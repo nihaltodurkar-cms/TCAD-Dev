@@ -20,8 +20,10 @@ from .materials import (
 )
 from .mesh import uniform_mesh, graded_mesh, merge_mesh, debye_length, check_mesh
 from .mesh2d import Mesh2D, control_volume_widths, check_mesh2d
+from .mesh3d import Mesh3D, check_mesh3d
 from .device import Device1D, Models, NewtonOptions, bernoulli, dbernoulli
 from .device2d import Device2D, DirichletBC, GateBC
+from .device3d import Device3D, DirichletBC as DirichletBC3D, GateBC as GateBC3D
 from .moscap import MOSCapacitor, flatband_voltage
 from .mosfet import mosfet_doping, build_mosfet, id_vg_sweep
 from . import process
@@ -34,8 +36,10 @@ __all__ = [
     "bandgap_narrowing_slotboom", "nie_effective", "recombination",
     "uniform_mesh", "graded_mesh", "merge_mesh", "debye_length", "check_mesh",
     "Mesh2D", "control_volume_widths", "check_mesh2d",
+    "Mesh3D", "check_mesh3d",
     "Device1D", "Models", "NewtonOptions", "bernoulli", "dbernoulli",
     "Device2D", "DirichletBC", "GateBC",
+    "Device3D", "DirichletBC3D", "GateBC3D",
     "MOSCapacitor", "flatband_voltage", "process",
     "mosfet_doping", "build_mosfet", "id_vg_sweep",
 ]
