@@ -1,6 +1,6 @@
 # PyTCAD
 
-A compact, readable, **validated** 1D (and now 2D MOSFET) TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation, structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
+A compact, readable, **validated** 1D TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation, structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
 
 Roughly 1,200 lines. No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
 
@@ -12,11 +12,8 @@ pytcad/
   process.py     implantation, diffusion, Deal-Grove oxidation
   device.py      drift-diffusion: Poisson + both continuity equations
   moscap.py      MOS capacitor, quasi-static C-V
-  mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
-  device2d.py    2D drift-diffusion: box-integration Poisson + continuity
-  mosfet.py      2D MOSFET builder + Id-Vg sweep
-examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg
-tests/           28 validation tests against analytic limits
+examples/        p-n diode, full process flow, MOS C-V
+tests/           15 validation tests against analytic limits
 ```
 
 ---
@@ -94,7 +91,7 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 28 tests pass (15 1D + 13 2D). Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
+All 15 tests pass. Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
 
 | Quantity | PyTCAD | Analytic | |
 |---|---|---|---|
@@ -160,8 +157,7 @@ Run everything:
 python examples/01_pn_diode.py       # -> pn_diode.png
 python examples/02_process_flow.py   # -> process_flow.png
 python examples/03_mos_cv.py         # -> mos_cv.png
-python examples/04_mosfet_idvg.py    # -> mosfet_idvg.png
-pytest tests/                        # 28/28 (15 1D + 13 2D)
+python tests/test_validation.py      # 15/15
 ```
 
 Requires `numpy`, `scipy`, `matplotlib` (examples only).
@@ -170,24 +166,12 @@ Requires `numpy`, `scipy`, `matplotlib` (examples only).
 
 ## 6. Honest limits of *this* code
 
-- **The 1D core** has no short-channel-effect modeling beyond drift-diffusion, no LOCOS/STI, and no unstructured mesh. A real $I_d$–$V_g$ MOSFET sweep with a gate-controlled channel *is* now available — see the "2D MOSFET (new)" subsection below.
+- **1D only.** No MOSFET $I_d$–$V_g$ with a real channel, no short-channel effects, no LOCOS/STI. 2D needs a triangular/rectangular mesh and a 2D box-integration assembly — the physics modules carry over unchanged.
 - **Implant tables are approximate** LSS moments for *amorphous* Si, good to ~5–10%. They contain **no channelling**, which in crystalline Si can put a tail 1–2 decades deeper. Pass `Rp`/`dRp` from SRIM for anything real.
 - **Diffusion is intrinsic and constant-$D$.** No extrinsic (charged-defect) enhancement above $n_i(T)$, no transient enhanced diffusion from implant damage, no oxidation-enhanced diffusion, no dopant–defect pair kinetics. These dominate real junction formation below ~1000 °C.
 - **Deal–Grove under-predicts thin dry oxides.** The $x_i \approx 25$ nm initial thickness is a fudge factor, not physics.
 - **No quantum corrections, no poly depletion, no $D_{it}$** in the MOS module.
 - **Quasi-static C-V only.** A 1 MHz measurement gives the high-frequency curve, where $C$ stays near $C_{min}$ in inversion because minority carriers cannot follow.
-
-### 2D MOSFET (new)
-
-There is now a 2D extension (`mesh2d.py`'s `Mesh2D`, `device2d.py`'s `Device2D`, and `mosfet.py`'s `build_mosfet`/`id_vg_sweep`) that solves full drift-diffusion on a tensor-product mesh and produces a real $I_d$–$V_g$ transfer curve with gate-controlled subthreshold switching — see `examples/04_mosfet_idvg.py`. It reuses the same Scharfetter–Gummel/Newton/scaling machinery described above, extended to a 2D box-integration Poisson/continuity assembly. For exactly what's in scope versus deferred (no $I_d$–$V_d$ family sweep, no 2D process simulation, structured rectangular mesh only — no unstructured/triangular mesh, no Canali velocity-saturation mobility in 2D), see the design spec at `docs/superpowers/specs/2026-08-22-2d-mosfet-design.md` (repo root).
-
-### 3D Solver (new)
-
-There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Device3D`) that solves full 3D drift-diffusion on a tensor-product Cartesian mesh (independent, non-uniform spacing per axis). It generalizes the same box-integration/edge-scatter assembly used in 1D and 2D: each mesh edge (now three families — x, y, z) scatters a Scharfetter–Gummel flux to its two endpoint nodes, giving a 7-point stencil per equation (block-heptadiagonal Jacobian for the coupled $\psi$/$n$/$p$ Newton system) and implicit zero-flux Neumann boundaries wherever an edge is simply absent. Boundary conditions are geometry-agnostic: `add_contact`/`add_gate` take arbitrary node-index arrays, not device-specific shapes. `GateBC` carries a `normal_axis` (`'x'`/`'y'`/`'z'`) so a gate face can sit on any of the three axes — needed for future wrapped-gate devices (FinFET, GAA) — though only `normal_axis='z'` is exercised by this sub-project's own tests.
-
-**Validation.** The primary correctness gate is dimensional reduction: a z-invariant 3D structure must reproduce the already-validated 2D solver exactly. `tests/test_validation_3d.py` checks this at equilibrium and forward bias, and `examples/05_3d_reduces_to_2d.py` makes it visual — extruding a p-n junction in z, solving both 2D and 3D, and plotting the difference. Measured on this repo: max $|\psi_{3D}-\psi_{2D}|$ = 1.11e-16 V, max $|J_{3D}-J_{2D}|$ = 3.98e-10 A/cm² — both at floating-point noise level, not just within the tests' (looser) 1e-6 V / 1e-3 relative tolerances. The analytic Newton Jacobian is independently checked against finite differences (worst relative error < 1e-3 across 30 random sampled columns via sparse column-slice extraction — never `J.toarray()` on the full matrix), and terminal-current extraction (residual-based, not edge-walking) conserves charge to <1e-6 relative error on a two-terminal 3D resistor.
-
-**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). Direct sparse solve only (`scipy.sparse.linalg.spsolve`), no iterative/preconditioned solver, no GPU. This has a real, measured cost: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; do not attempt 40³+ meshes without an iterative solver.** No claim of parity with commercial 3D TCAD tools is made or intended. See `docs/superpowers/specs/2026-08-22-3d-solver-core-design.md` for the full design rationale, explicit out-of-scope list, and the sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet).
 
 ## 7. Where to read more
 
