@@ -189,6 +189,17 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). Direct sparse solve only (`scipy.sparse.linalg.spsolve`), no iterative/preconditioned solver, no GPU. This has a real, measured cost: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; do not attempt 40³+ meshes without an iterative solver.** No claim of parity with commercial 3D TCAD tools is made or intended. See `docs/superpowers/specs/2026-08-22-3d-solver-core-design.md` for the full design rationale, explicit out-of-scope list, and the sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet).
 
+### Desktop GUI (new)
+
+There is now a PySide6 / Qt Quick desktop frontend in `gui/` — load a
+built-in 2D MOSFET, solve it in a background process, and visualize the
+result, without the GUI ever blocking or the numerical engine changing by
+a single line. See `gui/README.md` for install and run instructions, and
+`docs/superpowers/specs/2026-08-23-gui-v0.1-design.md` for the design
+rationale. It is an early version, not a complete TCAD workbench: v0.1
+covers the architecture plus one worked example, with structure editing,
+process simulation, sweeps, and 3D visualization still to come.
+
 ## 7. Where to read more
 
 - **Selberherr, *Analysis and Simulation of Semiconductor Devices* (1984)** — still the reference for the discretised equations, scaling, and Scharfetter–Gummel. Computational.
