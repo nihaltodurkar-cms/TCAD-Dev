@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "panels"
 import "components"
 
@@ -12,9 +13,14 @@ ApplicationWindow {
     title: "PyTCAD" + (appController.isDirty ? " *" : "")
     color: Theme.background
 
+    // Set by the close-confirmation dialog's "Save" button: after the save
+    // dialog is accepted and the project actually saves, quit instead of
+    // just closing the dialog. Cleared on any path that doesn't end in quit.
+    property bool pendingQuitAfterSave: false
+
     Shortcut { sequence: "Ctrl+Z"; onActivated: if (appController.canUndo) appController.undo() }
     Shortcut { sequence: "Ctrl+Y"; onActivated: if (appController.canRedo) appController.redo() }
-    Shortcut { sequence: "Ctrl+S"; onActivated: projectDialog.openFor("save") }
+    Shortcut { sequence: "Ctrl+S"; onActivated: saveFileDialog.open() }
 
     menuBar: MenuBar {
         Menu {
@@ -24,8 +30,8 @@ ApplicationWindow {
             MenuItem { text: "Load 2D MOSFET (Structure)"
                        onTriggered: appController.loadStructureExample("mosfet_2d_structure") }
             MenuSeparator {}
-            MenuItem { text: "Save Project..."; onTriggered: projectDialog.openFor("save") }
-            MenuItem { text: "Load Project..."; onTriggered: projectDialog.openFor("load") }
+            MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
+            MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }
             MenuSeparator {}
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -197,53 +203,41 @@ ApplicationWindow {
         }
     }
 
-    // Path-entry Save/Load, not a native file picker -- a real OS file
-    // dialog is explicitly deferred to v0.3 (see gui/README.md's
-    // "Planned" section). This is still a genuine, working round trip
-    // through the same saveProject()/loadProject() slots the tests
-    // exercise; it was previously reachable only from Python, with no
-    // UI path to it at all (found while verifying the app on a real
-    // display).
-    Dialog {
-        id: projectDialog
-        property string mode: "save"   // "save" | "load"
-        modal: true
-        title: mode === "save" ? "Save Project" : "Load Project"
-        anchors.centerIn: parent
-        standardButtons: Dialog.Cancel
-
-        function openFor(m) {
-            mode = m
-            pathField.text = pathField.text || (Qt.platform.os === "windows" ? "C:/tmp/project.json" : "/tmp/project.json")
-            open()
-        }
-
-        ColumnLayout {
-            width: 320
-            RowLayout {
-                Label { text: "Path"; Layout.preferredWidth: 60 }
-                TextField { id: pathField; Layout.fillWidth: true }
-            }
-            RowLayout {
-                visible: projectDialog.mode === "save"
-                Label { text: "Name"; Layout.preferredWidth: 60 }
-                TextField { id: nameField; Layout.fillWidth: true; text: "My Project" }
+    // Native OS file pickers (QtQuick.Dialogs FileDialog -- the platform's
+    // real dialog where one is available, e.g. via the Wayland/GTK portal,
+    // falling back to a Qt Quick implementation otherwise). Replaces the
+    // earlier typed-path Dialog. The project "name" saved into the file is
+    // derived from the chosen filename, since a native picker has no room
+    // for a separate name field.
+    FileDialog {
+        id: saveFileDialog
+        objectName: "saveFileDialog"
+        title: "Save Project As"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["PyTCAD project files (*.json)", "All files (*)"]
+        defaultSuffix: "json"
+        onAccepted: {
+            // Python-side saveProject() converts the file:// URL to a local
+            // path (via QUrl.toLocalFile()) -- correct on every platform,
+            // unlike stripping "file://" with a regex here would be.
+            var path = selectedFile.toString()
+            var baseName = path.substring(path.lastIndexOf("/") + 1).replace(/\.json$/i, "")
+            appController.saveProject(path, baseName || "Project")
+            if (window.pendingQuitAfterSave) {
+                window.pendingQuitAfterSave = false
+                Qt.quit()
             }
         }
+        onRejected: window.pendingQuitAfterSave = false
+    }
 
-        footer: DialogButtonBox {
-            Button {
-                text: projectDialog.mode === "save" ? "Save" : "Load"
-                onClicked: {
-                    if (projectDialog.mode === "save")
-                        appController.saveProject(pathField.text, nameField.text)
-                    else
-                        appController.loadProject(pathField.text)
-                    projectDialog.close()
-                }
-            }
-            Button { text: "Cancel"; onClicked: projectDialog.close() }
-        }
+    FileDialog {
+        id: openFileDialog
+        objectName: "openFileDialog"
+        title: "Open Project"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["PyTCAD project files (*.json)", "All files (*)"]
+        onAccepted: appController.loadProject(selectedFile.toString())
     }
 
     Connections {
@@ -267,8 +261,15 @@ ApplicationWindow {
         modal: true
         title: "Unsaved changes"
         anchors.centerIn: parent
-        standardButtons: Dialog.Cancel
         footer: DialogButtonBox {
+            Button {
+                text: "Save"
+                onClicked: {
+                    closeConfirmDialog.close()
+                    window.pendingQuitAfterSave = true
+                    saveFileDialog.open()
+                }
+            }
             Button { text: "Don't Save"; onClicked: { closeConfirmDialog.close(); Qt.quit() } }
             Button { text: "Cancel"; onClicked: closeConfirmDialog.close() }
         }

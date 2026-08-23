@@ -45,7 +45,11 @@ ColumnLayout {
         TextField {
             id: manualField
             Layout.fillWidth: true
-            text: gateData && gateData.vfbValue !== null ? gateData.vfbValue.toString() : ""
+            // Python None crosses to QML as undefined, not null (PySide's
+            // QVariant() mapping) -- `!= null` (loose) catches both;
+            // `!== null` alone let `undefined.toString()` through and
+            // threw a TypeError whenever a gate was in "computed" mode.
+            text: gateData && gateData.vfbValue != null ? gateData.vfbValue.toString() : ""
             onEditingFinished: if (gateId) controller.setGateVfbMode(gateId, "manual", parseFloat(text))
         }
     }

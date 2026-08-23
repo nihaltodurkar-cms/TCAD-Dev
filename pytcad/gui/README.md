@@ -109,31 +109,47 @@ independent and must keep passing unchanged.
 - Structure, Doping, Mesh, and Results viewport modes, plus a "Load
   structure example" toolbar button/menu item to reach the new example.
 - Schema-versioned project save/load (`schema_version: 2`) via
-  File → Save/Load Project... or Ctrl+S, through a path-entry dialog
-  (typed path + name, not a native OS file browser — see "Planned"
-  below); results stay separate `.npz` files, never embedded in the
-  project file.
+  File → Save Project As.../Open Project... or Ctrl+S, through a native
+  `QtQuick.Dialogs` `FileDialog` (see "v0.2.1 polish pass" below);
+  results stay separate `.npz` files, never embedded in the project file.
 - Undo/redo and a dirty-state indicator (`*` in the title bar), scoped to
   structure/mesh metadata edits only.
-- A close-confirmation dialog ("Don't Save"/"Cancel") when quitting with
-  unsaved changes.
+- A close-confirmation dialog ("Save"/"Don't Save"/"Cancel") when
+  quitting with unsaved changes.
 - A second, purpose-built structure example (`mosfet_2d_structure`) for
   exercising this workbench — see "Two examples" below.
 
+**v0.2.1 polish pass:**
+- Save/Open now use `QtQuick.Dialogs`' native `FileDialog` (the
+  platform's real file picker, e.g. via the Wayland/GTK desktop portal)
+  in place of the earlier typed-path `Dialog`. The project name saved
+  into the file is derived from the chosen filename, since a native
+  picker has no room for a separate name field.
+- The close-confirmation dialog now offers Save/Don't Save/Cancel
+  (previously Don't Save/Cancel only). Save opens the native Save dialog
+  and quits once it actually saves; Cancel, or dismissing the file
+  picker, leaves the app open with changes still unsaved.
+- The "Doping" viewport mode now rasterizes the structure's own regions
+  live (via the same `rasterize_doping()` `to_device_spec()` uses) when
+  no solve has happened yet, instead of showing "No project loaded" for
+  a structure that is perfectly valid but unsolved. Once a solve
+  produces a ResultStore, Doping mode goes back to showing solved field
+  data, as before.
+- Fixed a real, previously-shipped bug found while re-verifying on a
+  real display: `MplCanvasItem.setStructureSource()` unconditionally
+  forced its internal mode to `"structure"`, silently overriding
+  whatever mode `ViewportPanel.setViewMode()` had just set. Since QML
+  always calls `setMode()` then `setStructureSource()` in that order,
+  the **Mesh viewport mode was actually rendering the Structure
+  diagram**, not a mesh grid, the whole time — no headless test caught
+  it because the existing tests call the two methods in the opposite
+  order. Also fixed a `GateEditor.qml` crash (`undefined.toString()`)
+  that fired whenever a gate's flatband voltage was left in "computed"
+  mode (Python `None` crosses to QML as `undefined`, not `null`).
+
 **Planned (not yet implemented):**
-- A native OS file-picker for Save/Load (currently a typed-path dialog,
-  reachable via File menu or Ctrl+S — genuinely functional, just not a
-  file browser). The close-confirmation dialog still offers only
-  Don't Save/Cancel, not a Save option.
 - Per-region doping *profiles* beyond uniform (e.g. exposing
   `mosfet_doping()`'s own Gaussian/erfc shape as a region option).
-- The "Doping" viewport mode falls back to a "No project loaded"
-  placeholder for a structure that hasn't been solved yet, rather than
-  previewing the structure's own rasterized doping array live. The
-  "Structure" mode already conveys per-region doping (color by sign,
-  and exact values in the Regions list), so this is a redundancy gap,
-  not a missing capability -- a live pre-solve doping heatmap for
-  `_mode == "doping"` is a small, well-scoped follow-up.
 - A second real semiconductor material, once the backend has one.
 
 **Not supported, by design:**
@@ -180,3 +196,21 @@ grabbing real `QQuickWindow.grabWindow()` screenshots, pixel-measuring
 actual panel boundaries, and in one case a native `gdb` backtrace. If
 you change QML layout code here, don't trust the test suite alone —
 actually look at it.
+
+The v0.2.1 polish pass repeated this real-display verification (Structure,
+Doping-before-solve, Mesh, Results-after-solve, region reorder, contact
+editor, gate editor, Save/Open, dirty-state indicator, close dialog) and
+it caught two more real bugs the 95-test suite missed: the Mesh-mode
+bug and the `GateEditor.qml` crash described above under "v0.2.1 polish
+pass" — both are now covered by regression tests. One thing this pass
+could *not* verify visually: the native `FileDialog` opens as a genuine
+out-of-process window (via the desktop portal), confirmed by its
+`visible` property toggling correctly across open/close with no growth
+in this window's own scene graph — but that also means it falls outside
+what `QQuickWindow.grabWindow()` can capture, so its actual on-screen
+appearance was not screenshotted, only its wiring.
+
+The Structure/Mesh viewport's diagram still renders zoomed to roughly
+the left/top third of the domain instead of the full extent (axis limits
+report correctly; only the rendered crop is wrong) — a known, pre-existing
+cosmetic issue, unaffected by and out of scope for this pass.

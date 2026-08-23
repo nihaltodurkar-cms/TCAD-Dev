@@ -5,7 +5,7 @@ solver_runner.extract_result(), so nothing here branches on 1D/2D/3D --
 it just renders whatever fields and units the ResultStore reports.
 """
 import numpy as np
-from PySide6.QtCore import QObject, Property, Signal, Slot
+from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 
 from ..services import examples
 from ..services.job_runner import JobRunner
@@ -366,6 +366,7 @@ class AppController(QObject):
 
     @Slot(str, str)
     def saveProject(self, path, name):
+        path = self._to_local_path(path)
         if not self.runStructureValidation():
             self.errorRaised.emit("Cannot save an invalid structure",
                                   "\n".join(self.structureValidationErrors))
@@ -377,6 +378,7 @@ class AppController(QObject):
 
     @Slot(str)
     def loadProject(self, path):
+        path = self._to_local_path(path)
         try:
             name, structure, mesh_model = load_project(path)
         except Exception as exc:
@@ -461,6 +463,16 @@ class AppController(QObject):
         self.propertiesModel.setRows(self._properties_for(node_id))
 
     # -- internals ----------------------------------------------------
+    @staticmethod
+    def _to_local_path(path):
+        # QtQuick.Dialogs' FileDialog hands back a file:// URL string;
+        # existing callers (tests, scripts) pass a plain filesystem path.
+        # QUrl.toLocalFile() only does something for the former, so both
+        # keep working through the same slot.
+        if path.startswith("file:"):
+            return QUrl(path).toLocalFile()
+        return path
+
     def _properties_for(self, node_id):
         if self.spec is None:
             return [("Status", "No project loaded")]

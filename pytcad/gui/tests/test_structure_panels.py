@@ -45,3 +45,12 @@ def test_dirty_title_reflects_undo_state(gapp):
     assert controller.isDirty is False
     controller.addRegion("Extra", 0.0, 1e-5, 0.0, 1e-5, 1e16)
     assert controller.isDirty is True
+
+
+def test_native_file_dialogs_exist_and_replace_typed_path_dialog(gapp):
+    """v0.2.1: Save/Open moved to QtQuick.Dialogs' native FileDialog."""
+    engine, controller = gui_app.create_engine(gapp)
+    root = engine.rootObjects()[0]
+    assert root.findChild(object, "saveFileDialog") is not None
+    assert root.findChild(object, "openFileDialog") is not None
+    assert root.findChild(object, "projectDialog") is None

@@ -19,6 +19,8 @@ from PySide6.QtCore import Property, QObject, Signal, Slot, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickPaintedItem
 
+from ..services.structure_model import rasterize_doping
+
 _MIN_POSITIVE = 1e-30
 
 
@@ -65,9 +67,16 @@ class MplCanvasItem(QQuickPaintedItem):
 
     @Slot(object, object)
     def setStructureSource(self, structure, mesh_model):
+        # Deliberately does NOT touch self._mode: ViewportPanel.setViewMode()
+        # always calls setMode(mode) immediately before this, for every mode
+        # (structure/mesh/doping) that needs structure data. An earlier
+        # version hardcoded self._mode = "structure" here, which silently
+        # clobbered setMode("mesh")'s choice back to "structure" on every
+        # call -- the live Mesh viewport was rendering the structure diagram,
+        # not a mesh grid, and no headless test caught it because tests call
+        # setStructureSource() before setMode(), the opposite order QML uses.
         self._structure = structure
         self._mesh_model = mesh_model
-        self._mode = "structure"
         self.fit()
 
     @Slot(str)
@@ -88,6 +97,16 @@ class MplCanvasItem(QQuickPaintedItem):
     @Slot()
     def fit(self):
         if self._mode in ("structure", "mesh") and self._structure is not None:
+            self._xlim = (0.0, self._structure.width_cm * 1e4)
+            self._ylim = (0.0, self._structure.height_cm * 1e4)
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
+        # Doping mode before any solve has no ResultStore yet -- fit to the
+        # structure's own extent instead. Once a store exists (post-solve)
+        # it takes priority below, same as it always has.
+        if self._mode == "doping" and self._store is None and self._structure is not None:
             self._xlim = (0.0, self._structure.width_cm * 1e4)
             self._ylim = (0.0, self._structure.height_cm * 1e4)
             self._home = (self._xlim, self._ylim)
@@ -162,6 +181,14 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "mesh" and self._mesh_model is not None:
             self._draw_mesh(ax)
+            fig.tight_layout()
+            return fig
+        # Doping mode with a structure but no solve yet: rasterize the
+        # structure's own regions instead of falling back to "No project
+        # loaded". Once a solve produces a ResultStore, that takes over
+        # via the normal field-rendering path below -- unchanged.
+        if self._mode == "doping" and self._store is None and self._structure is not None and self._mesh_model is not None:
+            self._draw_doping_preview(ax)
             fig.tight_layout()
             return fig
 
@@ -265,6 +292,26 @@ class MplCanvasItem(QQuickPaintedItem):
             ax.plot([x[0], x[-1]], [yv, yv], color="#555555", linewidth=0.5)
         ax.set_xlim(x[0], x[-1]); ax.set_ylim(y[-1], y[0])
         ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+
+    def _draw_doping_preview(self, ax):
+        """Pre-solve doping heatmap straight from the structure's regions,
+        via the same rasterize_doping() that to_device_spec() uses -- so
+        this preview is exactly what a solve would use, not an approximation."""
+        mesh_spec = self._mesh_model.to_mesh_spec(
+            self._structure.width_cm, self._structure.height_cm)
+        doping = rasterize_doping(self._structure, mesh_spec)
+        x = np.asarray(mesh_spec.axes["x"], dtype=float) * 1e4
+        y = np.asarray(mesh_spec.axes["y"], dtype=float) * 1e4
+        mesh = ax.pcolormesh(x, y, self._maybe_log(doping), shading="nearest", cmap="RdBu_r")
+        cbar = ax.figure.colorbar(mesh, ax=ax)
+        label = "Net doping [cm^-3]"
+        cbar.set_label(f"log10 |{label}|" if self._log else label)
+        ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+        ax.invert_yaxis()
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+        if self._ylim:
+            ax.set_ylim(self._ylim[1], self._ylim[0])
 
     @Slot(result=object)
     def renderToImage(self):

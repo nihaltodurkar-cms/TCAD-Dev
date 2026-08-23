@@ -9,10 +9,14 @@ Rectangle {
     color: Theme.background
     border.color: Theme.border
     property var controller
+    property string currentMode: "doping"   // mirrors MplCanvasItem's own default
 
     function setViewMode(mode) {
+        root.currentMode = mode
         canvas.setMode(mode)
-        if (mode === "structure" || mode === "mesh") {
+        // "doping" needs structure/mesh data too, so the pre-solve doping
+        // preview has something to rasterize before any ResultStore exists.
+        if (mode === "structure" || mode === "mesh" || mode === "doping") {
             canvas.setStructureSource(controller.structureForQml, controller.meshModelForQml)
         }
     }
@@ -70,6 +74,19 @@ Rectangle {
                 }
                 onWheel: (w) => canvas.zoom(w.angleDelta.y > 0 ? 0.9 : 1.111)
             }
+        }
+    }
+
+    // A structure load (example or project) emits structureChanged but not
+    // resultChanged, so bindController()'s refresh alone never re-applies
+    // the current mode to the canvas -- without this, a freshly-loaded
+    // structure left "Doping" mode showing stale "No project loaded" until
+    // the mode selector was touched by hand. Re-applying on every edit also
+    // keeps the pre-solve doping preview live as regions change.
+    Connections {
+        target: controller
+        function onStructureChanged() {
+            if (controller) root.setViewMode(root.currentMode)
         }
     }
 

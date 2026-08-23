@@ -155,3 +155,19 @@ def test_save_and_load_project_round_trips(qapp, tmp_path):
     app2.loadProject(path)
     assert app2.regionListModel.rowCount() == app.regionListModel.rowCount()
     assert app2.isDirty is False
+
+
+def test_save_and_load_project_accept_file_urls(qapp, tmp_path):
+    """QtQuick.Dialogs' FileDialog hands saveProject()/loadProject() a
+    file:// URL string, not a plain path -- both slots must convert it."""
+    app = AppController()
+    app.loadStructureExample("mosfet_2d_structure")
+    path = tmp_path / "proj.json"
+    app.saveProject(path.as_uri(), "My Project")
+    assert path.exists()
+    assert app.isDirty is False
+
+    app2 = AppController()
+    app2.loadProject(path.as_uri())
+    assert app2.regionListModel.rowCount() == app.regionListModel.rowCount()
+    assert app2.isDirty is False
