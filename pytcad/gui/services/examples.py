@@ -65,3 +65,40 @@ def mosfet_example_spec():
 
 
 EXAMPLES = {"mosfet_2d": mosfet_example_spec}
+
+
+from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel
+
+
+def mosfet_example_structure():
+    """A second, honestly-simpler representative MOSFET, built from
+    uniform rectangular regions to exercise the Structure/Mesh workbench.
+    Deliberately NOT a rectangular decomposition of build_mosfet()'s
+    smooth Gaussian/erfc profile -- see the design spec section 17.5.
+
+    Geometry: 1.2e-4 cm wide (matching mosfet_example_spec's domain),
+    2e-5 cm deep. Source: x in [0, 3e-5]. Gate: x in [3e-5, 9e-5].
+    Drain: x in [9e-5, 1.2e-4]. Channel background covers the full width;
+    source/drain regions are listed after it so they overwrite it in
+    their own x-range (see rasterize_doping's list-order rule).
+    """
+    width_cm, height_cm = 1.2e-4, 2e-5
+    Lsd, Lg = 3e-5, 6e-5
+
+    structure = StructureModel(width_cm=width_cm, height_cm=height_cm, regions=[
+        RegionSpec("channel", "Channel", 0.0, width_cm, 0.0, height_cm, -1e17),
+        RegionSpec("source", "Source", 0.0, Lsd, 0.0, height_cm, 1e19),
+        RegionSpec("drain", "Drain", Lsd + Lg, width_cm, 0.0, height_cm, 1e19),
+    ], contacts=[
+        ContactModel("source_c", "source", BoundarySpec("top", 0.0, Lsd), V=0.0),
+        ContactModel("drain_c", "drain", BoundarySpec("top", Lsd + Lg, width_cm), V=0.05),
+        ContactModel("body_c", "body", BoundarySpec("bottom"), V=0.0),
+    ], gates=[
+        GateModel("gate", "gate", BoundarySpec("top", Lsd, Lsd + Lg),
+                  tox_cm=5e-7, gate_type="n+poly", vfb_mode="computed", V=1.0),
+    ])
+    mesh = MeshModel(nx=80, ny=40, grading="uniform")
+    return structure, mesh
+
+
+STRUCTURE_EXAMPLES = {"mosfet_2d_structure": mosfet_example_structure}

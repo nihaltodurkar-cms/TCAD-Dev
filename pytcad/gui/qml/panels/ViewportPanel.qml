@@ -10,6 +10,13 @@ Rectangle {
     border.color: Theme.border
     property var controller
 
+    function setViewMode(mode) {
+        canvas.setMode(mode)
+        if (mode === "structure" || mode === "mesh") {
+            canvas.setStructureSource(controller.structureForQml, controller.meshModelForQml)
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.pad

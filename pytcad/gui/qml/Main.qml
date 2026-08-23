@@ -9,14 +9,23 @@ ApplicationWindow {
     width: 1280
     height: 820
     visible: true
-    title: "PyTCAD"
+    title: "PyTCAD" + (appController.isDirty ? " *" : "")
     color: Theme.background
+
+    Shortcut { sequence: "Ctrl+Z"; onActivated: if (appController.canUndo) appController.undo() }
+    Shortcut { sequence: "Ctrl+Y"; onActivated: if (appController.canRedo) appController.redo() }
+    Shortcut { sequence: "Ctrl+S"; onActivated: projectDialog.openFor("save") }
 
     menuBar: MenuBar {
         Menu {
             title: "&File"
             MenuItem { text: "Load 2D MOSFET example"
                        onTriggered: appController.loadExample("mosfet_2d") }
+            MenuItem { text: "Load 2D MOSFET (Structure)"
+                       onTriggered: appController.loadStructureExample("mosfet_2d_structure") }
+            MenuSeparator {}
+            MenuItem { text: "Save Project..."; onTriggered: projectDialog.openFor("save") }
+            MenuItem { text: "Load Project..."; onTriggered: projectDialog.openFor("load") }
             MenuSeparator {}
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -64,6 +73,31 @@ ApplicationWindow {
                 implicitWidth: 22
                 implicitHeight: 22
             }
+            ToolSeparator {}
+            Button {
+                text: "Load structure example"
+                onClicked: appController.loadStructureExample("mosfet_2d_structure")
+            }
+            ComboBox {
+                id: viewModeBox
+                objectName: "viewModeSelector"
+                model: ["Structure", "Doping", "Mesh", "Results"]
+                onActivated: {
+                    var m = {"Structure": "structure", "Doping": "doping",
+                            "Mesh": "mesh", "Results": "doping"}[currentText]
+                    viewport.setViewMode(m)
+                }
+            }
+            ToolButton {
+                text: "Undo"
+                enabled: appController.canUndo
+                onClicked: appController.undo()
+            }
+            ToolButton {
+                text: "Redo"
+                enabled: appController.canRedo
+                onClicked: appController.redo()
+            }
             Item { Layout.fillWidth: true }
             Label {
                 text: appController.status
@@ -89,9 +123,24 @@ ApplicationWindow {
             }
 
             ViewportPanel {
+                id: viewport
                 objectName: "viewportPanel"
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 320
+                controller: appController
+            }
+
+            StructurePanel {
+                objectName: "structurePanel"
+                SplitView.preferredWidth: 260
+                SplitView.minimumWidth: 200
+                controller: appController
+            }
+
+            MeshPanel {
+                objectName: "meshPanel"
+                SplitView.preferredWidth: 220
+                SplitView.minimumWidth: 160
                 controller: appController
             }
 
@@ -148,6 +197,55 @@ ApplicationWindow {
         }
     }
 
+    // Path-entry Save/Load, not a native file picker -- a real OS file
+    // dialog is explicitly deferred to v0.3 (see gui/README.md's
+    // "Planned" section). This is still a genuine, working round trip
+    // through the same saveProject()/loadProject() slots the tests
+    // exercise; it was previously reachable only from Python, with no
+    // UI path to it at all (found while verifying the app on a real
+    // display).
+    Dialog {
+        id: projectDialog
+        property string mode: "save"   // "save" | "load"
+        modal: true
+        title: mode === "save" ? "Save Project" : "Load Project"
+        anchors.centerIn: parent
+        standardButtons: Dialog.Cancel
+
+        function openFor(m) {
+            mode = m
+            pathField.text = pathField.text || (Qt.platform.os === "windows" ? "C:/tmp/project.json" : "/tmp/project.json")
+            open()
+        }
+
+        ColumnLayout {
+            width: 320
+            RowLayout {
+                Label { text: "Path"; Layout.preferredWidth: 60 }
+                TextField { id: pathField; Layout.fillWidth: true }
+            }
+            RowLayout {
+                visible: projectDialog.mode === "save"
+                Label { text: "Name"; Layout.preferredWidth: 60 }
+                TextField { id: nameField; Layout.fillWidth: true; text: "My Project" }
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: projectDialog.mode === "save" ? "Save" : "Load"
+                onClicked: {
+                    if (projectDialog.mode === "save")
+                        appController.saveProject(pathField.text, nameField.text)
+                    else
+                        appController.loadProject(pathField.text)
+                    projectDialog.close()
+                }
+            }
+            Button { text: "Cancel"; onClicked: projectDialog.close() }
+        }
+    }
+
     Connections {
         target: appController
         function onErrorRaised(summary, details) {
@@ -155,5 +253,25 @@ ApplicationWindow {
             errorDialog.details = details
             errorDialog.open()
         }
+    }
+
+    onClosing: (close) => {
+        if (appController.isDirty) {
+            close.accepted = false
+            closeConfirmDialog.open()
+        }
+    }
+
+    Dialog {
+        id: closeConfirmDialog
+        modal: true
+        title: "Unsaved changes"
+        anchors.centerIn: parent
+        standardButtons: Dialog.Cancel
+        footer: DialogButtonBox {
+            Button { text: "Don't Save"; onClicked: { closeConfirmDialog.close(); Qt.quit() } }
+            Button { text: "Cancel"; onClicked: closeConfirmDialog.close() }
+        }
+        Label { text: "This project has unsaved changes. Close anyway?" }
     }
 }

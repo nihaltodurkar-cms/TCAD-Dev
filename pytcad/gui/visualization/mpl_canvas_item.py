@@ -35,6 +35,9 @@ class MplCanvasItem(QQuickPaintedItem):
         self._xlim = None
         self._ylim = None
         self._buf = None           # keep the Agg buffer alive while QImage uses it
+        self._structure = None
+        self._mesh_model = None
+        self._mode = "doping"
 
     # -- data ---------------------------------------------------------
     @Slot(object, str)
@@ -60,6 +63,18 @@ class MplCanvasItem(QQuickPaintedItem):
             lambda: self.setField(controller.currentField))
         refresh()
 
+    @Slot(object, object)
+    def setStructureSource(self, structure, mesh_model):
+        self._structure = structure
+        self._mesh_model = mesh_model
+        self._mode = "structure"
+        self.fit()
+
+    @Slot(str)
+    def setMode(self, mode):
+        self._mode = mode
+        self.update()
+
     @Property(bool, notify=viewChanged)
     def logScale(self):
         return self._log
@@ -72,6 +87,13 @@ class MplCanvasItem(QQuickPaintedItem):
     # -- view control -------------------------------------------------
     @Slot()
     def fit(self):
+        if self._mode in ("structure", "mesh") and self._structure is not None:
+            self._xlim = (0.0, self._structure.width_cm * 1e4)
+            self._ylim = (0.0, self._structure.height_cm * 1e4)
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
         if self._store is None:
             self._xlim = self._ylim = None
         else:
@@ -134,6 +156,15 @@ class MplCanvasItem(QQuickPaintedItem):
                      dpi=dpi)
         ax = fig.add_subplot(111)
 
+        if self._mode == "structure" and self._structure is not None:
+            self._draw_structure(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "mesh" and self._mesh_model is not None:
+            self._draw_mesh(ax)
+            fig.tight_layout()
+            return fig
+
         if self._store is None:
             ax.text(0.5, 0.5, "No project loaded", ha="center", va="center")
             ax.set_axis_off()
@@ -181,6 +212,59 @@ class MplCanvasItem(QQuickPaintedItem):
         if not self._log:
             return values
         return np.log10(np.maximum(np.abs(values), _MIN_POSITIVE))
+
+    def _draw_structure(self, ax):
+        s = self._structure
+        for region in s.regions:
+            colour = "#c0392b" if region.net_doping_cm3 > 0 else "#2980b9"
+            ax.add_patch(__import__("matplotlib").patches.Rectangle(
+                (region.x_min * 1e4, region.y_min * 1e4),
+                (region.x_max - region.x_min) * 1e4,
+                (region.y_max - region.y_min) * 1e4,
+                facecolor=colour, alpha=0.35, edgecolor=colour, linewidth=1.2))
+            ax.text((region.x_min + region.x_max) / 2 * 1e4,
+                    (region.y_min + region.y_max) / 2 * 1e4,
+                    region.name, ha="center", va="center", fontsize=8)
+        for contact in s.contacts:
+            self._draw_boundary(ax, contact.boundary, "#27ae60", contact.name)
+        for gate in s.gates:
+            self._draw_boundary(ax, gate.boundary, "#8e44ad", gate.name)
+        ax.set_xlim(0.0, s.width_cm * 1e4)
+        ax.set_ylim(s.height_cm * 1e4, 0.0)
+        ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+        if self._ylim:
+            ax.set_ylim(self._ylim[1], self._ylim[0])
+
+    def _draw_boundary(self, ax, boundary, colour, label):
+        s = self._structure
+        w, h = s.width_cm * 1e4, s.height_cm * 1e4
+        lo = (boundary.range_lo * 1e4) if boundary.range_lo is not None else None
+        hi = (boundary.range_hi * 1e4) if boundary.range_hi is not None else None
+        if boundary.edge in ("top", "bottom"):
+            x0, x1 = (lo if lo is not None else 0.0), (hi if hi is not None else w)
+            y = 0.0 if boundary.edge == "top" else h
+            ax.plot([x0, x1], [y, y], color=colour, linewidth=3, solid_capstyle="butt")
+            ax.text((x0 + x1) / 2, y, label, color=colour, fontsize=7, va="bottom")
+        else:
+            y0, y1 = (lo if lo is not None else 0.0), (hi if hi is not None else h)
+            x = 0.0 if boundary.edge == "left" else w
+            ax.plot([x, x], [y0, y1], color=colour, linewidth=3, solid_capstyle="butt")
+            ax.text(x, (y0 + y1) / 2, label, color=colour, fontsize=7, ha="left")
+
+    def _draw_mesh(self, ax):
+        mesh_spec = self._mesh_model.to_mesh_spec(
+            self._structure.width_cm if self._structure else 1.0,
+            self._structure.height_cm if self._structure else 1.0)
+        x = [v * 1e4 for v in mesh_spec.axes["x"]]
+        y = [v * 1e4 for v in mesh_spec.axes["y"]]
+        for xv in x:
+            ax.plot([xv, xv], [y[0], y[-1]], color="#555555", linewidth=0.5)
+        for yv in y:
+            ax.plot([x[0], x[-1]], [yv, yv], color="#555555", linewidth=0.5)
+        ax.set_xlim(x[0], x[-1]); ax.set_ylim(y[-1], y[0])
+        ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
 
     @Slot(result=object)
     def renderToImage(self):
