@@ -9,7 +9,7 @@ service layer, not reinvented.  Non-converged points are excluded from
 every statistic before anything is reported.
 """
 import json
-import os, sys
+import os, subprocess, sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -17,10 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pytest
 
+from gui.services import examples
+from gui.services.device_spec import SweepSpec
 from gui.services.result_store import NpzResultStore, SweepResult
 from gui.services.sweep_derived import (
     current_extremes, on_off_ratio, summarize, threshold_voltage_max_gm,
 )
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ----------------------------------------------------------------------
@@ -155,6 +159,92 @@ def test_extracted_vth_matches_backend_landmark():
 
     ratio = on_off_ratio(Id)
     assert ratio is not None and ratio > 1e6
+
+
+# ----------------------------------------------------------------------
+#  channel selection: summarize() must not silently pick the wrong-signed
+#  terminal just because it happens to be first (GitHub issue: the bundled
+#  MOSFET's structure lists "source" before "drain", and I(source)'s sign
+#  convention gives an everywhere-nonpositive gm, so threshold_voltage_max_gm
+#  correctly refuses a threshold on that channel -- summarize() must try
+#  the other channels instead of stopping at the first one).
+# ----------------------------------------------------------------------
+def test_channel_selection_finds_vth_for_bundled_mosfet_gate_sweep(tmp_path):
+    """Real end-to-end regression for the reported bug: run an actual
+    gate sweep on the bundled mosfet_2d_structure example (the exact
+    device/contact ordering the GUI ships) through the real solver_runner
+    CLI, and confirm the Results-node Vth readout is now present -- it
+    was silently missing before this fix, even though the sweep itself
+    ran and converged cleanly."""
+    structure, mesh = examples.mosfet_example_structure()
+    spec = structure.to_device_spec(mesh)
+    # precondition documenting the bug: "source" is the first ohmic
+    # contact in this structure's declaration order, exactly the
+    # situation that made summarize() pick it by accident.
+    ohmic_names = [c.name for c in spec.contacts if c.kind == "ohmic"]
+    assert ohmic_names[0] == "source"
+    assert "drain" in ohmic_names
+
+    spec.sweep = SweepSpec(contact="gate", start=0.0, stop=1.5, step=0.3)
+    job = str(tmp_path / "mosfet_gate_sweep.json")
+    out = str(tmp_path / "mosfet_gate_sweep.npz")
+    spec.to_json(job)
+    proc = subprocess.run(
+        [sys.executable, "-m", "gui.services.solver_runner", job, out],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+
+    sweep = NpzResultStore(out).sweep_result()
+    assert bool(sweep.converged.all()), "sweep must converge to test extraction"
+    assert list(sweep.channels)[0] == "source", \
+        "the bug precondition must survive into the written .npz"
+
+    stats = summarize(sweep, vds=0.05)  # drain sits at its fixed 0.05 V bias
+    assert "threshold_voltage_v" in stats, (
+        "Vth must be extractable from this real sweep even though the "
+        "first channel in file order ('source') cannot honestly yield one")
+    # a real nMOS threshold on this device, not an arbitrary number
+    assert 0.0 < stats["threshold_voltage_v"] < 1.2
+    # Ion/Ioff must still be reported -- this fix must not regress it
+    assert "on_off_ratio" in stats and stats["on_off_ratio"] > 1.0
+
+
+def test_channel_selection_is_not_hardcoded_to_any_contact_name():
+    """Non-standard contact names (neither 'source' nor 'drain'): the
+    wrong-signed channel is still listed first, so this fails if the fix
+    were a literal `if name == "drain"` instead of a real selection."""
+    V = np.linspace(0.0, 1.0, 7)
+    wrong_signed = -np.geomspace(1e-9, 1e-3, 7)          # decreasing, gm <= 0
+    right_signed = np.geomspace(1e-9, 1e-3, 7)           # textbook Id-Vg shape
+    sw = SweepResult(
+        contact="control", meta={"contact": "control"},
+        voltages=V, converged=np.ones_like(V, dtype=bool),
+        channels={"anode": wrong_signed, "cathode": right_signed},
+        unit="A/cm")
+
+    stats = summarize(sw)
+    assert "threshold_voltage_v" in stats
+    # the extraction must have actually come from "cathode": recompute it
+    # directly and require an exact match, not just "some value appeared"
+    expected = threshold_voltage_max_gm(V, right_signed)
+    assert stats["threshold_voltage_v"] == pytest.approx(expected)
+
+
+def test_channel_selection_falls_back_to_first_channel_when_no_vth_exists():
+    """When NO channel honestly yields a threshold, current extremes and
+    Ion/Ioff must still come from the first channel in file order --
+    exactly the pre-fix behavior -- rather than silently going missing."""
+    V = np.linspace(0.0, 1.0, 7)
+    flat = np.full(7, 1e-6)   # gm == 0 everywhere: no channel qualifies
+    sw = SweepResult(
+        contact="control", meta={"contact": "control"},
+        voltages=V, converged=np.ones_like(V, dtype=bool),
+        channels={"first": flat, "second": flat * 2.0},
+        unit="A/cm")
+
+    stats = summarize(sw)
+    assert "threshold_voltage_v" not in stats
+    assert stats["current_max"] == pytest.approx(1e-6)  # from "first", not "second"
 
 
 # ----------------------------------------------------------------------

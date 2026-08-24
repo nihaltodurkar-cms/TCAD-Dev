@@ -78,6 +78,72 @@ def threshold_voltage_max_gm(voltages, currents, vds=0.0):
     return float(V[i] - I[i] / gm[i] - vds / 2.0)
 
 
+def _plausible_threshold(voltages, currents, vds=0.0):
+    """threshold_voltage_max_gm(), tried against BOTH sign conventions of
+    `currents` and accepted only when the result also falls near the
+    actual swept range.
+
+    Which sign is "conventional Id" (near zero off-state, rising with
+    the sweep) depends on which physical terminal a channel is, and that
+    is not derivable from a contact's name -- so both are tried here,
+    never a hardcoded "source is negative"/"drain is positive" rule.
+    Passing the mechanical gm > 0 check is not sufficient on its own: a
+    channel whose OWN current is dominated by something other than the
+    swept terminal (e.g. a large near-constant leakage-like baseline)
+    can still have a locally positive gm and extrapolate to a tangent
+    x-intercept far outside the sweep -- a number as fictional as a
+    negative-gm result, just not caught by that guard.  Requiring the
+    threshold to land within the swept span (plus one span's margin, to
+    allow a threshold just outside a coarse ramp) rejects that case too.
+
+    Returns (peak_gm, threshold_v) for the better-supported sign, or
+    None if neither sign yields a plausible threshold.
+    """
+    V, I = _valid(voltages, currents)
+    if V.size < 3 or V.max() == V.min():
+        return None
+    lo, hi = float(V.min()), float(V.max())
+    margin = max(hi - lo, 1e-6)
+    order = np.argsort(V)
+    best = None
+    for sign in (1.0, -1.0):
+        vth = threshold_voltage_max_gm(voltages, sign * currents, vds=vds)
+        if vth is None or not (lo - margin <= vth <= hi + margin):
+            continue
+        gm_peak = float(np.max(np.gradient(sign * I[order], V[order])))
+        if best is None or gm_peak > best[0]:
+            best = (gm_peak, vth)
+    return best
+
+
+def _select_primary_channel(sweep_result, vds=0.0):
+    """Pick the channel most representative of the swept device's
+    response, without assuming any particular contact name (a bundled
+    example's structure may list "source" before "drain", or a caller
+    may use non-standard contact names entirely).
+
+    Among the channels that yield a plausible threshold (see
+    _plausible_threshold), picks the one with the largest peak
+    transconductance -- the terminal most strongly and cleanly
+    modulated by the sweep.  Falls back to the first channel in file
+    order when no channel yields a plausible threshold, so current
+    extremes / Ion-Ioff keep being reported exactly as before this
+    selection existed.
+    """
+    channels = sweep_result.channels
+    if not channels:
+        return None
+    best_name, best_gm = None, -np.inf
+    for name, currents in channels.items():
+        result = _plausible_threshold(sweep_result.voltages, currents, vds=vds)
+        if result is None:
+            continue
+        gm_peak, _ = result
+        if gm_peak > best_gm:
+            best_name, best_gm = name, gm_peak
+    return best_name if best_name is not None else next(iter(channels))
+
+
 def summarize(sweep_result, channel=None, vds=0.0):
     """Aggregate a SweepResult into plain-float derived values.
 
@@ -87,9 +153,17 @@ def summarize(sweep_result, channel=None, vds=0.0):
       current_min, current_max          -- signed extremes [unit]
       on_off_ratio                      -- dimensionless
       threshold_voltage_v               -- max-gm extrapolation estimate
+
+    `channel` forces a specific channel when given and present; otherwise
+    the channel is chosen by _select_primary_channel() -- see there for
+    why this is not simply "the first channel" or a hardcoded name.
+    current_min/current_max/on_off_ratio always use the channel's own
+    reported sign (the actual physical terminal current); only the
+    threshold extraction may internally try the opposite sign, since
+    that is purely an artifact of the linear extrapolation method.
     """
     channels = sweep_result.channels
-    name = channel if channel in channels else next(iter(channels), None)
+    name = channel if channel in channels else _select_primary_channel(sweep_result, vds=vds)
     out = {
         "points_total": sweep_result.n_points(),
         "points_converged": sweep_result.n_valid(),
@@ -102,7 +176,7 @@ def summarize(sweep_result, channel=None, vds=0.0):
     ratio = on_off_ratio(channels[name])
     if ratio is not None:
         out["on_off_ratio"] = ratio
-    vth = threshold_voltage_max_gm(sweep_result.voltages, channels[name], vds=vds)
-    if vth is not None:
-        out["threshold_voltage_v"] = vth
+    result = _plausible_threshold(sweep_result.voltages, channels[name], vds=vds)
+    if result is not None:
+        out["threshold_voltage_v"] = result[1]
     return out
