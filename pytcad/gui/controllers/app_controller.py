@@ -16,6 +16,7 @@ from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
 from ..services.process_result_store import ProcessResultStore
 from ..services.project_store import load_project, save_project
 from ..services.result_store import NpzResultStore, SpecResultStore
+from ..services import sweep_derived
 from ..services.structure_model import GateModel, RegionSpec
 from ..services.undo_stack import Command, UndoStack
 from .console_model import ConsoleModel
@@ -1032,6 +1033,31 @@ class AppController(QObject):
                 # never render a current without its unit: it is A/cm in
                 # 2D but real A in 3D
                 rows.append((f"I({t.name})", f"{t.value:.6g} {t.unit}"))
+            # v0.4: sweep-derived readouts (curve statistics only -- see
+            # services/sweep_derived.py).  summarize() omits any quantity
+            # it cannot derive honestly from converged points.
+            if self.hasSweep:
+                try:
+                    sweep = self._store.sweep_result()
+                    stats = sweep_derived.summarize(sweep)
+                except Exception:
+                    stats = None
+                if stats:
+                    rows.append(("Sweep points",
+                                 f"{stats['points_converged']} of "
+                                 f"{stats['points_total']} converged"))
+                    unit = sweep.unit
+                    if "current_max" in stats:
+                        rows.append((f"Sweep Imax ({sweep.contact})",
+                                     f"{stats['current_max']:.4g} {unit}"))
+                        rows.append((f"Sweep Imin ({sweep.contact})",
+                                     f"{stats['current_min']:.4g} {unit}"))
+                    if "on_off_ratio" in stats:
+                        rows.append(("Sweep Ion/Ioff",
+                                     f"{stats['on_off_ratio']:.3g}"))
+                    if "threshold_voltage_v" in stats:
+                        rows.append(("Sweep Vth (max-gm est.)",
+                                     f"{stats['threshold_voltage_v']:.3g} V"))
             return rows
         return [("Selected", node_id)]
 
