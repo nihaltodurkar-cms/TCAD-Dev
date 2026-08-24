@@ -27,6 +27,12 @@ Rectangle {
         if (mode === "process") {
             canvas.setProcessSource(controller.processResultForQml, root.currentProcessStepId)
         }
+        if (mode === "convergence") {
+            // v0.5.0 M4: hand the M2 RunRecord (or null) to the canvas.
+            var store = controller.currentStore
+            canvas.setConvergenceSource(
+                store && store.run_record ? store.run_record() : null)
+        }
         if (mode === "series") {
             // v0.4: hand the executed sweep (or null before any swept run)
             // to the canvas, then refresh the channel selector from it.

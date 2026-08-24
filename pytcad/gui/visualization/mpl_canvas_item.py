@@ -129,6 +129,36 @@ class MplCanvasItem(QQuickPaintedItem):
     def availableSweepChannels(self):
         return list(self._sweep.channels) if self._sweep is not None else []
 
+    # -- convergence history (v0.5.0 M4) ---------------------------------
+    @Slot(object)
+    def setConvergenceSource(self, record):
+        """Data source for "convergence" mode: a solver_backend.RunRecord
+        (or None).  Does NOT touch self._mode, like every other source
+        setter -- ViewportPanel.setViewMode() drives the mode."""
+        self._convergence_record = record
+        self.fit()
+
+    def _draw_convergence(self, ax):
+        record = getattr(self, "_convergence_record", None)
+        steps = list(record.trace) if record is not None and record.trace else []
+        if not steps:
+            ax.text(0.5, 0.5, "No convergence record\n"
+                    "(solve a device with schema-v2 results)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        offset = 0
+        for step in steps:
+            residuals = [np.nan if v is None else float(v)
+                         for v in next(iter(step.metrics.values()), [])]
+            xs = list(range(offset, offset + len(residuals)))
+            ax.semilogy(xs, residuals, marker=".", label=step.stage)
+            offset += len(residuals)
+        ax.set_xlabel("cumulative Newton iteration")
+        ax.set_ylabel("residual (first metric)")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
     @Property(bool, notify=viewChanged)
     def logScale(self):
         return self._log
@@ -250,6 +280,10 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "process" and self._process_store is not None:
             self._draw_process(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "convergence":
+            self._draw_convergence(ax)
             fig.tight_layout()
             return fig
         if self._mode == "series":

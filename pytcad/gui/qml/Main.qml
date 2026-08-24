@@ -87,11 +87,13 @@ ApplicationWindow {
             ComboBox {
                 id: viewModeBox
                 objectName: "viewModeSelector"
-                model: ["Structure", "Doping", "Mesh", "Process", "Curves", "Results"]
+                model: ["Structure", "Doping", "Mesh", "Process", "Curves",
+                        "Convergence", "Results"]
                 onActivated: {
                     var m = {"Structure": "structure", "Doping": "doping",
                             "Mesh": "mesh", "Process": "process",
                             "Curves": "series",
+                            "Convergence": "convergence",
                             "Results": "doping"}[currentText]
                     viewport.setViewMode(m)
                 }
@@ -165,6 +167,13 @@ ApplicationWindow {
                 SplitView.preferredWidth: 200
                 SplitView.minimumWidth: 170
                 controller: appController
+            }
+
+            PhysicsLabPanel {
+                objectName: "physicsLabPanel"
+                SplitView.preferredWidth: 230
+                SplitView.minimumWidth: 190
+                onPlotConvergenceRequested: viewport.setViewMode("convergence")
             }
 
             PropertiesPanel {

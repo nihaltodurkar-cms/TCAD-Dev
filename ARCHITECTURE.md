@@ -1,6 +1,8 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1 + M2 + M3 SHIPPED. M3 delivered the
+Date: 2026-08-24. Status: M1 + M2 + M3 + M4 SHIPPED (M4: Physics Lab
+foundation -- CatalogModel over the real registry, validated toggles
+reaching the executed RunRecord, convergence viewport mode). M3 delivered the
 store/analysis boundary (ABC sweep+solved-result protocol, no more
 isinstance checks, public selected_step_id, service-layer junction
 depth), the observables layer (workbench/analysis, parity-golden vs GUI
@@ -138,7 +140,7 @@ M3 - RESULTSTORE / ANALYSIS BOUNDARY + SOLVERBACKEND PROTOCOL
   Risks: solver_runner/store churn (guarded by the unchanged suite).
   Compat: GUI readouts unchanged in wording/values; CLI unchanged.
 
-M4 - PHYSICS LAB FOUNDATION (Educational UI)
+M4 - PHYSICS LAB FOUNDATION (Educational UI) [SHIPPED]
   Purpose: first real educational surface: panel listing ModelCatalog
          entries with enable/disable + validated parameter edits;
          equation/reference text; convergence-history plot from the M2

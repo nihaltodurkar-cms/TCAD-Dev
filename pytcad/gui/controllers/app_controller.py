@@ -106,6 +106,11 @@ class AppController(QObject):
         # v0.4 voltage sweep applied to the next Run (not undoable: it is
         # run configuration, like field selection -- not device geometry)
         self._sweep_config = None
+        # v0.5.0 M4: the Physics Lab owns the model-flag configuration.
+        # Its defaults equal the wire-format defaults, so this is
+        # invisible until a student toggles something.
+        from .lab_controller import PhysicsLabController
+        self.lab = PhysicsLabController(self)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -1006,6 +1011,9 @@ class AppController(QObject):
                     "Sweep cannot run on this device", str(exc))
                 return
         self.spec.sweep = self._sweep_config
+        # The Lab's validated catalog config is what executes; the M2
+        # RunRecord stamps it, so every run proves which physics ran.
+        self.spec.models = dict(self.lab.model_config)
         # Final review I-3: a fresh run invalidates whatever is on show.
         # Mirrors runProcess()'s clear-on-start: during a long sweep, the
         # previous run's curves must not sit there looking current.
