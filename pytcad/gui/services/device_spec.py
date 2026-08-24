@@ -43,19 +43,33 @@ class SweepSpec:
     def n_points(self):
         return len(self.voltages())
 
-    def validate(self, contact_names):
-        """Raise ValueError with an actionable message on any spec that
-        cannot be executed.  `contact_names` is the list of names the
-        enclosing DeviceSpec actually registers."""
-        names = list(contact_names)
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        """Structural parse with load-time errors -- used by project
+        persistence, where a corrupt sweep must fail with an actionable
+        message rather than surfacing later as a failed solver job."""
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"sweep configuration must be an object, got {type(d).__name__}")
+        try:
+            spec = cls(contact=d["contact"], start=float(d["start"]),
+                       stop=float(d["stop"]), step=float(d["step"]))
+        except KeyError as exc:
+            raise ValueError(f"sweep configuration is missing field {exc}") from None
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid sweep configuration: {exc}") from None
+        spec.validate_values()
+        return spec
+
+    def validate_values(self):
+        """Everything checkable WITHOUT knowing the contact registry."""
         for label, v in (("start", self.start), ("stop", self.stop),
                          ("step", self.step)):
-            if not math.isfinite(v):
-                raise ValueError(f"sweep {label} must be finite, got {v}")
-        if not self.contact or self.contact not in names:
-            raise ValueError(
-                f"sweep contact '{self.contact}' is not a registered "
-                f"contact (have: {', '.join(names) or 'none'})")
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError(f"sweep {label} must be finite, got {v!r}")
         if self.step == 0:
             raise ValueError("sweep step must be nonzero")
         if self.start == self.stop:
@@ -66,6 +80,18 @@ class SweepSpec:
             raise ValueError(
                 f"sweep step {self.step} does not move from start "
                 f"{self.start} toward stop {self.stop}")
+
+    def validate(self, contact_names):
+        """Raise ValueError with an actionable message on any spec that
+        cannot be executed.  `contact_names` is the list of names the
+        enclosing DeviceSpec actually registers."""
+        names = list(contact_names)
+        if not isinstance(self.contact, str) or not self.contact \
+                or self.contact not in names:
+            raise ValueError(
+                f"sweep contact '{self.contact}' is not a registered "
+                f"contact (have: {', '.join(names) or 'none'})")
+        self.validate_values()
 
 
 @dataclass

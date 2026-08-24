@@ -849,7 +849,8 @@ class AppController(QObject):
             self.errorRaised.emit("Cannot save an invalid process flow",
                                   "\n".join(self.processValidationErrors))
             return
-        save_project(path, name, self.structure, self.mesh_model, self.process_flow)
+        save_project(path, name, self.structure, self.mesh_model,
+                     self.process_flow, self._sweep_config)
         self._undo_stack.mark_clean()
         self.undoStateChanged.emit()
         self.consoleModel.append(f"Saved project to {path}.")
@@ -858,7 +859,7 @@ class AppController(QObject):
     def loadProject(self, path):
         path = self._to_local_path(path)
         try:
-            name, structure, mesh_model, process_flow = load_project(path)
+            name, structure, mesh_model, process_flow, sweep = load_project(path)
         except Exception as exc:
             self.errorRaised.emit("Could not load project", str(exc))
             return
@@ -868,6 +869,14 @@ class AppController(QObject):
         # unconditionally here, consistent with undo()/redo().
         self.structure, self.mesh_model = structure, mesh_model
         self.process_flow = process_flow
+        # v0.4: restore the project's armed sweep (None for v2/v3 files).
+        self._sweep_config = sweep
+        self.sweepChanged.emit()
+        # A project file never contains results: whatever was solved in
+        # this session belongs to the PREVIOUS project and must not stay
+        # on show as if it belonged to the one just loaded.
+        self._store = None
+        self.resultChanged.emit()
         self._undo_stack = UndoStack()
         self._undo_stack.mark_clean()
         self._refresh_structure_models()

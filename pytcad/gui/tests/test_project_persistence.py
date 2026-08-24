@@ -30,7 +30,7 @@ def test_save_then_load_round_trips_exactly(tmp_path):
     path = str(tmp_path / "project.json")
     save_project(path, "Test Project", structure, mesh)
 
-    name, back_structure, back_mesh, back_flow = load_project(path)
+    name, back_structure, back_mesh, back_flow, _sweep = load_project(path)
     assert name == "Test Project"
     assert back_structure.to_dict() == structure.to_dict()
     assert back_mesh.to_dict() == mesh.to_dict()
@@ -43,7 +43,7 @@ def test_saved_file_has_the_schema_version(tmp_path):
     save_project(path, "Test Project", structure, mesh)
     with open(path) as fh:
         data = json.load(fh)
-    assert data["schema_version"] == SCHEMA_VERSION == 3
+    assert data["schema_version"] == SCHEMA_VERSION == 4
 
 
 def test_saved_file_never_embeds_large_arrays(tmp_path):
@@ -71,7 +71,7 @@ def test_v3_project_round_trips_process_flow(tmp_path):
                                           parameters={"length_cm": 3e-4})])
     path = str(tmp_path / "v3.json")
     save_project(path, "V3 Project", structure, mesh, flow)
-    name, s2, m2, f2 = load_project(path)
+    name, s2, m2, f2, _sweep = load_project(path)
     assert f2.steps[0].id == "a"
     assert f2.steps[0].parameters == {"length_cm": 3e-4}
 
@@ -87,7 +87,7 @@ def test_v2_project_loads_with_empty_process_flow(tmp_path):
     path = str(tmp_path / "v2.json")
     with open(path, "w") as fh:
         json.dump(v2_data, fh)
-    name, s2, m2, f2 = load_project(path)
+    name, s2, m2, f2, _sweep = load_project(path)
     assert name == "Old Project"
     assert len(s2.regions) == len(structure.regions)
     assert s2.to_dict() == structure.to_dict()
@@ -119,7 +119,7 @@ def test_process_only_project_round_trips_with_no_structure(tmp_path):
     assert data["structure"] is None
     assert data["mesh"] is None
 
-    name, structure, mesh_model, process_flow = load_project(path)
+    name, structure, mesh_model, process_flow, _sweep = load_project(path)
     assert name == "Process Only"
     assert structure is None
     assert mesh_model is None
@@ -134,7 +134,7 @@ def test_structure_only_project_round_trips_with_empty_process_flow(tmp_path):
     path = str(tmp_path / "structure_only.json")
     save_project(path, "Structure Only", structure, mesh, ProcessFlow())
 
-    name, s2, m2, f2 = load_project(path)
+    name, s2, m2, f2, _sweep = load_project(path)
     assert name == "Structure Only"
     assert s2.to_dict() == structure.to_dict()
     assert m2.to_dict() == mesh.to_dict()
@@ -150,7 +150,7 @@ def test_structure_and_process_project_round_trips_both(tmp_path):
     path = str(tmp_path / "both.json")
     save_project(path, "Both", structure, mesh, flow)
 
-    name, s2, m2, f2 = load_project(path)
+    name, s2, m2, f2, _sweep = load_project(path)
     assert name == "Both"
     assert s2.to_dict() == structure.to_dict()
     assert m2.to_dict() == mesh.to_dict()
