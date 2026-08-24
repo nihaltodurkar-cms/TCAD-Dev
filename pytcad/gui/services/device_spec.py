@@ -12,6 +12,60 @@ JSON-serializable.
 """
 from dataclasses import dataclass, field, asdict
 import json
+import math
+
+
+@dataclass
+class SweepSpec:
+    """A single-contact voltage sweep.
+
+    v0.4 semantics: the named contact (or gate -- gates are biased by
+    name too) is ramped from `start` to `stop` in `step`; every OTHER
+    contact holds its DeviceSpec.bias voltage (or its ContactSpec.V
+    default where bias does not mention it).  The solver reuses one warm-
+    started device across points, mirroring pytcad's own iv_sweep /
+    id_vg_sweep pattern.
+
+    This lives on the JSON boundary: plain dataclass, no Qt, no numpy.
+    """
+    contact: str
+    start: float
+    stop: float
+    step: float
+
+    def voltages(self):
+        """Inclusive ramp start -> stop.  The endpoint survives IEEE
+        rounding (0.3/0.1 == 2.999...e0 must still yield 4 points)."""
+        k = (self.stop - self.start) / self.step
+        n = int(round(k)) + 1 if abs(k - round(k)) < 1e-9 else int(math.floor(k)) + 1
+        return [self.start + i * self.step for i in range(n)]
+
+    def n_points(self):
+        return len(self.voltages())
+
+    def validate(self, contact_names):
+        """Raise ValueError with an actionable message on any spec that
+        cannot be executed.  `contact_names` is the list of names the
+        enclosing DeviceSpec actually registers."""
+        names = list(contact_names)
+        for label, v in (("start", self.start), ("stop", self.stop),
+                         ("step", self.step)):
+            if not math.isfinite(v):
+                raise ValueError(f"sweep {label} must be finite, got {v}")
+        if not self.contact or self.contact not in names:
+            raise ValueError(
+                f"sweep contact '{self.contact}' is not a registered "
+                f"contact (have: {', '.join(names) or 'none'})")
+        if self.step == 0:
+            raise ValueError("sweep step must be nonzero")
+        if self.start == self.stop:
+            raise ValueError(
+                "a sweep needs at least 2 points; start == stop "
+                f"({self.start}) gives 1")
+        if (self.stop - self.start) * self.step < 0:
+            raise ValueError(
+                f"sweep step {self.step} does not move from start "
+                f"{self.start} toward stop {self.stop}")
 
 
 @dataclass
@@ -83,6 +137,7 @@ class DeviceSpec:
     models: dict = field(default_factory=_default_models)
     contacts: list = field(default_factory=list)
     bias: dict = None                  # {contact_name: V}; None = equilibrium only
+    sweep: SweepSpec = None            # v0.4: optional single-contact voltage ramp
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -90,6 +145,7 @@ class DeviceSpec:
 
     @classmethod
     def from_dict(cls, d):
+        sweep = d.get("sweep")
         return cls(
             mesh=MeshSpec(**d["mesh"]),
             doping=DopingSpec(**d["doping"]),
@@ -98,6 +154,7 @@ class DeviceSpec:
             models=d.get("models") or _default_models(),
             contacts=[ContactSpec(**c) for c in d.get("contacts", [])],
             bias=d.get("bias"),
+            sweep=SweepSpec(**sweep) if sweep else None,
         )
 
     def to_json(self, path):
