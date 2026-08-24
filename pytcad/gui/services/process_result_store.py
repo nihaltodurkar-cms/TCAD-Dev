@@ -63,6 +63,16 @@ class ProcessResultStore(ResultStore):
     def is_solved_result(self):
         return False
 
+    def domain_device(self, step_id=None):
+        """The selected (or given) checkpoint as a validated 1D
+        DomainDevice -- checkpoints ARE devices under the workbench
+        model (M6)."""
+        from workbench.adapters.process import domain_from_process_state
+        state = self.state_for(step_id or self._selected)
+        return domain_from_process_state(
+            state["x"], state["net_doping"], state.get("ntotal"),
+            name=f"checkpoint {step_id or self._selected}")
+
     def has_sweep(self):
         return False
 

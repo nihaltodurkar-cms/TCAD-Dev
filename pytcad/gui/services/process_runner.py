@@ -57,6 +57,14 @@ def _run_implant(step, state):
     species = p["species"]
     contribution = process.implant(x, species, p["energy_keV"], p["dose_cm2"],
                                    p.get("tilt_deg", 0.0))
+    # v0.5.0 M6: OPTIONAL ion-implanter window ("x_range_cm": [lo, hi]).
+    # Composition of the existing core function with a hard mask -- no
+    # numerical code changes.  Absent key -> whole domain, exactly as
+    # before.
+    window = p.get("x_range_cm")
+    if window is not None:
+        lo, hi = float(window[0]), float(window[1])
+        contribution = np.where((x >= lo) & (x <= hi), contribution, 0.0)
     profiles = dict(state["species_profiles"])
     existing = profiles.get(species, np.zeros_like(x))
     profiles[species] = existing + contribution

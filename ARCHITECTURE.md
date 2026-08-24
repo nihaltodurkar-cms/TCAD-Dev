@@ -1,6 +1,9 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1-M5 SHIPPED (M5: Device Builder expansion --
+Date: 2026-08-24. Status: M1-M6 SHIPPED (M6: process checkpoints map
+losslessly onto 1D DomainDevices via workbench/adapters/process.py;
+optional per-region implant windows as a composition mask -- zero
+numerical changes, old flows byte-identical). (M5: Device Builder expansion --
 parametric pn-diode / NMOS / MOS-C templates in the domain core, Builder
 controller+panel adopting into the existing Structure workbench, NMOS
 defaults pinned by equivalence golden to the shipped example). (M4: Physics Lab
@@ -162,7 +165,7 @@ M5 - DEVICE BUILDER EXPANSION (Device Builder) [SHIPPED]
           heterostructure Regions exist.
   Tests: each template builds, solves, matches current benchmarks.
 
-M6 - PROCESS BUILDER (Process side)
+M6 - PROCESS BUILDER (Process side) [SHIPPED]
   Purpose: process ops map onto domain-core Regions (per-region
           implants); checkpoints become DomainDevices. Scope stays 1D:
           multi-material regions are explicitly OUT until the

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field, asdict
 import copy
 import uuid
 
+import math
+
 import numpy as np
 
 from pytcad.process import DOPANT_TYPE
@@ -162,6 +164,17 @@ def validate_flow(flow):
                         f"for {species} ({lo}-{hi} keV)", step.id))
             if p.get("dose_cm2", 0.0) <= 0:
                 errors.append(ValidationError("Dose must be > 0", step.id))
+            # v0.5.0 M6: OPTIONAL ion-implanter window.  Absent -> the
+            # implant covers the whole domain exactly as before.
+            rng = p.get("x_range_cm")
+            if rng is not None:
+                ok = (isinstance(rng, (list, tuple)) and len(rng) == 2 and
+                      all(isinstance(v, (int, float)) and math.isfinite(v)
+                          for v in rng) and float(rng[0]) < float(rng[1]))
+                if not ok:
+                    errors.append(ValidationError(
+                        f"x_range_cm must be [lo, hi] with lo < hi "
+                        f"(finite numbers), got {rng!r}", step.id))
             tilt = p.get("tilt_deg", 0.0)
             if not (0.0 <= tilt < 90.0):
                 errors.append(ValidationError(
