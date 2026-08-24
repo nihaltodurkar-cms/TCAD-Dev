@@ -211,7 +211,8 @@ operations with per-species doping tracking (v0.3); single-contact
 voltage sweeps with curve plotting and derived readouts — Imax/Imin,
 Ion/Ioff, and a max-gm threshold estimate for gate sweeps (v0.4); and
 an explicit, versioned schema for solved-result files that every result
-is now validated against on load, preparing the ground for (but not yet
+is now validated against on load, plus per-run provenance and
+convergence-trace records, preparing the ground for (but not yet
 adding) a second solver backend (v0.5.0). See `gui/README.md` for
 install/run instructions and the full version-by-version detail (its
 own original design notes are not included in this repository
@@ -249,6 +250,19 @@ sweep is job-level configuration and does not ride on a DomainDevice;
 region-authored bias is derived from contact voltages and conflicts are
 rejected; non-silicon region materials fail loudly because the numerical
 core implements silicon only.
+
+### Run provenance & convergence records (new)
+
+Every solved result file is now self-describing (result schema v2,
+additive over v1): it carries its mesh as flat node coordinates, the
+exact physics-model flags and Newton options that produced it, and a
+per-stage convergence trace — iteration counts and residual norms for
+equilibrium, bias, and every sweep point. The capture works by teeing
+the solver's own verbose output, so the numerical engine is untouched;
+a test pins the output format so silent drift fails loudly. Files
+self-validate on load against the versioned schema. This is the
+substrate the planned "Physics Lab" UI will use to *show which
+equations produced a quantity and how the solve actually converged*.
 
 ## 7. Where to read more
 

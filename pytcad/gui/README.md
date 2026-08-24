@@ -640,7 +640,7 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
 - Windows runtime support remains unverified (see v0.3's note above);
   nothing in v0.4 changed the process-launch pattern.
 
-## v0.5.0 — Solver Backend Boundary
+## v0.5.0 — Solver Backend Boundary & Run Records
 
 One preparatory task: promote the de-facto contract between the GUI and
 the numerical solver into an explicit, versioned interface, with zero
@@ -696,6 +696,37 @@ but the original test suite only exercised 1D and 2D through the real
 CLI. A real 3D solve is now run and validated end to end as part of the
 conformance tests.
 
+### Task 2 — RunRecord + result schema v2
+
+The second (and larger) half of v0.5.0 makes a *run* a first-class
+artifact. Result schema 2 is purely additive over schema 1 — a v2 file
+is a valid v1 file with more keys, so nothing that reads v1 breaks:
+
+- **Geometry keys** (`geom__kind`, `mesh__shape`, `nodes__count`,
+  `nodes__coords`): every result now also carries its mesh as flat node
+  coordinates in the solver's own x-fastest node order, so a future
+  backend is not boxed into rectilinear grids by the wire format.
+- **Provenance** (`record__meta`, JSON): UTC timestamp, backend id,
+  dimensionality, material, T, the exact model-flag config and
+  NewtonOptions used, and sweep metadata when armed.
+- **Convergence trace** (`converge__trace`, JSON): per-stage Newton
+  history — `equilibrium`, `bias`, and one `sweep:<i>` stage per swept
+  point — with iteration numbers and residual metrics.
+
+The trace is captured with ZERO numerical changes: the runner tees its
+own stdout (everything captured still streams to the console panel) and
+parses the core's existing verbose Newton lines, split on the runner's
+own `PYTCAD_STAGE` markers. A dedicated format-pin test fails loudly if
+the core's line format ever drifts. `capture_trace=False` omits only
+the trace. `NpzResultStore.run_record()` returns a `RunRecord`
+(`None` for pre-v2 files); the Physics Lab planned for a later
+milestone will render exactly this record.
+
+Adversarial review of the first implementation found and fixed: geometry
+consistency checks that could be bypassed by omitting `geom__kind`; a
+misleading rejection for the reserved-but-unimplemented `point_cloud`
+kind; and a stdout leak in the runner if a solve raised mid-capture.
+
 ### Honest limits of v0.5.0
 
 - Preparation only: no second solver backend exists yet, and none is
@@ -709,3 +740,11 @@ conformance tests.
   Process-flow checkpoints (`ProcessResultStore`) and the pre-solve
   preview store (`SpecResultStore`) read npz files through entirely
   separate code paths and are not covered by this schema.
+- Schema 2's `point_cloud` geometry kind is reserved but NOT readable:
+  files declaring it are rejected with an explicit message until a
+  backend actually produces one.
+- The convergence trace is diagnostic, not load-bearing: it is parsed
+  from human-readable solver output (pinned by a test), so a residual
+  number in a trace is exactly what the core printed — no more. Only
+  sweep stages carry an authoritative converged flag; equilibrium/bias
+  steps assume convergence unless the run failed outright.
