@@ -1,23 +1,8 @@
 # PyTCAD
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pytcad/README.md)
-[![Tests: 39 passing](https://img.shields.io/badge/tests-39%20passing-brightgreen.svg)](pytcad/tests)
-[![Desktop GUI v0.4](https://img.shields.io/badge/desktop%20GUI-v0.4-informational.svg)](pytcad/gui/README.md)
-
 A compact, readable, **validated** TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation in 1D, 2D (with a real MOSFET), and 3D, plus a desktop GUI — structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
 
-| | |
-|---|---|
-| **1D** | Drift-diffusion diode/BJT core, validated against analytic ideal-diode limits |
-| **2D** | Full MOSFET with gate-controlled `Id`–`Vg` subthreshold turn-on |
-| **3D** | Tensor-product Cartesian solver, validated by dimensional reduction to 2D |
-| **Process** | Implant, diffusion, Deal–Grove oxidation — feeds directly into the device solvers |
-| **GUI** | PySide6 / Qt Quick desktop app (v0.4) — structure, mesh, process, and sweep workbenches |
-
 Roughly 2,700 lines for the numerical core below (1D + 2D + 3D; the desktop GUI in `gui/` is separate and documented in `gui/README.md`). No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
-
-**Jump to:** [Device equations](#1-the-device-equations) · [Numerics](#2-numerics--why-its-built-this-way) · [Physical models](#3-physical-models) · [Validation](#4-validation) · [Usage](#5-usage) · [Honest limits](#6-honest-limits-of-this-code) · [Further reading](#7-where-to-read-more)
 
 ```
 pytcad/
@@ -212,19 +197,23 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 ### Desktop GUI (new)
 
 There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
-v0.1 – v0.4) that solves devices in a background process and visualizes
-the result, without the GUI ever blocking or the numerical engine
-changing by a single line. It now covers: a built-in 2D MOSFET example
-(v0.1); a Structure + Mesh workbench for building and validating devices
-from regions, contacts and gates (v0.2); a Process Workbench driving
-pytcad's own 1D substrate/implant/anneal/oxidize operations with
-per-species doping tracking (v0.3); and single-contact voltage sweeps
-with curve plotting and derived readouts — Imax/Imin, Ion/Ioff, and a
-max-gm threshold estimate for gate sweeps (v0.4). See `gui/README.md`
-for install/run instructions and the full version-by-version detail
-(its own original design notes are not included in this repository
+v0.1 – v0.5.0) that solves devices in a background process and
+visualizes the result, without the GUI ever blocking or the numerical
+engine changing by a single line. It now covers: a built-in 2D MOSFET
+example (v0.1); a Structure + Mesh workbench for building and
+validating devices from regions, contacts and gates (v0.2); a Process
+Workbench driving pytcad's own 1D substrate/implant/anneal/oxidize
+operations with per-species doping tracking (v0.3); single-contact
+voltage sweeps with curve plotting and derived readouts — Imax/Imin,
+Ion/Ioff, and a max-gm threshold estimate for gate sweeps (v0.4); and
+an explicit, versioned schema for solved-result files that every result
+is now validated against on load, preparing the ground for (but not yet
+adding) a second solver backend (v0.5.0). See `gui/README.md` for
+install/run instructions and the full version-by-version detail (its
+own original design notes are not included in this repository
 checkout). Still not a complete TCAD workbench: no 3D visualization, no
-multi-parameter or batch sweeps, no C–V mode in the GUI (see
+multi-parameter or batch sweeps, no C–V mode in the GUI, no second
+solver backend actually wired up yet (see
 `gui/README.md`'s "Honest limits" for the full, current list).
 
 ## 7. Where to read more

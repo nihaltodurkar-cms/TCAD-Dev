@@ -1,13 +1,15 @@
-# PyTCAD Desktop GUI (v0.1 – v0.4)
+# PyTCAD Desktop GUI (v0.1 – v0.5.0)
 
 A PySide6 / Qt Quick desktop frontend for the PyTCAD solver.
 
-**This is v0.4 — swept device analysis on top of the v0.1–v0.3 spine.**
-It loads a built-in 2D MOSFET, solves it, and visualizes fields; edits
-2D structures and 1D process flows in undoable workbenches; and now runs
-single-contact **voltage sweeps** (I–V, Id–Vg) with curve visualization
-and derived readouts. Multi-parameter batch sweeps, C–V analysis, and 3D
-visualization remain later versions.
+**This is v0.5.0 — the solver-backend boundary formalized on top of the
+v0.1–v0.4 spine.** It loads a built-in 2D MOSFET, solves it, and
+visualizes fields; edits 2D structures and 1D process flows in undoable
+workbenches; runs single-contact **voltage sweeps** (I–V, Id–Vg) with
+curve visualization and derived readouts; and now validates every
+solved result against an explicit, versioned schema before displaying
+it. Multi-parameter batch sweeps, C–V analysis, 3D visualization, and
+an actual second solver backend all remain later work.
 
 ## Install
 
@@ -637,3 +639,73 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
   re-arming against whatever device is loaded next.
 - Windows runtime support remains unverified (see v0.3's note above);
   nothing in v0.4 changed the process-launch pattern.
+
+## v0.5.0 — Solver Backend Boundary
+
+One preparatory task: promote the de-facto contract between the GUI and
+the numerical solver into an explicit, versioned interface, with zero
+behavior change to the numerical engine, the controller, or any
+existing workflow.
+
+### What changed
+
+- **New `gui/services/solver_backend.py`** (Qt-free, pytcad-free):
+  `SOLVER_RESULT_SCHEMA_VERSION`, the canonical result-key grammar
+  documented as its own reference docstring (field/unit/vector/
+  terminal/sweep key conventions, per dimensionality), and
+  `validate_result()` — a *structural* validator (shapes agree with the
+  mesh axes, every field has a declared unit, a sweep block is
+  all-or-nothing) rather than an exhaustive key inventory, so
+  hand-written minimal test fixtures elsewhere in the suite stay legal.
+- `solver_runner.py` stamps every result with `result__schema =
+  SOLVER_RESULT_SCHEMA_VERSION` (one additive key; older files written
+  before this change have no stamp and are read as legacy version 1).
+- `NpzResultStore` now validates on open and fails fast with a
+  `ResultSchemaError` — a corrupt or malformed result file is reported
+  the moment it's loaded, not as a cryptic `KeyError` deep inside a plot
+  later.
+
+### Why
+
+This is preparation, not new capability: the solver is entirely
+homegrown (numpy/scipy finite-difference + Newton) with zero coupling
+to any external backend today. Formalizing the existing implicit
+contract — rather than leaving it as an undocumented convention that
+only `solver_runner.extract_result()` and `NpzResultStore` happen to
+agree on — is the smallest safe step toward a future second backend,
+without moving or rewriting anything in `pytcad/pytcad/` or the
+controller.
+
+### Found and fixed during review
+
+Adversarial review of the validator itself (not just its own bundled
+tests) found two real gaps between what it documents and what it
+enforces:
+- `solved_bias` was listed in the grammar docstring as always required
+  but was never actually checked — a result file missing it passed
+  validation silently. Now enforced.
+- Terminal validation checked that a `__value` implies a matching
+  `__unit`, but not the reverse — an orphan `terminal__X__unit` with no
+  `__value` passed silently (harmless in practice, since no consumer
+  ever reads an orphan unit key, but a real asymmetry in an otherwise
+  symmetric check). Now enforced both directions.
+
+A coverage gap was also closed: the grammar documents `dimensionality
+in {1,2,3}` and a terminal-unit change at 3D (real amperes, not A/cm),
+but the original test suite only exercised 1D and 2D through the real
+CLI. A real 3D solve is now run and validated end to end as part of the
+conformance tests.
+
+### Honest limits of v0.5.0
+
+- Preparation only: no second solver backend exists yet, and none is
+  wired up. DEVSIM (or any other backend) integration is explicitly out
+  of scope for this task.
+- Validation is structural, not physical: it checks that a result
+  file's shape is internally consistent, never that its numbers are
+  correct. Physical correctness stays the numerical suite's job
+  (`pytcad/tests/`), untouched by this work.
+- `NpzResultStore`'s validate-on-open covers device-solve results only.
+  Process-flow checkpoints (`ProcessResultStore`) and the pre-solve
+  preview store (`SpecResultStore`) read npz files through entirely
+  separate code paths and are not covered by this schema.

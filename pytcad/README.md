@@ -197,19 +197,23 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 ### Desktop GUI (new)
 
 There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
-v0.1 – v0.4) that solves devices in a background process and visualizes
-the result, without the GUI ever blocking or the numerical engine
-changing by a single line. It now covers: a built-in 2D MOSFET example
-(v0.1); a Structure + Mesh workbench for building and validating devices
-from regions, contacts and gates (v0.2); a Process Workbench driving
-pytcad's own 1D substrate/implant/anneal/oxidize operations with
-per-species doping tracking (v0.3); and single-contact voltage sweeps
-with curve plotting and derived readouts — Imax/Imin, Ion/Ioff, and a
-max-gm threshold estimate for gate sweeps (v0.4). See `gui/README.md`
-for install/run instructions and the full version-by-version detail
-(its own original design notes are not included in this repository
+v0.1 – v0.5.0) that solves devices in a background process and
+visualizes the result, without the GUI ever blocking or the numerical
+engine changing by a single line. It now covers: a built-in 2D MOSFET
+example (v0.1); a Structure + Mesh workbench for building and
+validating devices from regions, contacts and gates (v0.2); a Process
+Workbench driving pytcad's own 1D substrate/implant/anneal/oxidize
+operations with per-species doping tracking (v0.3); single-contact
+voltage sweeps with curve plotting and derived readouts — Imax/Imin,
+Ion/Ioff, and a max-gm threshold estimate for gate sweeps (v0.4); and
+an explicit, versioned schema for solved-result files that every result
+is now validated against on load, preparing the ground for (but not yet
+adding) a second solver backend (v0.5.0). See `gui/README.md` for
+install/run instructions and the full version-by-version detail (its
+own original design notes are not included in this repository
 checkout). Still not a complete TCAD workbench: no 3D visualization, no
-multi-parameter or batch sweeps, no C–V mode in the GUI (see
+multi-parameter or batch sweeps, no C–V mode in the GUI, no second
+solver backend actually wired up yet (see
 `gui/README.md`'s "Honest limits" for the full, current list).
 
 ## 7. Where to read more
