@@ -36,6 +36,8 @@ def create_engine(app):
     controller = AppController()
     engine.rootContext().setContextProperty("appController", controller)
     engine.rootContext().setContextProperty("physicsLab", controller.lab)
+    engine.rootContext().setContextProperty("deviceBuilder",
+                                            controller.builder)
     engine.load(QUrl.fromLocalFile(os.path.join(QML_DIR, "Main.qml")))
 
     # hold references on the engine so they outlive this function

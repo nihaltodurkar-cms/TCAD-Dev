@@ -176,6 +176,12 @@ ApplicationWindow {
                 onPlotConvergenceRequested: viewport.setViewMode("convergence")
             }
 
+            DeviceTemplatesPanel {
+                objectName: "deviceTemplatesPanel"
+                SplitView.preferredWidth: 210
+                SplitView.minimumWidth: 180
+            }
+
             PropertiesPanel {
                 objectName: "propertiesPanel"
                 SplitView.preferredWidth: 280

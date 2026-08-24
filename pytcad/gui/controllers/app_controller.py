@@ -111,6 +111,8 @@ class AppController(QObject):
         # invisible until a student toggles something.
         from .lab_controller import PhysicsLabController
         self.lab = PhysicsLabController(self)
+        from .builder_controller import BuilderController
+        self.builder = BuilderController(self)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -421,6 +423,20 @@ class AppController(QObject):
         self._undo_stack.push(Command(do, undo, description))
         self._refresh_process_flow()
         self.undoStateChanged.emit()
+
+    @Slot(object, object, str)
+    def adoptStructure(self, structure, mesh_model, label):
+        """Adopt an externally built (StructureModel, MeshModel) pair --
+        e.g. from a Device Builder template -- into the existing
+        Structure workbench: same undo reset, model refresh and console
+        trail as loadStructureExample."""
+        self.structure, self.mesh_model = structure, mesh_model
+        self._undo_stack = UndoStack()
+        self._refresh_structure_models()
+        self.undoStateChanged.emit()
+        self.consoleModel.append(
+            f"Built device from template '{label}' -- edit it in the "
+            "Structure workbench.")
 
     @Slot(str)
     def loadStructureExample(self, name):

@@ -1,6 +1,9 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1 + M2 + M3 + M4 SHIPPED (M4: Physics Lab
+Date: 2026-08-24. Status: M1-M5 SHIPPED (M5: Device Builder expansion --
+parametric pn-diode / NMOS / MOS-C templates in the domain core, Builder
+controller+panel adopting into the existing Structure workbench, NMOS
+defaults pinned by equivalence golden to the shipped example). (M4: Physics Lab
 foundation -- CatalogModel over the real registry, validated toggles
 reaching the executed RunRecord, convergence viewport mode). M3 delivered the
 store/analysis boundary (ABC sweep+solved-result protocol, no more
@@ -152,7 +155,7 @@ M4 - PHYSICS LAB FOUNDATION (Educational UI) [SHIPPED]
          ModelConfig and change RunRecord, convergence plot data).
   Compat: purely additive UI.
 
-M5 - DEVICE BUILDER EXPANSION (Device Builder)
+M5 - DEVICE BUILDER EXPANSION (Device Builder) [SHIPPED]
   Purpose: parametric templates (pn diode, NMOS like today's example,
           MOS-C) expressed in domain core; Builder UI lists templates
           with editable parameters. BJT/HEMT/solar deferred until
