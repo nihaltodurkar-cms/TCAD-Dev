@@ -168,3 +168,28 @@ def test_qml_panel_drives_a_real_build(gapp=None):
             gapp.processEvents(); time.sleep(0.01)
     pump()
     assert ctl.structure is not None, "QML Build did not adopt a device"
+
+
+# ----------------------------------------------------------------------
+#  hard-debug regressions
+# ----------------------------------------------------------------------
+def test_fractional_mesh_parameter_rejected_not_coerced():
+    t = get_template("pn_diode")
+    with pytest.raises(ValueError, match="whole number"):
+        t.build({"nx": 40.7})
+    # and the integral form still works
+    dev = t.build({"nx": 41})
+    assert dev.mesh_nx == 41
+
+
+def test_select_unknown_template_reports_error_not_raise(qapp=None):
+    qapp = QGuiApplication.instance() or QGuiApplication([])
+    from gui.controllers.builder_controller import BuilderController
+    from gui.controllers.app_controller import AppController
+    b = BuilderController(AppController())
+    errs = []
+    b.buildError.connect(lambda s, d: errs.append((s, d)))
+    before = b.selectedTemplateId()
+    b.selectTemplate("bjt")                    # must not raise
+    assert errs and "unknown device template" in errs[0][1]
+    assert b.selectedTemplateId() == before    # selection unchanged

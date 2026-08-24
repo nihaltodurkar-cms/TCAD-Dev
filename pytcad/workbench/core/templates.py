@@ -24,6 +24,7 @@ class TemplateParam:
     default: float
     lo: float = None            # inclusive bounds; None = unbounded
     hi: float = None
+    integer: bool = False       # reject 40.5 instead of silently coercing
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,10 @@ class DeviceTemplate:
                 raise ValueError(
                     f"parameter '{p.name}' must be a finite number, got "
                     f"{v!r}")
+            if p.integer and float(v) != int(v):
+                raise ValueError(
+                    f"parameter '{p.name}' must be a whole number, got "
+                    f"{v}")
             if p.lo is not None and v < p.lo:
                 raise ValueError(
                     f"parameter '{p.name}' must be >= {p.lo}, got {v}")
@@ -72,6 +77,8 @@ def _build_pn_diode(v):
     return DomainDevice(
         id="pn_diode", name="P-N diode",
         dimensionality=2, width_cm=w, height_cm=h,
+        # safe coercion: TemplateParam(integer=True) already rejected
+        # fractional values, so this cannot truncate anything
         mesh_nx=int(v["nx"]), mesh_ny=int(v["ny"]),
         regions=[
             Region("p_side", "P side", 0.0, mid, 0.0, h, v["na_cm3"]),
@@ -91,6 +98,8 @@ def _build_mos_capacitor(v):
     return DomainDevice(
         id="mos_capacitor", name="MOS capacitor",
         dimensionality=2, width_cm=w, height_cm=h,
+        # safe coercion: TemplateParam(integer=True) already rejected
+        # fractional values, so this cannot truncate anything
         mesh_nx=int(v["nx"]), mesh_ny=int(v["ny"]),
         regions=[
             Region("sub", "Substrate", 0.0, w, 0.0, h, v["na_cm3"]),
@@ -155,8 +164,10 @@ TEMPLATES = {
                           1e18, lo=-1e21, hi=1e21),
             TemplateParam("v_p", "P contact bias", "V", 0.0, lo=-50, hi=50),
             TemplateParam("v_n", "N contact bias", "V", 0.0, lo=-50, hi=50),
-            TemplateParam("nx", "Mesh nx", "nodes", 40, lo=8, hi=400),
-            TemplateParam("ny", "Mesh ny", "nodes", 10, lo=6, hi=400),
+            TemplateParam("nx", "Mesh nx", "nodes", 40, lo=8, hi=400,
+                          integer=True),
+            TemplateParam("ny", "Mesh ny", "nodes", 10, lo=6, hi=400,
+                          integer=True),
         ),
         _build_pn_diode),
     "mos_capacitor": _T(
@@ -170,8 +181,10 @@ TEMPLATES = {
                           -1e16, lo=-1e21, hi=1e21),
             TemplateParam("tox_cm", "Oxide thickness", "cm",
                           1e-6, lo=1e-9, hi=1e-4),
-            TemplateParam("nx", "Mesh nx", "nodes", 40, lo=8, hi=400),
-            TemplateParam("ny", "Mesh ny", "nodes", 20, lo=6, hi=400),
+            TemplateParam("nx", "Mesh nx", "nodes", 40, lo=8, hi=400,
+                          integer=True),
+            TemplateParam("ny", "Mesh ny", "nodes", 20, lo=6, hi=400,
+                          integer=True),
         ),
         _build_mos_capacitor),
     # Defaults are PINDED by test to equal gui/services/examples.py's

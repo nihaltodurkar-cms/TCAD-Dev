@@ -26,7 +26,13 @@ class BuilderController(QObject):
 
     @Slot(str)
     def selectTemplate(self, tid):
-        get_template(tid)                    # raises for unknown ids
+        try:
+            get_template(tid)
+        except KeyError as exc:
+            # a raw KeyError across the QML boundary is just a console
+            # warning -- surface it through the builder's error channel
+            self.buildError.emit("Unknown template", str(exc))
+            return
         self._tid = tid
         self._values = {}
         self.paramsChanged.emit()

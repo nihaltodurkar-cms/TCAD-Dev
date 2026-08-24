@@ -49,9 +49,6 @@ Rectangle {
             property var entries: root.builder.selectedParams()
             function rebuild() {
                 entries = root.builder.selectedParams()
-                for (let i = 0; i < children.length; ++i) {
-                    let f = children[i].children ? children[i].field : null
-                }
             }
             Component.onCompleted: rebuild()
 
