@@ -54,10 +54,83 @@ honor this grammar should not exist; fix it at the backend, not here.
 """
 import json
 import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import numpy as np
 
-SOLVER_RESULT_SCHEMA_VERSION = 1
+# Schema history: 1 = the v0.5.0 grammar (stamped or legacy-absent),
+# 2 = v2 adds geom/mesh/node keys plus record__meta provenance and an
+# optional converge__trace.  Everything is ADDITIVE -- a v2 file is a
+# valid v1 file with more keys, so v1 readers keep working untouched.
+SOLVER_RESULT_SCHEMA_VERSION = 2
+KNOWN_RESULT_SCHEMA_VERSIONS = frozenset({1, 2})
+
+GEOM_STRUCTURED = "structured_rectilinear"
+GEOM_POINT_CLOUD = "point_cloud"      # RESERVED: validated as declared-but-
+                                      # unreadable until a backend produces it
+_KNOWN_GEOM_KINDS = (GEOM_STRUCTURED, GEOM_POINT_CLOUD)
+
+
+@dataclass(frozen=True)
+class ConvergenceStep:
+    """One solver stage's Newton history, parsed from the core's own
+    verbose output (no numerical code is modified to produce this)."""
+    stage: str                       # "equilibrium" | "bias" | "sweep:<i>"
+    iterations: tuple = ()           # int per Newton iteration
+    metrics: dict = field(default_factory=dict)   # {"|dpsi|": [...], ...}
+    converged: bool = True
+
+    def to_dict(self):
+        return {"stage": self.stage, "iterations": list(self.iterations),
+                "metrics": {k: list(v) for k, v in self.metrics.items()},
+                "converged": self.converged}
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(stage=str(d.get("stage", "?")),
+                   iterations=tuple(d.get("iterations", [])),
+                   metrics=dict(d.get("metrics", {})),
+                   converged=bool(d.get("converged", True)))
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """Provenance of one executed solve: what was asked, with which
+    physics and numerics, and how convergence actually went.  This is
+    the substrate the Physics Lab will render; nothing here is parsed
+    from results text -- it is written by the runner that did the work."""
+    backend: str
+    created_utc: str
+    dimensionality: int
+    material: str
+    T: float
+    models: dict
+    numerics: dict
+    sweep: dict = None
+    trace: tuple = ()                  # ConvergenceStep tuples
+    schema_version: int = SOLVER_RESULT_SCHEMA_VERSION
+
+    @classmethod
+    def from_npz_keys(cls, d):
+        """Parse record__meta (+ optional converge__trace) from an open
+        npz mapping.  Returns None when the file carries no record --
+        pre-v2 files simply have provenance 'unknown'."""
+        if "record__meta" not in getattr(d, "files", ()):
+            return None
+        meta = json.loads(str(np.asarray(d["record__meta"]).reshape(())))
+        trace = ()
+        if "converge__trace" in getattr(d, "files", ()):
+            raw = json.loads(str(np.asarray(d["converge__trace"]).reshape(())))
+            trace = tuple(ConvergenceStep.from_dict(s) for s in raw)
+        return cls(
+            backend=meta.get("backend", ""), created_utc=meta.get("created_utc", ""),
+            dimensionality=int(meta.get("dimensionality", 0)),
+            material=meta.get("material", ""), T=float(meta.get("T", 0.0)),
+            models=dict(meta.get("models", {})),
+            numerics=dict(meta.get("numerics", {})),
+            sweep=meta.get("sweep"), trace=trace,
+            schema_version=int(meta.get("schema_version", 2)))
 
 
 class ResultSchemaError(ValueError):
@@ -114,13 +187,14 @@ def _validate_mapping(d, path):
         raise ResultSchemaError(f"{path}: not an npz result archive")
 
     # -- schema stamp (optional => legacy v1) ------------------------------
+    schema_found = SOLVER_RESULT_SCHEMA_VERSION
     if "result__schema" in files:
-        stamped = _as_int(d, "result__schema", path)
-        if stamped != SOLVER_RESULT_SCHEMA_VERSION:
+        schema_found = _as_int(d, "result__schema", path)
+        if schema_found not in KNOWN_RESULT_SCHEMA_VERSIONS:
             raise ResultSchemaError(
-                f"{path}: result schema version {stamped} unsupported "
-                f"(this build reads {SOLVER_RESULT_SCHEMA_VERSION}); "
-                "re-run the solver")
+                f"{path}: result schema version {schema_found} unsupported "
+                f"(this build reads "
+                f"{sorted(KNOWN_RESULT_SCHEMA_VERSIONS)}); re-run the solver")
 
     # -- dimensionality + axes ---------------------------------------------
     _require(d, "solved_bias", "always required", path)
@@ -181,6 +255,61 @@ def _validate_mapping(d, path):
                     f"{path}: vector__{name}__{comp} shape {values.shape} "
                     "does not match the mesh axes")
 
+    # -- v2: geometry kind, mesh shape, flat node coordinates -------------
+    # Consistency checks fire whenever ANY geometry key is present --
+    # gating them on geom__kind would let a malformed count slip through
+    # an otherwise-v1 file.  point_cloud is RESERVED by schema 2 but no
+    # producer or reader exists yet: reject it explicitly instead of
+    # failing later with misleading structured-mesh errors.
+    if "geom__kind" in files:
+        kind = str(np.asarray(d["geom__kind"]).reshape(()))
+        if kind not in _KNOWN_GEOM_KINDS:
+            raise ResultSchemaError(
+                f"{path}: unknown geom__kind '{kind}' (known: "
+                f"{', '.join(_KNOWN_GEOM_KINDS)})")
+        if kind == GEOM_POINT_CLOUD:
+            raise ResultSchemaError(
+                f"{path}: geom__kind 'point_cloud' is reserved by schema 2 "
+                "but not readable by this build; structured results only")
+    if "geom__kind" in files or \
+            files & {"mesh__shape", "nodes__count", "nodes__coords"}:
+        n_from_shape = None
+        if "mesh__shape" in files:
+            shape = [int(x) for x in np.asarray(d["mesh__shape"]).ravel()]
+            if sorted(shape) != sorted(a.size for a in axes.values()):
+                raise ResultSchemaError(
+                    f"{path}: mesh__shape {shape} does not match the axes "
+                    f"{[a.size for a in axes.values()]}")
+            n_from_shape = int(np.prod(shape))
+        if "nodes__count" in files:
+            count = _as_int(d, "nodes__count", path)
+            expected = n_from_shape or int(np.prod([a.size for a in axes.values()]))
+            if count != expected:
+                raise ResultSchemaError(
+                    f"{path}: nodes__count {count} disagrees with the "
+                    f"{dim}D mesh ({expected} nodes)")
+            if "nodes__coords" in files:
+                coords = np.asarray(d["nodes__coords"])
+                if coords.ndim != 2 or coords.shape != (count, dim):
+                    raise ResultSchemaError(
+                        f"{path}: nodes__coords shape {coords.shape} must "
+                        f"be ({count}, {dim})")
+
+    # -- v2: run record + convergence trace are parseable JSON -------------
+    for key, what in (("record__meta", "a JSON object"),
+                      ("converge__trace", "a JSON list")):
+        if key not in files:
+            continue
+        try:
+            parsed = json.loads(str(np.asarray(d[key]).reshape(())))
+        except Exception as exc:
+            raise ResultSchemaError(
+                f"{path}: {key} is not valid JSON ({exc})") from exc
+        if what.endswith("object") and not isinstance(parsed, dict):
+            raise ResultSchemaError(f"{path}: {key} must be {what}")
+        if what.endswith("list") and not isinstance(parsed, list):
+            raise ResultSchemaError(f"{path}: {key} must be {what}")
+
     # -- terminals come in value/unit pairs (both directions) -----------------
     for key in sorted(files):
         if key.startswith("terminal__") and key.endswith("__value"):
@@ -228,4 +357,4 @@ def _validate_mapping(d, path):
                 f"{path}: sweep__meta must be a JSON object with an integer "
                 "'dimensionality'")
 
-    return SOLVER_RESULT_SCHEMA_VERSION
+    return schema_found

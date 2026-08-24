@@ -147,6 +147,18 @@ class NpzResultStore(ResultStore):
     def has_sweep(self):
         return "sweep__voltage" in self._d
 
+    # -- run provenance (v2) --------------------------------------------
+    def has_record(self):
+        return "record__meta" in self._d
+
+    def run_record(self):
+        """The RunRecord (provenance + convergence trace), or None for
+        pre-v2 files, which simply have no recorded provenance."""
+        from .solver_backend import RunRecord
+        if not self.has_record():
+            return None
+        return RunRecord.from_npz_keys(self._d)
+
     def sweep_result(self):
         """The executed sweep as a SweepResult, or KeyError for a plain
         single-run result.  Non-converged points are NaN'd here at the

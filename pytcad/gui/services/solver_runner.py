@@ -16,11 +16,15 @@ future non-Qt frontend (design spec section 20).
 This module is also the ONLY place permitted to know pytcad's
 per-dimensionality API differences -- see extract_result().
 """
+import io
 import json
 import os
+import re
 import sys
 import traceback
 import warnings
+from dataclasses import asdict, replace
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -31,7 +35,9 @@ from pytcad.device2d import Device2D
 from pytcad.device3d import Device3D
 
 from .device_spec import DeviceSpec
-from .solver_backend import SOLVER_RESULT_SCHEMA_VERSION
+from .solver_backend import (
+    GEOM_STRUCTURED, SOLVER_RESULT_SCHEMA_VERSION, ConvergenceStep,
+)
 
 
 # ----------------------------------------------------------------------
@@ -289,26 +295,111 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
     return fields if fields is not None else fallback_fields, series
 
 
+
+# ----------------------------------------------------------------------
+# v0.5.0 M2: provenance + convergence trace, with ZERO numerical changes.
+# The core already prints its Newton progress when verbose=True; we tee
+# this process's stdout (JobRunner streaming is unaffected -- everything
+# captured still goes through to the console panel) and parse that text
+# into per-stage traces, split on the runner's own PYTCAD_STAGE markers.
+# A unit test pins the core line formats so silent drift fails loudly.
+# ----------------------------------------------------------------------
+class _Tee(io.TextIOBase):
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, text):
+        for stream in self._streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+
+def _start_capture():
+    """Begin teeing stdout into a buffer.  Returns an opaque handle for
+    _stop_capture()."""
+    buf = io.StringIO()
+    real = sys.stdout
+    sys.stdout = _Tee(real, buf)
+    return buf, real
+
+
+def _stop_capture(handle):
+    buf, real = handle
+    sys.stdout = real
+    return buf.getvalue()
+
+
+_STAGE_LINE = re.compile(r"^PYTCAD_STAGE=(\w+)(?:\s+(.*))?$")
+_SWEEP_POINT = re.compile(r"point (\d+)/(\d+)")   # 'sweep' is consumed by
+                                                  # _STAGE_LINE's group(1)
+_ITERATION = re.compile(r"\bit\s+(\d+)\b")
+_METRIC = re.compile(
+    r"\|\s*([^|]+?)\s*\|\s*=\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?\d+)?)")
+
+
+def _trace_from_output(text):
+    """Parse verbose solver output into ConvergenceSteps.  Unknown lines
+    are skipped, never fatal -- the trace is diagnostic, not load-bearing."""
+    steps = []
+    current = None
+
+    def close():
+        nonlocal current
+        if current is not None and current.iterations:
+            steps.append(current)
+        # a stage whose solve produced no iteration lines (trivial/no-op)
+        # carries no information and is dropped entirely
+
+    for raw in text.splitlines():
+        marker = _STAGE_LINE.match(raw.strip())
+        if marker:
+            name, extra = marker.group(1), marker.group(2) or ""
+            if name == "sweep" and "point" in extra:
+                point = _SWEEP_POINT.search(extra)
+                stage = f"sweep:{int(point.group(1)) - 1}" if point else None
+            elif name in ("equilibrium", "bias"):
+                stage = name
+            else:
+                stage = None          # e.g. "extract": nothing to record
+            close()
+            current = None if stage is None else ConvergenceStep(stage=stage)
+            continue
+        if current is None:
+            continue
+        it = _ITERATION.search(raw)
+        metrics = _METRIC.findall(raw)
+        if it and metrics:
+            new_metrics = {k: list(v) for k, v in current.metrics.items()}
+            for name, val in metrics:
+                new_metrics.setdefault(name.strip(), []).append(float(val))
+            current = replace(current,
+                              iterations=current.iterations +
+                              (int(it.group(1)),),
+                              metrics=new_metrics)
+    close()
+    return steps
+
+
+def _node_coords(mesh_spec):
+    """Flat node coordinates [cm], (N, dim), x-fastest -- exactly
+    Mesh2D/Mesh3D's idx() ordering (ravel order='F')."""
+    axes = [np.asarray(mesh_spec.axes[k], dtype=float)
+            for k in ("x", "y", "z")[:mesh_spec.dimensionality]]
+    grids = np.meshgrid(*axes, indexing="ij")
+    return np.stack([g.ravel(order="F") for g in grids], axis=1)
+
+
 # ----------------------------------------------------------------------
 #  Entry point
 # ----------------------------------------------------------------------
-def run_job(job_path, out_path):
-    spec = DeviceSpec.from_json(job_path)
-    if spec.sweep is not None:
-        # Fail fast on an unexecutable sweep, BEFORE paying for the
-        # equilibrium solve.
-        spec.sweep.validate([c.name for c in spec.contacts])
-
-    mesh_obj = build_mesh(spec.mesh)
-    doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
-    device = build_device(spec, mesh_obj, doping, ntotal)
-    register_contacts(device, spec)
-
-    # verbose=True is the v0.1 progress channel: JobRunner streams this
-    # process's stdout into the console panel.  Cosmetic only -- results
-    # are read from the .npz, never parsed from this text.
-    opts = NewtonOptions(verbose=True)
-
+def _solve_all(device, spec, opts):
+    """Equilibrium + (optional) bias or sweep, emitting the same
+    PYTCAD_STAGE markers JobRunner has always streamed.  Returns the
+    raw result dict in the v1 key shape."""
     print("PYTCAD_STAGE=equilibrium", flush=True)
     device.solve_equilibrium(opts)
 
@@ -331,10 +422,71 @@ def run_job(job_path, out_path):
 
         print("PYTCAD_STAGE=extract", flush=True)
         result = extract_result(device, spec, solved_bias)
+    return result
 
-    # Stamp the documented result grammar (v0.5.0): readers validate
-    # against this via gui.services.solver_backend.validate_result().
+
+def run_job(job_path, out_path, capture_trace=True):
+    spec = DeviceSpec.from_json(job_path)
+    if spec.sweep is not None:
+        # Fail fast on an unexecutable sweep, BEFORE paying for the
+        # equilibrium solve.
+        spec.sweep.validate([c.name for c in spec.contacts])
+
+    mesh_obj = build_mesh(spec.mesh)
+    doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
+    device = build_device(spec, mesh_obj, doping, ntotal)
+    register_contacts(device, spec)
+
+    # verbose=True is the v0.1 progress channel: JobRunner streams this
+    # process's stdout into the console panel.  Cosmetic only -- results
+    # are read from the .npz, never parsed from this text.
+    opts = NewtonOptions(verbose=True)
+
+    cap = _start_capture()
+    try:
+        result = _solve_all(device, spec, opts)
+    finally:
+        # even a failed solve must hand the real stdout back -- the
+        # except-handler in main() prints PYTCAD_ERROR through it
+        output_text = _stop_capture(cap)
+
+    # Stamp the documented result grammar (now schema v2): readers
+    # validate against this via gui.services.solver_backend.
+    # validate_result().  Everything here is ADDITIVE over v1 keys.
     result["result__schema"] = np.array(SOLVER_RESULT_SCHEMA_VERSION)
+    result["geom__kind"] = np.array(GEOM_STRUCTURED)
+    shape = spec.mesh.shape()
+    result["mesh__shape"] = np.array(shape)
+    coords = _node_coords(spec.mesh)
+    result["nodes__count"] = np.array(int(coords.shape[0]))
+    result["nodes__coords"] = coords
+
+    sweep_meta = None
+    if spec.sweep is not None:
+        sweep_meta = json.loads(str(result["sweep__meta"]))
+    result["record__meta"] = np.array(json.dumps({
+        "schema_version": SOLVER_RESULT_SCHEMA_VERSION,
+        "backend": "pytcad",
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "dimensionality": spec.mesh.dimensionality,
+        "material": spec.material,
+        "T": spec.T,
+        "models": spec.models,
+        "numerics": asdict(opts),
+        "sweep": sweep_meta,
+    }))
+
+    if capture_trace:
+        steps = _trace_from_output(output_text)
+        flags = result.get("sweep__converged")
+        patched = []
+        for step in steps:
+            if step.stage.startswith("sweep:") and flags is not None:
+                idx = int(step.stage.split(":")[1])
+                step = replace(step, converged=bool(np.asarray(flags)[idx]))
+            patched.append(step)
+        result["converge__trace"] = np.array(
+            json.dumps([step.to_dict() for step in patched]))
 
     # Atomic write: a killed process must never leave a partial file at
     # the canonical path (see the design spec's cancellation-safety
