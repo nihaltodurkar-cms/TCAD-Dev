@@ -21,6 +21,10 @@ examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
 tests/           39 validation tests against analytic limits
                  (15 1D + 13 2D + 8 3D + 3 process-physics)
+workbench/       Semiconductor Workbench domain layer (M1): Region /
+                 DomainDevice / MaterialLibrary / ModelCatalog as pure
+                 data, plus lossless adapters to DeviceSpec — see
+                 ARCHITECTURE.md
 ```
 
 ---
@@ -215,6 +219,36 @@ checkout). Still not a complete TCAD workbench: no 3D visualization, no
 multi-parameter or batch sweeps, no C–V mode in the GUI, no second
 solver backend actually wired up yet (see
 `gui/README.md`'s "Honest limits" for the full, current list).
+
+### Workbench domain layer (new)
+
+The first milestone of the Semiconductor Workbench plan
+(`ARCHITECTURE.md`) is now in place: `workbench/core/` holds pure-data
+domain objects — `Region` (a named rectangle of material + uniform net
+doping), `ContactDef` (edge-defined or node-map terminals), and
+`DomainDevice` (a whole device in either *imported* form — explicit mesh
+axes + array doping, as the solver boundary defines it today — or
+*authored* form — regions over a width × height extent with a mesh
+hint) — plus a `MaterialLibrary` and a `ModelCatalog`.
+
+The catalog is the educational piece: every physics model the solver
+actually implements (Caughey–Thomas doping mobility, Canali velocity
+saturation, Shockley–Read–Hall, Auger, Slotboom bandgap narrowing) is
+registered with its equation, the exact `Semiconductor` parameter names
+it consumes, literature references, and an honest applicability note —
+including `field_mobility`'s 1D-only status. Model configs are validated
+against this registry instead of being free-form dicts.
+
+Discipline kept: **zero numerical or GUI changes.** `DeviceSpec` remains
+the wire/project format; `DomainDevice` is its derived domain view, and
+the adapters (`workbench/adapters/spec.py`) prove lossless round-trips
+against both shipped examples by delegating region-authored devices to
+the existing `StructureModel.to_device_spec()` builder rather than
+reimplementing it. Known asymmetries are stated, not hidden: an armed
+sweep is job-level configuration and does not ride on a DomainDevice;
+region-authored bias is derived from contact voltages and conflicts are
+rejected; non-silicon region materials fail loudly because the numerical
+core implements silicon only.
 
 ## 7. Where to read more
 

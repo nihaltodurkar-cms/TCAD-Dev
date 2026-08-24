@@ -159,6 +159,13 @@ class DomainDevice:
             # IMPORTED shape: explicit axes + array doping
             if not self.axes:
                 raise ValueError("imported device needs non-empty axes")
+            missing = [a for a in ("x", "y", "z")[:self.dimensionality]
+                       if a not in self.axes or len(self.axes[a]) == 0]
+            if missing:
+                raise ValueError(
+                    f"a {self.dimensionality}D device needs non-empty "
+                    f"axes {sorted(('x', 'y', 'z')[:self.dimensionality])}; "
+                    f"missing/empty: {missing}")
             if self.explicit_doping is None:
                 raise ValueError(
                     "an imported (axes-defined) device needs "

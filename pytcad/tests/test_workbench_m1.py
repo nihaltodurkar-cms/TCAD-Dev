@@ -272,3 +272,56 @@ def test_adapters_fail_fast_on_foreign_material_at_import():
     original.material = "Unobtania"
     with pytest.raises(ValueError, match="unknown material"):
         spec_adapter.domain_from_device_spec(original)
+
+
+# ----------------------------------------------------------------------
+#  regressions: boundary-boundary bugs found by adversarial probing
+# ----------------------------------------------------------------------
+def test_3d_doping_arrays_do_not_alias_between_domain_and_spec():
+    spec = EXAMPLES["mosfet_2d"]()
+    spec.mesh.dimensionality = 3
+    spec.mesh.axes["y"] = [0.0, 1e-4]
+    spec.mesh.axes["z"] = [0.0, 1e-4]
+    spec.doping.values = [[[1.0, 2.0]], [[3.0, 4.0]]]
+    domain = spec_adapter.domain_from_device_spec(spec)
+    domain.explicit_doping[0][0][0] = 999.0
+    assert spec.doping.values[0][0][0] == 1.0, \
+        "mutation leaked through a shallow copy into the wire format"
+
+
+def test_gate_without_resolved_vfb_imports_cleanly():
+    from gui.services.device_spec import ContactSpec, DopingSpec, MeshSpec
+    spec = DeviceSpec(
+        mesh=MeshSpec(dimensionality=2, axes={"x": [0.0, 1e-4],
+                                              "y": [0.0, 1e-4]}),
+        doping=DopingSpec(kind="array", values=[[0.0, 0.0]]),
+        contacts=[
+            ContactSpec(name="l", kind="ohmic", nodes={"i": [0], "j": [0]}),
+            ContactSpec(name="g", kind="gate", nodes={"i": [1], "j": [0]},
+                        tox_cm=5e-7, Vfb=None),
+        ],
+    )
+    domain = spec_adapter.domain_from_device_spec(spec)   # must not raise
+    rebuilt = spec_adapter.spec_from_domain(domain)
+    gate = next(c for c in rebuilt.contacts if c.kind == "gate")
+    assert gate.Vfb is None
+
+
+def test_region_path_refuses_conflicting_explicit_bias():
+    domain = spec_adapter.domain_from_structure(
+        *STRUCTURE_EXAMPLES["mosfet_2d_structure"]())
+    structure, _ = spec_adapter.structure_from_domain(domain)
+    direct = structure.to_device_spec(MeshModel(nx=domain.mesh_nx,
+                                                ny=domain.mesh_ny))
+    conflicting = {k: v + 1.0 for k, v in direct.bias.items()}
+    domain.bias = conflicting
+    with pytest.raises(ValueError, match="conflicts"):
+        spec_adapter.spec_from_domain(domain)
+
+
+def test_imported_path_requires_complete_axes():
+    from gui.services.device_spec import DopingSpec, MeshSpec
+    bad = DeviceSpec(mesh=MeshSpec(dimensionality=2, axes={"x": [0., 1e-4]}),
+                     doping=DopingSpec(kind="array", values=[[0., 0.]]))
+    with pytest.raises(ValueError, match="axes"):
+        spec_adapter.domain_from_device_spec(bad)

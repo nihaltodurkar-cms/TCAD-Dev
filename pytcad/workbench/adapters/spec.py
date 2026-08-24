@@ -12,6 +12,11 @@ doping rasterization, boundary-index resolution, or gate-Vfb physics --
 spec_from_domain() rebuilds the StructureModel/MeshModel pair and calls
 the EXISTING to_device_spec() builder, so output equality holds by
 construction.
+
+Known asymmetry: DeviceSpec.sweep is deliberately NOT carried on
+DomainDevice -- an armed sweep is job-level run configuration, not part
+of the device.  Round-tripping therefore drops it; callers must keep
+run configuration separately.
 """
 from gui.services.device_spec import (
     ContactSpec, DeviceSpec, DopingSpec, MeshSpec,
@@ -33,8 +38,12 @@ def _copy_nodes(nodes):
 
 
 def _copy_nested(values):
-    return [list(row) if hasattr(row, "__iter__") else row
-            for row in values]
+    """Deep copy of the nested doping arrays.  Must be FULLY deep: a
+    shallow level-two copy aliases 3D inner rows between the domain
+    object and the wire format, letting mutations leak across the
+    boundary."""
+    import copy
+    return copy.deepcopy(values)
 
 
 def _boundary_from_def(b: Boundary):
@@ -61,10 +70,15 @@ def domain_from_device_spec(spec: DeviceSpec, id="imported",
             id=c.name, name=c.name, kind=c.kind, V=c.V,
             nodes=_copy_nodes(c.nodes),
             tox_cm=c.tox_cm,
-            # an imported gate's Vfb is already resolved; carry it as a
-            # fixed manual value so rebuilding reproduces it exactly
-            vfb_mode="manual" if c.kind == "gate" else "computed",
-            vfb_manual=c.Vfb if c.kind == "gate" else None,
+            # an imported gate's RESOLVED Vfb is carried as a fixed
+            # manual value so rebuilding reproduces it exactly; gates
+            # without one keep mode "computed" (validate() forbids
+            # manual-without-value, so this must never be unconditional)
+            vfb_mode=("manual"
+                      if c.kind == "gate" and c.Vfb is not None
+                      else "computed"),
+            vfb_manual=(c.Vfb if c.kind == "gate" and c.Vfb is not None
+                        else None),
         )
         for c in spec.contacts
     ]
@@ -213,4 +227,9 @@ def spec_from_domain(dev: DomainDevice) -> DeviceSpec:
     structure, mesh_model = structure_from_domain(dev)
     out = structure.to_device_spec(mesh_model, T=dev.T)
     out.models = dict(dev.models)
+    if dev.bias is not None and dev.bias != out.bias:
+        raise ValueError(
+            "DomainDevice.bias conflicts with the authored contacts' "
+            "voltages: on the region path bias is DERIVED from each "
+            "contact's V. Align the values or clear DomainDevice.bias.")
     return out
