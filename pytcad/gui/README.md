@@ -616,5 +616,5 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
 - Sweeps store field snapshots for one setpoint (last converged), not
   the full space-time-of-the-ramp movie. Series + one snapshot keeps
   result files small.
-- Windows runtime support remains unverified (see v0.3's note below);
+- Windows runtime support remains unverified (see v0.3's note above);
   nothing in v0.4 changed the process-launch pattern.
