@@ -24,11 +24,11 @@ from workbench.solvers.base import (
 from gui.tests.test_solver_backend import _diode_1d_spec
 
 
-def test_registry_addresses_pytcad_and_rejects_unknown():
-    assert backend_ids() == ["pytcad"]
+def test_registry_addresses_known_backends_and_rejects_unknown():
+    assert set(backend_ids()) == {"pytcad", "devsim"}
     assert isinstance(get_backend("pytcad"), PytcadBackend)
-    with pytest.raises(KeyError, match="devsim"):
-        get_backend("devsim")
+    with pytest.raises(KeyError, match="sentaurus"):
+        get_backend("sentaurus")
 
 
 def test_protocol_is_statically_checkable():

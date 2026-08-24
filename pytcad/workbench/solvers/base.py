@@ -46,6 +46,17 @@ class PytcadBackend:
 _BACKENDS = {"pytcad": PytcadBackend}
 
 
+def _register_devsim():
+    try:
+        from .devsim_backend import DevsimBackend
+    except ImportError:
+        return
+    _BACKENDS["devsim"] = DevsimBackend
+
+
+_register_devsim()
+
+
 def get_backend(backend_id: str) -> SolverBackend:
     try:
         return _BACKENDS[backend_id]()

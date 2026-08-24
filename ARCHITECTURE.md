@@ -1,6 +1,12 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1-M6 SHIPPED (M6: process checkpoints map
+Date: 2026-08-24. Status: M1-M7 SHIPPED (M7: GENUINE DEVSIM backend --
+own mesh built from spec nodes, full drift-diffusion equilibrium via
+devsim's canonical silicon physics, schema-v2 output behind the M3
+protocol. Cross-backend validation gate: same 1D junction solved by
+both engines agrees within 25 mV and both match the analytic
+built-in potential within 5%. devsim stays an OPTIONAL dependency;
+registry auto-detects it.) (M6: process checkpoints map
 losslessly onto 1D DomainDevices via workbench/adapters/process.py;
 optional per-region implant windows as a composition mask -- zero
 numerical changes, old flows byte-identical). (M5: Device Builder expansion --
@@ -172,7 +178,7 @@ M6 - PROCESS BUILDER (Process side) [SHIPPED]
           heterostructure question is settled.
   Compat: existing 1D flow files load unchanged.
 
-M7 - DEVSIM BACKEND (Solver Backends)
+M7 - DEVSIM BACKEND (Solver Backends) [SHIPPED -- equilibrium slice]
   Purpose: GENUINE backend proof on the M3 protocol: optional
           dependency; 1D diode implemented natively in DEVSIM (its own
           mesh), emitting RunResult v2 + RunRecord. Verified against
