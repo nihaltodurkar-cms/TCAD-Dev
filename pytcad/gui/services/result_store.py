@@ -13,6 +13,7 @@ DeviceSpec is presented as a read-only, doping-only ResultStore.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import json
 
 import numpy as np
 
@@ -42,6 +43,32 @@ class TerminalCurrent:
     name: str
     value: float
     unit: str             # "A/cm" in 2D, "A" in 3D -- never render without it
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    """One executed voltage sweep, kept SEPARATE from single-run data.
+
+    voltages/converged cover every ATTEMPTED point; a point whose Newton
+    solve diverged has converged=False and its per-channel value is NaN,
+    so no consumer can present it as valid measurement.  `channels` maps
+    an ohmic contact name (or "device" at 1D) to the current series;
+    `unit` applies to every channel ("A/cm^2" at 1D, "A/cm" at 2D, "A"
+    at 3D).  `meta` carries the ramp parameters as written by
+    solver_runner.run_sweep().
+    """
+    contact: str            # swept contact/gate name
+    meta: dict              # {"contact","start","stop","step","dimensionality"}
+    voltages: np.ndarray    # [V] per attempted point
+    converged: np.ndarray   # bool per attempted point
+    channels: dict          # {name: ndarray}; NaN where not converged
+    unit: str
+
+    def n_points(self):
+        return int(self.voltages.size)
+
+    def n_valid(self):
+        return int(self.converged.sum())
 
 
 class ResultStore(ABC):
@@ -107,6 +134,34 @@ class NpzResultStore(ResultStore):
         return TerminalCurrent(name=name, value=float(self._d[key]),
                                unit=str(self._d[f"terminal__{name}__unit"]))
 
+    # -- sweep series (v0.4) ------------------------------------------
+    def has_sweep(self):
+        return "sweep__voltage" in self._d
+
+    def sweep_result(self):
+        """The executed sweep as a SweepResult, or KeyError for a plain
+        single-run result.  Non-converged points are NaN'd here at the
+        boundary; their identity survives in `converged`."""
+        if not self.has_sweep():
+            raise KeyError(f"no sweep series in {self.path}")
+        meta = json.loads(str(self._d["sweep__meta"]))
+        converged = np.asarray(self._d["sweep__converged"], dtype=bool)
+        prefix = "sweep__current__"
+        channels = {}
+        for k in self._d.files:
+            if k.startswith(prefix):
+                vals = np.asarray(self._d[k], dtype=float).copy()
+                vals[~converged] = np.nan
+                channels[k[len(prefix):]] = vals
+        return SweepResult(
+            contact=meta.get("contact", ""),
+            meta=meta,
+            voltages=np.asarray(self._d["sweep__voltage"], dtype=float),
+            converged=converged,
+            channels=channels,
+            unit=str(self._d["unit__sweep_current"]),
+        )
+
 
 class SpecResultStore(ResultStore):
     """A DeviceSpec presented as a doping-only ResultStore, so the
@@ -139,3 +194,9 @@ class SpecResultStore(ResultStore):
 
     def terminal_current(self, name):
         raise KeyError("a structure preview has no terminal currents")
+
+    def has_sweep(self):
+        return False
+
+    def sweep_result(self):
+        raise KeyError("a structure preview has no sweep series")
