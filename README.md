@@ -1,8 +1,23 @@
 # PyTCAD
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pytcad/README.md)
+[![Tests: 39 passing](https://img.shields.io/badge/tests-39%20passing-brightgreen.svg)](pytcad/tests)
+[![Desktop GUI v0.4](https://img.shields.io/badge/desktop%20GUI-v0.4-informational.svg)](pytcad/gui/README.md)
+
 A compact, readable, **validated** TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation in 1D, 2D (with a real MOSFET), and 3D, plus a desktop GUI — structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
 
+| | |
+|---|---|
+| **1D** | Drift-diffusion diode/BJT core, validated against analytic ideal-diode limits |
+| **2D** | Full MOSFET with gate-controlled `Id`–`Vg` subthreshold turn-on |
+| **3D** | Tensor-product Cartesian solver, validated by dimensional reduction to 2D |
+| **Process** | Implant, diffusion, Deal–Grove oxidation — feeds directly into the device solvers |
+| **GUI** | PySide6 / Qt Quick desktop app (v0.4) — structure, mesh, process, and sweep workbenches |
+
 Roughly 2,700 lines for the numerical core below (1D + 2D + 3D; the desktop GUI in `gui/` is separate and documented in `gui/README.md`). No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
+
+**Jump to:** [Device equations](#1-the-device-equations) · [Numerics](#2-numerics--why-its-built-this-way) · [Physical models](#3-physical-models) · [Validation](#4-validation) · [Usage](#5-usage) · [Honest limits](#6-honest-limits-of-this-code) · [Further reading](#7-where-to-read-more)
 
 ```
 pytcad/
