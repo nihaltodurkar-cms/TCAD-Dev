@@ -100,3 +100,15 @@ def test_both_backends_match_analytic_builtin_potential(run_both):
         drop = float(psi[-1] - psi[0])
         assert abs(abs(drop) - vbi) < 0.05 * vbi, \
             f"{bid}: |{drop:.4f}| vs Vbi {vbi:.4f} V"
+
+
+def test_devsim_refuses_nonzero_bias_honestly(diode_job, tmp_path):
+    from gui.services.device_spec import DeviceSpec
+    from workbench.solvers.base import SolveRequest
+    spec = DeviceSpec.from_json(diode_job)
+    spec.bias = {"left": 0.0, "right": 0.3}
+    job2 = str(tmp_path / "biased.json")
+    spec.to_json(job2)
+    with pytest.raises(ValueError, match="EQUILIBRIUM only"):
+        get_backend("devsim").run(SolveRequest(
+            job_json_path=job2, out_npz_path=str(tmp_path / "b.npz")))

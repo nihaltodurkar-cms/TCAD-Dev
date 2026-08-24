@@ -133,7 +133,8 @@ def validate_flow(flow):
             "flow -- a real wafer is only initialized once"))
 
     last_implant_species = None
-    for step in flow.steps:
+    steps = flow.steps
+    for i, step in enumerate(steps):
         p = step.parameters
         if step.operation == "substrate":
             if p.get("length_cm", 0.0) <= 0:
@@ -175,12 +176,28 @@ def validate_flow(flow):
                     errors.append(ValidationError(
                         f"x_range_cm must be [lo, hi] with lo < hi "
                         f"(finite numbers), got {rng!r}", step.id))
+                elif rng[0] < 0:
+                    errors.append(ValidationError(
+                        f"x_range_cm lo must be >= 0, got {rng[0]!r}",
+                        step.id))
             tilt = p.get("tilt_deg", 0.0)
             if not (0.0 <= tilt < 90.0):
                 errors.append(ValidationError(
                     f"Tilt {tilt} deg must be in [0, 90) -- process.implant scales "
                     "Rp by cos(tilt), which is zero or negative at or above "
                     "90 deg", step.id))
+            # a window beyond the substrate would silently no-op the
+            # whole implant -- reject it instead
+            if step.enabled and rng is not None and ok:
+                length = next((st.parameters.get("length_cm")
+                               for st in reversed(steps[:i + 1])
+                               if st.operation == "substrate"), None)
+                if length is not None and float(rng[1]) > float(length):
+                    errors.append(ValidationError(
+                        f"x_range_cm hi {float(rng[1]):g} exceeds the "
+                        f"substrate length {float(length):g} -- the whole "
+                        "implant would land outside the device",
+                        step.id))
             if step.enabled:
                 last_implant_species = species
 

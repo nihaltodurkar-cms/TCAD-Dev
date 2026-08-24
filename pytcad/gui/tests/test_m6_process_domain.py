@@ -18,7 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pytest
 
-from gui.services.process_model import ProcessFlow, ProcessStep
+from gui.services.process_model import (
+    ProcessFlow, ProcessStep, validate_flow,
+)
 from gui.services.process_runner import run_flow
 
 
@@ -131,3 +133,12 @@ def test_full_range_mask_matches_unmasked_exactly():
     db = np.load(manifest_b["state_paths"]["b"])
     assert np.array_equal(da["net_doping"], db["net_doping"])
     assert np.array_equal(da["species_P"], db["species_P"])
+
+
+def test_window_outside_substrate_rejected_not_silently_noop():
+    flow = ProcessFlow(steps=[
+        _substrate(),
+        _implant("bad", **{"x_range_cm": [5e-3, 6e-3]}),
+    ])
+    errs = validate_flow(flow)
+    assert any("outside the device" in e.message for e in errs), errs

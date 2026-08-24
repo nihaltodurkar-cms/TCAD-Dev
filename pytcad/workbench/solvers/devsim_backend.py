@@ -58,6 +58,12 @@ class DevsimBackend:
         if len(ohmic) != 2:
             raise ValueError(
                 "the devsim backend needs exactly two ohmic contacts")
+        bias = dict(spec.bias or {})
+        if any(abs(float(v)) > 1e-12 for v in bias.values()):
+            raise ValueError(
+                "the devsim backend solves EQUILIBRIUM only in this "
+                "slice; nonzero contact bias is not supported yet "
+                f"(got {bias})")
 
         x = np.asarray(spec.mesh.axes["x"], dtype=float)
         doping = np.asarray(spec.doping.values, dtype=float)
