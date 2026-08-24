@@ -552,7 +552,10 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
 1. **Arm a sweep** in the *Voltage sweep* panel: pick the contact or gate,
    enter start / stop / step volts, press **Arm sweep**. The status label
    turns green ("sweep armed"); **Clear** disarms. Sweep settings are part
-   of the saved project (schema v4).
+   of the saved project (schema v4). If Arm is rejected (bad numeric
+   values), the fields snap back to whatever sweep is actually still
+   armed and an amber note says so — the panel never leaves you looking
+   at typed values that don't match what Run would actually execute.
 2. **Run** as usual. Each ramp point reuses the warm-started solution of
    the previous point (the same pattern as pytcad's own `iv_sweep` /
    `id_vg_sweep`), and the console streams per-point progress. Stop kills
@@ -584,6 +587,15 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
   load with a specific error; contact-name validity is checked at Run time
   against the actual spec. Results are still never embedded in project
   files, and loading a project drops whatever results were on screen.
+- **Arm-time and Run-time sweep failures are deliberately distinct
+  errors**, not the same message twice. Numeric problems (nonzero step,
+  finite values, a sane point count) are caught immediately on Arm.
+  Contact-name validity can only be judged against the currently loaded
+  device, so it's checked at Run — and if it fails there (e.g. the
+  structure changed under an already-armed sweep, removing the contact
+  it names), that is reported as the device no longer matching the
+  sweep, never as "the arm attempt was rejected": no arm attempt
+  happened, the sweep was valid when armed.
 - **Derived readouts are curve statistics only** — extremes, ratio, and
   the max-transconductance linear-extrapolation threshold estimate that
   pytcad's own validation suite checks against the MOS-C analytic
