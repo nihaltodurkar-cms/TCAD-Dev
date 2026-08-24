@@ -151,6 +151,23 @@ class PhysicsLabController(QObject):
         return self._record() is not None
 
     @Slot(result="QVariant")
+    def provenanceRows(self):
+        """"What produced this quantity": the last run's record as
+        label/value rows for the Properties-style display."""
+        record = self._record()
+        if record is None:
+            return None
+        rows = [("Backend", record.backend),
+                ("Solved at", record.created_utc or "unknown"),
+                ("Dimensionality", f"{record.dimensionality}D"),
+                ("Material", record.material),
+                ("Temperature", f"{record.T:g} K"),
+                ("Schema version", str(record.schema_version))]
+        rows += [(f"model: {k}", "on" if v else "off")
+                 for k, v in sorted(record.models.items())]
+        return [list(map(str, r)) for r in rows]
+
+    @Slot(result="QVariant")
     def convergenceData(self):
         """Per-stage Newton history for plotting: [{stage, iterations,
         residuals}].  residuals is the first recorded metric series with

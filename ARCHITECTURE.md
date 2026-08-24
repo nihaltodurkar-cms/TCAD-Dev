@@ -1,6 +1,10 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1-M7 SHIPPED (M7: GENUINE DEVSIM backend --
+Date: 2026-08-24. Status: M1-M7 SHIPPED; M8-M10 shipped as validated
+first slices (M8: published-value benchmark gate over every registered
+physics model; M9: provenance readout slot on the lab controller;
+M10: deck-format workflow front end translating text -> template ->
+DomainDevice). Full-depth M8/M9/M10 work builds on these slices. (M7: GENUINE DEVSIM backend --
 own mesh built from spec nodes, full drift-diffusion equilibrium via
 devsim's canonical silicon physics, schema-v2 output behind the M3
 protocol. Cross-backend validation gate: same 1D junction solved by

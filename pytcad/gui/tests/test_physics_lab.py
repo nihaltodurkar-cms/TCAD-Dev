@@ -173,3 +173,14 @@ def test_view_mode_selector_offers_convergence(gapp):
     engine, root, _ = _fresh(gapp)
     selector = root.findChild(object, "viewModeSelector")
     assert "Convergence" in list(selector.property("model"))
+
+
+def test_provenance_rows_after_real_run(gapp):
+    engine, root, ctl = _fresh(gapp)
+    lab = ctl.lab
+    assert lab.provenanceRows() is None          # nothing solved yet
+    ctl.loadExample("mosfet_2d")
+    _wait_run(ctl, gapp)
+    rows = dict(lab.provenanceRows())
+    assert rows["Backend"] == "pytcad"
+    assert any(k.startswith("model:") for k in rows)
