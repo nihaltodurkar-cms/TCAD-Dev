@@ -589,6 +589,16 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
   pytcad's own validation suite checks against the MOS-C analytic
   landmark (±0.1 V there; the GUI labels it an estimate because the GUI
   does not know each device's Vds). No new physics models were added.
+- **The channel used for Ion/Ioff and Vth is chosen automatically**, not
+  by contact-declaration order or by name. Sign convention (which
+  terminal reads as "rising with the sweep") isn't derivable from a
+  contact's name, so both signs are tried per channel and a result is
+  kept only when it also lands near the actual swept range — a tangent
+  extrapolated far outside the sweep is rejected even if the mechanics
+  otherwise looked fine. This matters concretely on the bundled MOSFET
+  example: its structure lists "source" before "drain", and a naive
+  first-channel or largest-current choice would have reported nothing,
+  or a fictional value, for that example's own gate sweep.
 
 ### Honest limits of v0.4
 
@@ -598,9 +608,11 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
   swept results exactly as to single-bias ones; high-current sweep points
   can also leave the range where the validated tolerances were measured.
 - The Vth estimate assumes the swept curve actually contains a
-  transistor-like turn-on (it returns nothing otherwise) and carries a
-  +Vds/2 bias unless the opposing terminal's bias happens to be 0. It is
-  therefore only computed (and only shown) for gate sweeps.
+  transistor-like turn-on on AT LEAST ONE recorded channel, in either
+  sign convention, with the extrapolated threshold landing near the
+  actual swept range (it returns nothing if no channel qualifies), and
+  carries a +Vds/2 bias unless the opposing terminal's bias happens to
+  be 0. It is therefore only computed (and only shown) for gate sweeps.
 - Sweeps store field snapshots for one setpoint (last converged), not
   the full space-time-of-the-ramp movie. Series + one snapshot keeps
   result files small.

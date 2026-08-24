@@ -191,14 +191,21 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 ### Desktop GUI (new)
 
-There is now a PySide6 / Qt Quick desktop frontend in `gui/` — load a
-built-in 2D MOSFET, solve it in a background process, and visualize the
-result, without the GUI ever blocking or the numerical engine changing by
-a single line. See `gui/README.md` for install and run instructions, and
-`docs/superpowers/specs/2026-08-23-gui-v0.1-design.md` for the design
-rationale. It is an early version, not a complete TCAD workbench: v0.1
-covers the architecture plus one worked example, with structure editing,
-process simulation, sweeps, and 3D visualization still to come.
+There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
+v0.1 – v0.4) that solves devices in a background process and visualizes
+the result, without the GUI ever blocking or the numerical engine
+changing by a single line. It now covers: a built-in 2D MOSFET example
+(v0.1); a Structure + Mesh workbench for building and validating devices
+from regions, contacts and gates (v0.2); a Process Workbench driving
+pytcad's own 1D substrate/implant/anneal/oxidize operations with
+per-species doping tracking (v0.3); and single-contact voltage sweeps
+with curve plotting and derived readouts — Imax/Imin, Ion/Ioff, and a
+max-gm threshold estimate for gate sweeps (v0.4). See `gui/README.md`
+for install/run instructions and the full version-by-version detail,
+and `docs/superpowers/specs/2026-08-23-gui-v0.1-design.md` for the
+original design rationale. Still not a complete TCAD workbench: no 3D
+visualization, no multi-parameter or batch sweeps, no C–V mode in the
+GUI (see `gui/README.md`'s "Honest limits" for the full, current list).
 
 ## 7. Where to read more
 
