@@ -87,10 +87,11 @@ ApplicationWindow {
             ComboBox {
                 id: viewModeBox
                 objectName: "viewModeSelector"
-                model: ["Structure", "Doping", "Mesh", "Process", "Results"]
+                model: ["Structure", "Doping", "Mesh", "Process", "Curves", "Results"]
                 onActivated: {
                     var m = {"Structure": "structure", "Doping": "doping",
                             "Mesh": "mesh", "Process": "process",
+                            "Curves": "series",
                             "Results": "doping"}[currentText]
                     viewport.setViewMode(m)
                 }
@@ -157,6 +158,13 @@ ApplicationWindow {
                 SplitView.minimumWidth: 200
                 controller: appController
                 onStepSelected: (stepId) => viewport.setProcessStep(stepId)
+            }
+
+            SweepPanel {
+                objectName: "sweepPanel"
+                SplitView.preferredWidth: 200
+                SplitView.minimumWidth: 170
+                controller: appController
             }
 
             PropertiesPanel {

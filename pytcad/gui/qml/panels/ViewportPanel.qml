@@ -27,6 +27,15 @@ Rectangle {
         if (mode === "process") {
             canvas.setProcessSource(controller.processResultForQml, root.currentProcessStepId)
         }
+        if (mode === "series") {
+            // v0.4: hand the executed sweep (or null before any swept run)
+            // to the canvas, then refresh the channel selector from it.
+            canvas.setSweepSource(controller.sweepResultForQml)
+            sweepChannelBox.model = canvas.availableSweepChannels()
+            if (sweepChannelBox.model.length)
+                sweepChannelBox.currentIndex =
+                    Math.max(0, sweepChannelBox.model.indexOf(canvas._sweep_channel))
+        }
     }
 
     // Called from Main.qml on ProcessPanel.stepSelected -- lets clicking a
@@ -65,6 +74,14 @@ Rectangle {
             CheckBox {
                 text: "log scale"
                 onToggled: canvas.logScale = checked
+            }
+            ComboBox {
+                id: sweepChannelBox
+                objectName: "sweepChannelSelector"
+                visible: root.currentMode === "series"
+                Layout.preferredWidth: 150
+                model: []
+                onActivated: canvas.setSweepChannel(currentText)
             }
             Item { Layout.fillWidth: true }
             Button { text: "Zoom in";  onClicked: canvas.zoom(0.8) }
@@ -117,6 +134,16 @@ Rectangle {
         target: controller
         function onProcessResultChanged() {
             if (controller && root.currentMode === "process") root.setViewMode(root.currentMode)
+        }
+    }
+
+    // v0.4: same trap, sweep edition -- a finished swept run emits
+    // resultChanged only; without this, "Curves" mode kept showing the
+    // previous state until the mode selector was re-touched by hand.
+    Connections {
+        target: controller
+        function onResultChanged() {
+            if (controller && root.currentMode === "series") root.setViewMode(root.currentMode)
         }
     }
 
