@@ -252,8 +252,17 @@ class MplCanvasItem(QQuickPaintedItem):
             self._draw_process(ax)
             fig.tight_layout()
             return fig
-        if self._mode == "series" and self._sweep is not None:
-            self._draw_series(ax)
+        if self._mode == "series":
+            if self._sweep is not None:
+                self._draw_series(ax)
+            else:
+                # Final review M-3: falling through to field rendering here
+                # showed a stale doping map under "Curves" before any swept
+                # run -- a placeholder is the honest empty state.
+                ax.text(0.5, 0.5, "No sweep yet\n"
+                        "(arm one in the Voltage sweep panel and Run)",
+                        ha="center", va="center")
+                ax.set_axis_off()
             fig.tight_layout()
             return fig
         # Doping mode with a structure but no solve yet: rasterize the

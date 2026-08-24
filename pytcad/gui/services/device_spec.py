@@ -14,6 +14,11 @@ from dataclasses import dataclass, field, asdict
 import json
 import math
 
+# A sweep is serialized point-by-point into the job JSON on the UI
+# thread; beyond this it is a hang/OOM, not a simulation. (Final review
+# finding M-4.)
+MAX_SWEEP_POINTS = 100_000
+
 
 @dataclass
 class SweepSpec:
@@ -80,6 +85,11 @@ class SweepSpec:
             raise ValueError(
                 f"sweep step {self.step} does not move from start "
                 f"{self.start} toward stop {self.stop}")
+        n = abs((self.stop - self.start) / self.step) + 1
+        if n > MAX_SWEEP_POINTS:
+            raise ValueError(
+                f"sweep would need ~{int(n):g} points; the limit is "
+                f"{MAX_SWEEP_POINTS} (increase the step)")
 
     def validate(self, contact_names):
         """Raise ValueError with an actionable message on any spec that
@@ -180,7 +190,10 @@ class DeviceSpec:
             models=d.get("models") or _default_models(),
             contacts=[ContactSpec(**c) for c in d.get("contacts", [])],
             bias=d.get("bias"),
-            sweep=SweepSpec(**sweep) if sweep else None,
+            # Strict parse path (final review M-5): same float coercion
+            # and load-time validation project_store uses, not a bare
+            # SweepSpec(**dict).
+            sweep=SweepSpec.from_dict(sweep) if sweep else None,
         )
 
     def to_json(self, path):

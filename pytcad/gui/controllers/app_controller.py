@@ -283,9 +283,18 @@ class AppController(QObject):
 
     @Slot(str, float, float, float)
     def setSweepConfig(self, contact, start, stop, step):
-        """Configure the voltage sweep Run() will attach to the spec."""
-        self._sweep_config = SweepSpec(contact=str(contact), start=float(start),
-                                       stop=float(stop), step=float(step))
+        """Configure the voltage sweep Run() will attach to the spec.
+        Numeric sanity is checked immediately (final review M-6) so a
+        typo'd field cannot sit there labeled 'armed'; contact-name
+        validity still waits for Run, where the real spec is known."""
+        cfg = SweepSpec(contact=str(contact), start=float(start),
+                        stop=float(stop), step=float(step))
+        try:
+            cfg.validate_values()
+        except ValueError as exc:
+            self.errorRaised.emit("Invalid sweep configuration", str(exc))
+            return
+        self._sweep_config = cfg
         self.sweepChanged.emit()
 
     @Slot()
@@ -877,6 +886,11 @@ class AppController(QObject):
         # this session belongs to the PREVIOUS project and must not stay
         # on show as if it belonged to the one just loaded.
         self._store = None
+        # Final review I-2: same for a stale device spec -- otherwise
+        # Run would silently re-solve the PREVIOUS project's device
+        # (with the newly-restored sweep config validated against ITS
+        # contacts) whenever the loaded project defines no structure.
+        self.spec = None
         self.resultChanged.emit()
         self._undo_stack = UndoStack()
         self._undo_stack.mark_clean()
@@ -902,6 +916,10 @@ class AppController(QObject):
         self._current_field = "doping"
         self.consoleModel.append(f"Loaded example '{name}'.")
         self._set_status(f"Loaded '{name}' -- not yet solved")
+        # Final review I-1: the spec change alters sweepContactNames (and
+        # structureForQml consumers); without this signal the Sweep
+        # panel's contact combo stayed empty after loadExample.
+        self.structureChanged.emit()
         self.resultChanged.emit()
         self.fieldChanged.emit()
         self.selectNode("structure")
@@ -941,6 +959,11 @@ class AppController(QObject):
                 self.errorRaised.emit("Invalid sweep configuration", str(exc))
                 return
         self.spec.sweep = self._sweep_config
+        # Final review I-3: a fresh run invalidates whatever is on show.
+        # Mirrors runProcess()'s clear-on-start: during a long sweep, the
+        # previous run's curves must not sit there looking current.
+        self._store = None
+        self.resultChanged.emit()
         self.consoleModel.append("Starting solve...")
         self._set_status("Solving...")
         self._set_busy(True)
@@ -978,6 +1001,16 @@ class AppController(QObject):
         if path.startswith("file:"):
             return QUrl(path).toLocalFile()
         return path
+
+    def _sweep_vds(self, sweep):
+        """The held-terminal bias magnitude to use as Vds for the Vth
+        estimate (final review I-6): the largest |V| among contacts other
+        than the swept one.  0.0 when nothing is known."""
+        if self.spec is None or self.spec.bias is None:
+            return 0.0
+        others = [abs(float(v)) for name, v in self.spec.bias.items()
+                  if name != sweep.contact]
+        return max(others) if others else 0.0
 
     def _properties_for(self, node_id):
         # The "process" node has its own data source (self.process_flow)
@@ -1039,7 +1072,8 @@ class AppController(QObject):
             if self.hasSweep:
                 try:
                     sweep = self._store.sweep_result()
-                    stats = sweep_derived.summarize(sweep)
+                    stats = sweep_derived.summarize(
+                        sweep, vds=self._sweep_vds(sweep))
                 except Exception:
                     stats = None
                 if stats:
@@ -1052,10 +1086,18 @@ class AppController(QObject):
                                      f"{stats['current_max']:.4g} {unit}"))
                         rows.append((f"Sweep Imin ({sweep.contact})",
                                      f"{stats['current_min']:.4g} {unit}"))
-                    if "on_off_ratio" in stats:
+                    # Final review M-2: Ion/Ioff and a threshold are
+                    # transfer-curve (gate-sweep) quantities; presenting
+                    # them for an output-characteristic sweep would be
+                    # misleading.
+                    swept = next((c for c in (self.spec.contacts
+                                              if self.spec else [])
+                                  if c.name == sweep.contact), None)
+                    is_gate = bool(swept and swept.kind == "gate")
+                    if is_gate and "on_off_ratio" in stats:
                         rows.append(("Sweep Ion/Ioff",
                                      f"{stats['on_off_ratio']:.3g}"))
-                    if "threshold_voltage_v" in stats:
+                    if is_gate and "threshold_voltage_v" in stats:
                         rows.append(("Sweep Vth (max-gm est.)",
                                      f"{stats['threshold_voltage_v']:.3g} V"))
             return rows

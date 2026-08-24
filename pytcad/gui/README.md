@@ -1,11 +1,13 @@
-# PyTCAD Desktop GUI (v0.1 + v0.2 + v0.3)
+# PyTCAD Desktop GUI (v0.1 – v0.4)
 
 A PySide6 / Qt Quick desktop frontend for the PyTCAD solver.
 
-**This is v0.1 — the architectural spine plus one working example, not a
-complete TCAD workbench.** It loads a built-in 2D MOSFET, solves it, and
-visualizes the result. Structure editing, process simulation, mesh
-editing, bias sweeps, and 3D visualization are later versions.
+**This is v0.4 — swept device analysis on top of the v0.1–v0.3 spine.**
+It loads a built-in 2D MOSFET, solves it, and visualizes fields; edits
+2D structures and 1D process flows in undoable workbenches; and now runs
+single-contact **voltage sweeps** (I–V, Id–Vg) with curve visualization
+and derived readouts. Multi-parameter batch sweeps, C–V analysis, and 3D
+visualization remain later versions.
 
 ## Install
 
@@ -81,6 +83,8 @@ independent and must keep passing unchanged.
 
 - One built-in example; no structure/process/mesh editor yet.
 - Single bias point per run — no I-V, C-V, or Id-Vg sweeps.
+  *(Superseded in v0.4 for single-contact voltage sweeps; see v0.4 below.
+  C–V and multi-contact/multi-parameter sweeps are still future work.)*
 - 3D results are shown as a central z-slice; there is no 3D renderer.
   VTK/PyVista are intentionally not dependencies yet.
 - The device spec is embedded in the job file as JSON, so very large
@@ -536,3 +540,69 @@ and `process_result_store.py` were written to that same standard from the
 start. This has **not** been verified by actually running the GUI on
 Windows — no Windows environment was available during this plan, and
 that gap is reported honestly rather than implied to be covered.
+
+## v0.4 — Swept Device Analysis
+
+One coherent feature: a **single-contact voltage sweep** carried through
+the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
+→ ResultStore → viewport — with no changes to the numerical backend.
+
+### Using it
+
+1. **Arm a sweep** in the *Voltage sweep* panel: pick the contact or gate,
+   enter start / stop / step volts, press **Arm sweep**. The status label
+   turns green ("sweep armed"); **Clear** disarms. Sweep settings are part
+   of the saved project (schema v4).
+2. **Run** as usual. Each ramp point reuses the warm-started solution of
+   the previous point (the same pattern as pytcad's own `iv_sweep` /
+   `id_vg_sweep`), and the console streams per-point progress. Stop kills
+   the process exactly as for single-bias runs; atomic writes guarantee no
+   partial result.
+3. Switch the view mode to **Curves** to see I vs. V for any recorded
+   channel (ohmic contacts at 2D/3D; total current density at 1D). The
+   channel dropdown switches curves; log scale plots |I|.
+4. Select the **Results** node in the project tree for derived readouts:
+   converged point count and Imax/Imin (with explicit units) always; for
+   **gate sweeps** also Ion/Ioff and a Vth estimate labeled "max-gm
+   est.". Numeric sweep values are sanity-checked as soon as you arm a
+   sweep; whether the named contact exists is checked when you Run.
+
+### Semantics and guarantees
+
+- **Non-converged points never become data.** A diverging Newton solve is
+  detected via pytcad's own "did not converge" warnings (no numerical code
+  was touched); the point stays in the curve's convergence mask but its
+  value reads back as NaN — the plot shows an honest gap, and derived
+  statistics exclude it. A bad point never aborts the rest of the sweep.
+- **Stored fields are the last converged point's** solution, clearly kept
+  apart from the series data (separate npz key namespaces: `field__*` vs
+  `sweep__*`). All v0.1–v0.3 result keys and behavior are unchanged.
+- **Units are explicit end to end**: A/cm² (1D current density), A/cm
+  (2D per-depth terminal currents), A (3D real terminal currents).
+- **Projects**: schema version 4 adds one optional `sweep` key. v2/v3
+  files load unchanged (sweep = none). Structurally invalid sweeps fail at
+  load with a specific error; contact-name validity is checked at Run time
+  against the actual spec. Results are still never embedded in project
+  files, and loading a project drops whatever results were on screen.
+- **Derived readouts are curve statistics only** — extremes, ratio, and
+  the max-transconductance linear-extrapolation threshold estimate that
+  pytcad's own validation suite checks against the MOS-C analytic
+  landmark (±0.1 V there; the GUI labels it an estimate because the GUI
+  does not know each device's Vds). No new physics models were added.
+
+### Honest limits of v0.4
+
+- One swept contact per run; every other terminal holds its configured
+  bias. No multi-parameter or batch sweeps, no C–V mode.
+- The Boltzmann-statistics degeneracy warning (>~1e19 cm⁻³) applies to
+  swept results exactly as to single-bias ones; high-current sweep points
+  can also leave the range where the validated tolerances were measured.
+- The Vth estimate assumes the swept curve actually contains a
+  transistor-like turn-on (it returns nothing otherwise) and carries a
+  +Vds/2 bias unless the opposing terminal's bias happens to be 0. It is
+  therefore only computed (and only shown) for gate sweeps.
+- Sweeps store field snapshots for one setpoint (last converged), not
+  the full space-time-of-the-ramp movie. Series + one snapshot keeps
+  result files small.
+- Windows runtime support remains unverified (see v0.3's note below);
+  nothing in v0.4 changed the process-launch pattern.

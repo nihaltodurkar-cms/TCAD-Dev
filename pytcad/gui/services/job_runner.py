@@ -86,12 +86,15 @@ class JobRunner(QObject):
         if not self.running:
             return
         self._canceling = True
+        proc = self._proc          # final-review I-5: kill THIS process
         self._proc.terminate()
-        QTimer.singleShot(_KILL_GRACE_MS, self._force_kill)
-
-    def _force_kill(self):
-        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
-            self._proc.kill()
+        # The 3 s grace timer must target the process we're canceling,
+        # not "whatever self._proc holds when the timer fires" -- a quick
+        # cancel-then-restart would otherwise murder the fresh run.
+        def _kill_canceled():
+            if proc is not None and proc.state() != QProcess.NotRunning:
+                proc.kill()
+        QTimer.singleShot(_KILL_GRACE_MS, _kill_canceled)
 
     # -- subprocess plumbing ------------------------------------------
     def _on_stdout(self):

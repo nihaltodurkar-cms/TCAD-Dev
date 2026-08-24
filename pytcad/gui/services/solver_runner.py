@@ -216,7 +216,7 @@ def extract_result(device, spec, solved_bias):
 # ----------------------------------------------------------------------
 #  Sweeps (v0.4)
 # ----------------------------------------------------------------------
-def run_sweep(device, spec, opts=None):
+def run_sweep(device, spec, opts=None, fallback_fields=None):
     """Execute spec.sweep on an EQUILIBRIUM-SOLVED device.
 
     Warm-started ramp: one device object is reused across points, so each
@@ -228,7 +228,9 @@ def run_sweep(device, spec, opts=None):
 
     Returns (fields, series):
       fields  extract_result() dict from the last CONVERGED point, or
-              None if every point diverged;
+              `fallback_fields` if every point diverged -- callers pass
+              the pre-sweep equilibrium snapshot here so a fully-diverged
+              sweep can never present a diverged state as a biased result;
       series  flat npz keys: sweep__voltage, sweep__converged,
               sweep__current__<channel>, unit__sweep_current, sweep__meta.
 
@@ -267,7 +269,7 @@ def run_sweep(device, spec, opts=None):
                 currents[name].append(float(device.terminal_current(name)))
 
         # Keep only converged solutions for the stored field snapshot:
-        # a diverged final point must not overwrite good fields with a
+        # a diverged point must not overwrite good fields with a
         # nonphysical state.
         if ok:
             fields = extract_result(device, spec, solved_bias=True)
@@ -283,7 +285,7 @@ def run_sweep(device, spec, opts=None):
     }
     for name, vals in currents.items():
         series[f"sweep__current__{name}"] = np.asarray(vals, dtype=float)
-    return fields, series
+    return fields if fields is not None else fallback_fields, series
 
 
 # ----------------------------------------------------------------------
@@ -311,9 +313,14 @@ def run_job(job_path, out_path):
 
     if spec.sweep is not None:
         print("PYTCAD_STAGE=sweep", flush=True)
-        fields, series = run_sweep(device, spec, opts)
-        result = fields if fields is not None else extract_result(device, spec,
-                                                                  solved_bias=True)
+        # Snapshot the equilibrium state BEFORE the sweep mutates the
+        # device: if every point diverges, this (honestly labeled
+        # solved_bias=False) is what gets stored -- never a diverged
+        # nonphysical field set. (Final review finding I-4.)
+        equilibrium_fields = extract_result(device, spec, solved_bias=False)
+        fields, series = run_sweep(device, spec, opts,
+                                   fallback_fields=equilibrium_fields)
+        result = fields
         result.update(series)
     else:
         solved_bias = spec.bias is not None

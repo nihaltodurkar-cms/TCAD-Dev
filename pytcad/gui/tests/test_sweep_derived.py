@@ -202,5 +202,10 @@ def test_results_node_shows_sweep_derived_rows(qapp=None, tmp_path=None):
     rows = dict(app._properties_for("results"))
     assert any("Sweep" in k for k in rows), rows
     assert rows["Sweep points"] == "4 of 4 converged"
-    assert rows["Sweep Ion/Ioff"].startswith("1e+09"), rows["Sweep Ion/Ioff"]
     assert "A/cm^2" in rows["Sweep Imax (left)"], rows["Sweep Imax (left)"]
+    # Final review M-2: 'left' is an ohmic contact here, so Ion/Ioff and
+    # a threshold are not meaningful for this output-characteristic
+    # sweep and must be absent (gate-swept rows are covered in
+    # test_v04_review_fixes.py).
+    assert "Sweep Ion/Ioff" not in rows
+    assert "Sweep Vth (max-gm est.)" not in rows

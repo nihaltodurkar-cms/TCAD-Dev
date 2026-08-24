@@ -35,11 +35,13 @@ def current_extremes(currents):
 
 
 def on_off_ratio(currents):
-    """max|I| / max(min nonzero |I|, ...) -- the ratio between the largest
-    and smallest distinct positive magnitudes among valid points.  None
-    unless at least two meaningfully different magnitudes exist: a ratio
-    like 1.0 (flat curve) or one built on a single valid point would be
-    numerically defined but physically meaningless."""
+    """max|I| / min nonzero |I| over valid points -- the ratio between
+    the largest and smallest distinct positive magnitudes.  None unless
+    at least two meaningfully different magnitudes exist: a ratio like
+    1.0 (flat curve) or one built on a single valid point would be
+    numerically defined but physically meaningless.  Note this is only a
+    real "on/off" figure for transistor-like transfer curves; callers
+    should not present it for output-characteristic sweeps."""
     I = np.asarray(currents, dtype=float)
     I = I[np.isfinite(I)]
     mags = np.abs(I[I != 0.0])
@@ -96,8 +98,7 @@ def summarize(sweep_result, channel=None, vds=0.0):
         return out
     V, I = _valid(sweep_result.voltages, channels[name])
     if I.size:
-        out["current_min"] = float(np.min(I))
-        out["current_max"] = float(np.max(I))
+        out["current_min"], out["current_max"] = current_extremes(channels[name])
     ratio = on_off_ratio(channels[name])
     if ratio is not None:
         out["on_off_ratio"] = ratio
