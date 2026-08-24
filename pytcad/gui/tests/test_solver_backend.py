@@ -141,6 +141,45 @@ def test_cli_2d_swept_output_conforms(tmp_path):
     assert str(d["unit__sweep_current"]) == "A/cm"
 
 
+def test_cli_3d_output_conforms(tmp_path):
+    """The grammar documents dim in {1,2,3}; the terminal unit switches
+    to real amperes at 3D.  Tiny mesh keeps the real solve fast."""
+    x = np.linspace(0.0, 2e-4, 6)
+    y = np.linspace(0.0, 1e-4, 4)
+    z = np.linspace(0.0, 1e-4, 4)
+    jj, kk = np.meshgrid(range(y.size), range(z.size), indexing="ij")
+    nodes = {"i": [0] * len(jj.ravel()), "j": jj.ravel().tolist(),
+             "k": kk.ravel().tolist()}
+    right = dict(nodes)
+    right["i"] = [x.size - 1] * len(right["i"])
+    spec = DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(
+            kind="array",
+            values=np.full((z.size, y.size, x.size), 1e17).tolist()),
+        contacts=[
+            ContactSpec(name="left", kind="ohmic", nodes=nodes, V=0.0),
+            ContactSpec(name="right", kind="ohmic", nodes=right, V=0.0),
+        ],
+        bias={"left": 0.05, "right": 0.0},
+    )
+    proc, out = _run_cli(spec, tmp_path, "resistor3d")
+    assert proc.returncode == 0, proc.stderr
+    validate_result(out)
+
+    d = np.load(out)
+    assert int(d["result__schema"]) == SOLVER_RESULT_SCHEMA_VERSION
+    assert int(d["dimensionality"]) == 3
+    assert d["field__potential"].shape == (z.size, y.size, x.size)
+    for comp in ("x", "y", "z"):
+        assert d[f"vector__current_density__{comp}"].shape == \
+            (z.size, y.size, x.size)
+    for t in ("left", "right"):
+        assert str(d[f"terminal__{t}__unit"]) == "A"   # real amperes at 3D
+
+
 # ----------------------------------------------------------------------
 #  legacy acceptance: hand-written pre-stamp files remain legal
 # ----------------------------------------------------------------------
@@ -250,6 +289,25 @@ def test_terminal_without_unit_rejected(tmp_path):
         d["terminal__left__value"] = np.array(1e-4)
     with pytest.raises(ResultSchemaError, match="terminal__left__unit"):
         validate_result(_broken(tmp_path, "badterm", m))
+
+
+def test_missing_solved_bias_rejected(tmp_path):
+    """The docstring lists solved_bias as always required -- the
+    validator must enforce its own documented grammar, or a second
+    backend could omit it forever unnoticed."""
+    def m(d):
+        del d["solved_bias"]
+    with pytest.raises(ResultSchemaError, match="solved_bias"):
+        validate_result(_broken(tmp_path, "nobias", m))
+
+
+def test_orphan_terminal_unit_rejected(tmp_path):
+    """Symmetry: a terminal__X__unit without a __value is as malformed
+    as a value without a unit."""
+    def m(d):
+        d["terminal__ghost__unit"] = np.array("A")
+    with pytest.raises(ResultSchemaError, match="terminal__ghost__value"):
+        validate_result(_broken(tmp_path, "orphanterm", m))
 
 
 def test_non_npz_file_rejected(tmp_path):

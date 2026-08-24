@@ -123,6 +123,7 @@ def _validate_mapping(d, path):
                 "re-run the solver")
 
     # -- dimensionality + axes ---------------------------------------------
+    _require(d, "solved_bias", "always required", path)
     dim = _as_int(d, "dimensionality", path)
     if dim not in (1, 2, 3):
         raise ResultSchemaError(f"{path}: dimensionality must be 1, 2 or 3, "
@@ -180,12 +181,16 @@ def _validate_mapping(d, path):
                     f"{path}: vector__{name}__{comp} shape {values.shape} "
                     "does not match the mesh axes")
 
-    # -- terminals come in value/unit pairs -----------------------------------
+    # -- terminals come in value/unit pairs (both directions) -----------------
     for key in sorted(files):
         if key.startswith("terminal__") and key.endswith("__value"):
             name = key[len("terminal__"):-len("__value")]
             _require(d, f"terminal__{name}__unit",
                      f"terminal__{name}__value has no unit", path)
+        elif key.startswith("terminal__") and key.endswith("__unit"):
+            name = key[len("terminal__"):-len("__unit")]
+            _require(d, f"terminal__{name}__value",
+                     f"orphan terminal__{name}__unit has no value", path)
 
     # -- sweep block: all-or-nothing, consistent lengths, parseable meta ------
     sweep_keys = [k for k in files if k.startswith("sweep__")]
