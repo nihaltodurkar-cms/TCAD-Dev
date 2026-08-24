@@ -995,7 +995,14 @@ class AppController(QObject):
             try:
                 self._sweep_config.validate([c.name for c in self.spec.contacts])
             except ValueError as exc:
-                self.errorRaised.emit("Invalid sweep configuration", str(exc))
+                # Deliberately NOT the arm-time summary ("Invalid sweep
+                # configuration"): this failure means the DEVICE changed
+                # under an armed sweep (e.g. the contact no longer
+                # exists), not that the user just typed bad values.
+                # SweepPanel keys its "arm rejected" note off the arm-time
+                # summary alone and must stay silent here.
+                self.errorRaised.emit(
+                    "Sweep cannot run on this device", str(exc))
                 return
         self.spec.sweep = self._sweep_config
         # Final review I-3: a fresh run invalidates whatever is on show.

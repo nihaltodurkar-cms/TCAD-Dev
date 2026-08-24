@@ -142,6 +142,33 @@ def test_rejected_arm_reverts_fields_to_armed_config(gapp):
     assert controller.sweepConfig() is None
 
 
+def test_run_time_sweep_mismatch_does_not_trigger_arm_rejected_note(gapp):
+    """A sweep whose contact no longer exists fails at RUN time (the
+    device changed under an armed sweep).  That error must keep its own
+    summary -- the panel's 'arm rejected' note and field revert are only
+    for arm-time rejections, otherwise editing the structure would
+    falsely claim the user just failed to type valid values."""
+    engine, root, controller = _fresh(gapp)
+    controller.loadStructureExample("mosfet_2d_structure")
+
+    # arm-time numeric validation passes; the contact name is bogus but
+    # that can only be judged against the device at Run.
+    controller.setSweepConfig("ghost_contact", 0.0, 0.5, 0.1)
+    assert controller.hasSweepConfig is True
+
+    errors = []
+    controller.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    controller.run()
+
+    assert errors and errors[-1][0] == "Sweep cannot run on this device", errors
+    assert not controller.busy
+    note = root.findChild(object, "sweepRejectNote")
+    assert note.property("visible") is False, \
+        "run-time mismatch falsely reported as 'last arm attempt was rejected'"
+    # fields were left alone too
+    assert str(root.findChild(object, "sweepStepField").property("text")) == "0.1"
+
+
 # ----------------------------------------------------------------------
 #  viewport series mode
 # ----------------------------------------------------------------------
