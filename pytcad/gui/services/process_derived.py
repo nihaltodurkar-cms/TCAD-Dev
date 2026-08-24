@@ -62,3 +62,11 @@ def sheet_resistance(x, net_doping, ntotal, T=300.0):
     mu = np.where(netm >= 0, mu_n, mu_p)
     sigma = Q * mu * np.maximum(np.abs(netm), 1.0)
     return 1.0 / np.trapezoid(sigma, xm)
+
+
+def junction_depth_um(x, net_doping):
+    """Metallurgical junction depths in um for every zero crossing of the
+    net doping (service-layer wrapper; callers outside services must not
+    import pytcad directly)."""
+    from pytcad.process import junction_depth
+    return [float(v) * 1e4 for v in junction_depth(x, net_doping)]

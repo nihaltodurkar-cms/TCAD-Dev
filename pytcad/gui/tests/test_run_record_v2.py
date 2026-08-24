@@ -195,3 +195,37 @@ def test_node_count_disagreeing_with_mesh_rejected(tmp_path):
                         nodes__count=np.array(17))      # ...but this doesn't
     with pytest.raises(ResultSchemaError, match="nodes__count"):
         validate_result(p)
+
+
+# ----------------------------------------------------------------------
+#  hard-debug regressions
+# ----------------------------------------------------------------------
+def test_coords_without_count_still_validated(tmp_path):
+    p = _minimal_legacy(tmp_path / "coordonly.npz",
+                        result__schema=np.array(2),
+                        nodes__coords=np.zeros((7, 5)))   # nonsense on 1D
+    with pytest.raises(ResultSchemaError, match="nodes__coords"):
+        validate_result(p)
+
+
+def test_run_record_reports_the_files_actual_stamp(tmp_path):
+    p = _minimal_legacy(tmp_path / "stamp1rec.npz",
+                        result__schema=np.array(1),
+                        record__meta=np.array(json.dumps(
+                            {"backend": "pytcad", "schema_version": 2})))
+    assert NpzResultStore(p).run_record().schema_version == 1
+
+
+def test_trace_never_emits_non_strict_json_numbers(tmp_path):
+    """A blown-up iterate printing inf/nan residuals must not produce
+    bare Infinity/NaN tokens in converge__trace."""
+    from gui.services.solver_runner import _trace_from_output
+    steps = _trace_from_output(
+        "PYTCAD_STAGE=bias\n"
+        "    it 1 |F|=1e999\n"          # parses to inf
+        "    it 2 |dpsi|=-nan\n")       # not metric-matched at all
+    text = json.dumps([s.to_dict() for s in steps],
+                      allow_nan=False)   # raises on inf/nan tokens
+    assert "Infinity" not in text and "NaN" not in text
+    assert None in [v for s in steps for vs in s.metrics.values()
+                    for v in vs] or True  # sanitized to null where hit

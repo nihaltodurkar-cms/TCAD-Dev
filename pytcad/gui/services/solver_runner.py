@@ -18,6 +18,7 @@ per-dimensionality API differences -- see extract_result().
 """
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -375,7 +376,12 @@ def _trace_from_output(text):
         if it and metrics:
             new_metrics = {k: list(v) for k, v in current.metrics.items()}
             for name, val in metrics:
-                new_metrics.setdefault(name.strip(), []).append(float(val))
+                x = float(val)
+                # a diverged iterate can print inf/nan; those must never
+                # reach the trace as bare Infinity/NaN tokens (invalid
+                # strict JSON for every non-Python consumer)
+                new_metrics.setdefault(name.strip(), []).append(
+                    x if math.isfinite(x) else None)
             current = replace(current,
                               iterations=current.iterations +
                               (int(it.group(1)),),

@@ -149,7 +149,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self.update()
             return
         if self._mode == "process" and self._process_store is not None:
-            state = self._process_store.state_for(self._process_store._selected)
+            state = self._process_store.state_for(self._process_store.selected_step_id)
             x_um = state["x"] * 1e4
             self._xlim = (float(x_um.min()), float(x_um.max()))
             self._ylim = None
@@ -399,7 +399,7 @@ class MplCanvasItem(QQuickPaintedItem):
         """Log-scale doping vs. depth, mirroring examples/02_process_flow.py's
         own plotting convention: net doping plus each species profile
         present in the currently-selected checkpoint."""
-        state = self._process_store.state_for(self._process_store._selected)
+        state = self._process_store.state_for(self._process_store.selected_step_id)
         x_um = state["x"] * 1e4
         net_doping = np.abs(state["net_doping"])
         ax.semilogy(x_um, net_doping, "-", label="|net doping|", lw=1.5)

@@ -19,9 +19,17 @@ import numpy as np
 from .result_store import MeshAxes, ScalarField
 
 
-class ProcessResultStore:
+from .result_store import ResultStore
+
+
+class ProcessResultStore(ResultStore):
     """Wraps a process_runner.py manifest dict
     ({"step_ids": [...], "state_paths": {step_id: npz_path}}).
+
+    Subclasses ResultStore so the controller/visualization layers can
+    hand ANY store through one protocol: process states carry no vector
+    fields, terminal currents, sweeps, and are never "solved results",
+    so those members are honest stubs inherited or overridden here.
 
     A "selected" step (defaulting to the last one in the flow) drives
     mesh_axes()/scalar_field()/available_scalars(), mirroring how
@@ -42,6 +50,31 @@ class ProcessResultStore:
         if step_id not in self._state_paths:
             raise KeyError(step_id)
         self._selected = step_id
+
+    @property
+    def selected_step_id(self):
+        """Public read access to the live selection (the visualization
+        layer must not reach into _selected)."""
+        return self._selected
+
+    def vector_field(self, name):
+        raise KeyError("a process checkpoint carries no vector fields")
+
+    def is_solved_result(self):
+        return False
+
+    def has_sweep(self):
+        return False
+
+    def sweep_result(self):
+        raise KeyError("a process checkpoint carries no executed voltage "
+                       "sweep")
+
+    def available_terminals(self):
+        return []
+
+    def terminal_current(self, name):
+        raise KeyError("a process checkpoint carries no terminal currents")
 
     def state_for(self, step_id):
         """Loads one checkpoint fresh from disk every call -- these files

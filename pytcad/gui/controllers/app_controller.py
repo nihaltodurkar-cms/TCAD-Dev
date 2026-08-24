@@ -126,7 +126,9 @@ class AppController(QObject):
 
     @Property(bool, notify=resultChanged)
     def hasResult(self):
-        return isinstance(self._store, NpzResultStore)
+        # Ask the store, never type-check it: any backend's solved-result
+        # store satisfies this without importing NpzResultStore here.
+        return self._store is not None and self._store.is_solved_result()
 
     @Property(list, notify=resultChanged)
     def fieldNames(self):
@@ -254,19 +256,19 @@ class AppController(QObject):
 
     @Property(bool, notify=resultChanged)
     def hasSweep(self):
-        return isinstance(self._store, NpzResultStore) and self._store.has_sweep()
+        return self._store is not None and self._store.has_sweep()
 
     # Same opaque-handoff rationale as processResultForQml above: handed
     # to MplCanvasItem.setSweepSource() by ViewportPanel, never
     # attribute-read from QML.
     @Property(object, notify=resultChanged)
     def sweepResultForQml(self):
-        if isinstance(self._store, NpzResultStore) and self._store.has_sweep():
-            try:
-                return self._store.sweep_result()
-            except Exception:
-                return None
-        return None
+        if self._store is None or not self._store.has_sweep():
+            return None
+        try:
+            return self._store.sweep_result()
+        except Exception:
+            return None
 
     # Candidate sweep targets for the QML panel, in structure order:
     # what the Structure workbench currently defines, else what the
@@ -691,11 +693,10 @@ class AppController(QObject):
         if self._process_result is None:
             return {}
         state = self._process_result.state_for(step_id)
-        from ..services.process_derived import sheet_resistance
-        from pytcad.process import junction_depth
+        from ..services.process_derived import junction_depth_um, sheet_resistance
         x, net, ntotal = state["x"], state["net_doping"], state["ntotal"]
         result = {
-            "junction_depth_um": [float(v) * 1e4 for v in junction_depth(x, net)],
+            "junction_depth_um": junction_depth_um(x, net),
             # Task 15 (real-display verification) finding: sheet_resistance()
             # returns a bare numpy.float64 (from 1.0 / np.trapezoid(...)).
             # Left unconverted, PySide6's QVariant marshaling of a

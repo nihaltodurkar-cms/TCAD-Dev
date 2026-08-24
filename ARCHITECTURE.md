@@ -1,8 +1,12 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1 + M2 SHIPPED (domain core + model catalog;
-RunRecord + result schema v2). Roadmap revised to the M1-M10 sequence
-below; M3-M10 still planning. Supersedes the earlier Step-1 plan.txt
+Date: 2026-08-24. Status: M1 + M2 + M3 SHIPPED. M3 delivered the
+store/analysis boundary (ABC sweep+solved-result protocol, no more
+isinstance checks, public selected_step_id, service-layer junction
+depth), the observables layer (workbench/analysis, parity-golden vs GUI
+readouts, gm(Vg), band diagram matching the core exactly), and the
+SolverBackend protocol with golden-equality transparency proof.
+M4-M10 still planning. Supersedes the earlier Step-1 plan.txt
 (small-boundary scope); keeps its findings as the audit baseline.
 
 Long-term ambition: a learning + research TCAD environment combining the
@@ -110,7 +114,7 @@ M2 - RUNRECORD + RESULT SCHEMA v2 (Architecture/Results) [SHIPPED]
   geometry-check bypass, point_cloud honesty, stdout leak on failure.
 
 M3 - RESULTSTORE / ANALYSIS BOUNDARY + SOLVERBACKEND PROTOCOL
-  (Architecture)
+  (Architecture) [SHIPPED]
   Purpose: finish the data layer before any UI consumes it.
   a) Store seam: has_sweep()/sweep_result() promoted onto the
      ResultStore ABC; AppController's isinstance(NpzResultStore) checks

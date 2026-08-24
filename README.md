@@ -264,6 +264,28 @@ self-validate on load against the versioned schema. This is the
 substrate the planned "Physics Lab" UI will use to *show which
 equations produced a quantity and how the solve actually converged*.
 
+### Store, analysis & solver-backend boundaries (new)
+
+The M3 milestone of the Semiconductor Workbench plan is in place:
+
+- **One store protocol.** The `ResultStore` ABC now carries the sweep
+  and solved-result contracts with honest defaults; the controller asks
+  stores instead of type-checking them against `NpzResultStore`, so a
+  future backend's store plugs in by satisfying an interface. Process
+  checkpoints are a real subclass; the visualization layer reads the
+  selected step through a public accessor.
+- **An observables layer** (`workbench/analysis/`): backend-agnostic,
+  array-based physics readouts — current extremes, Ion/Ioff, max-gm Vth
+  (delegating to the existing, GUI-proven math so parity is exact), plus
+  new gm(Vg) curves and band diagrams (E_c/E_v/E_Fn/E_Fp) computed from
+  plain physical-unit arrays, verified to match the core's own
+  band-diagram routine bit-for-bit on real solved data.
+- **A SolverBackend protocol** (`workbench/solvers/base.py`): backends
+  are addressed by id behind one file-based interface; the homegrown
+  runner is the reference implementation. A golden test proves runs
+  routed through the protocol are identical to direct calls — this is
+  the door the future DEVSIM backend walks through.
+
 ## 7. Where to read more
 
 - **Selberherr, *Analysis and Simulation of Semiconductor Devices* (1984)** — still the reference for the discretised equations, scaling, and Scharfetter–Gummel. Computational.

@@ -72,6 +72,15 @@ class SweepResult:
 
 
 class ResultStore(ABC):
+    """The store contract.  Controllers and the visualization layer must
+    ask STORES these questions -- never type-check concrete classes --
+    so a future backend's store plugs in by satisfying this interface,
+    not by being whitelisted anywhere.
+
+    Sweep and solved-result support are protocol members with honest
+    defaults rather than abstractmethods: most stores legitimately carry
+    neither."""
+
     @abstractmethod
     def mesh_axes(self): ...
 
@@ -90,6 +99,19 @@ class ResultStore(ABC):
     @abstractmethod
     def available_terminals(self): ...
 
+    # -- protocol with defaults ------------------------------------------
+    def is_solved_result(self):
+        """True only for stores wrapping an actual solve output.
+        Previews (e.g. SpecResultStore) must stay False so 'results
+        loaded' UI state never lies."""
+        return False
+
+    def has_sweep(self):
+        return False
+
+    def sweep_result(self):
+        raise KeyError("this store carries no executed voltage sweep")
+
 
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
@@ -106,6 +128,9 @@ class NpzResultStore(ResultStore):
         self._d = np.load(path)
         from .solver_backend import validate_result
         validate_result(self._d)   # validates our open handle, no re-read
+
+    def is_solved_result(self):
+        return True
 
     def mesh_axes(self):
         d = int(self._d["dimensionality"])

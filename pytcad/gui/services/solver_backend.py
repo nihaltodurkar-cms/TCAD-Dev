@@ -123,6 +123,11 @@ class RunRecord:
         if "converge__trace" in getattr(d, "files", ()):
             raw = json.loads(str(np.asarray(d["converge__trace"]).reshape(())))
             trace = tuple(ConvergenceStep.from_dict(s) for s in raw)
+        # report the version the FILE is stamped with, falling back to
+        # the record's own claim for legacy unstamped writers
+        stamped = meta.get("schema_version", 2)
+        if "result__schema" in getattr(d, "files", ()):
+            stamped = int(np.asarray(d["result__schema"]).reshape(()))
         return cls(
             backend=meta.get("backend", ""), created_utc=meta.get("created_utc", ""),
             dimensionality=int(meta.get("dimensionality", 0)),
@@ -130,7 +135,7 @@ class RunRecord:
             models=dict(meta.get("models", {})),
             numerics=dict(meta.get("numerics", {})),
             sweep=meta.get("sweep"), trace=trace,
-            schema_version=int(meta.get("schema_version", 2)))
+            schema_version=int(stamped))
 
 
 class ResultSchemaError(ValueError):
@@ -288,12 +293,20 @@ def _validate_mapping(d, path):
                 raise ResultSchemaError(
                     f"{path}: nodes__count {count} disagrees with the "
                     f"{dim}D mesh ({expected} nodes)")
-            if "nodes__coords" in files:
-                coords = np.asarray(d["nodes__coords"])
-                if coords.ndim != 2 or coords.shape != (count, dim):
-                    raise ResultSchemaError(
-                        f"{path}: nodes__coords shape {coords.shape} must "
-                        f"be ({count}, {dim})")
+        else:
+            count = n_from_shape
+        if "nodes__coords" in files:
+            # validated whenever present -- with OR without a declared
+            # count (gating this on the count was a validation bypass)
+            coords = np.asarray(d["nodes__coords"])
+            if coords.ndim != 2 or coords.shape[1] != dim:
+                raise ResultSchemaError(
+                    f"{path}: nodes__coords shape {coords.shape} must be "
+                    f"(N, {dim})")
+            if count is not None and coords.shape[0] != count:
+                raise ResultSchemaError(
+                    f"{path}: nodes__coords has {coords.shape[0]} rows but "
+                    f"the mesh declares {count} nodes")
 
     # -- v2: run record + convergence trace are parseable JSON -------------
     for key, what in (("record__meta", "a JSON object"),
