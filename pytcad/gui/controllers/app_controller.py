@@ -8,7 +8,9 @@ import numpy as np
 from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 
 from ..services import examples
-from ..services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+from ..services.device_spec import (
+    ContactSpec, DeviceSpec, DopingSpec, MeshSpec, SweepSpec,
+)
 from ..services.job_runner import JobRunner
 from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
 from ..services.process_result_store import ProcessResultStore
@@ -52,6 +54,7 @@ class AppController(QObject):
     structureChanged = Signal()
     undoStateChanged = Signal()
     processResultChanged = Signal()
+    sweepChanged = Signal()                 # v0.4 sweep configuration edits
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,6 +102,9 @@ class AppController(QObject):
         self._process_result = None      # ProcessResultStore, once a flow has run
         self._left_contact_v = 0.0
         self._right_contact_v = 0.0
+        # v0.4 voltage sweep applied to the next Run (not undoable: it is
+        # run configuration, like field selection -- not device geometry)
+        self._sweep_config = None
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -239,6 +245,52 @@ class AppController(QObject):
     @Property(object, notify=processResultChanged)
     def processResultForQml(self):
         return self._process_result
+
+    # -- v0.4 sweep configuration and results -------------------------
+    @Property(bool, notify=sweepChanged)
+    def hasSweepConfig(self):
+        return self._sweep_config is not None
+
+    @Property(bool, notify=resultChanged)
+    def hasSweep(self):
+        return isinstance(self._store, NpzResultStore) and self._store.has_sweep()
+
+    # Same opaque-handoff rationale as processResultForQml above: handed
+    # to MplCanvasItem.setSweepSource() by ViewportPanel, never
+    # attribute-read from QML.
+    @Property(object, notify=resultChanged)
+    def sweepResultForQml(self):
+        if isinstance(self._store, NpzResultStore) and self._store.has_sweep():
+            try:
+                return self._store.sweep_result()
+            except Exception:
+                return None
+        return None
+
+    # Candidate sweep targets for the QML panel, in structure order:
+    # what the Structure workbench currently defines, else what the
+    # current spec (example / process handoff) carries.
+    @Property(list, notify=structureChanged)
+    def sweepContactNames(self):
+        if self.structure is not None:
+            names = [c.name for c in self.structure.contacts]
+            names += [g.name for g in self.structure.gates]
+            return names
+        if self.spec is not None:
+            return [c.name for c in self.spec.contacts]
+        return []
+
+    @Slot(str, float, float, float)
+    def setSweepConfig(self, contact, start, stop, step):
+        """Configure the voltage sweep Run() will attach to the spec."""
+        self._sweep_config = SweepSpec(contact=str(contact), start=float(start),
+                                       stop=float(stop), step=float(step))
+        self.sweepChanged.emit()
+
+    @Slot()
+    def clearSweepConfig(self):
+        self._sweep_config = None
+        self.sweepChanged.emit()
 
     @Property(float, notify=processResultChanged)
     def leftContactV(self):
@@ -867,6 +919,18 @@ class AppController(QObject):
             return
         if self._busy:
             return
+        # v0.4: attach the CURRENT sweep config (None included) so a
+        # previously-run sweep can never linger on the spec after
+        # clearSweepConfig().  Validate BEFORE starting the subprocess --
+        # an unexecutable sweep should be an immediate, actionable error,
+        # not a failed job.
+        if self._sweep_config is not None:
+            try:
+                self._sweep_config.validate([c.name for c in self.spec.contacts])
+            except ValueError as exc:
+                self.errorRaised.emit("Invalid sweep configuration", str(exc))
+                return
+        self.spec.sweep = self._sweep_config
         self.consoleModel.append("Starting solve...")
         self._set_status("Solving...")
         self._set_busy(True)
@@ -965,7 +1029,12 @@ class AppController(QObject):
     def _on_stage(self, stage):
         self._set_status({"equilibrium": "Solving equilibrium...",
                           "bias": "Solving at bias...",
-                          "extract": "Extracting results..."}.get(stage, "Solving..."))
+                          "extract": "Extracting results...",
+                          # v0.4: solver_runner emits PYTCAD_STAGE=sweep per
+                          # point; JobRunner's \w+ regex delivers just
+                          # "sweep" (the point counter reaches the console
+                          # via progressLine).
+                          "sweep": "Running voltage sweep..."}.get(stage, "Solving..."))
 
     def _on_finished(self, path):
         self._set_busy(False)
