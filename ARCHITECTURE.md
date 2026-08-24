@@ -1,9 +1,9 @@
 # Semiconductor Workbench - v0.5.0 Major Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1 IMPLEMENTED (domain core + model catalog,
-15 tests, both-example equivalence proven); M2-M8 still planning.
-Supersedes the earlier Step-1 plan.txt (small-boundary scope); keeps its
-findings as the audit baseline.
+Date: 2026-08-24. Status: M1 + M2 SHIPPED (domain core + model catalog;
+RunRecord + result schema v2). Roadmap revised to the M1-M10 sequence
+below; M3-M10 still planning. Supersedes the earlier Step-1 plan.txt
+(small-boundary scope); keeps its findings as the audit baseline.
 
 Long-term ambition: a learning + research TCAD environment combining the
 capabilities and educational value of DEVSIM / Silvaco / Sentaurus while
@@ -92,123 +92,133 @@ existing numerical package is NEVER modified except to expose values it
 already computes.
 
 ------------------------------------------------------------------------
-4. MILESTONE ROADMAP
+4. MILESTONE ROADMAP (revised M1-M10 sequence)
 ------------------------------------------------------------------------
 Every milestone ships green tests and preserves all existing tests.
-Dependency order: M1 -> M2 -> M3 -> {M4, M5} -> M6 -> M7; M8 after M1.
+Dependency order: M1 -> M2 -> M3 -> M4 -> {M5, M6, M7} -> M8 -> M9 -> M10.
 
 M1 - DOMAIN CORE + MODEL CATALOG (Architecture) [SHIPPED]
-  Purpose: foundational objects everything else consumes.
-  Files: new pytcad/workbench/core/{device,region,materials,catalog}.py;
-         pytcad/workbench/adapters/spec.py.
-  Interfaces: DomainDevice, Region, MaterialLibrary.get(name),
-         ModelCatalog.list()/describe(name)/validate(config).
-  Migration: none forced - DeviceSpec stays wire/project format; becomes
-         strictly a derived view of DomainDevice.
-  Tests: round-trip equivalence (domain->spec->current builder ==
-         current direct path for both shipped examples); catalog
-         metadata completeness.
-  Risks: representation duplication (mitigated by derived-view rule).
-  Compat: 100% behavioral.
+  Shipped as planned: workbench/core/{device,region,materials,catalog}.py
+  + adapters/spec.py; both-example round-trip equivalence proven;
+  post-ship audit fixed material-handling boundary bugs (case-insensitive
+  library lookup, honest non-silicon rejection).
 
-M2 - RUNRECORD + RESULT SCHEMA v2 (Architecture/Results)
-  Purpose: runs become first-class. Capture Newton iteration/residual
-         history (keep warnings for compat), stamp enabled-model config,
-         emit schema-v2 files (flat node coords + per-node fields +
-         structured-shape hint) alongside v1 shaped keys.
-  Files: solver_backend (v2 grammar + RunRecord), solver_runner (capture
-         + dual write), result_store (prefer v2 when present).
-  Tests: conformance 1D/2D/3D on v2 keys; convergence-trace assertions;
-         old-file acceptance.
-  Risks: file size growth (traces behind a flag); solver_runner is the
-         most delicate non-numerical file.
-  Compat: v1 readers/writers untouched; backward-readable.
+M2 - RUNRECORD + RESULT SCHEMA v2 (Architecture/Results) [SHIPPED]
+  Shipped as planned: additive v2 grammar (geom/mesh/node keys,
+  record__meta provenance, converge__trace), stdout-tee capture with
+  zero numerical changes, run_record() accessor. Post-ship probing fixed
+  geometry-check bypass, point_cloud honesty, stdout leak on failure.
 
-M3 - SOLVERBACKEND INTERFACE (Solver Backends)
-  Purpose: real protocol prepare(DomainDevice, ModelConfig, numerics)
-         -> SolveHandle; run() -> RunResult+RunRecord. Generic subprocess
-         runner keyed by backend id (JobRunner already module-
-         parameterized - formalize, don't replace).
-  Files: workbench/solvers/base.py, workbench/solvers/pytcad_backend.py
-         (thin wrap of today's runner internals), job_runner adaptation.
-  Tests: backend-conformance battery (from M2) against pytcad backend;
-         golden-file equality with current outputs.
-  Risks: behavior drift (guarded by golden tests).
-  Compat: default backend id "pytcad"; CLI unchanged.
+M3 - RESULTSTORE / ANALYSIS BOUNDARY + SOLVERBACKEND PROTOCOL
+  (Architecture)
+  Purpose: finish the data layer before any UI consumes it.
+  a) Store seam: has_sweep()/sweep_result() promoted onto the
+     ResultStore ABC; AppController's isinstance(NpzResultStore) checks
+     removed (:129/:257/:264); ProcessResultStore subclassing or a
+     documented duck-type contract; MplCanvasItem's private
+     store._selected reach-in replaced by a public accessor; the
+     controller's direct pytcad.process import moved behind
+     process_derived.
+  b) Observables: sweep_derived promoted into an analysis layer with a
+     uniform Observable.compute(RunResult) interface; add gm(Vg) curve,
+     band-diagram extraction, recombination/mobility diagnostic fields
+     (expose what the core already computes - never recompute); C-V via
+     the validated moscap.cv_sweep behind the same interface.
+  c) SolverBackend protocol (EARLY in this milestone): formal
+     prepare(DomainDevice, ModelConfig, numerics) -> SolveHandle /
+     run() -> RunResult+RunRecord, with the pytcad runner as reference
+     implementation. Decided here rather than at DEVSIM time so M7 is
+     an adapter, not a rewrite. Zero behavior change; golden equality.
+  Tests: parity goldens vs existing sweep_derived values; conformance
+         battery against the pytcad backend; FakeStore-driven seam tests.
+  Risks: solver_runner/store churn (guarded by the unchanged suite).
+  Compat: GUI readouts unchanged in wording/values; CLI unchanged.
 
-M4 - PHYSICS LAB PHASE 1 (Educational UI)
+M4 - PHYSICS LAB FOUNDATION (Educational UI)
   Purpose: first real educational surface: panel listing ModelCatalog
          entries with enable/disable + validated parameter edits;
-         equation/reference text; convergence-history plot from
+         equation/reference text; convergence-history plot from the M2
          RunRecord; "what produced this quantity" provenance view.
          Everything backed by the real pipeline - nothing faked.
   Files: qml/panels/PhysicsLabPanel.qml, controllers/lab_controller.py
-         (keeps the god controller from growing), analysis hook.
+         (keeps the god controller from growing).
   Tests: headless QML driver checks (catalog reflection, toggles reach
-         ModelConfig + change RunRecord, convergence plot data).
-  Risks: controller growth (mitigated by dedicated lab_controller).
+         ModelConfig and change RunRecord, convergence plot data).
   Compat: purely additive UI.
 
-M5 - OBSERVABLES LAYER (Analysis)
-  Purpose: promote sweep_derived into workbench/analysis with uniform
-         Observable.compute(RunResult) interface; add gm(Vg) curve,
-         band-diagram extraction, recombination/mobility diagnostic
-         fields (core already computes these mid-iteration - expose,
-         never recompute); route C-V through the pipeline using the
-         validated moscap.cv_sweep behind the Observable interface.
-  Tests: numerical parity goldens vs existing sweep_derived values.
-  Risks: C-V generality (quasi-static vs small-signal) - scope to the
-         validated moscap path first.
-  Compat: existing GUI readouts unchanged in wording/values.
-
-M6 - DEVICE TEMPLATES (Device Builder phase 1)
+M5 - DEVICE BUILDER EXPANSION (Device Builder)
   Purpose: parametric templates (pn diode, NMOS like today's example,
-         MOS-C) expressed in domain core; Builder UI lists templates
-         with editable parameters. BJT/HEMT/solar deferred until
-         heterostructure Regions exist (post-M7 learning).
+          MOS-C) expressed in domain core; Builder UI lists templates
+          with editable parameters. BJT/HEMT/solar deferred until
+          heterostructure Regions exist.
   Tests: each template builds, solves, matches current benchmarks.
-  Risks: low.
 
-M7 - DEVSIM BACKEND SPIKE (Solver Backends)
-  Purpose: GENUINE backend proof: optional dependency; 1D diode
-         implemented natively in DEVSIM (its own mesh), emitting
-         RunResult v2 + RunRecord. Verified against the shared analytic
-         benchmark set BEFORE any UI exposure. Unstructured output fits
-         schema v2 point clouds; visualization gains a triangulated
-         scatter path.
+M6 - PROCESS BUILDER (Process side)
+  Purpose: process ops map onto domain-core Regions (per-region
+          implants); checkpoints become DomainDevices. Scope stays 1D:
+          multi-material regions are explicitly OUT until the
+          heterostructure question is settled.
+  Compat: existing 1D flow files load unchanged.
+
+M7 - DEVSIM BACKEND (Solver Backends)
+  Purpose: GENUINE backend proof on the M3 protocol: optional
+          dependency; 1D diode implemented natively in DEVSIM (its own
+          mesh), emitting RunResult v2 + RunRecord. Verified against
+          the shared analytic benchmark set BEFORE any UI exposure.
+          Unstructured output uses schema v2 point-cloud geometry;
+          visualization gains a triangulated scatter path.
   Tests: cross-backend agreement within stated tolerances; conformance
          battery.
   Risks: highest-risk milestone; isolated by the interface, opt-in,
          off by default.
 
-M8 - PROCESS BUILDER EVOLUTION
-  Purpose: process ops map onto domain-core Regions (per-region
-         implants); checkpoints become DomainDevices; 2D profiles later.
-  Compat: existing 1D flow files load unchanged.
+M8 - ADVANCED PHYSICS / SOLVERS (Physics)
+  Purpose: first NEW physics beyond the current five models - chosen by
+          concrete demand (e.g. thermionic emission, heterojunction
+          continuity for HEMT-class devices; impact ionization for
+          breakdown studies). This is where compositional equation
+          assembly gets decided, justified by that second model need.
+          Advanced solvers (iterative/preconditioned) address the 3D
+          LU fill-in wall documented in benchmarks/.
+  Gate: no new model lands without validation against an analytic or
+        published benchmark, and without catalog metadata.
+
+M9 - EDUCATIONAL PHYSICS LAB (Educational UI, full)
+  Purpose: complete the lab started in M4: side-by-side model on/off
+          comparisons (needs M8's richer physics to be worth comparing),
+          band diagrams, recombination/mobility maps, mesh/BC inspection,
+          full "which equations produced this" explanations per quantity.
+
+M10 - WORKFLOW LAYER (Silvaco / Sentaurus-style)
+  Purpose: deck-style input translation over the app core (parse ->
+          DomainDevice + ModelConfig + job spec -> run -> results), so
+          batch/scripted workflows mirror commercial TCAD usage. A
+          translation layer ONLY - never a second UI code path.
+  Compat: everything above remains reachable from the QML app.
+
+Done criteria carried from M1/M2: every milestone proves behavioral
+equivalence or adds independently validated capability; adversarial
+probing pass before ship; suite green with pre-existing tests unchanged.
 
 ------------------------------------------------------------------------
-5. RECOMMENDED FIRST IMPLEMENTATION MILESTONE
+5. NEXT IMPLEMENTATION MILESTONE
 ------------------------------------------------------------------------
-M1 - Domain Core + Model Catalog. It is the one component every other
-milestone imports (backends consume Devices+ModelConfig; Physics Lab
-renders the Catalog; Builder edits Devices; Analysis annotates Results),
-it forces zero behavioral change, and it converts materials.py /
-Models-flag reality into documented, citable metadata - the first
-tangible educational value.
-
-Deliverable sketch: pytcad/workbench/core/{device,region,materials,
-catalog}.py + adapters/spec.py + equivalence tests against both shipped
-examples.
+M1 and M2 are shipped. Next: M3 - ResultStore / analysis boundary +
+SolverBackend protocol. It pays down every store-layer leak found in the
+audit, promotes analysis into backend-agnostic observables, and defines
+the backend door that M4-M10 walk through - still with zero behavioral
+change, guarded by parity goldens.
 
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Any DEVSIM code, install, or adapter (that is M7, after M1-M3).
+- Any DEVSIM code, install, or adapter (that is M7, behind the M3
+  protocol).
 - Quantum/tunneling/thermionic/impact-ionization models; any new
-  semiconductor physics.
+  semiconductor physics (M8, gated on benchmarks + catalog metadata).
 - Rewriting Device classes into compositional equation assembly
-  (deferred until a SECOND concrete model need justifies it - no
-  speculative abstraction).
+  (deferred until a SECOND concrete model need justifies it - decided
+  at M8).
 - Custom FEM/FVM; new mesh generators.
 - BJT/HEMT/solar-cell device templates (need heterostructure Regions).
 - Generic-engine C-V beyond the validated moscap path.
