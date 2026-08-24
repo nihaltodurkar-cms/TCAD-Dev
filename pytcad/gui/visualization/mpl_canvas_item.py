@@ -39,6 +39,7 @@ class MplCanvasItem(QQuickPaintedItem):
         self._buf = None           # keep the Agg buffer alive while QImage uses it
         self._structure = None
         self._mesh_model = None
+        self._process_store = None
         self._mode = "doping"
 
     # -- data ---------------------------------------------------------
@@ -79,6 +80,25 @@ class MplCanvasItem(QQuickPaintedItem):
         self._mesh_model = mesh_model
         self.fit()
 
+    @Slot(object, str)
+    def setProcessSource(self, store, step_id):
+        # Deliberately does NOT touch self._mode -- see setStructureSource()
+        # above for why: ViewportPanel.setViewMode() always calls setMode()
+        # immediately before this, and a previous version's setStructureSource
+        # silently clobbering self._mode back to its own mode caused a real,
+        # previously-shipped bug (Mesh viewport rendering the Structure
+        # diagram, undetected because the old tests called setStructureSource
+        # before setMode -- the reverse of the real QML order). Same trap,
+        # same fix, applied here before it can happen again.
+        self._process_store = store
+        # step_id may legitimately be "" -- e.g. ViewportPanel switching to
+        # "process" mode before any step has been clicked in ProcessPanel's
+        # list -- in which case ProcessResultStore's own constructor default
+        # (the flow's last step) should stand rather than raising KeyError("").
+        if store is not None and step_id:
+            store.select_step(step_id)
+        self.fit()
+
     @Slot(str)
     def setMode(self, mode):
         self._mode = mode
@@ -99,6 +119,15 @@ class MplCanvasItem(QQuickPaintedItem):
         if self._mode in ("structure", "mesh") and self._structure is not None:
             self._xlim = (0.0, self._structure.width_cm * 1e4)
             self._ylim = (0.0, self._structure.height_cm * 1e4)
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
+        if self._mode == "process" and self._process_store is not None:
+            state = self._process_store.state_for(self._process_store._selected)
+            x_um = state["x"] * 1e4
+            self._xlim = (float(x_um.min()), float(x_um.max()))
+            self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
             self.update()
@@ -181,6 +210,10 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "mesh" and self._mesh_model is not None:
             self._draw_mesh(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "process" and self._process_store is not None:
+            self._draw_process(ax)
             fig.tight_layout()
             return fig
         # Doping mode with a structure but no solve yet: rasterize the
@@ -312,6 +345,41 @@ class MplCanvasItem(QQuickPaintedItem):
             ax.set_xlim(*self._xlim)
         if self._ylim:
             ax.set_ylim(self._ylim[1], self._ylim[0])
+
+    def _draw_process(self, ax):
+        """Log-scale doping vs. depth, mirroring examples/02_process_flow.py's
+        own plotting convention: net doping plus each species profile
+        present in the currently-selected checkpoint."""
+        state = self._process_store.state_for(self._process_store._selected)
+        x_um = state["x"] * 1e4
+        net_doping = np.abs(state["net_doping"])
+        ax.semilogy(x_um, net_doping, "-", label="|net doping|", lw=1.5)
+        species_max = 0.0
+        for species, C in state["species_profiles"].items():
+            ax.semilogy(x_um, C, "--", label=species, lw=1.0)
+            if len(C):
+                species_max = max(species_max, float(np.max(C)))
+        ax.set_xlabel("depth [um]")
+        ax.set_ylabel("cm^-3")
+        ax.legend(fontsize=8)
+        # Task 15 (real-display verification) finding: a Gaussian implant
+        # tail (pytcad's own moment-based profile) underflows toward zero
+        # far from its peak -- e.g. ~1e-312, a subnormal float, not a real
+        # concentration -- and matplotlib's default semilogy autoscale
+        # happily stretched the y-axis down to include it, squashing the
+        # actual physically meaningful 1e15-1e20 cm^-3 range into a sliver
+        # at the top of the plot (confirmed with a real process run: the
+        # rendered axis ran from ~1e33 to ~1e-311). examples/02_process_
+        # flow.py -- the script this method's own docstring says it
+        # mirrors -- avoids exactly this with a fixed set_ylim(1e15, 1e21);
+        # this computes the equivalent floor/ceiling from the real data
+        # (background doping level) instead of hardcoding one flow's numbers.
+        floor = max(abs(float(state["background"])), 1.0) * 1e-2
+        peak = max(float(np.max(net_doping)) if len(net_doping) else floor,
+                   species_max, floor * 10)
+        ax.set_ylim(floor, peak * 3)
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
 
     @Slot(result=object)
     def renderToImage(self):

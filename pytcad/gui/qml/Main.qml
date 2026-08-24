@@ -87,10 +87,11 @@ ApplicationWindow {
             ComboBox {
                 id: viewModeBox
                 objectName: "viewModeSelector"
-                model: ["Structure", "Doping", "Mesh", "Results"]
+                model: ["Structure", "Doping", "Mesh", "Process", "Results"]
                 onActivated: {
                     var m = {"Structure": "structure", "Doping": "doping",
-                            "Mesh": "mesh", "Results": "doping"}[currentText]
+                            "Mesh": "mesh", "Process": "process",
+                            "Results": "doping"}[currentText]
                     viewport.setViewMode(m)
                 }
             }
@@ -148,6 +149,14 @@ ApplicationWindow {
                 SplitView.preferredWidth: 220
                 SplitView.minimumWidth: 160
                 controller: appController
+            }
+
+            ProcessPanel {
+                objectName: "processPanel"
+                SplitView.preferredWidth: 260
+                SplitView.minimumWidth: 200
+                controller: appController
+                onStepSelected: (stepId) => viewport.setProcessStep(stepId)
             }
 
             PropertiesPanel {

@@ -8,7 +8,10 @@ import numpy as np
 from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 
 from ..services import examples
+from ..services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
 from ..services.job_runner import JobRunner
+from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
+from ..services.process_result_store import ProcessResultStore
 from ..services.project_store import load_project, save_project
 from ..services.result_store import NpzResultStore, SpecResultStore
 from ..services.structure_model import GateModel, RegionSpec
@@ -16,9 +19,28 @@ from ..services.undo_stack import Command, UndoStack
 from .console_model import ConsoleModel
 from .contact_list_model import ContactListModel
 from .gate_list_model import GateListModel
+from .process_step_list_model import ProcessStepListModel
 from .project_tree_model import ProjectTreeModel
 from .properties_model import PropertiesModel
 from .region_list_model import RegionListModel
+
+
+class _ProcessFlowJob:
+    """Adapts a ProcessFlow to the `to_json(path)` contract JobRunner.start()
+    expects on whatever it is handed (it calls `spec.to_json(job_path)`
+    generically -- see job_runner.py). ProcessFlow (Task 3/7) only exposes
+    to_dict()/from_dict(), matching process_runner.py's own CLI contract
+    (gui/tests/test_process_runner.py writes `flow.to_dict()` by hand), so
+    this tiny wrapper is added here rather than growing process_model.py,
+    which this task must not touch.
+    """
+    def __init__(self, flow):
+        self._flow = flow
+
+    def to_json(self, path):
+        import json
+        with open(path, "w") as fh:
+            json.dump(self._flow.to_dict(), fh)
 
 
 class AppController(QObject):
@@ -29,6 +51,7 @@ class AppController(QObject):
     errorRaised = Signal(str, str)          # concise summary, expandable details
     structureChanged = Signal()
     undoStateChanged = Signal()
+    processResultChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,12 +74,31 @@ class AppController(QObject):
         self._gate_list_model = GateListModel()
         self._structure_errors = []
 
+        self.process_flow = ProcessFlow()
+        self._process_flow_model = ProcessStepListModel()
+        self._process_errors = []
+
         self._runner = JobRunner(parent=self)
         self._runner.progressLine.connect(self.consoleModel.append)
         self._runner.stageChanged.connect(self._on_stage)
         self._runner.finished.connect(self._on_finished)
         self._runner.failed.connect(self._on_failed)
         self._runner.canceled.connect(self._on_canceled)
+
+        # Process -> Device(1D) handoff (v0.3, Task 8): a second JobRunner
+        # instance driving process_runner.py instead of solver_runner.py.
+        # Kept entirely separate from self._runner/self._store above --
+        # a process-flow run and a device solve are different subprocess
+        # jobs with different result shapes (a manifest.json vs. a
+        # result.npz) and must not be conflated.
+        self._process_runner = JobRunner(parent=self, module="gui.services.process_runner")
+        self._process_runner.progressLine.connect(self.consoleModel.append)
+        self._process_runner.finished.connect(self._on_process_finished)
+        self._process_runner.failed.connect(self._on_process_failed)
+        self._process_runner.canceled.connect(self._on_process_canceled)
+        self._process_result = None      # ProcessResultStore, once a flow has run
+        self._left_contact_v = 0.0
+        self._right_contact_v = 0.0
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -122,6 +164,10 @@ class AppController(QObject):
     def gateListModel(self):
         return self._gate_list_model
 
+    @Property(QObject, constant=True)
+    def processFlowModel(self):
+        return self._process_flow_model
+
     # Material is a scalar read from StructureModel, not the whole
     # object: a plain (non-QObject) Python object exposed via
     # @Property(object, ...) is NOT attribute-readable from QML/JS at
@@ -151,6 +197,64 @@ class AppController(QObject):
     @Property(list, notify=structureChanged)
     def structureValidationErrors(self):
         return [e.message for e in self._structure_errors]
+
+    # design section 10's documented format: "Step 03 -- Implant: <message>",
+    # a 1-based flow index and the operation's display name, resolved from
+    # the ValidationError's object_id (a step uuid) back to its current
+    # position/operation in self.process_flow -- not the raw uuid hex the
+    # code used to emit directly.
+    _OPERATION_LABELS = {"substrate": "Substrate", "implant": "Implant",
+                         "anneal": "Anneal", "oxidize": "Oxidize"}
+
+    def _format_process_error(self, error):
+        if error.object_id:
+            idx = next((i for i, s in enumerate(self.process_flow.steps)
+                       if s.id == error.object_id), None)
+            if idx is not None:
+                step = self.process_flow.steps[idx]
+                label = self._OPERATION_LABELS.get(step.operation, step.operation.title())
+                return f"Step {idx + 1:02d} — {label}: {error.message}"
+        # Flow-level errors (e.g. "must start with an enabled substrate
+        # step") aren't scoped to any one step, so there is no step number
+        # to resolve -- just the message.
+        return error.message
+
+    @Property(list, notify=structureChanged)
+    def processValidationErrors(self):
+        # Reuses the existing generic structureChanged signal rather than
+        # adding a parallel signal every QML binding would need to
+        # duplicate-listen to -- processFlowModel and this property both
+        # key off it, refreshed together in _refresh_process_flow.
+        return [self._format_process_error(e) for e in self._process_errors]
+
+    @Property(bool, notify=processResultChanged)
+    def hasProcessResult(self):
+        return self._process_result is not None
+
+    # Same rationale as structureForQml/meshModelForQml above: a plain
+    # Python object property is not attribute-readable from QML, so this
+    # exists only to be handed opaquely into MplCanvasItem.setProcessSource()
+    # (ViewportPanel.setViewMode()'s "process" branch) -- QML never reads
+    # attributes off it directly.
+    @Property(object, notify=processResultChanged)
+    def processResultForQml(self):
+        return self._process_result
+
+    @Property(float, notify=processResultChanged)
+    def leftContactV(self):
+        return self._left_contact_v
+
+    @leftContactV.setter
+    def leftContactV(self, value):
+        self._left_contact_v = float(value)
+
+    @Property(float, notify=processResultChanged)
+    def rightContactV(self):
+        return self._right_contact_v
+
+    @rightContactV.setter
+    def rightContactV(self, value):
+        self._right_contact_v = float(value)
 
     @Property(bool, notify=undoStateChanged)
     def canUndo(self):
@@ -191,6 +295,15 @@ class AppController(QObject):
         return rows
 
     def _refresh_structure_models(self):
+        # Guarded: process-flow-only sessions (no loadStructureExample/
+        # loadProject yet) share the same UndoStack, and undo()/redo()
+        # call this unconditionally -- self.structure is None until a
+        # structure is actually loaded, so this must be a no-op rather
+        # than an AttributeError in that case. Every existing v0.2 call
+        # site (addRegion, moveRegion, etc.) already requires a loaded
+        # structure to run at all, so this guard changes nothing for them.
+        if self.structure is None:
+            return
         self._region_list_model.refresh(self.structure.regions)
         self._contact_list_model.refresh(self.structure.contacts)
         self._gate_list_model.refresh(self.structure.gates)
@@ -198,11 +311,33 @@ class AppController(QObject):
         self.structureChanged.emit()
 
     def _run_validation_quiet(self):
-        self._structure_errors = self.structure.validate(self.mesh_model)
+        # Guarded (Task 9): saveProject/runStructureValidation may now be
+        # called on a project with no structure loaded (process-only
+        # projects) -- self.structure/self.mesh_model can legitimately be
+        # None, in which case there is nothing to validate.
+        self._structure_errors = (
+            self.structure.validate(self.mesh_model)
+            if self.structure is not None and self.mesh_model is not None
+            else []
+        )
 
     def _push(self, do, undo, description=""):
         self._undo_stack.push(Command(do, undo, description))
         self._refresh_structure_models()
+        self.undoStateChanged.emit()
+
+    def _refresh_process_flow(self):
+        self._process_flow_model.refresh(self.process_flow.steps)
+        self._process_errors = validate_flow(self.process_flow)
+        self.structureChanged.emit()
+
+    def _push_process(self, do, undo, description=""):
+        # Twin of _push, used only by process-flow mutations: refreshes
+        # ProcessStepListModel/processValidationErrors instead of the
+        # structure models. Keeps _push's existing structure-only
+        # contract untouched for every v0.2 call site.
+        self._undo_stack.push(Command(do, undo, description))
+        self._refresh_process_flow()
         self.undoStateChanged.emit()
 
     @Slot(str)
@@ -349,13 +484,22 @@ class AppController(QObject):
     @Slot()
     def undo(self):
         self._undo_stack.undo()
+        # One shared UndoStack now carries both structure and
+        # process-flow commands (Task 7), so a generic undo() must
+        # refresh both projections -- _refresh_structure_models() is a
+        # no-op when no structure is loaded, and _refresh_process_flow()
+        # is a no-op-ish refresh of an empty ProcessFlow when no process
+        # steps exist, so this is behavior-preserving for pure v0.2
+        # structure sessions.
         self._refresh_structure_models()
+        self._refresh_process_flow()
         self.undoStateChanged.emit()
 
     @Slot()
     def redo(self):
         self._undo_stack.redo()
         self._refresh_structure_models()
+        self._refresh_process_flow()
         self.undoStateChanged.emit()
 
     @Slot(result=bool)
@@ -364,14 +508,296 @@ class AppController(QObject):
         self.structureChanged.emit()
         return not self._structure_errors
 
+    # -- process flow (v0.3) ------------------------------------------
+    @Slot(str, str, dict)
+    def addProcessStep(self, operation, name, parameters):
+        import uuid
+        step = ProcessStep(id=uuid.uuid4().hex[:8], name=name, operation=operation,
+                           parameters=dict(parameters))
+        self._push_process(lambda: self.process_flow.add_step(step),
+                           lambda: self.process_flow.remove_step(step.id),
+                           f"add process step {name}")
+
+    @Slot(str)
+    def removeProcessStep(self, step_id):
+        step = self.process_flow.find_step(step_id)
+        if step is None:
+            return
+        self._push_process(lambda: self.process_flow.remove_step(step_id),
+                           lambda: self.process_flow.add_step(step),
+                           f"remove process step {step.name}")
+
+    @Slot(str, int)
+    def moveProcessStep(self, step_id, offset):
+        step = self.process_flow.find_step(step_id)
+        if step is None:
+            return
+        # Same clamped-delta resolution as moveRegion: resolve the
+        # actual, already-clamped index delta up front rather than
+        # pushing the raw requested offset, so undo (negating the
+        # resolved delta) is exactly reversible even when the requested
+        # offset would have overshot the list ends.
+        old_idx = self.process_flow.steps.index(step)
+        new_idx = max(0, min(len(self.process_flow.steps) - 1, old_idx + offset))
+        if new_idx == old_idx:
+            return
+        delta = new_idx - old_idx
+        self._push_process(lambda: self.process_flow.move_step(step_id, delta),
+                           lambda: self.process_flow.move_step(step_id, -delta),
+                           f"reorder process step {step.name}")
+
+    @Slot(str)
+    def duplicateProcessStep(self, step_id):
+        original = self.process_flow.find_step(step_id)
+        if original is None:
+            return
+        new_id_holder = {}
+        def do():
+            dup = self.process_flow.duplicate_step(step_id)
+            new_id_holder["id"] = dup.id
+        def undo():
+            self.process_flow.remove_step(new_id_holder["id"])
+        self._push_process(do, undo, f"duplicate process step {original.name}")
+
+    @Slot(str, bool)
+    def setProcessStepEnabled(self, step_id, enabled):
+        step = self.process_flow.find_step(step_id)
+        if step is None:
+            return
+        old = step.enabled
+        self._push_process(lambda: setattr(step, "enabled", enabled),
+                           lambda: setattr(step, "enabled", old), "toggle process step")
+
+    @Slot(str, str)
+    def renameProcessStep(self, step_id, new_name):
+        step = self.process_flow.find_step(step_id)
+        if step is None:
+            return
+        old_name = step.name
+        self._push_process(lambda: setattr(step, "name", new_name),
+                           lambda: setattr(step, "name", old_name),
+                           f"rename process step to {new_name}")
+
+    @Slot(str, dict)
+    def setProcessStepParameters(self, step_id, parameters):
+        step = self.process_flow.find_step(step_id)
+        if step is None:
+            return
+        old = dict(step.parameters)
+        new = dict(parameters)
+        def apply(vals):
+            step.parameters.clear()
+            step.parameters.update(vals)
+        self._push_process(lambda: apply(new), lambda: apply(old),
+                           "edit process step parameters")
+
+    @Slot(str, result=str)
+    def processStepOperation(self, step_id):
+        step = self.process_flow.find_step(step_id)
+        return step.operation if step is not None else ""
+
+    @Slot(str, result="QVariant")
+    def processStepParameters(self, step_id):
+        step = self.process_flow.find_step(step_id)
+        return dict(step.parameters) if step is not None else {}
+
+    @Slot(str, result="QVariant")
+    def processDerivedQuantities(self, step_id):
+        """Design section 19: the Derived Quantities panel's data source.
+        Reads a single process checkpoint (ProcessResultStore.state_for)
+        and computes a small set of GUI-facing derived values -- junction
+        depth, per-species peak concentration/depth/dose, sheet
+        resistance, and (for oxidize steps) oxide thickness / silicon
+        consumed. Keys are named with explicit unit suffixes
+        (junction_depth_um, peak_concentration_cm3_<species>, ...) so
+        DerivedQuantitiesPanel.qml can format each one without guessing
+        units from a bare key name.
+        """
+        if self._process_result is None:
+            return {}
+        state = self._process_result.state_for(step_id)
+        from ..services.process_derived import sheet_resistance
+        from pytcad.process import junction_depth
+        x, net, ntotal = state["x"], state["net_doping"], state["ntotal"]
+        result = {
+            "junction_depth_um": [float(v) * 1e4 for v in junction_depth(x, net)],
+            # Task 15 (real-display verification) finding: sheet_resistance()
+            # returns a bare numpy.float64 (from 1.0 / np.trapezoid(...)).
+            # Left unconverted, PySide6's QVariant marshaling of a
+            # numpy.float64 across this Slot(result="QVariant") boundary
+            # does NOT produce a JS number -- confirmed with an isolated
+            # repro: QML saw typeof "object" whose string/numeric coercion
+            # is literally -1, so DerivedQuantitiesPanel.qml's
+            # Math.round(value) rendered "-1 Ω/□" for every step,
+            # regardless of the real (positive, correct) computed
+            # resistance. Every other value in this dict is already
+            # explicitly cast with float(...) for exactly this reason;
+            # sheet_resistance_ohm_sq was the one omission.
+            "sheet_resistance_ohm_sq": float(sheet_resistance(x, net, ntotal)),
+        }
+        for species, C in state["species_profiles"].items():
+            peak_idx = int(C.argmax())
+            result[f"peak_concentration_cm3_{species}"] = float(C[peak_idx])
+            result[f"peak_depth_um_{species}"] = float(x[peak_idx]) * 1e4
+            result[f"implanted_dose_cm2_{species}"] = float(np.trapezoid(C, x))
+        if "oxide_thickness_um" in state["bookkeeping"]:
+            result["oxide_thickness_um"] = state["bookkeeping"]["oxide_thickness_um"]
+            result["silicon_consumed_um"] = state["bookkeeping"]["silicon_consumed_um"]
+        return result
+
+    @Slot(result=bool)
+    def runProcessValidation(self):
+        self._process_errors = validate_flow(self.process_flow)
+        self.structureChanged.emit()
+        return not self._process_errors
+
+    @Slot()
+    def runProcess(self):
+        if not self.runProcessValidation():
+            self.errorRaised.emit("Cannot run an invalid process flow",
+                                  "\n".join(self.processValidationErrors))
+            return
+        if self._busy:
+            return
+        # Final-review finding: a previous run's result must not be
+        # presented as "current" once a new run starts. Each run now
+        # writes its checkpoints into its own isolated per-run directory
+        # (process_runner.py's run_flow()), so the OLD result is not
+        # literally corrupted by a new run -- but showing it while a
+        # fresh run is in flight (or after that fresh run fails/is
+        # canceled) would silently look like results for the flow as it
+        # exists right now, which it is not.
+        self._process_result = None
+        self.processResultChanged.emit()
+        self.consoleModel.append("Starting process flow...")
+        self._set_status("Running process flow...")
+        self._set_busy(True)
+        try:
+            self._process_runner.start(_ProcessFlowJob(self.process_flow))
+        except Exception as exc:
+            self._set_busy(False)
+            self._set_status("Failed to start")
+            self.errorRaised.emit("Could not start the process flow", str(exc))
+
+    @Slot()
+    def cancelProcess(self):
+        if self._process_runner.running:
+            self.consoleModel.append("Cancelling process flow...")
+            self._process_runner.cancel()
+
+    @Slot(result=bool)
+    def buildDeviceFromProcess(self):
+        """Design section 14: the final process checkpoint becomes a 1D
+        DeviceSpec, with ntotal always populated -- unlike other DeviceSpec
+        producers (e.g. loadExample), which may leave it None, a
+        process-generated spec's ntotal is the actual total ionized
+        impurity concentration tracked through the whole flow, and it
+        would be physically wrong to drop it here.
+        """
+        if self._process_result is None:
+            self.errorRaised.emit("No process result to hand off",
+                                  "Run the process flow first.")
+            return False
+        final_id = self._process_result.step_ids()[-1]
+        state = self._process_result.state_for(final_id)
+        x = state["x"]
+        n = len(x)
+        mesh = MeshSpec(dimensionality=1, axes={"x": x.tolist()})
+        doping = DopingSpec(kind="array", values=state["net_doping"].tolist(),
+                            ntotal=state["ntotal"].tolist())
+        contacts = [
+            ContactSpec(name="left", kind="ohmic", nodes={"i": [0]}, V=self._left_contact_v),
+            ContactSpec(name="right", kind="ohmic", nodes={"i": [n - 1]},
+                       V=self._right_contact_v),
+        ]
+        self.spec = DeviceSpec(mesh=mesh, doping=doping, contacts=contacts,
+                               bias={"left": self._left_contact_v,
+                                    "right": self._right_contact_v})
+        # Process handoff takes priority over any stale v0.2 structure:
+        # run() checks self.structure first, so it must be cleared here
+        # (along with mesh_model, its QML-visible counterpart) for the
+        # newly-built spec to actually be used on the next Run.
+        #
+        # This is an intentional, one-way precedence switch (design
+        # section 14's Process-handoff-takes-priority rule), not a bug --
+        # but it IS destructive and has no undo: unlike every other
+        # structure/mesh mutation in this file, it does not go through
+        # _push()/the UndoStack, so a cleared 2D structure cannot be
+        # recovered by Ctrl+Z, and a subsequent saveProject() will write
+        # "structure": null over whatever 2D work existed before this
+        # call. Final-review finding: this used to clear both attributes
+        # without emitting structureChanged at all, so QML bound to
+        # structureForQml/meshModelForQml (and anything reading
+        # structureMaterial/meshInfo) kept showing stale pre-clear data
+        # until some unrelated signal happened to fire. Emitting it here
+        # closes that gap; full undo-tracking of a "handoff mode switch"
+        # would be a larger redesign (treating structure/process as two
+        # mutually exclusive modes with their own undo scoping) not
+        # warranted for this fix pass.
+        self.structure = None
+        self.mesh_model = None
+        self.structureChanged.emit()
+        self.consoleModel.append("Built a 1D device spec from the process flow.")
+        return True
+
+    def _on_process_finished(self, manifest_path):
+        import json
+        self._set_busy(False)
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        self._process_result = ProcessResultStore(manifest)
+        self.consoleModel.append("Process flow finished.")
+        self._set_status("Process flow complete")
+        self.processResultChanged.emit()
+
+    def _on_process_failed(self, summary, details):
+        self._set_busy(False)
+        # Belt-and-braces alongside runProcess()'s own clear-on-start:
+        # a failed run must not leave a (now out-of-sync-with-the-current-
+        # flow) previous result reachable via hasProcessResult/
+        # _process_result. Already None by the time this fires in
+        # practice (runProcess() clears it before starting), but this
+        # keeps the handler correct on its own even if that ordering ever
+        # changes.
+        self._process_result = None
+        self.processResultChanged.emit()
+        self._set_status("Process flow failed")
+        self.consoleModel.append(f"ERROR: {summary}")
+        self.errorRaised.emit(summary, details)
+
+    def _on_process_canceled(self):
+        # Task 15 (real-display verification) finding: this handler did not
+        # exist and self._process_runner.canceled was never connected to
+        # anything, unlike self._runner.canceled -> self._on_canceled for
+        # the device-solve path. Canceling a running process flow therefore
+        # left self._busy stuck True forever -- Run stayed disabled and the
+        # BusyIndicator/Stop button never cleared, with no console message
+        # explaining why. Mirrors _on_canceled() above.
+        self._set_busy(False)
+        # Same belt-and-braces clear as _on_process_failed above.
+        self._process_result = None
+        self.processResultChanged.emit()
+        self._set_status("Process flow canceled")
+        self.consoleModel.append("Process flow canceled -- no results were kept.")
+
     @Slot(str, str)
     def saveProject(self, path, name):
         path = self._to_local_path(path)
-        if not self.runStructureValidation():
+        # Task 9: structure and process flow are independently optional.
+        # Only validate whichever piece is actually present -- a
+        # process-only project (self.structure is None) or a
+        # structure-only project (no process steps) must be saveable
+        # without tripping validation for the piece that was never
+        # loaded/authored.
+        if self.structure is not None and not self.runStructureValidation():
             self.errorRaised.emit("Cannot save an invalid structure",
                                   "\n".join(self.structureValidationErrors))
             return
-        save_project(path, name, self.structure, self.mesh_model)
+        if self.process_flow.steps and not self.runProcessValidation():
+            self.errorRaised.emit("Cannot save an invalid process flow",
+                                  "\n".join(self.processValidationErrors))
+            return
+        save_project(path, name, self.structure, self.mesh_model, self.process_flow)
         self._undo_stack.mark_clean()
         self.undoStateChanged.emit()
         self.consoleModel.append(f"Saved project to {path}.")
@@ -380,14 +806,20 @@ class AppController(QObject):
     def loadProject(self, path):
         path = self._to_local_path(path)
         try:
-            name, structure, mesh_model = load_project(path)
+            name, structure, mesh_model, process_flow = load_project(path)
         except Exception as exc:
             self.errorRaised.emit("Could not load project", str(exc))
             return
+        # structure/mesh_model may legitimately be None (process-only
+        # project) -- _refresh_structure_models() already no-ops on a
+        # None structure (see its guard above), so it is safe to call
+        # unconditionally here, consistent with undo()/redo().
         self.structure, self.mesh_model = structure, mesh_model
+        self.process_flow = process_flow
         self._undo_stack = UndoStack()
         self._undo_stack.mark_clean()
         self._refresh_structure_models()
+        self._refresh_process_flow()
         self.undoStateChanged.emit()
         self.consoleModel.append(f"Loaded project '{name}' from {path}.")
 
@@ -474,6 +906,27 @@ class AppController(QObject):
         return path
 
     def _properties_for(self, node_id):
+        # The "process" node has its own data source (self.process_flow)
+        # and must not be masked by the self.spec is None guard below --
+        # self.spec is normally None for a process-only session (no
+        # structure loaded, no device solved yet) precisely because
+        # nothing has happened on the STRUCTURE/DEVICE side, which says
+        # nothing about whether a process flow has been authored. Final-
+        # review finding: this branch used to be unreachable in that
+        # common case (the self.spec is None early return above fired
+        # first) and, even when reached, returned a stale v0.1 placeholder
+        # ("Process editing arrives in a later version") predating this
+        # entire plan.
+        if node_id == "process":
+            if not self.process_flow.steps:
+                return [("Status", "No process steps yet")]
+            rows = [("Steps", str(len(self.process_flow.steps))),
+                    ("Enabled steps",
+                     str(sum(1 for s in self.process_flow.steps if s.enabled)))]
+            errors = validate_flow(self.process_flow)
+            rows.append(("Validation", "OK" if not errors else f"{len(errors)} error(s)"))
+            rows.append(("Result", "Available" if self.hasProcessResult else "Not run yet"))
+            return rows
         if self.spec is None:
             return [("Status", "No project loaded")]
         mesh = self.spec.mesh
@@ -507,8 +960,6 @@ class AppController(QObject):
                 # 2D but real A in 3D
                 rows.append((f"I({t.name})", f"{t.value:.6g} {t.unit}"))
             return rows
-        if node_id == "process":
-            return [("Status", "Process editing arrives in a later version")]
         return [("Selected", node_id)]
 
     def _on_stage(self, stage):

@@ -88,6 +88,139 @@ def test_doping_mode_renders_structure_preview_before_a_solve(gapp):
     assert len(colours) > 1
 
 
+def test_process_mode_renders_a_nonblank_multi_species_plot(gapp):
+    """setMode("process") then setProcessSource(...) -- the real QML order --
+    must render net doping plus each species' profile, not the "No project
+    loaded" placeholder and not a single flat line."""
+    import json
+    import os
+    import tempfile
+
+    from gui.services.process_model import ProcessFlow, ProcessStep
+    from gui.services.process_result_store import ProcessResultStore
+    from gui.services.process_runner import run_flow
+
+    flow = ProcessFlow(steps=[
+        ProcessStep(id="sub", name="Substrate", operation="substrate",
+                    parameters={"length_cm": 2e-4, "background_doping_cm3": -1e16,
+                                "mesh": {"h_min_cm": 2e-8, "h_max_cm": 2e-6, "ratio": 1.15}}),
+        ProcessStep(id="i1", name="Implant", operation="implant",
+                    parameters={"species": "P", "energy_keV": 50.0, "dose_cm2": 3e14}),
+    ])
+    tmp = tempfile.mkdtemp()
+    flow_path = os.path.join(tmp, "f.json")
+    manifest_path = os.path.join(tmp, "m.json")
+    with open(flow_path, "w") as fh:
+        json.dump(flow.to_dict(), fh)
+    run_flow(flow_path, manifest_path)
+    with open(manifest_path) as fh:
+        manifest = json.load(fh)
+    store = ProcessResultStore(manifest)
+
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setMode("process")
+    item.setProcessSource(store, "i1")
+    assert item._mode == "process"
+    img = item.renderToImage()
+    assert not img.isNull()
+    colours = {img.pixel(x, y) for x in range(0, img.width(), 41)
+              for y in range(0, img.height(), 41)}
+    assert len(colours) > 1
+
+
+def test_setmode_before_setprocesssource_is_not_clobbered(gapp):
+    """setProcessSource must not force self._mode to "process" -- mirrors
+    the setStructureSource regression test above, guarding against the same
+    class of bug (a setXSource() call silently overriding whatever mode
+    setMode() had just set) recurring for the new process mode."""
+    import json
+    import os
+    import tempfile
+
+    from gui.services.process_model import ProcessFlow, ProcessStep
+    from gui.services.process_result_store import ProcessResultStore
+    from gui.services.process_runner import run_flow
+
+    flow = ProcessFlow(steps=[
+        ProcessStep(id="sub", name="Substrate", operation="substrate",
+                    parameters={"length_cm": 2e-4, "background_doping_cm3": -1e16,
+                                "mesh": {"h_min_cm": 2e-8, "h_max_cm": 2e-6, "ratio": 1.15}}),
+        ProcessStep(id="i1", name="Implant", operation="implant",
+                    parameters={"species": "P", "energy_keV": 50.0, "dose_cm2": 3e14}),
+    ])
+    tmp = tempfile.mkdtemp()
+    flow_path = os.path.join(tmp, "f.json")
+    manifest_path = os.path.join(tmp, "m.json")
+    with open(flow_path, "w") as fh:
+        json.dump(flow.to_dict(), fh)
+    run_flow(flow_path, manifest_path)
+    with open(manifest_path) as fh:
+        manifest = json.load(fh)
+    store = ProcessResultStore(manifest)
+
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setMode("mesh")
+    item.setProcessSource(store, "i1")
+    assert item._mode == "mesh"
+
+
+def test_process_mode_y_axis_is_floored_against_gaussian_underflow(gapp):
+    """Regression test for a Task 15 real-display finding: a Gaussian
+    implant tail underflows to a subnormal float (~1e-312) far from its
+    peak -- not a real concentration, just floating-point noise -- and
+    _draw_process() had no y-axis floor, so matplotlib's semilogy
+    autoscale stretched the axis down to include it. A real screenshot
+    showed the axis running from ~1e33 to ~1e-311, squashing the
+    physically meaningful 1e15-1e20 cm^-3 range into an unreadable sliver.
+    This drives the same real flow and checks the rendered y-limits stay
+    within a sane physical window."""
+    import json
+    import os
+    import tempfile
+
+    from gui.services.process_model import ProcessFlow, ProcessStep
+    from gui.services.process_result_store import ProcessResultStore
+    from gui.services.process_runner import run_flow
+
+    flow = ProcessFlow(steps=[
+        ProcessStep(id="sub", name="Substrate", operation="substrate",
+                    parameters={"length_cm": 1e-3, "background_doping_cm3": 1e15,
+                                "mesh": {"h_min_cm": 1e-7, "h_max_cm": 1e-5, "ratio": 1.2}}),
+        ProcessStep(id="i1", name="Implant", operation="implant",
+                    parameters={"species": "P", "energy_keV": 40.0, "dose_cm2": 2e14,
+                                "tilt_deg": 7}),
+        ProcessStep(id="a1", name="Anneal", operation="anneal",
+                    parameters={"temperature_C": 1000.0, "time_s": 45.0}),
+    ])
+    tmp = tempfile.mkdtemp()
+    flow_path = os.path.join(tmp, "f.json")
+    manifest_path = os.path.join(tmp, "m.json")
+    with open(flow_path, "w") as fh:
+        json.dump(flow.to_dict(), fh)
+    run_flow(flow_path, manifest_path)
+    with open(manifest_path) as fh:
+        manifest = json.load(fh)
+    store = ProcessResultStore(manifest)
+
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setMode("process")
+    item.setProcessSource(store, "a1")
+    img = item.renderToImage()
+    assert not img.isNull()
+
+    fig = item._build_figure(480, 320)
+    ax = fig.axes[0]
+    ymin, ymax = ax.get_ylim()
+    # Real doping concentrations in this codebase never approach 1e25
+    # cm^-3 (well above any physical dopant density) or fall below 1e0 --
+    # anything outside that band is underflow noise, not signal.
+    assert ymin >= 1.0, f"y-axis floor {ymin} lets underflow noise through"
+    assert ymax <= 1e25, f"y-axis ceiling {ymax} is not physically sane"
+
+
 def test_doping_mode_prefers_resultstore_once_a_solve_exists(gapp):
     """After a solve, doping mode must keep using the ResultStore, not fall
     back to the pre-solve structure-rasterizing preview."""

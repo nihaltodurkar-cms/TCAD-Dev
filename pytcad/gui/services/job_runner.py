@@ -11,6 +11,7 @@ touching validated numerical code.
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import uuid
@@ -41,10 +42,11 @@ class JobRunner(QObject):
     failed = Signal(str, str)       # concise summary, expandable details
     canceled = Signal()
 
-    def __init__(self, work_dir=None, parent=None):
+    def __init__(self, work_dir=None, parent=None, module="gui.services.solver_runner"):
         super().__init__(parent)
         self._work_dir = work_dir or tempfile.mkdtemp(prefix="pytcad-gui-")
         os.makedirs(self._work_dir, exist_ok=True)
+        self._module = module
         self._proc = None
         self._canceling = False
         self._stderr = ""
@@ -77,7 +79,7 @@ class JobRunner(QObject):
         self._proc.readyReadStandardError.connect(self._on_stderr)
         self._proc.finished.connect(self._on_finished)
         self._proc.start(sys.executable,
-                         ["-m", "gui.services.solver_runner", job_path, self.result_path])
+                         ["-m", self._module, job_path, self.result_path])
         self.started.emit()
 
     def cancel(self):
@@ -128,6 +130,7 @@ class JobRunner(QObject):
                 except OSError:
                     pass
             self._cleanup_tmp()
+            self._cleanup_stale_state_dir()
             self.canceled.emit()
             return
 
@@ -137,16 +140,36 @@ class JobRunner(QObject):
             self.finished.emit(self._result_seen)
             return
 
+        self._cleanup_stale_state_dir()
         summary, details = self._parse_failure()
         self.failed.emit(summary, details)
 
     def _cleanup_tmp(self):
-        tmp = self.result_path + ".tmp.npz"
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        # ".tmp.npz" is solver_runner.py's own atomic-write suffix;
+        # ".tmp.json" is process_runner.py's (its "result" is a JSON
+        # manifest, not an .npz -- see run_flow()'s tmp_manifest). Both
+        # are always renamed away on success, so removing them
+        # unconditionally here is a no-op in that case and only ever
+        # does something for a run that didn't finish cleanly.
+        for suffix in (".tmp.npz", ".tmp.json"):
+            tmp = self.result_path + suffix
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    def _cleanup_stale_state_dir(self):
+        """Some runner modules (process_runner.py) write per-run
+        checkpoint artifacts into a sibling "<result-stem>-state/"
+        directory instead of a single result file (see run_flow()'s
+        state_dir). Only called on cancel/failure -- a successful run's
+        state_dir is the ProcessResultStore's actual data and must
+        never be touched. A no-op for runner modules (e.g.
+        solver_runner.py) that never create one."""
+        state_dir = os.path.splitext(self.result_path)[0] + "-state"
+        if os.path.isdir(state_dir):
+            shutil.rmtree(state_dir, ignore_errors=True)
 
     def _parse_failure(self):
         for line in self._stderr.splitlines():

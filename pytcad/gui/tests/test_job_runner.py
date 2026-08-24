@@ -1,6 +1,7 @@
 """JobRunner owns the QProcess lifecycle.  These tests drive a real Qt
 event loop headlessly -- no GUI is shown, but the async behavior is the
 whole point, so it must be exercised for real rather than mocked."""
+import json
 import os, sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -106,3 +107,91 @@ def test_example_spec_is_a_valid_2d_mosfet():
     gate = [c for c in spec.contacts if c.kind == "gate"][0]
     assert gate.tox_cm is not None and gate.Vfb is not None
     assert "mosfet_2d" in examples.EXAMPLES
+
+
+def test_job_runner_accepts_a_custom_module(qapp, tmp_path):
+    runner = JobRunner(work_dir=str(tmp_path), module="gui.services.process_runner")
+    assert runner._module == "gui.services.process_runner"
+
+
+def test_job_runner_default_module_is_unchanged(qapp, tmp_path):
+    runner = JobRunner(work_dir=str(tmp_path))
+    assert runner._module == "gui.services.solver_runner"
+
+
+class _ProcessFlowJson:
+    """Minimal to_json(path) adapter, mirroring app_controller.py's own
+    _ProcessFlowJob -- JobRunner.start() just needs `spec.to_json(path)`
+    to write the flow.json a process run reads."""
+    def __init__(self, flow):
+        self._flow = flow
+
+    def to_json(self, path):
+        with open(path, "w") as fh:
+            json.dump(self._flow.to_dict(), fh)
+
+
+def _small_process_flow():
+    from gui.services.process_model import ProcessFlow, ProcessStep
+    return ProcessFlow(steps=[
+        ProcessStep(id="sub", name="Substrate", operation="substrate",
+                   parameters={"length_cm": 2e-4, "background_doping_cm3": -1e16,
+                               "mesh": {"h_min_cm": 2e-8, "h_max_cm": 2e-6, "ratio": 1.15}}),
+        ProcessStep(id="i1", name="Implant", operation="implant",
+                   parameters={"species": "P", "energy_keV": 50.0, "dose_cm2": 3e14}),
+    ])
+
+
+def test_process_run_success_keeps_its_state_dir(qapp, tmp_path):
+    """Final-review finding: a canceled/failed process run must not leave
+    a stale per-run checkpoint directory or partial .tmp files behind
+    (JobRunner._cleanup_stale_state_dir/_cleanup_tmp), but a SUCCESSFUL
+    run's own state_dir is the ProcessResultStore's actual backing data
+    and must survive -- confirm the happy path is unaffected."""
+    runner = JobRunner(work_dir=str(tmp_path), module="gui.services.process_runner")
+    outcome = _run_to_completion(runner, _ProcessFlowJson(_small_process_flow()))
+    assert outcome.get("kind") == "finished", outcome
+
+    manifest_path = outcome["path"]
+    with open(manifest_path) as fh:
+        manifest = json.load(fh)
+    state_dir = os.path.dirname(next(iter(manifest["state_paths"].values())))
+    assert os.path.isdir(state_dir), "a successful run's state_dir must survive"
+    assert not os.path.exists(manifest_path + ".tmp.json"), (
+        "the manifest's own .tmp.json must be renamed away on success")
+
+
+def test_process_run_cancel_removes_the_state_dir_and_tmp_files(qapp, tmp_path):
+    """The actual regression: canceling a process run used to leave its
+    per-step .tmp.npz files (inside the old shared checkpoint directory)
+    and the manifest's own .tmp.json behind forever -- and, worse, left
+    the OLD ProcessResultStore from any previous successful run pointing
+    at a directory a later run could still write into. Isolating each
+    run into its own "<result-stem>-state/" directory (process_runner.py)
+    means a cancel now has a single directory it can safely delete
+    outright."""
+    from gui.services.process_model import ProcessFlow, ProcessStep
+    steps = _small_process_flow().steps + [
+        ProcessStep(id=f"a{k}", name="Anneal", operation="anneal",
+                   parameters={"temperature_C": 950.0, "time_s": 600.0})
+        for k in range(4)
+    ]
+    flow = ProcessFlow(steps=steps)
+    runner = JobRunner(work_dir=str(tmp_path), module="gui.services.process_runner")
+
+    loop = QEventLoop()
+    outcome = {}
+    runner.finished.connect(lambda p: (outcome.update(kind="finished", path=p), loop.quit()))
+    runner.failed.connect(lambda s, d: (outcome.update(kind="failed"), loop.quit()))
+    runner.canceled.connect(lambda: (outcome.update(kind="canceled"), loop.quit()))
+    runner.start(_ProcessFlowJson(flow))
+    result_path = runner.result_path
+    QTimer.singleShot(500, runner.cancel)
+    QTimer.singleShot(60000, loop.quit)
+    loop.exec()
+
+    assert outcome.get("kind") == "canceled", outcome
+    state_dir = os.path.splitext(result_path)[0] + "-state"
+    assert not os.path.isdir(state_dir), "canceled run left a stale state_dir behind"
+    assert not os.path.exists(result_path + ".tmp.json"), (
+        "canceled run left the manifest's .tmp.json behind")

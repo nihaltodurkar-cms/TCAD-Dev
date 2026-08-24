@@ -1,4 +1,4 @@
-# PyTCAD Desktop GUI (v0.1 + v0.2)
+# PyTCAD Desktop GUI (v0.1 + v0.2 + v0.3)
 
 A PySide6 / Qt Quick desktop frontend for the PyTCAD solver.
 
@@ -214,3 +214,325 @@ The Structure/Mesh viewport's diagram still renders zoomed to roughly
 the left/top third of the domain instead of the full extent (axis limits
 report correctly; only the rendered crop is wrong) — a known, pre-existing
 cosmetic issue, unaffected by and out of scope for this pass.
+
+## v0.3 — Process Workbench
+
+A second, independent workflow built around the *existing*
+`pytcad.process` backend: the user composes a **process flow** — an
+ordered list of steps — runs it out-of-process, inspects the resulting
+per-species doping profile at any intermediate step, and can hand the
+final state off to a real 1D device solve. It is reached via a new
+"Process" entry alongside Structure/Mesh/Doping/Results in the viewport
+mode selector, and lives under its own "Process" node in the project
+tree — **not** merged into or fed by the v0.2 2D Structure/Mesh
+workbench, which stays completely unchanged. `pytcad.process` is
+entirely 1D (every function takes/returns a plain NumPy array along one
+depth axis), so there is no honest way to make a process flow produce a
+v0.2 2D `StructureModel` without inventing 2D process physics — see
+"Not supported, by design" below.
+
+**Implemented:**
+- Four process operations, each with a fixed parameter schema and a
+  capability-disclosure block shown directly in its properties editor
+  (`gui/qml/components/*Editor.qml`), so the GUI never implies a
+  capability the backend doesn't have:
+  - **Initialize Substrate** (`SubstrateEditor.qml`) — builds the
+    initial 1D depth array and background doping via
+    `pytcad.mesh.graded_mesh`. Its editor states plainly: *"There is no
+    separate backend 'wafer' object — this substrate step's parameters
+    define the initial 1D mesh and background doping that later steps
+    in the flow build on directly."* Must be first among enabled steps
+    in every flow.
+  - **Implant** (`ImplantEditor.qml`) — `process.implant()`, a Gaussian
+    profile from tabulated LSS moments. Disclosed capabilities: ✓ Dose
+    ✓ Energy ✓ Species (B, P, As only) ✓ Tilt (first-order `cos(tilt)`
+    range scaling). Explicitly not implemented: ✗ Channeling
+    ✗ Transient-enhanced diffusion ✗ Monte-Carlo damage model. Energy
+    must fall inside each species' tabulated range (10–200 keV) or
+    validation rejects it before Run.
+  - **Anneal** (`AnnealEditor.qml`) — `process.diffuse_numeric()`
+    (explicit finite-difference diffusion, constant Arrhenius
+    diffusivity). Has no species field of its own: it diffuses whichever
+    dopant the **most recent enabled Implant step before it** in the
+    flow introduced; an anneal with no preceding implant is a validation
+    error, not a silent no-op or a fabricated default species.
+  - **Oxidize** (`OxidizeEditor.qml`) — `process.oxide_thickness()` /
+    `process.silicon_consumed()`, the Deal-Grove analytic model.
+    Bookkeeping only — see its own subsection below.
+- **Process Flow list/tree** (`ProcessPanel.qml`): add, reorder (up/down,
+  undoable), duplicate (deep-copied parameters, independent of the
+  original), enable/disable (a disabled step is skipped by the runner
+  but keeps its ID, position, and parameters), and rename steps. Step
+  IDs are UUIDs, stable across reorders — never derived from list
+  position.
+- **Process validation** (`ValidationPanel.qml`, generalized from v0.2's
+  structure validator): a fixed per-operation validator (positive
+  length/dose/time, in-range implant energy, valid species/ambient, a
+  leading enabled Substrate step, an Implant step preceding every
+  Anneal) blocks Run on any error and reports it scoped to the exact
+  step, e.g. `Step 03 — Implant: Dose must be > 0`.
+- **Undo/redo**, reusing v0.2's `UndoStack`/`Command` pattern verbatim
+  for every process-flow edit (add/remove/reorder/duplicate/enable/
+  rename/parameter change) — the undo stack only ever stores the small
+  `ProcessFlow`/`ProcessStep` dataclasses, never `.npz` state.
+- **Out-of-process execution**: reached via `ProcessPanel.qml`'s own
+  "Run Process"/"Stop" buttons (mirroring the main toolbar's device-solve
+  Run/Stop exactly, including sharing the same `controller.busy` flag),
+  which drive `gui/services/process_runner.py`, a Qt-free CLI (`python -m
+  gui.services.process_runner flow.json manifest.json`) run via a
+  generalized `JobRunner` (now takes a `module` parameter so v0.1/v0.2's
+  solver path and the new process path share one
+  QProcess/cancellation/atomic-result implementation instead of two
+  near-identical classes). Each run writes its checkpoints into its own
+  per-run `<manifest-stem>-state/` subdirectory (derived from
+  `JobRunner`'s already-unique-per-run manifest path), so two runs of the
+  same flow — same step IDs — can never overwrite or mix each other's
+  checkpoint files, and a canceled/failed run's entire subdirectory
+  (including any `.tmp.npz` per-step file and the manifest's own
+  `.tmp.json`) is removed outright rather than left behind, exactly like
+  the v0.1 solve path's atomic-result guarantee.
+- **Per-species doping state**: rather than one running `(x, C)` array
+  (which would lose data the moment a second dopant species enters the
+  flow — a second implant would either overwrite the first species'
+  profile or silently co-diffuse both under the wrong diffusivity),
+  state is kept as `species_profiles: {species: array}`, sparse (only
+  implanted species are present), plus a scalar signed `background`.
+  Two implants of the *same* species accumulate onto one profile; two
+  implants of *different* species get independent entries. An Anneal
+  step diffuses only its resolved species' array — every other species'
+  profile passes through byte-for-byte unchanged, since
+  `process.diffuse_numeric` has no cross-species/co-diffusion model.
+  `net_doping` and `ntotal` are never stored independently — both are
+  always produced by one shared reconstruction function
+  (`process_model.reconstruct_doping`, `net = background +
+  Σ DOPANT_TYPE[s]·C_s`, `ntotal = |background| + Σ C_s`, using only
+  `pytcad.process.DOPANT_TYPE`), called from the runner, the Device1D
+  handoff, and the Derived Quantities panel alike, so the three can
+  never compute a different answer from the same state. This was a
+  correction made during design review of the original single-array
+  sketch, which would have silently lost data on a multi-implant flow.
+- **Intermediate process states**: every *enabled* step writes its own
+  checkpoint (`state-{step_id}.npz`, atomic temp-file-then-rename) into
+  that run's own checkpoint subdirectory, read back via
+  `ProcessResultStore`. A fresh "Run Process" click clears any previous
+  run's `ProcessResultStore` immediately (not just once the new run
+  finishes), so a result is never shown as "current" while a re-run is in
+  flight or after that re-run fails/is canceled. The viewport's new "process" draw mode
+  (`MplCanvasItem._draw_process`, a `semilogy(x, |net_doping|)` plot with
+  each present species profile overlaid) renders whichever step is
+  currently selected; clicking a different step in the Process Flow list
+  re-selects the plotted state immediately, letting the user step through
+  Initial → post-Implant → post-Anneal → ... states of the same flow. The
+  Derived Quantities panel (junction depth, peak concentration and its
+  depth, retained dose, sheet resistance, oxide thickness, silicon
+  consumed) is scoped to whichever step is currently selected, and shows
+  only backend-implemented, test-covered quantities — each row states its
+  source function so the claim is checkable, not asserted.
+- **Units**: internal storage stays in the backend's own units — depth in
+  cm, dose in cm⁻², energy in keV, doping/`ntotal` in cm⁻³, anneal time in
+  seconds (`diffuse_numeric`'s `t_s`), oxidize time in **hours**
+  (`oxide_thickness`'s `t_hours` — a genuinely different unit for the
+  same physical quantity than anneal time, so every time field's label
+  states which). Temperature is **°C** everywhere (`diffuse_numeric`,
+  `oxide_thickness`, and `deal_grove_coefficients` all take `T_C`
+  directly — the GUI never silently converts to Kelvin). Display
+  converts cm to nm/µm at the UI boundary only, following the exact
+  convention `StructureModel`/`ViewportPanel` already use.
+- **Save/load, schema v3**: `project.json`'s `schema_version` is now 3,
+  adding a `"process": {"steps": [...]}` key alongside the unchanged
+  `"structure"`/`"mesh"` keys. A v2 project (no `"process"` key) loads
+  with an empty process flow and its structure/mesh data completely
+  untouched — no information is discarded on migration. **v3 also
+  supports process-only projects** (structure/mesh empty or absent,
+  process flow populated) — this generalizes v0.2's assumption that a
+  project always has a 2D structure, and was itself a correction made
+  during design review of the original schema sketch. A v1 project still
+  raises the same clear `UnsupportedProjectVersionError` it did before
+  v0.3 (v1→v3 direct migration was never supported, even pre-v0.3, so
+  nothing new is broken). Round-tripping a v3 project (save then reload)
+  reproduces an identical `ProcessFlow`.
+- **Process → Device(1D) handoff**: the final enabled step's checkpoint
+  becomes a `DeviceSpec` through the *same* `device_spec.py` dataclasses
+  and the *same* `JobRunner`/`solver_runner.py`/`NpzResultStore` path
+  v0.1/v0.2 already use for 2D solves — literally the same code, first
+  time exercised at `dimensionality == 1`. Both `net_doping` and
+  `ntotal` from the checkpoint are carried across (never leaving
+  `DopingSpec.ntotal` as `None`, which would otherwise make the solver
+  silently fall back to `abs(net_doping)` — physically wrong the moment
+  more than one species or a nonzero background is present). **The
+  handoff exposes exactly two voltage fields ("Left V", "Right V") and a
+  "Build Device from Process" button, all in `ProcessPanel.qml`** — not a
+  general contact editor — because `Device1D` structurally has only two
+  ends and `solver_runner.apply_bias` already requires exactly two
+  contacts, read positionally. "Build Device from Process" is enabled
+  once a process result exists; clicking it clears any loaded v0.2
+  structure/mesh (Process handoff takes priority over a stale structure
+  on the next Run, mirroring how loading a `StructureModel` already takes
+  priority over a v0.1 spec) and emits the same `structureChanged` signal
+  every other structure mutation does, so QML immediately reflects the
+  switch rather than showing stale pre-clear data. This clear is a
+  one-way precedence switch, not an undo-tracked edit — there is
+  currently no way to get a cleared 2D structure back via Ctrl+Z.
+
+**Planned (not yet implemented):**
+- `ProcessFlow.to_json()`/`from_json()` directly on the dataclass
+  (`gui/services/process_model.py`), mirroring `DeviceSpec`'s own
+  pattern (`gui/services/device_spec.py`). Today `AppController` bridges
+  the gap with a small internal `_ProcessFlowJob` adapter so `ProcessFlow`
+  can be handed to `JobRunner`; adding the methods directly would let
+  that adapter be deleted.
+- A public `current_step_id` property on `ProcessResultStore`
+  (`gui/services/process_result_store.py`). Today
+  `gui/visualization/mpl_canvas_item.py` reaches into the store's
+  private `_selected` attribute at its two call sites — a documented,
+  brief-sanctioned workaround for v0.3 (see the plan's Task 10 review
+  notes), not a defect, but a public accessor would be the more
+  consistent long-term shape.
+- Wiring `implant_pearson4_skewed()` (`pytcad/process.py`) into the
+  Implant step as an alternate skewed-profile implant model, once it
+  gains species/energy-shaped parameters — it currently takes
+  Rp/dRp/gamma directly, unlike every other Implant field — and gets
+  test coverage. See "Not supported, by design" below and the design
+  spec's section 16, which already flags it as a candidate future step
+  type rather than a permanent exclusion.
+- A second real semiconductor material, once the backend has one — the
+  same still-true item from v0.2's own "Planned" section above, and it
+  applies equally here: `pytcad.materials` defines only `SILICON`, and
+  nothing in the 1D process path (`pytcad.process`) is material-aware
+  enough to use a second one yet.
+
+**Not supported, by design:**
+- **Deposition, etch** — no function exists anywhere in `pytcad.process`
+  for either.
+- **Any 2D or 3D process operation, and any process → 2D `StructureModel`
+  handoff** — `pytcad.process` is entirely 1D; `Device2D`/`StructureModel`
+  are solver-side/2D-only and nothing bridges the two without inventing
+  new backend physics, which is out of scope.
+- Channeling, transient-enhanced diffusion, oxidation-enhanced diffusion,
+  advanced/Monte-Carlo implantation, level-set etching, multi-material
+  process simulation, stress mechanics, crystal damage, quantum
+  corrections — none exist in the backend, none are faked by the GUI.
+- `implant_pearson4_skewed` — exists in `process.py` but takes
+  Rp/dRp/gamma directly rather than species/energy and has no test
+  coverage, so it is not wired into the Implant step's parameter shape.
+- Cross-species interaction during Anneal (co-diffusion, segregation,
+  pairing) — `diffuse_numeric` has no such model; every non-diffusing
+  species' profile is left untouched, not approximated.
+- A general contact editor for the process handoff — exactly two fixed
+  ohmic ends, matching what `Device1D` structurally has.
+
+**Oxidation is bookkeeping-only — stated plainly:** `oxide_thickness()`
+and `silicon_consumed()` return **scalars** (oxide thickness in µm, Si
+recession in µm). Running an Oxidize step **does not remap the x-axis
+and does not alter the doping profile in any way** — `process.py`
+implements no oxidation *geometry* model, only the scalar Deal-Grove
+thickness. The step's own properties panel carries this exact,
+non-dismissable note: *"Oxidation is bookkeeping-only in this backend:
+it reports oxide thickness and Si consumed, but does not alter the
+wafer's x-axis or doping profile."* If a later step should account for a
+real recessed surface, the user must adjust that step's own parameters
+by hand — nothing is automated. The reported thickness/consumption
+numbers remain visible in the Derived Quantities panel for manual
+bookkeeping only.
+
+**Known limitations / real-display defects found and fixed (Task 15):**
+Verified on a real Wayland display (`QQuickWindow.grabWindow()`
+screenshots + pixel measurement), not just headlessly, following the same
+methodology the v0.2.1 pass used — and it found the same class of "no
+headless test could have caught this" defects:
+- The Process viewport mode was completely unwired end to end (rendering
+  was implemented and unit-tested, but no QML file ever called it) —
+  running a flow and switching to "Process" view showed nothing.
+- Canceling a running process flow left the app permanently stuck busy
+  (`canceled` signal from the process `JobRunner` was never connected),
+  silently blocking every subsequent Run for the rest of the session.
+- The process semilogy plot had no y-axis floor, so floating-point
+  underflow noise in a Gaussian implant's far tail (values as small as
+  `~1e-312`) stretched the axis until the real, physically meaningful
+  1e15–1e20 cm⁻³ range was squashed into an unreadable sliver.
+- Sheet resistance rendered as the literal text "-1 Ω/□" for every step:
+  a bare `numpy.float64` doesn't marshal to a JS number across a
+  `Slot(result="QVariant")` boundary the way every other derived value
+  (already wrapped in `float(...)`) does.
+- The Process Flow list's reorder/duplicate/remove buttons were entirely
+  clipped and invisible at the window's actual (SplitView-compressed)
+  default width — not just at some drag-to-minimum edge case.
+- Explanatory capability-disclosure text in the Implant/Substrate/Oxidize
+  editors visibly overran its panel's real right edge, even though Qt's
+  own wrap-metric check reported success (a `Layout.fillWidth`-reported
+  width exceeding the panel's true clipped bounds — the same class of
+  over-report this codebase's `RegionList.qml` already documents).
+
+All six were found and fixed with regression tests; none touched
+`pytcad/pytcad/`. See the v0.3 plan's Task 15 report (real-display
+verification pass) for full detail, screenshots, and root causes.
+
+**Final whole-branch review fix pass:** a review across all 16
+implementation tasks together (rather than each task in isolation) found
+one Critical defect and six Important ones, all now fixed with regression
+tests, re-verified on a real Wayland display:
+- **Critical — the Process Workbench was unreachable from the real app.**
+  `runProcess()`/`cancelProcess()`/`buildDeviceFromProcess()` had zero
+  callers anywhere outside `gui/tests/` — every prior test called them
+  directly from Python, which is exactly the test shape that let this
+  ship undetected. `ProcessPanel.qml` now has real "Run Process"/"Stop"
+  buttons, "Left V"/"Right V" fields, and a "Build Device from Process"
+  button (see "Out-of-process execution" and "Process → Device(1D)
+  handoff" above), and the regression test drives the actual QML
+  `Button.clicked` signal via `QMetaObject.invokeMethod`, not a direct
+  Python call to the controller slot.
+- A flow like `substrate → implant P → substrate → anneal` used to pass
+  validation (only the *first* enabled step was checked to be
+  `substrate`) and then crash with a raw `KeyError` inside
+  `process_runner._anneal_species`, because the second substrate step
+  resets `species_profiles` to `{}` and the anneal step still tried to
+  resolve `"P"`. `validate_flow()` now rejects more than one enabled
+  substrate step per flow.
+- Two runs of the same flow (same step IDs, e.g. a re-run after tweaking
+  a parameter) used to write checkpoints into the same shared work
+  directory, so a second run could silently overwrite the first run's
+  `state-{id}.npz` files in place; a failed/canceled run could then leave
+  the `ProcessResultStore` from a *previous* successful run pointing at a
+  now-mixed set of files. `process_runner.py` now isolates each run's
+  checkpoints into their own `<manifest-stem>-state/` subdirectory, and
+  `JobRunner` removes that whole subdirectory outright on cancel/failure;
+  `AppController` additionally clears `_process_result` the moment a new
+  run starts (not just once it settles), so a stale result is never
+  reachable via `hasProcessResult`.
+- `buildDeviceFromProcess()` cleared `self.structure`/`self.mesh_model`
+  directly without emitting `structureChanged`, leaving QML bound to
+  `structureForQml`/`meshModelForQml` showing stale pre-clear data. It
+  now emits the signal (see the handoff bullet above for the full
+  precedence-switch caveat).
+- `sheet_resistance()` integrated conductivity over the *entire* depth
+  array instead of masking to the doped-above-background region the way
+  `examples/02_process_flow.py` (the script its own docstring claims to
+  mirror) does — `mask = x <= xj[0]`. At realistic substrate lengths this
+  could produce a value several times off from what the label/docstring/
+  design spec all describe as "sheet resistance of the n-layer" (or
+  p-layer). Fixed to apply the same junction-depth mask, falling back to
+  the full array only when `junction_depth` finds no sign change (a
+  uniformly-doped profile with no junction at all).
+- The project tree's "Process" node showed a stale v0.1 placeholder
+  ("Process editing arrives in a later version") predating this entire
+  plan, and was additionally masked by an unconditional `self.spec is
+  None` guard for the common process-only-session case. It now shows real
+  step count / enabled-step count / validation status / result
+  availability derived from `self.process_flow`, independent of whether a
+  2D structure/device spec has ever been loaded.
+- `tilt_deg` was unvalidated in `validate_flow()`'s implant checks —
+  `process.implant()` scales `Rp` by `cos(tilt)`, so a tilt at or above
+  90° silently yields a zero/negative implant range. `validate_flow()`
+  now requires `0 <= tilt_deg < 90`.
+
+See the SDD ledger's final-review-fix-report for the complete list with
+covering tests and test output.
+
+**Windows compatibility:** audited via **static analysis only** (Task 14)
+against the clean pattern `job_runner.py` already established
+(`tempfile.mkdtemp()`, `os.path.join`, `sys.executable`, `QProcess`, no
+hardcoded `/tmp`, no bash-specific subprocess flags); `process_runner.py`
+and `process_result_store.py` were written to that same standard from the
+start. This has **not** been verified by actually running the GUI on
+Windows — no Windows environment was available during this plan, and
+that gap is reported honestly rather than implied to be covered.

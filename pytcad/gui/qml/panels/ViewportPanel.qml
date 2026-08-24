@@ -10,6 +10,11 @@ Rectangle {
     border.color: Theme.border
     property var controller
     property string currentMode: "doping"   // mirrors MplCanvasItem's own default
+    // Which process step's checkpoint the "process" mode plot shows.
+    // "" means "no explicit selection yet" -- setProcessSource() then
+    // leaves ProcessResultStore's own default (the flow's last step) in
+    // place rather than forcing one.
+    property string currentProcessStepId: ""
 
     function setViewMode(mode) {
         root.currentMode = mode
@@ -18,6 +23,19 @@ Rectangle {
         // preview has something to rasterize before any ResultStore exists.
         if (mode === "structure" || mode === "mesh" || mode === "doping") {
             canvas.setStructureSource(controller.structureForQml, controller.meshModelForQml)
+        }
+        if (mode === "process") {
+            canvas.setProcessSource(controller.processResultForQml, root.currentProcessStepId)
+        }
+    }
+
+    // Called from Main.qml on ProcessPanel.stepSelected -- lets clicking a
+    // step in the process list drive which checkpoint the viewport plots,
+    // independent of whether "process" mode is currently active.
+    function setProcessStep(stepId) {
+        root.currentProcessStepId = stepId
+        if (root.currentMode === "process") {
+            canvas.setProcessSource(controller.processResultForQml, stepId)
         }
     }
 
@@ -87,6 +105,18 @@ Rectangle {
         target: controller
         function onStructureChanged() {
             if (controller) root.setViewMode(root.currentMode)
+        }
+    }
+
+    // A fresh process run emits processResultChanged, not structureChanged --
+    // without this, running a flow while "Process" mode was already selected
+    // left the viewport showing whatever it had before the run (or the
+    // "No project loaded" placeholder) until the mode selector was re-touched
+    // by hand. Mirrors the structureChanged Connections above.
+    Connections {
+        target: controller
+        function onProcessResultChanged() {
+            if (controller && root.currentMode === "process") root.setViewMode(root.currentMode)
         }
     }
 
