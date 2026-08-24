@@ -34,6 +34,13 @@ def create_engine(app):
     engine.addImportPath(QML_DIR)
 
     controller = AppController()
+    # Parent the controller to the engine (both QObjects): without this,
+    # Python GC can destroy the controller while QML bindings still
+    # evaluate during engine teardown, and every binding sees a null
+    # appController -- the source of the noisy "Cannot read property
+    # '<x>' of null" TypeErrors on exit.  The engine now destroys the
+    # controller only AFTER the QML tree is gone.
+    controller.setParent(engine)
     engine.rootContext().setContextProperty("appController", controller)
     engine.rootContext().setContextProperty("physicsLab", controller.lab)
     engine.rootContext().setContextProperty("deviceBuilder",
