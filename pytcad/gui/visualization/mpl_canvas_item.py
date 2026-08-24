@@ -40,6 +40,8 @@ class MplCanvasItem(QQuickPaintedItem):
         self._structure = None
         self._mesh_model = None
         self._process_store = None
+        self._sweep = None             # result_store.SweepResult (v0.4)
+        self._sweep_channel = ""
         self._mode = "doping"
 
     # -- data ---------------------------------------------------------
@@ -104,6 +106,29 @@ class MplCanvasItem(QQuickPaintedItem):
         self._mode = mode
         self.update()
 
+    # -- sweep series (v0.4) ------------------------------------------
+    @Slot(object)
+    def setSweepSource(self, sweep):
+        """Data source for "series" mode: a result_store.SweepResult.
+        Deliberately does NOT touch self._mode -- ViewportPanel.setViewMode()
+        calls setMode() itself, immediately before this (see the trap
+        documented on setStructureSource above)."""
+        self._sweep = sweep
+        names = list(sweep.channels) if sweep is not None else []
+        if self._sweep_channel not in names:
+            self._sweep_channel = names[0] if names else ""
+        self.fit()
+
+    @Slot(str)
+    def setSweepChannel(self, name):
+        if self._sweep is None or name in self._sweep.channels:
+            self._sweep_channel = name
+            self.update()
+
+    @Slot(result=list)
+    def availableSweepChannels(self):
+        return list(self._sweep.channels) if self._sweep is not None else []
+
     @Property(bool, notify=viewChanged)
     def logScale(self):
         return self._log
@@ -127,6 +152,17 @@ class MplCanvasItem(QQuickPaintedItem):
             state = self._process_store.state_for(self._process_store._selected)
             x_um = state["x"] * 1e4
             self._xlim = (float(x_um.min()), float(x_um.max()))
+            self._ylim = None
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
+        if self._mode == "series" and self._sweep is not None:
+            V = np.asarray(self._sweep.voltages, dtype=float)
+            lo, hi = (float(V.min()), float(V.max())) if V.size else (0.0, 1.0)
+            if hi == lo:
+                hi = lo + 1.0
+            self._xlim = (lo, hi)
             self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
@@ -214,6 +250,10 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "process" and self._process_store is not None:
             self._draw_process(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "series" and self._sweep is not None:
+            self._draw_series(ax)
             fig.tight_layout()
             return fig
         # Doping mode with a structure but no solve yet: rasterize the
@@ -378,6 +418,38 @@ class MplCanvasItem(QQuickPaintedItem):
         peak = max(float(np.max(net_doping)) if len(net_doping) else floor,
                    species_max, floor * 10)
         ax.set_ylim(floor, peak * 3)
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+
+    def _draw_series(self, ax):
+        """Sweep curve: current vs. swept-contact voltage.
+
+        Non-converged points arrive from SweepResult as NaN and are
+        plotted as-is -- matplotlib breaks the line at NaN, which is the
+        honest rendering (a gap), never interpolation or substitution.
+        Log mode plots |I| because a log axis can only show magnitude;
+        zero/negative points simply do not appear on it rather than being
+        clipped onto the axis edge with fabricated values."""
+        sw = self._sweep
+        if self._sweep_channel not in sw.channels:
+            ax.text(0.5, 0.5, f"'{self._sweep_channel}' is not available\n"
+                              "for this sweep", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        V = np.asarray(sw.voltages, dtype=float)
+        I = np.asarray(sw.channels[self._sweep_channel], dtype=float)
+        marker = "-o" if V.size <= 40 else "-"
+        if self._log:
+            ax.semilogy(V, np.abs(I), marker, lw=1.5, ms=3)
+            ylabel = f"|{self._sweep_channel}| [{sw.unit}]"
+        else:
+            ax.plot(V, I, marker, lw=1.5, ms=3)
+            ylabel = f"{self._sweep_channel} [{sw.unit}]"
+        n_bad = int((~np.asarray(sw.converged, dtype=bool)).sum())
+        note = f"  ({n_bad} point(s) did not converge)" if n_bad else ""
+        ax.set_xlabel(f"{sw.contact} bias [V]")
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"{sw.contact} sweep{note}", fontsize=9)
         if self._xlim:
             ax.set_xlim(*self._xlim)
 
