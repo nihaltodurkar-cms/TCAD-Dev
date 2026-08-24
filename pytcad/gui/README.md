@@ -616,5 +616,12 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
 - Sweeps store field snapshots for one setpoint (last converged), not
   the full space-time-of-the-ramp movie. Series + one snapshot keeps
   result files small.
+- A session whose only device is a built-in example (the raw v0.1 spec)
+  cannot be fully saved: project files store Structure/Process workbench
+  state and the sweep settings, never a DeviceSpec. Saving such a
+  session warns explicitly and writes only the sweep configuration;
+  reopening that file restores an empty project (Run says "Nothing to
+  run"), and the dangling sweep is dropped at load rather than silently
+  re-arming against whatever device is loaded next.
 - Windows runtime support remains unverified (see v0.3's note above);
   nothing in v0.4 changed the process-launch pattern.

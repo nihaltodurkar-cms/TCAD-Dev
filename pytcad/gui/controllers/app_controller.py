@@ -302,6 +302,19 @@ class AppController(QObject):
         self._sweep_config = None
         self.sweepChanged.emit()
 
+    @Slot(result="QVariant")
+    def sweepConfig(self):
+        """Read back the LIVE armed sweep as {contact,start,stop,step}
+        (or null).  The panel's TextFields are write-only -- after a
+        rejected arm attempt it uses this to revert its fields to what
+        is actually armed, so the displayed values can never disagree
+        with the configuration a Run would execute."""
+        s = self._sweep_config
+        if s is None:
+            return None
+        return {"contact": s.contact, "start": s.start,
+                "stop": s.stop, "step": s.step}
+
     @Property(float, notify=processResultChanged)
     def leftContactV(self):
         return self._left_contact_v
@@ -859,6 +872,21 @@ class AppController(QObject):
             self.errorRaised.emit("Cannot save an invalid process flow",
                                   "\n".join(self.processValidationErrors))
             return
+        # A session whose only device is a built-in example (the raw v0.1
+        # spec) cannot be represented in a project file: the schema stores
+        # Structure/Process workbench state plus the armed sweep, never a
+        # DeviceSpec.  Save anyway -- the sweep configuration alone is
+        # still worth keeping -- but say so loudly instead of letting the
+        # user discover an empty project after reopening the file.
+        if self.structure is None and self.spec is not None:
+            self.errorRaised.emit(
+                "This project cannot store the device itself",
+                "The current device came from a built-in example (or a raw "
+                "v0.1 device spec), which project files do not embed: they "
+                "store the Structure/Process workbench and the voltage-sweep "
+                "settings only.\n\nThe saved file will contain just the "
+                "sweep configuration; reopening it will NOT restore this "
+                "device.")
         save_project(path, name, self.structure, self.mesh_model,
                      self.process_flow, self._sweep_config)
         self._undo_stack.mark_clean()
@@ -880,7 +908,18 @@ class AppController(QObject):
         self.structure, self.mesh_model = structure, mesh_model
         self.process_flow = process_flow
         # v0.4: restore the project's armed sweep (None for v2/v3 files).
-        self._sweep_config = sweep
+        # Never into a project with no device at all (no structure AND an
+        # empty process flow): the contact it names cannot exist anywhere
+        # yet, so the setting would dangle -- silently re-arming itself
+        # against whatever unrelated device happens to be loaded next.
+        if structure is None and not process_flow.steps and sweep is not None:
+            self._sweep_config = None
+            self.consoleModel.append(
+                "Dropped the project's voltage-sweep setting: the file "
+                "contains no device (no structure, no process flow) to "
+                "sweep.")
+        else:
+            self._sweep_config = sweep
         self.sweepChanged.emit()
         # A project file never contains results: whatever was solved in
         # this session belongs to the PREVIOUS project and must not stay

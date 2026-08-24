@@ -5,14 +5,32 @@ import ".."
 
 // v0.4: configure the voltage sweep Run() will attach to the solve.
 // Pure presentation -- every value goes straight into
-// AppController.setSweepConfig()/clearSweepConfig(); validation and
-// error reporting live in the controller (an invalid sweep raises
-// errorRaised at Run time, not here).
+// AppController.setSweepConfig()/clearSweepConfig(); validation lives in
+// the controller: numeric values are checked immediately at arm time
+// (an invalid sweep raises errorRaised right here, without arming),
+// while contact-name validity can only be judged against the loaded
+// device and is checked at Run time.
 Rectangle {
     id: root
     color: Theme.panel
     border.color: Theme.border
     property var controller
+    // Set when the controller rejects an arm attempt (errorRaised with
+    // the sweep summary). The fields are then reverted to the LIVE
+    // armed values, so what's on screen is always what Run would use.
+    property bool lastArmRejected: false
+
+    function revertToArmed() {
+        if (!root.controller) return
+        var cfg = root.controller.sweepConfig()
+        if (!cfg) return
+        var names = root.controller.sweepContactNames
+        var idx = names.indexOf ? names.indexOf(cfg.contact) : -1
+        if (idx >= 0) contactBox.currentIndex = idx
+        startField.text = String(cfg.start)
+        stopField.text = String(cfg.stop)
+        stepField.text = String(cfg.step)
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -31,17 +49,26 @@ Rectangle {
             objectName: "sweepContactBox"
             Layout.fillWidth: true
             model: root.controller ? root.controller.sweepContactNames : []
-            Connections {
-                target: root.controller
-                // Candidates change with structure edits, project loads,
-                // and process handoff; keep a still-valid selection.
-                function onStructureChanged() {
-                    var names = root.controller.sweepContactNames
-                    contactBox.model = names
-                    if (names.indexOf(contactBox.currentText) < 0)
-                        contactBox.currentIndex = names.length ? 0 : -1
+        Connections {
+            target: root.controller
+            // Candidates change with structure edits, project loads,
+            // and process handoff; keep a still-valid selection.
+            function onStructureChanged() {
+                var names = root.controller.sweepContactNames
+                contactBox.model = names
+                if (names.indexOf(contactBox.currentText) < 0)
+                    contactBox.currentIndex = names.length ? 0 : -1
+            }
+            function onErrorRaised(summary, details) {
+                if (summary === "Invalid sweep configuration") {
+                    root.lastArmRejected = true
+                    root.revertToArmed()
                 }
             }
+            function onSweepChanged() {
+                root.lastArmRejected = false
+            }
+        }
         }
 
         Label { text: "Start [V]"; color: Theme.textDim }
@@ -96,6 +123,16 @@ Rectangle {
                    ? Theme.ok : Theme.textDim
             text: root.controller && root.controller.hasSweepConfig
                   ? "sweep armed" : "no sweep configured"
+        }
+
+        Label {
+            objectName: "sweepRejectNote"
+            visible: root.lastArmRejected
+            color: Theme.running
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            font.italic: true
+            text: "Last arm attempt was rejected -- the fields show the currently armed sweep."
         }
 
         Item { Layout.fillHeight: true }

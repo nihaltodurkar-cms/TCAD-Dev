@@ -97,6 +97,52 @@ def test_clear_button_and_status_label_reflect_state(gapp):
 
 
 # ----------------------------------------------------------------------
+#  rejected arm attempt must revert the fields to the LIVE armed config
+# ----------------------------------------------------------------------
+def test_rejected_arm_reverts_fields_to_armed_config(gapp):
+    engine, root, controller = _fresh(gapp)
+    controller.loadStructureExample("mosfet_2d_structure")
+
+    # arm a valid sweep through the panel
+    box = root.findChild(object, "sweepContactBox")
+    box.setProperty("currentIndex", list(box.property("model")).index("drain"))
+    for name, value in (("sweepStartField", "0.0"), ("sweepStopField", "0.6"),
+                        ("sweepStepField", "0.2")):
+        root.findChild(object, name).setProperty("text", value)
+    QMetaObject.invokeMethod(root.findChild(object, "applySweepButton"), "clicked")
+    assert controller.hasSweepConfig is True
+
+    # type garbage over it and hit Arm again
+    root.findChild(object, "sweepStepField").setProperty("text", "nan")
+    errors = []
+    controller.errorRaised.connect(lambda s, d: errors.append(s))
+    QMetaObject.invokeMethod(root.findChild(object, "applySweepButton"), "clicked")
+
+    assert "Invalid sweep configuration" in errors
+    assert controller.hasSweepConfig is True, "rejection dropped the armed sweep"
+    note = root.findChild(object, "sweepRejectNote")
+    assert note is not None and note.property("visible") is True, \
+        "panel gave no hint that the armed values differ from the typed ones"
+    # the fields were reverted to the LIVE config -- screen == what Run uses
+    assert float(root.findChild(object, "sweepStartField").property("text")) == 0.0
+    assert float(root.findChild(object, "sweepStopField").property("text")) == 0.6
+    assert float(root.findChild(object, "sweepStepField").property("text")) == 0.2
+    cfg = controller.sweepConfig()
+    assert (cfg["contact"], cfg["start"], cfg["stop"], cfg["step"]) == \
+        ("drain", 0.0, 0.6, 0.2)
+
+    # a subsequent successful arm clears the rejection note
+    root.findChild(object, "sweepStopField").setProperty("text", "0.8")
+    QMetaObject.invokeMethod(root.findChild(object, "applySweepButton"), "clicked")
+    assert controller._sweep_config.stop == 0.8
+    assert note.property("visible") is False
+
+    # no config at all -> sweepConfig() reads back null
+    controller.clearSweepConfig()
+    assert controller.sweepConfig() is None
+
+
+# ----------------------------------------------------------------------
 #  viewport series mode
 # ----------------------------------------------------------------------
 def test_view_mode_selector_offers_curves(gapp):
