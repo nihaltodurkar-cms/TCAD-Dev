@@ -92,11 +92,20 @@ class ResultStore(ABC):
 
 
 class NpzResultStore(ResultStore):
-    """Reads the key convention solver_runner.extract_result() writes."""
+    """Reads the key convention solver_runner.extract_result() writes.
+
+    Opening validates the file against the documented result grammar
+    (gui/services.solver_backend) and fails fast with a
+    ResultSchemaError on corruption or an unsupported schema version --
+    a broken file must be reported at load, not surface later as a
+    cryptic KeyError deep inside a plot.
+    """
 
     def __init__(self, path):
         self.path = path
         self._d = np.load(path)
+        from .solver_backend import validate_result
+        validate_result(self._d)   # validates our open handle, no re-read
 
     def mesh_axes(self):
         d = int(self._d["dimensionality"])

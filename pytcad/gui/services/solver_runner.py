@@ -31,6 +31,7 @@ from pytcad.device2d import Device2D
 from pytcad.device3d import Device3D
 
 from .device_spec import DeviceSpec
+from .solver_backend import SOLVER_RESULT_SCHEMA_VERSION
 
 
 # ----------------------------------------------------------------------
@@ -330,6 +331,10 @@ def run_job(job_path, out_path):
 
         print("PYTCAD_STAGE=extract", flush=True)
         result = extract_result(device, spec, solved_bias)
+
+    # Stamp the documented result grammar (v0.5.0): readers validate
+    # against this via gui.services.solver_backend.validate_result().
+    result["result__schema"] = np.array(SOLVER_RESULT_SCHEMA_VERSION)
 
     # Atomic write: a killed process must never leave a partial file at
     # the canonical path (see the design spec's cancellation-safety
