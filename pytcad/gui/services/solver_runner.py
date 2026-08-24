@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import traceback
+import warnings
 
 import numpy as np
 
@@ -97,20 +98,32 @@ def register_contacts(device, spec):
             raise ValueError(f"unknown contact kind '{c.kind}'")
 
 
-def apply_bias(device, spec, opts):
+def merge_bias(spec, override=None):
+    """The full {contact_name: V} intent for a solve: ContactSpec.V
+    defaults, overridden by DeviceSpec.bias, optionally overridden again
+    by a per-sweep-point value.  Matches what register_contacts +
+    apply_bias established in v0.1, made explicit so the sweep loop can
+    override one name at a time."""
+    bias = {c.name: c.V for c in spec.contacts}
+    if spec.bias:
+        bias.update(spec.bias)
+    if override:
+        bias.update(override)
+    return bias
+
+
+def apply_bias(device, spec, opts, override=None):
     """Device1D takes a positional [V_left, V_right]; 2D/3D take a
     {name: V} dict.  Another pytcad asymmetry absorbed here."""
+    bias = merge_bias(spec, override)
     if spec.mesh.dimensionality == 1:
         if len(spec.contacts) != 2:
             raise ValueError("a 1D device needs exactly two contacts "
                              f"(got {len(spec.contacts)})")
-        device.solve_bias([spec.contacts[0].V if spec.bias is None
-                           else spec.bias.get(spec.contacts[0].name, spec.contacts[0].V),
-                           spec.contacts[1].V if spec.bias is None
-                           else spec.bias.get(spec.contacts[1].name, spec.contacts[1].V)],
-                          opts)
+        device.solve_bias([bias[spec.contacts[0].name],
+                           bias[spec.contacts[1].name]], opts)
     else:
-        device.solve_bias(spec.bias, opts)
+        device.solve_bias(bias, opts)
 
 
 # ----------------------------------------------------------------------
@@ -201,10 +214,88 @@ def extract_result(device, spec, solved_bias):
 
 
 # ----------------------------------------------------------------------
+#  Sweeps (v0.4)
+# ----------------------------------------------------------------------
+def run_sweep(device, spec, opts=None):
+    """Execute spec.sweep on an EQUILIBRIUM-SOLVED device.
+
+    Warm-started ramp: one device object is reused across points, so each
+    Newton solve starts from the previous bias's solution -- the same
+    pattern as pytcad's own iv_sweep / mosfet.id_vg_sweep, applied here
+    at the GUI boundary where any contact can be the swept one.  No
+    numerical code is modified; divergence detection borrows pytcad's
+    existing "did not converge" warnings instead of adding a callback.
+
+    Returns (fields, series):
+      fields  extract_result() dict from the last CONVERGED point, or
+              None if every point diverged;
+      series  flat npz keys: sweep__voltage, sweep__converged,
+              sweep__current__<channel>, unit__sweep_current, sweep__meta.
+
+    Channels are the ohmic terminal currents at 2D/3D (A/cm and A) and
+    the single total current density at 1D (A/cm^2), matching
+    extract_result's dimensional convention.
+    """
+    opts = opts or NewtonOptions(verbose=True)
+    sw = spec.sweep
+    sw.validate([c.name for c in spec.contacts])
+    d = spec.mesh.dimensionality
+
+    if d == 1:
+        channels = ["device"]        # Device1D has no terminal registry
+    else:
+        channels = [c.name for c in spec.contacts if c.kind == "ohmic"]
+
+    currents = {name: [] for name in channels}
+    converged_flags = []
+    fields = None
+
+    voltages = sw.voltages()
+    for i, V in enumerate(voltages):
+        print(f"PYTCAD_STAGE=sweep point {i + 1}/{len(voltages)}", flush=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            apply_bias(device, spec, opts, override={sw.contact: V})
+        ok = not any("did not converge" in str(w.message) for w in caught)
+        converged_flags.append(ok)
+
+        if d == 1:
+            J_mean, _ = device.current_density()
+            currents["device"].append(float(J_mean))
+        else:
+            for name in channels:
+                currents[name].append(float(device.terminal_current(name)))
+
+        # Keep only converged solutions for the stored field snapshot:
+        # a diverged final point must not overwrite good fields with a
+        # nonphysical state.
+        if ok:
+            fields = extract_result(device, spec, solved_bias=True)
+
+    series = {
+        "sweep__voltage": np.asarray(voltages, dtype=float),
+        "sweep__converged": np.asarray(converged_flags, dtype=bool),
+        "unit__sweep_current": np.array(
+            {1: "A/cm^2", 2: "A/cm", 3: "A"}[d]),
+        "sweep__meta": np.array(json.dumps({
+            "contact": sw.contact, "start": sw.start, "stop": sw.stop,
+            "step": sw.step, "dimensionality": d})),
+    }
+    for name, vals in currents.items():
+        series[f"sweep__current__{name}"] = np.asarray(vals, dtype=float)
+    return fields, series
+
+
+# ----------------------------------------------------------------------
 #  Entry point
 # ----------------------------------------------------------------------
 def run_job(job_path, out_path):
     spec = DeviceSpec.from_json(job_path)
+    if spec.sweep is not None:
+        # Fail fast on an unexecutable sweep, BEFORE paying for the
+        # equilibrium solve.
+        spec.sweep.validate([c.name for c in spec.contacts])
+
     mesh_obj = build_mesh(spec.mesh)
     doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
     device = build_device(spec, mesh_obj, doping, ntotal)
@@ -218,13 +309,20 @@ def run_job(job_path, out_path):
     print("PYTCAD_STAGE=equilibrium", flush=True)
     device.solve_equilibrium(opts)
 
-    solved_bias = spec.bias is not None
-    if solved_bias:
-        print("PYTCAD_STAGE=bias", flush=True)
-        apply_bias(device, spec, opts)
+    if spec.sweep is not None:
+        print("PYTCAD_STAGE=sweep", flush=True)
+        fields, series = run_sweep(device, spec, opts)
+        result = fields if fields is not None else extract_result(device, spec,
+                                                                  solved_bias=True)
+        result.update(series)
+    else:
+        solved_bias = spec.bias is not None
+        if solved_bias:
+            print("PYTCAD_STAGE=bias", flush=True)
+            apply_bias(device, spec, opts)
 
-    print("PYTCAD_STAGE=extract", flush=True)
-    result = extract_result(device, spec, solved_bias)
+        print("PYTCAD_STAGE=extract", flush=True)
+        result = extract_result(device, spec, solved_bias)
 
     # Atomic write: a killed process must never leave a partial file at
     # the canonical path (see the design spec's cancellation-safety
