@@ -135,3 +135,33 @@ def test_family_curves_reach_the_canvas(gapp, tmp_path):
     canvas = root.findChild(object, "mplCanvas")
     assert canvas.familyCurveCount() == 2, \
         "canvas did not receive the family curves"
+
+
+def test_bad_direction_config_is_rejected_with_error(gapp):
+    """step=+0.25 from 1.0 toward 0.0 used to silently produce a
+    single-curve 'family' -- it must raise an actionable error instead."""
+    engine, controller = gui_app.create_engine(gapp)
+    fam = controller.family
+    errs = []
+    controller.errorRaised.connect(lambda s, d: errs.append(s))
+    fam.configureFamily(stepped="right", start=1.0, stop=0.0, step=0.25)
+    assert errs and "Invalid family" in errs[0]
+    # negative direction is legitimate and must still work
+    errs.clear()
+    fam.configureFamily(stepped="right", start=0.5, stop=-0.5, step=-0.25)
+    assert not errs
+    fam.runFamily(swept="left", start=0.0, stop=0.3, step=0.1)
+    assert any("Nothing to sweep" in e for e in errs) or not fam.curves
+
+
+def test_family_stepper_contact_list_follows_structure_changes(gapp):
+    engine, controller = gui_app.create_engine(gapp)
+    root = engine.rootObjects()[0]
+    controller.loadStructureExample("mosfet_2d_structure")
+    box = root.findChild(object, "familySteppedBox")
+    model_before = list(box.property("model"))
+    assert model_before, "stepper combo must offer the device contacts"
+    # loading a different project refreshes the registry; the stepper
+    # must follow it rather than keep stale contacts
+    controller.loadStructureExample("mosfet_2d_structure")
+    assert list(box.property("model")) == model_before

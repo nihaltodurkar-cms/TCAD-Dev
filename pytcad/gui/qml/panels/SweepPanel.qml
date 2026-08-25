@@ -72,6 +72,11 @@ Rectangle {
                 contactBox.model = names
                 if (names.indexOf(contactBox.currentText) < 0)
                     contactBox.currentIndex = names.length ? 0 : -1
+                // the family stepper follows the same contact registry
+                if (familySteppedBox.model !== names)
+                    familySteppedBox.model = names
+                if (names.indexOf(familySteppedBox.currentText) < 0)
+                    familySteppedBox.currentIndex = names.length ? 0 : -1
             }
             function onErrorRaised(summary, details) {
                 if (summary === "Invalid sweep configuration") {

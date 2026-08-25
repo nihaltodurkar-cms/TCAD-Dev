@@ -46,15 +46,26 @@ class FamilySweepController(QObject):
         """Which terminal is STEPPED and over which values.  A single
         value (start == stop) is allowed and yields a one-curve family;
         the per-point validation happens against the base spec at run."""
+        # reject a step that moves AWAY from the target -- the old code
+        # silently produced a single-curve "family" for that typo
+        if step != 0 and (stop - start) * step < 0:
+            self._app.errorRaised.emit(
+                "Invalid family configuration",
+                f"step {step:g} does not move from start {start:g} "
+                f"toward stop {stop:g}")
+            return
         self._stepped = str(stepped)
         vals = []
         if step != 0:
-            n = int(round((stop - start) / step))
-            if abs((stop - start) - n * step) < 1e-9:
+            span = abs(stop - start)
+            n = int(round(span / abs(step)))
+            if abs(span - n * abs(step)) < 1e-9:
                 n += 1
             else:
-                n = int((stop - start) / step) + 1
-            vals = [start + i * step for i in range(max(n, 1))]
+                n = int(span / abs(step)) + 1
+            direction = 1.0 if stop >= start else -1.0
+            vals = [start + i * abs(step) * direction
+                    for i in range(max(n, 1))]
         else:
             vals = [float(start)]
         self._values = vals
@@ -73,6 +84,8 @@ class FamilySweepController(QObject):
                 "Run the device once first; every family curve re-solves "
                 "that exact device.")
             return
+        if self._runner.running:
+            return          # a click during a running family is ignored
         names = [c.name for c in base.contacts]
         for label, contact in ((self._stepped, self._stepped),
                                ("swept", swept)):
@@ -146,6 +159,8 @@ class FamilySweepController(QObject):
 
     def _on_curve_failed(self, summary, details):
         self._queue = []
+        # partial curves stay visible; the UI must hear about it either way
+        self.familyChanged.emit()
         self._app.errorRaised.emit(f"Family failed: {summary}", details)
 
     # -- QML surface ----------------------------------------------------
