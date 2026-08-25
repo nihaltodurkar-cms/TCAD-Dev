@@ -294,3 +294,11 @@ The M3 milestone of the Semiconductor Workbench plan is in place:
 - **Plummer, Deal & Griffin, *Silicon VLSI Technology*** — the process side: implantation, diffusion, oxidation, with the models actually used in fabs. Experimental/empirical.
 - **Deal & Grove, *J. Appl. Phys.* 36, 3770 (1965)** — the oxidation model, and honest about its thin-oxide failure. Experimental + theory.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
+
+### Workflow front end (new)
+
+`workbench/workflow.py` adds a Silvaco/Sentaurus-flavoured text deck as
+a front door to the Device Builder templates: `TEMPLATE nmos` plus
+KEY = value lines translates into a real DomainDevice through the same
+validated path the GUI uses, with line-numbered error reporting. A thin
+translation layer only — never a second simulation path.
