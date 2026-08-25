@@ -363,7 +363,9 @@ class Device1D:
             psi = self.psi
         if psi is None:
             psi = np.zeros(self.N)
-        edge_F = np.abs(np.diff(psi)) * self.VT / (self.LD * self.h)
+        edge_F_cm = np.abs(np.diff(psi)) * self.VT / (self.LD * self.h)
+        # B(m*) above is SI-calibrated -> convert V/cm to V/m
+        edge_F = edge_F_cm * 100.0
         F = np.empty(self.N)
         F[1:-1] = 0.5 * (edge_F[:-1] + edge_F[1:])
         F[0], F[-1] = edge_F[0], edge_F[-1]
