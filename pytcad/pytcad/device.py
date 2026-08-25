@@ -340,17 +340,24 @@ class Device1D:
         # the current vanish identically at equilibrium even across an
         # abrupt material change; derivatives wrt psi are unchanged
         # because nie is fixed under the Newton update.
-        delta = ((psi[1:] - psi[:-1])
-                 + np.log(self.nie_s[1:] / self.nie_s[:-1]))
-        delta_psi = psi[1:] - psi[:-1]           # Poisson-side potential drop
+        # M11-S3 band-offset-aware SG deltas.  Electrons and holes need
+        # OPPOSITE nie-factor signs (calibrated against equilibrium
+        # detailed balance on every edge):
+        #   electron: delta_n = dpsi + dln(nie_s)
+        #   hole:     delta_p = dpsi - dln(nie_s)
+        dlnnie = np.log(self.nie_s[1:] / self.nie_s[:-1])
+        delta = (psi[1:] - psi[:-1]) + dlnnie          # electrons
+        delta_p = (psi[1:] - psi[:-1]) - dlnnie        # holes
         Bp, Bm = bernoulli(delta), bernoulli(-delta)
         dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+        Bp_h, Bm_h = bernoulli(delta_p), bernoulli(-delta_p)
+        dBp_h, dBm_h = dbernoulli(delta_p), dbernoulli(-delta_p)
         et = self._eps_tilde_edge()
 
         an = dn_e / h
         ap = dp_e / h
         Jn = an * (n[1:] * Bp - n[:-1] * Bm)
-        Jp = -ap * (p[1:] * Bm - p[:-1] * Bp)
+        Jp = -ap * (p[1:] * Bm_h - p[:-1] * Bp_h)
 
         # recombination (unscaled physical densities)
         n_phys, p_phys = n * self.Ns, p * self.Ns
@@ -402,12 +409,15 @@ class Device1D:
 
         # --- hole continuity:  Jp_{i+1/2} - Jp_{i-1/2} + R dV = 0 ---
         F[3 * i + 2] = Jp[1:] - Jp[:-1] + Rs[1:-1] * dV[1:-1]
-        add(3 * i + 2, 3 * i + 2, ap[1:] * Bp[1:] + ap[:-1] * Bm[:-1]
+        add(3 * i + 2, 3 * i + 2, ap[1:] * Bp_h[1:] + ap[:-1] * Bm_h[:-1]
             + dRs_dp[1:-1] * dV[1:-1])
-        add(3 * i + 2, 3 * (i + 1) + 2, -ap[1:] * Bm[1:])
-        add(3 * i + 2, 3 * (i - 1) + 2, -ap[:-1] * Bp[:-1])
+        add(3 * i + 2, 3 * (i + 1) + 2, -ap[1:] * Bm_h[1:])
+        add(3 * i + 2, 3 * (i - 1) + 2, -ap[:-1] * Bp_h[:-1])
         add(3 * i + 2, 3 * i + 1, dRs_dn[1:-1] * dV[1:-1])
-        dJp_dpsiR = ap * (p[1:] * dBm + p[:-1] * dBp)
+        # d(delta_p)/d(psi_{k+1}) = +1 like the electron side, because the
+        # minus from the hole Boltzmann exponent cancels the minus in the
+        # delta definition -- verified by the FD-Jacobian test
+        dJp_dpsiR = ap * (p[1:] * dBm_h + p[:-1] * dBp_h)
         add(3 * i + 2, 3 * i, -dJp_dpsiR[1:] - dJp_dpsiR[:-1])
         add(3 * i + 2, 3 * (i + 1), dJp_dpsiR[1:])
         add(3 * i + 2, 3 * (i - 1), dJp_dpsiR[:-1])
