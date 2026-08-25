@@ -6,10 +6,12 @@ A PySide6 / Qt Quick desktop frontend for the PyTCAD solver.
 v0.1–v0.4 spine.** It loads a built-in 2D MOSFET, solves it, and
 visualizes fields; edits 2D structures and 1D process flows in undoable
 workbenches; runs single-contact **voltage sweeps** (I–V, Id–Vg) with
-curve visualization and derived readouts; and now validates every
-solved result against an explicit, versioned schema before displaying
-it. Multi-parameter batch sweeps, C–V analysis, 3D visualization, and
-an actual second solver backend all remain later work.
+curve visualization and derived readouts; validates every solved result
+against an explicit, versioned schema before displaying it; and now has
+a genuine second solver backend — DEVSIM, optional and auto-detected,
+with warm-started bias ramps/sweeps validated by cross-backend I–V
+tests. Multi-parameter batch sweeps, C–V analysis, and 3D visualization
+remain later work.
 
 ## Install
 
@@ -748,3 +750,73 @@ kind; and a stdout leak in the runner if a solve raised mid-capture.
   number in a trace is exactly what the core printed — no more. Only
   sweep stages carry an authoritative converged flag; equilibrium/bias
   steps assume convergence unless the run failed outright.
+
+## v0.5.x — Second Backend (DEVSIM), Viewport Observables, Deck Growth
+
+### The DEVSIM backend (M7)
+
+`workbench/solvers/devsim_backend.py` is a real second engine behind the
+M3 SolverBackend protocol. It builds its own DEVSIM mesh from the same
+DeviceSpec job the homegrown runner consumes (1D devices, two ohmic
+contacts), solves drift–diffusion with DEVSIM's canonical silicon physics
+(Scharfetter–Gummel currents, Boltzmann statistics, SRH), and writes the
+same schema-v2 result files.
+
+- **Bias ramps**: `spec.bias` is reached by fixed 50 mV voltage steps,
+  each solve warm-started from the previous point. `spec.sweep` emits
+  the full documented sweep block; per-point convergence is DEVSIM's own
+  `solve(info=True)` verdict ANDed with a finite/positive-carrier check.
+- **Diverged points are flagged, never stored**: field snapshots come
+  only from converged points, falling back to the equilibrium state.
+- **Provenance parity**: every Newton stage lands in `converge__trace`
+  in the same JSON shape the homegrown runner writes, so the Physics
+  Lab's convergence view works identically for both backends.
+- **Cross-backend validation gate**: the same 1D diode swept by both
+  engines produces I–V curves agreeing to a constant factor ≈2 (set by
+  the engines' tabulated intrinsic-carrier difference), both exponential,
+  and both matching the analytic built-in potential within 5%.
+- DEVSIM stays an **optional dependency**: without it, the registry
+  silently offers only the pytcad backend; with it, jobs can select
+  `"devsim"` explicitly.
+
+### Viewport observables & model comparison (M9)
+
+- New viewport modes **Bands** (E_c/E_v/E_Fn/E_Fp via
+  `workbench.analysis.band_diagram`, pinned to the core's own band
+  routine) and **Recombination** (`recombination_rate()` using the core's
+  SRH/Auger/BGN conventions; lifetimes from |net doping| because stored
+  results carry no Ntotal — stated in the code).
+- **Model on/off comparison**: after any swept Run, "Compare models"
+  re-solves the identical device with every catalog model disabled into
+  a separate store; Curves mode overlays it dashed ("all models off").
+
+### Deck growth (M10)
+
+Decks gain `bias <contact> = <V>` and
+`sweep <contact> start=S stop=P step=D` statements (contact names are
+validated against the built device, errors stay line-numbered), and
+Main.qml gains an **Open Deck...** file dialog. A deck becomes the same
+editable Structure-workbench session the Device Builder produces — never
+a second simulation path.
+
+### First new physics (M8)
+
+`workbench/physics/impact_ionization.py`: van Overstraeten–de Man impact
+ionization coefficients plus the avalanche-breakdown integral for
+one-sided abrupt junctions, gated by published values (coefficient table;
+breakdown inside textbook ranges at 1e15/1e16/1e17 cm⁻³). Analysis-layer
+only for now — catalog registration comes together with solver coupling.
+
+### Honest limits of v0.5.x
+
+- The DEVSIM backend solves **1D two-terminal silicon devices only**
+  (equilibrium, static bias, or one swept contact); no gates, no 2D/3D,
+  no transient or AC analysis.
+- Cross-backend I–V agreement is a *factor* comparison, not pointwise:
+  the engines ship different tabulated ni, which shifts forward current
+  by roughly its ratio squared. Both engines are separately anchored to
+  analytic results instead.
+- Band/recombination modes read stored fields of the current result;
+  2D+ results get an honest placeholder rather than a fake cut.
+- Impact ionization is not yet selectable in the Physics Lab nor coupled
+  to any solver's Newton assembly.

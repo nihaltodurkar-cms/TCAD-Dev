@@ -8,8 +8,7 @@ Sentaurus class). REAL physics only — every educational surface backed
 by actual computation. Never fake, never mock, never weaken tests.
 
 ## STATE (as of this handoff)
-Suite: 459 passed, ZERO warnings (pytest.ini policy). Tree clean at
-cc340a5. Python 3.14, PySide6, devsim 2.11 installed (optional dep).
+Suite: 481 passed, ZERO warnings (pytest.ini policy). Tagged v0.5.0. Python 3.14, PySide6, devsim 2.11 installed (optional dep).
 SHIPPED: M1 domain core+ModelCatalog; M2 RunRecord+schema v2; M3 store/
 analysis boundaries + SolverBackend protocol; M4 Physics Lab foundation;
 M5 device templates (NMOS golden == shipped example); M6 checkpoints→

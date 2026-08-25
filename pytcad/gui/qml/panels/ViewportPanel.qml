@@ -33,6 +33,11 @@ Rectangle {
             canvas.setConvergenceSource(
                 store && store.run_record ? store.run_record() : null)
         }
+        if (mode === "bands" || mode === "recombination") {
+            // M9: both read the current store's fields directly; nothing
+            // extra to hand over, but a fresh result must re-trigger.
+            canvas.setStore(controller.currentStore(), controller.currentField)
+        }
         if (mode === "series") {
             // v0.4: hand the executed sweep (or null before any swept run)
             // to the canvas, then refresh the channel selector from it.
@@ -150,6 +155,15 @@ Rectangle {
         target: controller
         function onResultChanged() {
             if (controller && root.currentMode === "series") root.setViewMode(root.currentMode)
+        }
+    }
+
+    // M9: the models-off comparison finishing must refresh the series
+    // overlay the same way.
+    Connections {
+        target: controller
+        function onComparisonChanged() {
+            if (controller) canvas.setComparisonSource(controller.comparisonSweepForQml)
         }
     }
 

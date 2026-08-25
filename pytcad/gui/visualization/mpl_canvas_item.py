@@ -125,6 +125,19 @@ class MplCanvasItem(QQuickPaintedItem):
             self._sweep_channel = name
             self.update()
 
+    # -- model on/off comparison overlay (M9) --------------------------
+    @Slot(object)
+    def setComparisonSource(self, sweep):
+        """The all-models-OFF run's SweepResult, overlaid dashed in
+        "series" mode.  Does NOT touch self._mode (same contract as
+        every other source setter)."""
+        self._comparison_sweep = sweep
+        self.update()
+
+    @Slot(result=bool)
+    def hasComparisonSource(self):
+        return getattr(self, "_comparison_sweep", None) is not None
+
     @Slot(result=list)
     def availableSweepChannels(self):
         return list(self._sweep.channels) if self._sweep is not None else []
@@ -280,6 +293,14 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "process" and self._process_store is not None:
             self._draw_process(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "bands":
+            self._draw_bands(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "recombination":
+            self._draw_recombination(ax)
             fig.tight_layout()
             return fig
         if self._mode == "convergence":
@@ -464,6 +485,97 @@ class MplCanvasItem(QQuickPaintedItem):
         if self._xlim:
             ax.set_xlim(*self._xlim)
 
+    # -- M9 observables (workbench/analysis) ---------------------------
+    def _observable_fields(self):
+        """(x_um, psi, n, p, doping, material, T) from the current store,
+        or None when there is nothing to draw yet.  Material/T come from
+        the run record -- what actually produced the numbers -- falling
+        back to the silicon defaults."""
+        store = self._store
+        if store is None or not store.is_solved_result():
+            return None
+        names = store.available_scalars()
+        for required in ("potential", "electron_density", "hole_density"):
+            if required not in names:
+                return None
+        axes = store.mesh_axes()
+        x = np.asarray(axes.axes["x"], dtype=float) * 1e4
+        psi = np.asarray(store.scalar_field("potential").values, float)
+        n = np.asarray(store.scalar_field("electron_density").values, float)
+        p = np.asarray(store.scalar_field("hole_density").values, float)
+        doping = None
+        if "doping" in names:
+            doping = np.asarray(store.scalar_field("doping").values, float)
+        material, T = "SILICON", 300.0
+        record = getattr(store, "run_record", None)
+        if callable(record):
+            try:
+                rec = record()
+                if rec is not None:
+                    material = rec.material or material
+                    T = rec.T or T
+            except Exception:
+                pass
+        return x, psi, n, p, doping, material, T
+
+    def _draw_bands(self, ax):
+        """Band diagram (Ec/Ev/EFn/EFp) via workbench.analysis -- the
+        same arrays any backend stores, the same conventions as the
+        core's band_diagram().  1D results plot against depth; higher
+        dimensionality gets an honest placeholder (a 2D+ band MAP is a
+        later slice)."""
+        data = self._observable_fields()
+        if data is None:
+            ax.text(0.5, 0.5, "No solved result yet\n"
+                    "(solve a device to see its bands)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        x, psi, n, p, _doping, material, T = data
+        axes = self._store.mesh_axes()
+        if axes.dimensionality != 1:
+            ax.text(0.5, 0.5, "Band diagrams: 1D results only in this "
+                              "version", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        from workbench.analysis.observables import band_diagram
+        Ec, Ev, EFn, EFp = band_diagram(psi, n, p, material, T)
+        ax.plot(x, Ec, "-", label="Ec", lw=1.4)
+        ax.plot(x, Ev, "-", label="Ev", lw=1.4)
+        ax.plot(x, EFn, "--", label="EFn", lw=1.0)
+        ax.plot(x, EFp, "--", label="EFp", lw=1.0)
+        ax.set_xlabel("depth [um]")
+        ax.set_ylabel("energy [eV]")
+        ax.legend(fontsize=8)
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+
+    def _draw_recombination(self, ax):
+        """Net recombination rate R(x) computed by workbench.analysis
+        from the stored carrier densities (see recombination_rate()'s
+        honesty note about Ntotal)."""
+        data = self._observable_fields()
+        if data is None or data[4] is None:
+            ax.text(0.5, 0.5, "No solved result yet\n"
+                    "(solve a device to see recombination)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        x, _psi, n, p, doping, material, T = data
+        axes = self._store.mesh_axes()
+        if axes.dimensionality != 1:
+            ax.text(0.5, 0.5, "Recombination maps: 1D results only in "
+                              "this version", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        from workbench.analysis.observables import recombination_rate
+        R = recombination_rate(n, p, doping, material, T)
+        ax.semilogy(x, np.abs(R), lw=1.4)
+        ax.set_xlabel("depth [um]")
+        ax.set_ylabel("|R| [cm^-3 s^-1]")
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+
     def _draw_series(self, ax):
         """Sweep curve: current vs. swept-contact voltage.
 
@@ -492,6 +604,18 @@ class MplCanvasItem(QQuickPaintedItem):
         note = f"  ({n_bad} point(s) did not converge)" if n_bad else ""
         ax.set_xlabel(f"{sw.contact} bias [V]")
         ax.set_ylabel(ylabel)
+        # M9: overlay the all-models-OFF comparison sweep, dashed, when
+        # present and covering the same contact/channel.
+        comp = getattr(self, "_comparison_sweep", None)
+        if comp is not None and self._sweep_channel in comp.channels:
+            Ic = np.asarray(comp.channels[self._sweep_channel], dtype=float)
+            if self._log:
+                ax.semilogy(V, np.abs(Ic), marker, lw=1.2, ms=3,
+                            ls="--", color="#8e44ad", label="all models off")
+            else:
+                ax.plot(V, Ic, marker, lw=1.2, ms=3, ls="--",
+                        color="#8e44ad", label="all models off")
+            ax.legend(fontsize=8)
         ax.set_title(f"{sw.contact} sweep{note}", fontsize=9)
         if self._xlim:
             ax.set_xlim(*self._xlim)

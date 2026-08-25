@@ -4,6 +4,8 @@ Everything dimension-specific has already been normalized away by
 solver_runner.extract_result(), so nothing here branches on 1D/2D/3D --
 it just renders whatever fields and units the ResultStore reports.
 """
+import tempfile
+
 import numpy as np
 from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 
@@ -56,6 +58,7 @@ class AppController(QObject):
     undoStateChanged = Signal()
     processResultChanged = Signal()
     sweepChanged = Signal()                 # v0.4 sweep configuration edits
+    comparisonChanged = Signal()            # M9 model on/off overlay
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -101,6 +104,20 @@ class AppController(QObject):
         self._process_runner.failed.connect(self._on_process_failed)
         self._process_runner.canceled.connect(self._on_process_canceled)
         self._process_result = None      # ProcessResultStore, once a flow has run
+        # M9: model on/off comparison -- a SECOND, fully independent
+        # solve of the last-run device with every catalog model disabled,
+        # so the series viewport can overlay "models on" vs "all off".
+        # Own JobRunner, own output, never touches _store/_busy: a slow
+        # comparison can be canceled by quitting without disturbing any
+        # primary run.
+        self._comparison_runner = JobRunner(parent=self,
+                                            work_dir=tempfile.mkdtemp(
+                                                prefix="pytcad-compare-"))
+        self._comparison_runner.progressLine.connect(self.consoleModel.append)
+        self._comparison_runner.finished.connect(self._on_comparison_finished)
+        self._comparison_runner.failed.connect(self._on_comparison_failed)
+        self._comparison_store = None
+        self._last_run_spec = None
         self._left_contact_v = 0.0
         self._right_contact_v = 0.0
         # v0.4 voltage sweep applied to the next Run (not undoable: it is
@@ -1048,6 +1065,9 @@ class AppController(QObject):
         self.consoleModel.append("Starting solve...")
         self._set_status("Solving...")
         self._set_busy(True)
+        # M9: remember exactly what this Run solved so runModelComparison()
+        # can re-solve the SAME device with every model off.
+        self._last_run_spec = self.spec
         try:
             self._runner.start(self.spec)
         except Exception as exc:
@@ -1060,6 +1080,102 @@ class AppController(QObject):
         if self._busy:
             self.consoleModel.append("Cancelling...")
             self._runner.cancel()
+
+    # -- M9: model on/off comparison runs ------------------------------
+    @Property(bool, notify=comparisonChanged)
+    def hasComparison(self):
+        return self._comparison_store is not None
+
+    @Property(object, notify=comparisonChanged)
+    def comparisonSweepForQml(self):
+        """The all-models-OFF run's sweep (or None), handed opaquely to
+        MplCanvasItem.setComparisonSource() -- same contract as
+        sweepResultForQml."""
+        if self._comparison_store is None:
+            return None
+        try:
+            return (self._comparison_store.sweep_result()
+                    if self._comparison_store.has_sweep() else None)
+        except Exception:
+            return None
+
+    @Slot()
+    def runModelComparison(self):
+        """Re-solve the last-run device with EVERY catalog model
+        disabled, into a separate result store.  Requires a completed
+        Run (the spec is reused verbatim, only `models` changes) and a
+        free runner -- never races the primary or process runners."""
+        if self._last_run_spec is None:
+            self.errorRaised.emit(
+                "Nothing to compare",
+                "Run the device once; the comparison re-solves that "
+                "exact device with every model off.")
+            return
+        if self._busy or self._comparison_runner.running:
+            return
+        from workbench.core.catalog import ModelCatalog
+        off = {key: False for key in ModelCatalog.list()}
+        import copy
+        spec_off = copy.deepcopy(self._last_run_spec)
+        spec_off.sweep = copy.deepcopy(self._last_run_spec.sweep)
+        spec_off.models = off
+        spec_off.bias = dict(self._last_run_spec.bias or {}) \
+            if self._last_run_spec.bias else None
+        self.consoleModel.append(
+            "Starting comparison solve (all models OFF)...")
+        try:
+            self._comparison_runner.start(spec_off)
+        except Exception as exc:
+            self.errorRaised.emit("Could not start the comparison", str(exc))
+
+    @Slot(str)
+    def runDeck(self, text):
+        """M10: the deck front door.  Translates deck text through
+        workbench.workflow into the SAME objects the GUI already edits:
+        an adopted Structure-workbench session, contact voltages, and an
+        armed sweep.  Never a second simulation path."""
+        from workbench.workflow import run_deck_full
+        try:
+            run = run_deck_full(text)
+        except ValueError as exc:
+            self.errorRaised.emit("Deck error", str(exc))
+            return False
+        except Exception as exc:
+            self.errorRaised.emit("Could not read the deck", str(exc))
+            return False
+        from workbench.adapters.spec import structure_from_domain
+        try:
+            structure, mesh_model = structure_from_domain(run.device)
+        except Exception as exc:
+            self.errorRaised.emit(
+                "Deck device cannot be edited here", str(exc))
+            return False
+        self.adoptStructure(structure, mesh_model,
+                            f"deck: {run.template_id}")
+        for c in structure.contacts:
+            if c.name in run.bias and c.V != run.bias[c.name]:
+                self.setContactVoltage(c.id, run.bias[c.name])
+        if run.sweep is not None:
+            self.setSweepConfig(run.sweep["contact"], run.sweep["start"],
+                                run.sweep["stop"], run.sweep["step"])
+        self.consoleModel.append(
+            f"Deck loaded: template '{run.template_id}' with "
+            f"{len(run.bias)} bias statement(s) and "
+            f"{'a' if run.sweep else 'no'} sweep.")
+        return True
+
+    def _on_comparison_finished(self, result_path):
+        from ..services.result_store import NpzResultStore
+        self._comparison_store = NpzResultStore(result_path)
+        self.consoleModel.append(
+            "Comparison solve finished -- switch to Curves mode to see "
+            "the models-off overlay.")
+        self.comparisonChanged.emit()
+
+    def _on_comparison_failed(self, summary, details):
+        self._comparison_store = None
+        self.comparisonChanged.emit()
+        self.errorRaised.emit(f"Comparison failed: {summary}", details)
 
     @Slot(str)
     def setField(self, name):

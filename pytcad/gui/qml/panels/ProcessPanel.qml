@@ -62,7 +62,8 @@ Rectangle {
     // Default parameter dicts per operation, matching the fixed schemas
     // from the design spec (design spec section 5):
     //   substrate = {length_cm, background_doping_cm3, mesh:{h_min_cm,h_max_cm,ratio}}
-    //   implant   = {species, energy_keV, dose_cm2, tilt_deg}
+    //   implant   = {species, energy_keV, dose_cm2, tilt_deg,
+//                x_range_cm? [lo, hi] cm -- M6 optional window}
     //   anneal    = {temperature_C, time_s}
     //   oxidize   = {temperature_C, time_hours, ambient}
     function _defaultParams(operation) {

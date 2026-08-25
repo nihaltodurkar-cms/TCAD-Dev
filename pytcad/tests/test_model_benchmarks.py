@@ -64,3 +64,115 @@ def test_deck_errors_are_line_numbered():
         run_deck("go\ntemplate nmos\nbadline\nend")
     with pytest.raises(ValueError, match="TEMPLATE"):
         run_deck("go\nnx = 40\nend")
+
+
+# ----------------------------------------------------------------------
+#  M8 first NEW physics: impact ionization (van Overstraeten-de Man).
+#  Analysis-layer module (workbench/physics): NOT yet coupled to the
+#  Newton solvers -- registered in the catalog only when it becomes a
+#  selectable model.  Gates are PUBLISHED values, per the M8 rule.
+# ----------------------------------------------------------------------
+def test_van_overstraeten_alpha_n_matches_published_curve():
+    """alpha_n(4e5 V/cm) ~= 3.2e4 cm^-1: read off the standard published
+    van Overstraeten-de Man low-field plot reproduced in Sze & Ng."""
+    from workbench.physics.impact_ionization import alpha_n
+    assert alpha_n(4e5) == pytest.approx(3.2e4, rel=0.15)
+
+
+def test_van_overstraeten_regimes_are_continuous_at_the_switch():
+    """The two fitted regimes must meet at E = 5e5 V/cm to within their
+    own fit scatter -- a discontinuity would be a parameter typo."""
+    from workbench.physics.impact_ionization import alpha_n, alpha_p
+    for alpha in (alpha_n, alpha_p):
+        lo = alpha(5e5 - 1.0)
+        hi = alpha(5e5 + 1.0)
+        assert hi == pytest.approx(lo, rel=0.35)
+
+
+def test_alpha_coefficients_match_published_table():
+    """Direct coefficient check against the published table
+    (van Overstraeten & de Man, Solid-State Electron. 13, 583 (1970);
+    values as tabulated in the Sentaurus/Taurus manuals):
+      low field:  An=7.03e5 Bn=1.231e6 ; Ap=1.582e6 Bp=2.036e6
+      high field: An=7.03e5 Bn=1.231e6 ; Ap=6.71e5  Bp=1.693e6
+    """
+    from workbench.physics import impact_ionization as ii
+    assert ii.ALPHA_N_LOW["A"] == 7.03e5
+    assert ii.ALPHA_N_LOW["B"] == 1.231e6
+    assert ii.ALPHA_P_LOW["A"] == 1.582e6
+    assert ii.ALPHA_P_LOW["B"] == 2.036e6
+    assert ii.ALPHA_P_HIGH["A"] == 6.71e5
+    assert ii.ALPHA_P_HIGH["B"] == 1.693e6
+
+
+def test_breakdown_voltage_matches_published_ranges():
+    """One-sided abrupt Si junction breakdown voltages must land inside
+    the ranges quoted across standard references (Sze & Ng ch. 3 plots;
+    Fulop-style fits give 60 V at 1e16 scaling ~ N^-0.75 -- the spread
+    between references is real, hence RANGES not point values):
+        N = 1e15 -> ~200-400 V ; 1e16 -> ~45-65 V ; 1e17 -> ~10-16 V
+    """
+    from workbench.physics.impact_ionization import (
+        breakdown_voltage_one_sided,
+    )
+    for N, lo, hi in ((1e15, 200.0, 400.0), (1e16, 45.0, 65.0),
+                      (1e17, 10.0, 16.0)):
+        bv_model = breakdown_voltage_one_sided(N)
+        assert lo <= bv_model <= hi, \
+            f"N={N:g}: model {bv_model:.1f} V outside published " \
+            f"[{lo}, {hi}] V"
+
+
+def test_no_breakdown_below_ten_percent_of_published():
+    """Sanity: well below breakdown the ionization integral must be far
+    from unity (avalanche is a threshold phenomenon)."""
+    from workbench.physics.impact_ionization import (
+        breakdown_voltage_one_sided, ionization_integral,
+    )
+    bv = breakdown_voltage_one_sided(1e17)
+    assert ionization_integral(0.2 * bv, 1e17) < 0.15
+
+
+# ----------------------------------------------------------------------
+#  M10 growth: bias/sweep deck statements + file-open integration.
+#  run_deck()'s original contract (template_id, device) is pinned by the
+#  tests above and must not change; the growth lives in run_deck_full().
+# ----------------------------------------------------------------------
+def test_deck_bias_statement_reaches_the_run():
+    from workbench.workflow import run_deck_full
+    run = run_deck_full("""
+        go
+        template pn_diode
+        length_cm = 2e-4
+        bias p = 0.3
+        end
+    """)
+    assert run.bias == {"p": pytest.approx(0.3)}
+    assert "bias" in dir(run)
+
+
+def test_deck_sweep_statement_reaches_the_run():
+    from workbench.workflow import run_deck_full
+    run = run_deck_full("""
+        go
+        template pn_diode
+        sweep n start=0.0 stop=0.5 step=0.1
+        end
+    """)
+    assert run.sweep["contact"] == "n"
+    assert run.sweep["start"] == 0.0
+    assert run.sweep["stop"] == 0.5
+    assert run.sweep["step"] == 0.1
+
+
+def test_deck_sweep_unknown_contact_is_line_numbered():
+    from workbench.workflow import run_deck_full
+    with pytest.raises(ValueError, match="line 3"):
+        run_deck_full("go\ntemplate pn_diode\n"
+                      "sweep nosuch start=0 stop=1 step=0.1\nend")
+
+
+def test_deck_bias_unknown_contact_is_line_numbered():
+    from workbench.workflow import run_deck_full
+    with pytest.raises(ValueError, match="line 3"):
+        run_deck_full("go\ntemplate pn_diode\nbias nosuch = 0.3\nend")

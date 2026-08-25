@@ -32,6 +32,11 @@ ApplicationWindow {
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }
+            MenuItem {
+                objectName: "openDeckAction"
+                text: "Open Deck..."
+                onTriggered: openDeckDialog.open()
+            }
             MenuSeparator {}
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -88,11 +93,12 @@ ApplicationWindow {
                 id: viewModeBox
                 objectName: "viewModeSelector"
                 model: ["Structure", "Doping", "Mesh", "Process", "Curves",
-                        "Convergence", "Results"]
+                        "Bands", "Recombination", "Convergence", "Results"]
                 onActivated: {
                     var m = {"Structure": "structure", "Doping": "doping",
                             "Mesh": "mesh", "Process": "process",
-                            "Curves": "series",
+                            "Curves": "series", "Bands": "bands",
+                            "Recombination": "recombination",
                             "Convergence": "convergence",
                             "Results": "doping"}[currentText]
                     viewport.setViewMode(m)
@@ -270,6 +276,22 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFile
         nameFilters: ["PyTCAD project files (*.json)", "All files (*)"]
         onAccepted: appController.loadProject(selectedFile.toString())
+    }
+    FileDialog {
+        id: openDeckDialog
+        objectName: "openDeckDialog"
+        title: "Open Deck"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["Deck files (*.deck *.txt)", "All files (*)"]
+        onAccepted: {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", selectedFile.toString())
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState === XMLHttpRequest.DONE)
+                    appController.runDeck(xhr.responseText)
+            }
+            xhr.send()
+        }
     }
 
     Connections {
