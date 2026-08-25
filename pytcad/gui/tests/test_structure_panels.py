@@ -68,6 +68,9 @@ def test_implant_editor_shows_only_when_implant_step_selected(gapp):
     controller.addProcessStep("implant", "Implant",
                               {"species": "B", "energy_keV": 30.0, "dose_cm2": 1e14})
     process_panel = root.findChild(object, "processPanel")
+    # v0.5 UI: the workbench panels live in a tabbed dock; bring the
+    # Process tab forward exactly like a user click would.
+    root.findChild(object, "workbenchTabs").setProperty("currentIndex", 3)
     step_id = controller.process_flow.steps[0].id
     process_panel.setProperty("selectedStepId", step_id)
     implant_editor = root.findChild(object, "implantEditor")
@@ -105,6 +108,8 @@ def test_step_editor_routing_updates_when_selection_changes(gapp):
                                "mesh": {"h_min_cm": 1e-7, "h_max_cm": 1e-5, "ratio": 1.2}})
     controller.addProcessStep("anneal", "Anneal",
                               {"temperature_C": 950.0, "time_s": 60.0})
+    # v0.5 UI: bring the Process tab forward like a user click would
+    root.findChild(object, "workbenchTabs").setProperty("currentIndex", 3)
     process_panel = root.findChild(object, "processPanel")
     substrate_id = controller.process_flow.steps[0].id
     anneal_id = controller.process_flow.steps[1].id
@@ -133,6 +138,9 @@ def test_step_editor_parameters_refresh_after_edit_in_place(gapp):
     controller.addProcessStep("anneal", "Anneal",
                               {"temperature_C": 900.0, "time_s": 10.0})
     process_panel = root.findChild(object, "processPanel")
+    # v0.5 UI: the workbench panels live in a tabbed dock; bring the
+    # Process tab forward exactly like a user click would.
+    root.findChild(object, "workbenchTabs").setProperty("currentIndex", 3)
     step_id = controller.process_flow.steps[0].id
     process_panel.setProperty("selectedStepId", step_id)
 

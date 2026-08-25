@@ -15,26 +15,6 @@ Rectangle {
         anchors.margins: Theme.pad
         spacing: 4
 
-        RowLayout {
-            Layout.fillWidth: true
-            Label {
-                text: "SIMULATION CONSOLE"
-                color: Theme.textDim
-                font.pixelSize: 11
-                font.letterSpacing: 1
-            }
-            Item { Layout.fillWidth: true }
-            Rectangle {
-                width: 8; height: 8; radius: 4
-                color: busy ? Theme.running : Theme.textDim
-            }
-            Label {
-                text: statusText
-                color: Theme.textDim
-                font.pixelSize: 11
-            }
-        }
-
         ListView {
             id: lines
             Layout.fillWidth: true

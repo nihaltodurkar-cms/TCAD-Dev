@@ -30,7 +30,12 @@ ColumnLayout {
     }
 
     RowLayout {
-        Label { text: "Length [cm]"; Layout.preferredWidth: 130 }
+        Label {
+            text: "Length [cm]"; Layout.preferredWidth: 130
+            HoverHandler { id: hLen }
+            ToolTip.visible: hLen.hovered; ToolTip.delay: 400
+            ToolTip.text: "Wafer depth simulated. The 1D process domain runs from the surface (0) to this depth."
+        }
         TextField {
             Layout.fillWidth: true
             text: parameters && parameters.length_cm != null ? parameters.length_cm.toExponential(3) : ""
@@ -39,7 +44,12 @@ ColumnLayout {
         }
     }
     RowLayout {
-        Label { text: "Bg doping [cm⁻³]"; Layout.preferredWidth: 130 }
+        Label {
+            text: "Bg doping [cm⁻³]"; Layout.preferredWidth: 130
+            HoverHandler { id: hBg }
+            ToolTip.visible: hBg.hovered; ToolTip.delay: 400
+            ToolTip.text: "Uniform background doping. Negative = p-type, positive = n-type [cm^-3]."
+        }
         TextField {
             Layout.fillWidth: true
             text: parameters && parameters.background_doping_cm3 != null
@@ -49,7 +59,12 @@ ColumnLayout {
         }
     }
     RowLayout {
-        Label { text: "Mesh h_min [cm]"; Layout.preferredWidth: 130 }
+        Label {
+            text: "Mesh h_min [cm]"; Layout.preferredWidth: 130
+            HoverHandler { id: hHmin }
+            ToolTip.visible: hHmin.hovered; ToolTip.delay: 400
+            ToolTip.text: "Finest spacing near junctions. Keep it around one Debye length (~10 nm at 1e17) or finer."
+        }
         TextField {
             Layout.fillWidth: true
             text: parameters && parameters.mesh && parameters.mesh.h_min_cm != null

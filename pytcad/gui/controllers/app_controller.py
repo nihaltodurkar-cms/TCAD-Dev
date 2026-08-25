@@ -4,6 +4,7 @@ Everything dimension-specific has already been normalized away by
 solver_runner.extract_result(), so nothing here branches on 1D/2D/3D --
 it just renders whatever fields and units the ResultStore reports.
 """
+import re
 import tempfile
 
 import numpy as np
@@ -87,6 +88,7 @@ class AppController(QObject):
 
         self._runner = JobRunner(parent=self)
         self._runner.progressLine.connect(self.consoleModel.append)
+        self._runner.progressLine.connect(self._on_progress_line)
         self._runner.stageChanged.connect(self._on_stage)
         self._runner.finished.connect(self._on_finished)
         self._runner.failed.connect(self._on_failed)
@@ -1299,6 +1301,31 @@ class AppController(QObject):
                                      f"{stats['threshold_voltage_v']:.3g} V"))
             return rows
         return [("Selected", node_id)]
+
+    def _on_progress_line(self, line):
+        """Sweep-point granularity for the status bar, parsed from the
+        runner's own progress markers ("PYTCAD_STAGE=sweep point 3/10").
+        Diagnostic only -- results are read from the npz, never this."""
+        if not self._busy:
+            return
+        m = re.search(r"point (\d+)/(\d+)", line)
+        if m:
+            self._set_status(f"Running voltage sweep... point "
+                             f"{m.group(1)}/{m.group(2)}")
+
+    @Slot(result="QVariant")
+    def convergenceRecordForQml(self):
+        """The last run's RunRecord (or null) for the convergence
+        viewport.  Lives here -- not as a generic store accessor --
+        because only Qt-annotated slots cross into QML safely."""
+        store = self._store
+        getter = getattr(store, "run_record", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
 
     def _on_stage(self, stage):
         self._set_status({"equilibrium": "Solving equilibrium...",

@@ -28,15 +28,17 @@ Rectangle {
             canvas.setProcessSource(controller.processResultForQml, root.currentProcessStepId)
         }
         if (mode === "convergence") {
-            // v0.5.0 M4: hand the M2 RunRecord (or null) to the canvas.
-            var store = controller.currentStore
+            // v0.5.0 M4/M9: fetch the RunRecord through a real Qt slot.
+            // The old paren-less read of the currentStore METHOD handed
+            // QML a function object whose .run_record was undefined, so
+            // this mode silently showed its empty placeholder forever.
             canvas.setConvergenceSource(
-                store && store.run_record ? store.run_record() : null)
+                controller ? controller.convergenceRecordForQml() : null)
         }
         if (mode === "bands" || mode === "recombination") {
-            // M9: both read the current store's fields directly; nothing
-            // extra to hand over, but a fresh result must re-trigger.
-            canvas.setStore(controller.currentStore(), controller.currentField)
+            // M9: both read the canvas' own store (kept in sync by
+            // bindController on every resultChanged); nothing to hand over.
+            canvas.setMode(mode)
         }
         if (mode === "series") {
             // v0.4: hand the executed sweep (or null before any swept run)
@@ -109,16 +111,53 @@ Rectangle {
 
             MouseArea {
                 anchors.fill: parent
+                hoverEnabled: true
                 property real lastX: 0
                 property real lastY: 0
-                onPressed: (m) => { lastX = m.x; lastY = m.y }
-                onPositionChanged: (m) => {
-                    if (!pressed) return
-                    // drag right -> view moves left, so negate
-                    canvas.pan(-(m.x - lastX) / width, -(m.y - lastY) / height)
+                onPressed: (m) => {
                     lastX = m.x; lastY = m.y
+                    canvas.clearReadout()   // view is about to change
                 }
-                onWheel: (w) => canvas.zoom(w.angleDelta.y > 0 ? 0.9 : 1.111)
+                onPositionChanged: (m) => {
+                    if (pressed) {
+                        // drag right -> view moves left, so negate
+                        canvas.pan(-(m.x - lastX) / width,
+                                   -(m.y - lastY) / height)
+                        lastX = m.x; lastY = m.y
+                        canvas.clearReadout()
+                        return
+                    }
+                    canvas.hoverAt(m.x, m.y)
+                }
+                onExited: canvas.clearReadout()
+                onWheel: (w) => {
+                    canvas.zoom(w.angleDelta.y > 0 ? 0.9 : 1.111)
+                    canvas.clearReadout()
+                }
+            }
+
+            // live cursor readout for 1D curves -- the value under the
+            // pointer, snapped to the nearest computed node
+            Rectangle {
+                // guarded bindings: during engine teardown `canvas` and
+                // `parent` transiently evaluate to null -- without the
+                // guards this prints three TypeErrors on every exit
+                visible: canvas ? canvas.readout !== "" : false
+                anchors.top: parent ? parent.top : undefined
+                anchors.right: parent ? parent.right : undefined
+                anchors.margins: Theme.padLg
+                radius: Theme.radiusLg
+                color: Qt.rgba(0, 0, 0, 0.65)
+                implicitWidth: readoutText.implicitWidth + 2 * Theme.padLg
+                implicitHeight: readoutText.implicitHeight + Theme.pad
+                Label {
+                    id: readoutText
+                    anchors.centerIn: parent
+                    text: canvas ? canvas.readout : ""
+                    color: "#ffffff"
+                    font.family: Theme.mono
+                    font.pixelSize: Theme.fsSmall
+                }
             }
         }
     }
@@ -167,5 +206,11 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: if (controller) canvas.bindController(controller)
+    Component.onCompleted: {
+        if (controller) canvas.bindController(controller)
+        canvas.applyTheme(Theme.dark)
+    }
+
+    // keep matplotlib in step with the design system's light/dark state
+    function syncTheme() { canvas.applyTheme(Theme.dark) }
 }

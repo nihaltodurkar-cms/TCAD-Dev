@@ -37,10 +37,21 @@ Rectangle {
         anchors.margins: Theme.pad
         spacing: Theme.pad
 
+
         Label {
             text: "Voltage sweep"
             font.bold: true
             color: Theme.text
+            font.pixelSize: Theme.fsHeader
+        }
+
+        Label {
+            text: "One warm-started DC solve per point: each Newton run " +
+                  "starts from the previous bias's solution."
+            color: Theme.textFaint
+            font.pixelSize: Theme.fsTiny
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
         }
 
         Label { text: "Contact"; color: Theme.textDim }
@@ -49,6 +60,9 @@ Rectangle {
             objectName: "sweepContactBox"
             Layout.fillWidth: true
             model: root.controller ? root.controller.sweepContactNames : []
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: "Which terminal is ramped; every other terminal holds its configured voltage."
         Connections {
             target: root.controller
             // Candidates change with structure edits, project loads,
@@ -78,6 +92,9 @@ Rectangle {
             Layout.fillWidth: true
             text: "0.0"
             validator: DoubleValidator {}
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: "First sweep point [V]. Usually the equilibrium, 0 V."
         }
         Label { text: "Stop [V]"; color: Theme.textDim }
         TextField {
@@ -86,6 +103,9 @@ Rectangle {
             Layout.fillWidth: true
             text: "1.0"
             validator: DoubleValidator {}
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: "Last sweep point [V]. Forward bias on a diode anode turns it on; reverse bias studies leakage/breakdown."
         }
         Label { text: "Step [V]"; color: Theme.textDim }
         TextField {
@@ -94,6 +114,9 @@ Rectangle {
             Layout.fillWidth: true
             text: "0.1"
             validator: DoubleValidator {}
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: "Voltage step between points [V]. Fine steps resolve sharp physics (subthreshold swing) but cost one Newton solve each."
         }
 
         RowLayout {

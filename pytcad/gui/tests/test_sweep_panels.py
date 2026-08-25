@@ -102,6 +102,8 @@ def test_clear_button_and_status_label_reflect_state(gapp):
 def test_rejected_arm_reverts_fields_to_armed_config(gapp):
     engine, root, controller = _fresh(gapp)
     controller.loadStructureExample("mosfet_2d_structure")
+    # v0.5 UI: bring the Sweeps tab forward (index 4) like a user click
+    root.findChild(object, "workbenchTabs").setProperty("currentIndex", 4)
 
     # arm a valid sweep through the panel
     box = root.findChild(object, "sweepContactBox")

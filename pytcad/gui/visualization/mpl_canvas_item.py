@@ -43,6 +43,77 @@ class MplCanvasItem(QQuickPaintedItem):
         self._sweep = None             # result_store.SweepResult (v0.4)
         self._sweep_channel = ""
         self._mode = "doping"
+        self._dark = True
+        # last rendered state, for the hover readout
+        self._ax = None
+        self._fig = None
+        self._series = []
+        self._readout = ""
+        self._readout_unit = ""
+
+    # -- theme & hover readout ------------------------------------------
+    @Slot(bool)
+    def applyTheme(self, dark):
+        """Mirror the QML design system's light/dark choice into the
+        matplotlib rendering."""
+        if self._dark != bool(dark):
+            self._dark = bool(dark)
+            self.update()
+
+    @Property(str, notify=viewChanged)
+    def readout(self):
+        return self._readout
+
+    @Slot()
+    def clearReadout(self):
+        self._readout = ""
+        self.update()
+
+    @Slot(float, float)
+    def hoverAt(self, x_px, y_px):
+        """Map widget pixels -> data coords through the live Axes
+        transform and snap to the nearest plotted sample.  Purely
+        derived from what was actually rendered -- never fake."""
+        ax = self._ax
+        if ax is None or not self._series or self._fig is None:
+            return
+        # Qt's pointer origin is TOP-left; matplotlib's display space is
+        # BOTTOM-left. Convert before inverting the data transform.
+        fig_h_px = self._fig.get_figheight() * self._fig.dpi
+        inv = ax.transData.inverted()
+        try:
+            dx, dy = inv.transform_point(
+                (float(x_px), fig_h_px - float(y_px)))
+        except Exception:
+            return
+        best = None
+        tiny = 1e-30
+        for xs, ys, label in self._series:
+            if xs is None or len(xs) == 0:
+                continue
+            xs_a = np.asarray(xs, dtype=float)
+            # snap on what is DISPLAYED: a log axis plots log10(|y|),
+            # so vertical proximity must be judged there -- while the
+            # readout still reports the physical value
+            ys_disp = np.log10(np.maximum(np.abs(ys), tiny)) \
+                if self._log else np.asarray(ys, dtype=float)
+            idx = int(np.argmin(np.abs(xs_a - dx)))
+            span_x = (float(np.max(xs_a) - np.min(xs_a))) or 1.0
+            span_y = (float(np.max(ys_disp) - np.min(ys_disp))) or 1.0
+            score = abs(float(xs_a[idx]) - dx) / span_x + \
+                    abs(float(ys_disp[idx]) - dy) / span_y
+            if best is None or score < best[0]:
+                best = (score, label, float(xs[idx]), float(ys[idx]))
+        if best is None or best[0] > 0.08:
+            if self._readout:
+                self._readout = ""
+                self.update()
+            return
+        _, label, xv, yv = best
+        text = f"{label}: {yv:.3e} @ {xv:.2f} {self._readout_unit}".rstrip()
+        if text != self._readout:
+            self._readout = text
+            self.update()
 
     # -- data ---------------------------------------------------------
     @Slot(object, str)
@@ -160,16 +231,23 @@ class MplCanvasItem(QQuickPaintedItem):
                     ha="center", va="center")
             ax.set_axis_off()
             return
+        stage_colours = {"equilibrium": "#61bd6d", "bias": "#d9a441"}
+        seen = {}
         offset = 0
         for step in steps:
             residuals = [np.nan if v is None else float(v)
                          for v in next(iter(step.metrics.values()), [])]
+            base = step.stage.split(":")[0]
+            colour = stage_colours.get(base, "#4a90d9")
+            legend_label = base if base not in seen else None
+            seen[base] = True
             xs = list(range(offset, offset + len(residuals)))
-            ax.semilogy(xs, residuals, marker=".", label=step.stage)
+            ax.semilogy(xs, residuals, marker=".", color=colour,
+                        label=legend_label, linewidth=1.0, markersize=3)
             offset += len(residuals)
         ax.set_xlabel("cumulative Newton iteration")
         ax.set_ylabel("residual (first metric)")
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=8, frameon=False)
         ax.grid(True, alpha=0.3)
 
     @Property(bool, notify=viewChanged)
@@ -282,7 +360,13 @@ class MplCanvasItem(QQuickPaintedItem):
         fig = Figure(figsize=(max(width_px, 1) / dpi, max(height_px, 1) / dpi),
                      dpi=dpi)
         ax = fig.add_subplot(111)
+        self._style_axes(fig, ax)
 
+        self._fig = fig
+        # hover readout state: cleared per render, repopulated by the
+        # draw paths that support it
+        self._ax = None
+        self._series = []
         if self._mode == "structure" and self._structure is not None:
             self._draw_structure(ax)
             fig.tight_layout()
@@ -347,9 +431,12 @@ class MplCanvasItem(QQuickPaintedItem):
         values = np.asarray(field.values, dtype=float)
 
         if axes.dimensionality == 1:
-            ax.plot(x, self._maybe_log(values))
+            y = self._maybe_log(values) if self._log else values
+            ax.plot(x, y, color=self._series_color(0), lw=1.6)
             ax.set_xlabel("x [um]")
             ax.set_ylabel(f"{field.name} [{field.unit}]")
+            self._remember_series(ax, [(x, values, field.name)],
+                                  unit=field.unit)
             if self._xlim:
                 ax.set_xlim(*self._xlim)
         else:
@@ -371,6 +458,37 @@ class MplCanvasItem(QQuickPaintedItem):
                 ax.set_ylim(self._ylim[1], self._ylim[0])
         fig.tight_layout()
         return fig
+
+    def _style_axes(self, fig, ax):
+        """Mirror the QML design system into matplotlib: neutral panel
+        surface, dimmed grid/spines, readable tick sizes."""
+        dark = self._dark
+        fg = "#dde3e9" if dark else "#1a2129"
+        dim = "#8d99a5" if dark else "#5a6572"
+        panel = "#1f242b" if dark else "#ffffff"
+        grid = "#343c46" if dark else "#d5dbe1"
+        fig.patch.set_facecolor(panel)
+        ax.set_facecolor(panel)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("bottom", "left"):
+            ax.spines[side].set_color(dim)
+        ax.tick_params(colors=dim, labelsize=9, which="both")
+        for lbl in (ax.xaxis.label, ax.yaxis.label):
+            lbl.set_color(fg)
+            lbl.set_fontsize(10)
+        ax.grid(True, color=grid, alpha=0.35, linewidth=0.6)
+        ax.set_axisbelow(True)
+
+    def _series_color(self, index):
+        palette = ("#4a90d9", "#61bd6d", "#d9a441", "#e05c56",
+                   "#9b59b6", "#1abc9c", "#e67e22")
+        return palette[index % len(palette)]
+
+    def _remember_series(self, ax, series, unit=""):
+        self._ax = ax
+        self._series = series
+        self._readout_unit = unit
 
     def _maybe_log(self, values):
         if not self._log:
@@ -540,13 +658,16 @@ class MplCanvasItem(QQuickPaintedItem):
             return
         from workbench.analysis.observables import band_diagram
         Ec, Ev, EFn, EFp = band_diagram(psi, n, p, material, T)
-        ax.plot(x, Ec, "-", label="Ec", lw=1.4)
-        ax.plot(x, Ev, "-", label="Ev", lw=1.4)
-        ax.plot(x, EFn, "--", label="EFn", lw=1.0)
-        ax.plot(x, EFp, "--", label="EFp", lw=1.0)
+        for arr, style, lbl in ((Ec, "-", "Ec"), (Ev, "-", "Ev"),
+                                (EFn, "--", "EFn"), (EFp, "--", "EFp")):
+            ax.plot(x, arr, style, label=lbl,
+                    color=self._series_color(["Ec","Ev","EFn","EFp"].index(lbl)))
         ax.set_xlabel("depth [um]")
         ax.set_ylabel("energy [eV]")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, frameon=False)
+        self._remember_series(
+            ax, [(x, Ec, "Ec"), (x, Ev, "Ev"),
+                 (x, EFn, "EFn"), (x, EFp, "EFp")], unit="eV")
         if self._xlim:
             ax.set_xlim(*self._xlim)
 
@@ -570,9 +691,11 @@ class MplCanvasItem(QQuickPaintedItem):
             return
         from workbench.analysis.observables import recombination_rate
         R = recombination_rate(n, p, doping, material, T)
-        ax.semilogy(x, np.abs(R), lw=1.4)
+        ax.semilogy(x, np.abs(R), lw=1.6, color=self._series_color(3))
         ax.set_xlabel("depth [um]")
         ax.set_ylabel("|R| [cm^-3 s^-1]")
+        self._remember_series(ax, [(x, np.abs(R), "|R|")],
+                              unit="cm^-3 s^-1")
         if self._xlim:
             ax.set_xlim(*self._xlim)
 
@@ -595,11 +718,14 @@ class MplCanvasItem(QQuickPaintedItem):
         I = np.asarray(sw.channels[self._sweep_channel], dtype=float)
         marker = "-o" if V.size <= 40 else "-"
         if self._log:
-            ax.semilogy(V, np.abs(I), marker, lw=1.5, ms=3)
+            ax.semilogy(V, np.abs(I), marker, lw=1.5, ms=3,
+                        color=self._series_color(0))
             ylabel = f"|{self._sweep_channel}| [{sw.unit}]"
         else:
-            ax.plot(V, I, marker, lw=1.5, ms=3)
+            ax.plot(V, I, marker, lw=1.5, ms=3, color=self._series_color(0))
             ylabel = f"{self._sweep_channel} [{sw.unit}]"
+        self._remember_series(ax, [(V, I, self._sweep_channel)],
+                              unit=sw.unit)
         n_bad = int((~np.asarray(sw.converged, dtype=bool)).sum())
         note = f"  ({n_bad} point(s) did not converge)" if n_bad else ""
         ax.set_xlabel(f"{sw.contact} bias [V]")
@@ -609,12 +735,13 @@ class MplCanvasItem(QQuickPaintedItem):
         comp = getattr(self, "_comparison_sweep", None)
         if comp is not None and self._sweep_channel in comp.channels:
             Ic = np.asarray(comp.channels[self._sweep_channel], dtype=float)
+            style = "--" if len(V) > 40 else "--o"
             if self._log:
-                ax.semilogy(V, np.abs(Ic), marker, lw=1.2, ms=3,
-                            ls="--", color="#8e44ad", label="all models off")
+                ax.semilogy(V, np.abs(Ic), style, lw=1.2, ms=3,
+                            color="#9b59b6", label="all models off")
             else:
-                ax.plot(V, Ic, marker, lw=1.2, ms=3, ls="--",
-                        color="#8e44ad", label="all models off")
+                ax.plot(V, Ic, style, lw=1.2, ms=3,
+                        color="#9b59b6", label="all models off")
             ax.legend(fontsize=8)
         ax.set_title(f"{sw.contact} sweep{note}", fontsize=9)
         if self._xlim:

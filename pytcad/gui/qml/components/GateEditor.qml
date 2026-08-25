@@ -12,7 +12,12 @@ ColumnLayout {
     Label { text: gateData ? gateData.name : ""; color: Theme.text }
 
     RowLayout {
-        Label { text: "tox [nm]"; color: Theme.textDim; Layout.preferredWidth: 80 }
+        Label {
+            text: "tox [nm]"; color: Theme.textDim; Layout.preferredWidth: 80
+            HoverHandler { id: hTox }
+            ToolTip.visible: hTox.hovered; ToolTip.delay: 400
+            ToolTip.text: "Gate-oxide thickness. Below ~2 nm direct tunneling leakage appears -- not modeled here."
+        }
         TextField {
             Layout.fillWidth: true
             text: gateData ? (gateData.tox * 1e7).toString() : ""
@@ -21,7 +26,12 @@ ColumnLayout {
     }
 
     RowLayout {
-        Label { text: "V [V]"; color: Theme.textDim; Layout.preferredWidth: 80 }
+        Label {
+            text: "V [V]"; color: Theme.textDim; Layout.preferredWidth: 80
+            HoverHandler { id: hGV }
+            ToolTip.visible: hGV.hovered; ToolTip.delay: 400
+            ToolTip.text: "Gate voltage vs body. Above threshold it inverts the surface and forms a channel."
+        }
         TextField {
             Layout.fillWidth: true
             text: gateData ? gateData.voltage.toString() : ""

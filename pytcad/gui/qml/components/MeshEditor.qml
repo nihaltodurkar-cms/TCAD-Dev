@@ -42,14 +42,27 @@ ColumnLayout {
         // ListView.view attached property, with the RowLayout anchored
         // inside as a child, not as the delegate root itself.
         delegate: Item {
+            id: meshInfoRow
+            required property var modelData
+            // route through functions so no label binding ever touches
+            // modelData before the delegate context exists (the source of
+            // the "Unable to assign [undefined] to QString" spam)
+            function rowLabel() {
+                return (modelData !== undefined && modelData !== null)
+                        ? String(modelData[0]) : ""
+            }
+            function rowValue() {
+                return (modelData !== undefined && modelData !== null)
+                        ? String(modelData[1]) : ""
+            }
             width: ListView.view ? ListView.view.width : 200
             height: row.implicitHeight
             RowLayout {
                 id: row
                 anchors.left: parent.left
                 anchors.right: parent.right
-                Label { text: modelData ? modelData[0] : ""; color: Theme.textDim; Layout.preferredWidth: 140 }
-                Label { text: modelData ? modelData[1] : ""; color: Theme.text; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                Label { text: meshInfoRow.rowLabel(); color: Theme.textDim; Layout.preferredWidth: 140 }
+                Label { text: meshInfoRow.rowValue(); color: Theme.text; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             }
         }
     }
