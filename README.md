@@ -22,9 +22,12 @@ pytcad/
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           527 tests: analytic-limit validation, published-value
+tests/           541 tests: analytic-limit validation, published-value
                  physics benchmarks, headless GUI tests — all green,
                  zero warnings
+  fermi.py       complete Fermi-Dirac integrals F_{1/2}, F_{-1/2},
+                 inverse, FD intrinsic density (M13 phase 1; solver
+                 integration is the active work item)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -112,7 +115,7 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 527 tests pass — analytic-limit validation, published-value physics
+All 541 tests pass — analytic-limit validation, published-value physics
 benchmarks, and headless GUI tests — with a standing zero-warnings
 invariant. Every verification result is classified as one of
 **literature benchmark** (agrees with measured published values),
@@ -210,7 +213,7 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/ gui/tests/               # 527 passed, zero warnings
+pytest tests/ gui/tests/               # 541 passed, zero warnings
 ```
 
 Requires `numpy`, `scipy`, `matplotlib` (examples only).
@@ -389,6 +392,11 @@ than device currents.
 - **Plummer, Deal & Griffin, *Silicon VLSI Technology*** — the process side: implantation, diffusion, oxidation, with the models actually used in fabs. Experimental/empirical.
 - **Deal & Grove, *J. Appl. Phys.* 36, 3770 (1965)** — the oxidation model, and honest about its thin-oxide failure. Experimental + theory.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
+**Project roadmap.** `SENTAURUS-PARITY-PLAN.md` governs all future
+capability growth (three parity tiers, milestones M13–M30 with
+published-value acceptance gates); `M13-FERMI-DIRAC-PLAN.md` is the
+active physics-foundation milestone spec.
+
 - **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 
 ### Workflow front end (new)

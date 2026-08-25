@@ -21,6 +21,9 @@ pytcad/ (this package)
                  per-node heterojunction materials (M11); Hurkx trap-
                  assisted tunneling (M12)
   moscap.py      MOS capacitor, quasi-static C-V
+  fermi.py       complete Fermi-Dirac integrals F_{1/2}/F_{-1/2},
+                 inverse, FD ni (M13 phase 1; solver integration
+                 is the active work item)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity
   mosfet.py      2D MOSFET builder + Id-Vg sweep
@@ -29,7 +32,7 @@ pytcad/ (this package)
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
 tests/           analytic-limit validation + published-value physics
-                 benchmarks (part of the 527-test suite, zero warnings)
+                 benchmarks (part of the 541-test suite, zero warnings)
 ../workbench/    domain layer: materials library (Si, Ge, GaAs, InGaAs,
                  AlGaAs), model catalog, solver backends, tunneling and
                  impact-ionization physics, deck front end
@@ -111,7 +114,7 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All tests pass as part of the project-wide 527-test suite (zero
+All tests pass as part of the project-wide 541-test suite (zero
 warnings); every result is classified as literature benchmark,
 analytical validation, model parameterization, or numerical
 regression — see the project README. Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
@@ -182,7 +185,7 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/ ../gui/tests/            # 527 passed, zero warnings
+pytest tests/ ../gui/tests/            # 541 passed, zero warnings
 ```
 
 Requires `numpy`, `scipy`, `matplotlib` (examples only).
