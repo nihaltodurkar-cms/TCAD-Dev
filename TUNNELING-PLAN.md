@@ -1,8 +1,15 @@
 # M12 -- Tunneling & Quantum Corrections -- Milestone Plan
 
-Status: PLANNING (no code).  Follows the M11 pattern: staged slices,
-published-value gates before anything ships, catalog metadata required,
-honest limits documented.
+Status: S1 + S2 SHIPPED (S2: 29b9764 -- Hurkx TAT in Device1D, all
+acceptance gates green; S1: tunneling.py FN+WKB, published-constant
+gates).  S3 (density gradient) is DESIGNED (section 5) and folded
+into M20 of SENTAURUS-PARITY-PLAN.md -- do not start it there; the
+parity plan governs.  Implementation lessons recorded in
+history.md/AGENTS.md: WKB factors are SI-calibrated (field in V/m --
+the V/cm unit bug silently reduced TAT to SRH); bulk-Si midgap TAT
+underflows to exactly zero at any realizable field (correct physics
+-- gate the factor law, not device currents); abrupt-junction
+neutrality is a GLOBAL charge-balance criterion.
 
 Depends on: nothing in M11 (oxide tunneling is MOS-side; quantum
 corrections touch Device1D separately).  Can proceed in parallel.

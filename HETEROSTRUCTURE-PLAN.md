@@ -1,8 +1,16 @@
 # Heterostructure Regions -- Milestone Plan (M11 proposal)
 
-Status: PLANNING -- no code.  This document is the gate for the largest
-remaining architectural item: multi-material devices (AlGaAs/GaAs,
-Si/SiGe, GaN-class stacks) end to end.
+Status: S1-S3 SHIPPED (materials layer; DeviceSpec.region_materials
+wire format with parse-time validation; 1D heterojunction core --
+eps(x) harmonic-mean flux-form Poisson, Anderson band offsets via
+CARRIER-SPECIFIC ln(nie) SG deltas, per-material recombination;
+acceptance: FD-Jacobian across Si/GaAs < 5e-5, detailed balance
+exact, homojunction bit-identical).  S4 (2D box-integration) and S5
+(HBT/HEMT templates + UI) remain OPEN and are queued in
+ARCHITECTURE.md section 7 / SENTAURUS-PARITY-PLAN.md.  Key lesson
+(section 4 mechanism proved necessary): a shared band-offset delta
+passed the FD-Jacobian but broke hole detailed balance -- only a
+carrier-specific equilibrium check catches that class.
 
 Read alongside ARCHITECTURE.md sections 3/4/6 and history.md.
 

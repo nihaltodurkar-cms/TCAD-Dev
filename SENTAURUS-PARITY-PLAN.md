@@ -110,7 +110,9 @@ Sizes: S ~1 session, M ~1-2, L ~2-4, XL ~4+ (with tests, honest).
 === TIER 1: SDevice local-physics parity ===========================
 
 M13  FERMI-DIRAC STATISTICS + INCOMPLETE IONIZATION          [L]
-  Formal physics-foundation milestone -- full spec with
+  IN IMPLEMENTATION: phase 1 landed (fermi.py, G1-G3 gates green,
+  G6a pre-edit goldens, sign-off recorded); phase 2 = 1D core
+  integration, gates G4-G8.  Full spec with
   quantitative acceptance gates in M13-FERMI-DIRAC-PLAN.md
   (G1 F_{1/2} vs independent quadrature reference + published
   spot values; G2 Boltzmann limit; G3 Sommerfeld degenerate
@@ -376,13 +378,13 @@ M15 needs M22's continuation only for robustness, not correctness.
 ------------------------------------------------------------------------
 5. IMMEDIATE NEXT ACTIONS (on approval)
 ------------------------------------------------------------------------
-1. Close out M12-S2 (TAT) -- the two failing tests get rewritten to
-   the global-neutrality + factor-law gates already designed; commit
-   green.  (In flight, this session's open thread.)
-2. M11-S4 (2D heterojunctions) -- design exists; medium.
-3. M12-S3 / M20 (density gradient) -- design exists; medium-large.
-4. M13 (Fermi-Dirac) -- spec formalized in M13-FERMI-DIRAC-PLAN.md;
-   on approval: write the G1-G3 red tests (fermi.py is pure addition,
-   no amendment needed), commit goldens, obtain the amend-core
-   sign-off BEFORE touching any residual/Jacobian.  M15+ stay
-   blocked until every gate in that spec is green.
+1. [DONE 29b9764] M12-S2 (TAT) -- all acceptance gates green.
+2. [DONE 58ca76c, 5c8a3ed] M13 PHASE 1 -- fermi.py + G1-G3 gates
+   green + G6a pre-edit goldens committed; amendment sign-off
+   recorded in M13-FERMI-DIRAC-PLAN.md.
+3. ACTIVE -- M13 PHASE 2: 1D core integration (density path,
+   generalized-SG design spike, incomplete ionization), gates G4-G8.
+   M15+ stay blocked until every gate is green (standing rule 4b).
+4. THEN: M11-S4 (2D heterojunctions, design exists) and M11-S5
+   (HBT/HEMT templates) -- independent of M13, may proceed in
+   parallel; then M15 (impact ionization coupling) unblocks.
