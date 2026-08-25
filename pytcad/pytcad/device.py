@@ -56,6 +56,11 @@ from dataclasses import dataclass
 import warnings
 
 import numpy as np
+
+# M12-S2 physical constants for the WKB escape factors
+Q_E_CONST = 1.602176634e-19       # C
+HBAR_CONST = 1.054571817e-34      # J s
+M_E_CONST = 9.1093837015e-31      # kg
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
@@ -103,6 +108,11 @@ class Models:
     doping_mobility: bool = True
     field_mobility: bool = False   # lagged; enable for high-field devices
     srh: bool = True
+    # M12-S2: trap-assisted tunneling (Hurkx-style field-enhanced SRH,
+    # plan-specified form with WKB escape probabilities in the
+    # denominator).  Default OFF => bit-identical to plain SRH.
+    tat: bool = False
+    trap_et_rel: float = 0.5          # trap level as fraction of Eg
     auger: bool = True
     bgn: bool = True               # bandgap narrowing
 
@@ -225,6 +235,10 @@ class Device1D:
         self.psi = None
         self.n = None
         self.p = None
+        # M12-S2 frozen-field WKB escape probabilities (None until the
+        # first TAT-enabled residual evaluation freezes them)
+        self._Pn = None
+        self._Pp = None
 
     # ------------------------------------------------------------------
     def _eps_tilde_edge(self):
@@ -332,6 +346,41 @@ class Device1D:
     # ------------------------------------------------------------------
     #  Coupled residual and Jacobian
     # ------------------------------------------------------------------
+    def _update_tat_probabilities(self, psi=None):
+        """M12-S2 FROZEN-FIELD WKB escape probabilities P_n/P_p.
+
+        Trap-to-band tunneling through the field-lowered triangular
+        barrier: P = exp(-B phi^1.5 / F) with
+            B(m*) = 4 sqrt(2 m* q) / (3 hbar),
+        phi = half-gap (midgap trap), F = local physical field taken
+        from the CURRENT potential.  Probabilities are FROZEN for the
+        duration of a Newton solve (computed once per solve_bias call);
+        the analytic Jacobian therefore omits dP/dpsi -- the documented
+        frozen-field approximation.  At realistic low fields the
+        exponent underflows and P == 0.0 exactly, reducing TAT to
+        plain SRH."""
+        if psi is None:
+            psi = self.psi
+        if psi is None:
+            psi = np.zeros(self.N)
+        edge_F = np.abs(np.diff(psi)) * self.VT / (self.LD * self.h)
+        F = np.empty(self.N)
+        F[1:-1] = 0.5 * (edge_F[:-1] + edge_F[1:])
+        F[0], F[-1] = edge_F[0], edge_F[-1]
+        et_rel = getattr(self.models, "trap_et_rel", 0.5)
+        phi_n = self.Eg0_arr * (1.0 - et_rel)     # eV, electron side
+        phi_p = self.Eg_arr if False else None    # placeholder replaced below
+        # hole-side barrier uses Eg(T) -- build per-node Eg(T) here
+        eg_t = np.array([m.Eg(self.T) for m in self.mats])
+        phi_p = eg_t * et_rel
+        m_n = np.array([m.m_n_star for m in self.mats])
+        m_p = np.array([m.m_p_star for m in self.mats])
+        B_n = 4.0 * np.sqrt(2.0 * m_n * Q_E_CONST) / (3.0 * HBAR_CONST)
+        B_p = 4.0 * np.sqrt(2.0 * m_p * Q_E_CONST) / (3.0 * HBAR_CONST)
+        safe_F = np.maximum(F, 1.0)
+        self._Pn = np.exp(-B_n * phi_n ** 1.5 / safe_F)
+        self._Pp = np.exp(-B_p * phi_p ** 1.5 / safe_F)
+
     def _residual_jacobian(self, psi, n, p, bc):
         N, h, dV, C = self.N, self.h, self.dV, self.C
         dn_e, dp_e = self.dn_edge, self.dp_edge
@@ -371,6 +420,30 @@ class Device1D:
                 auger=self.models.auger)
         if not self.models.srh:
             R = np.zeros_like(R); dRdn = np.zeros_like(R); dRdp = np.zeros_like(R)
+
+        # --- M12-S2 trap-assisted tunneling (plan section 5) -----------
+        # R_TAT = (n p - nie^2) / [taup(n + nie Pp) + taun(p + nie Pn)]
+        # with FROZEN-FIELD WKB probabilities Pn/Pp.  Reduces exactly
+        # to SRH wherever P == 0 (all low-field points underflow).
+        if getattr(self.models, "tat", False):
+            if self._Pn is None or self._Pp is None:
+                self._update_tat_probabilities(psi)
+        else:
+            self._Pn = self._Pp = None
+        # tunneling-assisted capture ON TOP OF the thermal n1/p1
+        # baselines: P == 0 everywhere reduces EXACTLY to SRH -- the
+        # all-zero case must leave the SRH arrays UNTOUCHED so that
+        # traps-off is deterministically bit-identical
+        if getattr(self.models, "tat", False) and (
+                bool(self._Pn.any()) or bool(self._Pp.any())):
+            nie2 = self.nie * self.nie
+            den = (self.tau_p * (n_phys + self.nie * (1.0 + self._Pp))
+                   + self.tau_n * (p_phys + self.nie * (1.0 + self._Pn)))
+            R = (n_phys * p_phys - nie2) / den
+            dRdn = (p_phys * den - (n_phys * p_phys - nie2)
+                    * self.tau_p) / (den * den)
+            dRdp = (n_phys * den - (n_phys * p_phys - nie2)
+                    * self.tau_n) / (den * den)
         Rs = R / self.R0
         dRs_dn = dRdn * self.Ns / self.R0      # d(R/R0)/d(n/Ns)
         dRs_dp = dRdp * self.Ns / self.R0
@@ -438,6 +511,9 @@ class Device1D:
 
     # ------------------------------------------------------------------
     def solve_bias(self, V, opts: NewtonOptions = None):
+        if getattr(self.models, "tat", False):
+            self._Pn = None          # fresh frozen-field snapshot
+            self._Pp = None
         """Solve at applied bias V = [V_left, V_right] (volts)."""
         opts = opts or NewtonOptions()
         if self.psi is None:
