@@ -516,12 +516,130 @@ empirical fit), and where it breaks.
       <td>position-dependent materials, band offsets</td>
       <td>Si/Ge/GaAs/InGaAs/AlGaAs library</td></tr>
 </table>
-<h3>How models are validated</h3>
+<h3>How results are classified</h3>
+<p>
+Verification evidence in this project is sorted into four classes.
+Conflating them would overstate what is actually proven: an analytical
+check validates the <i>solver's numerics</i> against theory, not the
+provenance of a physical constant; a literature benchmark validates a
+constant against measurement; a parameterization can only be verified
+for correct transcription and stated applicability; and a numerical
+regression detects code drift, not physical accuracy.
+</p>
+<table>
+  <tr><th>Type</th><th>What it establishes</th></tr>
+  <tr><td><b>Literature benchmark</b></td>
+      <td>A computed quantity agrees with an experimentally measured,
+          independently published value.</td></tr>
+  <tr><td><b>Analytical validation</b></td>
+      <td>A solver result agrees with a closed-form derivation that is
+          independent of the solver (theory-derived check).</td></tr>
+  <tr><td><b>Model parameterization</b></td>
+      <td>A fitted/empirical model constant matches its published
+          source, with its applicability regime stated explicitly.</td></tr>
+  <tr><td><b>Numerical regression</b></td>
+      <td>A self-consistency gate (dimensional reduction, exact
+          identity, bit-identity, Jacobian error) that catches code
+          drift.</td></tr>
+</table>
+
+<h3>Verified results and their classification</h3>
+<table>
+  <tr><th>Result</th><th>Value</th><th>Reference / check</th><th>Type</th></tr>
+  <tr><td>n<sub>i</sub>(Si, 300&#8202;K)</td>
+      <td>1.067&#215;10<sup>10</sup> cm<sup>&#8722;3</sup></td>
+      <td>Misiakos &amp; Tsamakis, J.&#8202;Appl.&#8202;Phys. <b>67</b>,
+          2944 (1990): 1.08&#215;10<sup>10</sup> (agree 1.2%)</td>
+      <td>Literature benchmark</td></tr>
+  <tr><td>Varshni bandgap parameters (&#945;, &#946;),
+      E<sub>g</sub>(300&#8202;K) = 1.1245&#8202;eV</td>
+      <td>&#945; = 4.73&#215;10<sup>&#8722;4</sup> eV/K,
+          &#946; = 636&#8202;K</td>
+      <td>Varshni empirical fit, standard tabulation</td>
+      <td>Model parameterization</td></tr>
+  <tr><td>Built-in potential V<sub>bi</sub>
+      (N<sub>A</sub>&#8202;=&#8202;N<sub>D</sub>&#8202;=&#8202;10<sup>17</sup>)</td>
+      <td>0.830&#8202;V</td>
+      <td>(k<sub>B</sub>T/q)&#183;ln(N<sub>A</sub>N<sub>D</sub>/n<sub>i</sub>&sup2;)</td>
+      <td>Analytical validation</td></tr>
+  <tr><td>Oxide capacitance C<sub>ox</sub>
+      (t<sub>ox</sub>&#8202;=&#8202;5&#8202;nm)</td>
+      <td>0.6906&#8202;&#181;F/cm&sup2;</td>
+      <td>3.9&#949;<sub>0</sub>/t<sub>ox</sub></td>
+      <td>Analytical validation</td></tr>
+  <tr><td>C<sub>min</sub>, W<sub>max</sub>
+      (N<sub>sub</sub>&#8202;=&#8202;10<sup>17</sup>)</td>
+      <td>0.0873&#8202;&#181;F/cm&sup2;, 103.6&#8202;nm</td>
+      <td>depletion approximation</td>
+      <td>Analytical validation</td></tr>
+  <tr><td>Flat-band voltage V<sub>FB</sub>
+      (n<sup>+</sup>-poly / p-Si, 10<sup>17</sup>)</td>
+      <td>&#8722;0.977&#8202;V</td>
+      <td>metal&#8211;semiconductor work-function difference
+          &#966;<sub>ms</sub></td>
+      <td>Analytical validation</td></tr>
+  <tr><td>Auger coefficients C<sub>n</sub>, C<sub>p</sub></td>
+      <td>2.8&#215;10<sup>&#8722;31</sup> /
+          9.9&#215;10<sup>&#8722;32</sup> cm<sup>6</sup>/s</td>
+      <td>Dziewior &amp; Schmid, Appl.&#8202;Phys.&#8202;Lett.
+          <b>31</b>, 346 (1977)</td>
+      <td>Literature benchmark</td></tr>
+  <tr><td>Phosphorus diffusivity D<sub>0</sub>, E<sub>a</sub>
+      (D(950&#8202;&#176;C) = 3.2&#215;10<sup>&#8722;15</sup> cm&sup2;/s)</td>
+      <td>3.85&#8202;cm&sup2;/s, 3.66&#8202;eV</td>
+      <td>SUPREM-IV standard parameterization</td>
+      <td>Model parameterization</td></tr>
+  <tr><td>Implant projected range, P 50&#8202;keV</td>
+      <td>R<sub>p</sub> = 62&#8202;nm,
+          &#916;R<sub>p</sub> = 22&#8202;nm</td>
+      <td>Gibbons/Smith range tables (&#8776;0.062/0.021&#8202;&#181;m);
+          SRIM consensus 60&#8211;65&#8202;nm</td>
+      <td>Literature benchmark</td></tr>
+  <tr><td>Implant dose conservation</td>
+      <td>&#8747;C&#8202;dx = dose to machine precision</td>
+      <td>integral of the discretized profile vs. requested
+          fluence</td>
+      <td>Numerical regression</td></tr>
+  <tr><td>Gaussian implant peak (3&#215;10<sup>14</sup> dose)</td>
+      <td>5.44&#215;10<sup>19</sup> cm<sup>&#8722;3</sup></td>
+      <td>dose / (&#8730;(2&#960;)&#183;&#916;R<sub>p</sub>) &#8212;
+          identity for the Gaussian ansatz</td>
+      <td>Analytical validation</td></tr>
+  <tr><td>Low-field mobility at 10<sup>17</sup>
+      (Caughey-Thomas)</td>
+      <td>&#956;<sub>n</sub> = 801,
+          &#956;<sub>p</sub> = 232 cm&sup2;/V&#183;s</td>
+      <td>Caughey-Thomas empirical fit</td>
+      <td>Model parameterization</td></tr>
+  <tr><td>3D&#8594;2D dimensional reduction</td>
+      <td>max&#8202;|&#968;<sub>3D</sub>&#8722;&#968;<sub>2D</sub>|
+          = 1.1&#215;10<sup>&#8722;16</sup></td>
+      <td>extruded structure vs. 2D solution</td>
+      <td>Numerical regression</td></tr>
+</table>
+
+<div class="note">
+<b>Applicability notes.</b>
+<b>Auger:</b> the Dziewior&#8211;Schmid coefficients were measured on
+heavily doped, low-injection silicon at 300&#8202;K; the product-form
+rate used here omits Coulomb enhancement and injection dependence, so it
+underestimates Auger recombination at low carrier densities (cf.
+Richter et al., Phys.&#8202;Rev.&#8202;B <b>86</b>, 165202 (2012)).
+<b>Phosphorus diffusivity:</b> the 3.85&#8202;cm&sup2;/s /
+3.66&#8202;eV pair is the standard SUPREM-IV intrinsic-diffusion
+parameterization for inert ambients; direct measurements under intrinsic
+conditions report E<sub>a</sub> &#8776; 2.74&#8202;eV (Christensen et
+al., Appl.&#8202;Phys.&#8202;Lett. <b>82</b>, 2254 (2003)), and
+high-concentration emitters require concentration-dependent (Fair-type)
+models. <b>Analytical rows</b> validate the solver's numerics against
+theory, not the provenance of its physical constants.
+</div>
+
 <ul>
   <li><b>Analytic limits.</b> Each solver is tested against closed-form
       results: built-in potential, depletion width, ideal-diode current,
-      C<sub>ox</sub>/C<sub>min</sub> landmarks, 3D-reduces-to-2D
-      identity.</li>
+      C<sub>ox</sub>/C<sub>min</sub> landmarks &#8212; all classified as
+      analytical validation above.</li>
   <li><b>Published benchmarks.</b> New physics must land in
       <code>tests/test_model_benchmarks.py</code> FIRST, gated against
       literature values (e.g. Auger coefficients, FN slope), before any
