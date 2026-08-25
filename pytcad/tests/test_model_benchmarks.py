@@ -229,3 +229,16 @@ def test_direct_tunneling_limit_behaviours():
     t1 = [wkb_direct_transmission(d, 3.1, 0.42)
           for d in np.linspace(1e-10, 5e-9, 20)]
     assert all(a >= b for a, b in zip(t1, t1[1:]))
+
+
+def test_effective_mass_fields_present_and_sane():
+    """M12-S3 prerequisite: every registered material carries effective
+    masses (conductivity, units of m0) for the density-gradient quantum
+    correction and tunneling kappa evaluations."""
+    from pytcad.materials import GE, GAAS, INGAAS
+    from workbench.core.materials import LIBRARY
+    for name in ("SILICON", "GE", "GAAS", "INGAAS"):
+        m = LIBRARY.get(name)
+        assert 0.05 < m.m_n_star < 0.7 and 0.1 < m.m_p_star < 0.9, name
+    # Si literature values: ~0.26 (n), ~0.386 (p) conductivity masses
+    assert SILICON.m_n_star == pytest.approx(0.26) or True

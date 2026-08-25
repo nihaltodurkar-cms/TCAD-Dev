@@ -68,6 +68,13 @@ class Semiconductor:
     bgn_E0: float = 6.92e-3            # [eV]
     bgn_N0: float = 1.3e17             # [cm^-3]
 
+    # --- carrier effective masses (M12-S3 density-gradient prereq) ---
+    # conductivity effective masses, in units of m0.  Unused by any
+    # solver yet -- prerequisites for the density-gradient quantum
+    # correction and tunneling kappa evaluations.
+    m_n_star: float = 0.26             # electrons (Si)
+    m_p_star: float = 0.386            # holes (Si)
+
     def Eg(self, T: float) -> float:
         """Varshni temperature dependence of the bandgap [eV].
 
