@@ -33,14 +33,19 @@ Plan → user approves → TDD (tests red first) → implement → hard debug
 (fuzz/probe the new code adversarially, fix, regression tests) → commit
 (user pushes). Honesty over polish: report blockers, document limits.
 
-## NEXT (priority order, details in ARCHITECTURE.md §7)
-1. M6 UI: surface x_range_cm implants + checkpoint→device in ProcessPanel.
-3. M9 plots: band diagram / recombination viewport modes from
-   workbench/analysis; model on/off comparison runs.
-4. M8 first new physics model (thermionic or impact ionization) — MUST
-   land with a published-value benchmark test first.
-5. M10 growth: sweep/bias deck statements + file-open UI.
-6. Release pass: gui/README final wording, tag v0.5.0.
+## NEXT (candidate directions, nothing queued yet)
+1. COMPLETE devsim impact-ionization coupling: signs calibrated
+   (+/+ both continuity equations, verified vs node-model ground
+   truth), manual alpha Jacobian entries written, equation rewiring
+   recipe proven. Remaining gap: generation's CURRENT-dependence is
+   frozen out of the Jacobian -> marginally stable Newton beyond ~0.5 V.
+   Needs upstream guidance or flux-folded discretization. Full record:
+   pytcad/benchmarks/README-devsim-II-blocker.md + prototype script.
+2. [DONE 9203975] 2D band/recombination maps: heatmap chosen over
+   cut-plane; observables are element-wise so no physics changes.
+3. Multi-material / heterostructure Regions to unlock BJT/HEMT templates
+   (largest architectural item -- plan carefully).
+4. C-V beyond the validated moscap path; batch/multi-parameter sweeps.
 
 ## GOTCHAS LEARNED THE HARD WAY
 - devsim mesher adds nodes if ps < segment length → use FULL spacing.
