@@ -433,6 +433,14 @@ def _solve_all(device, spec, opts):
 
 def run_job(job_path, out_path, capture_trace=True):
     spec = DeviceSpec.from_json(job_path)
+    # honesty guard: the cores always solve silicon; a non-silicon label
+    # must fail loudly instead of silently solving the wrong material
+    if str(getattr(spec, "material", "SILICON")).upper() not in (
+            "SILICON", "SI"):
+        raise ValueError(
+            f"material '{spec.material}' is registered but not solvable: "
+            "the numerical core implements silicon only -- heterostructure "
+            "solving requires the M11-S3 backend")
     if spec.sweep is not None:
         # Fail fast on an unexecutable sweep, BEFORE paying for the
         # equilibrium solve.

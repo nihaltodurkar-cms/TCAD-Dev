@@ -147,11 +147,27 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
     return domain
 
 
+def _refuse_unsolvable_regions(dev):
+    """Known-but-not-solvable materials stop HERE: the domain layer
+    accepts them since M11-S1, but no backend can solve them until the
+    M11-S3 heterojunction core exists."""
+    mixed = sorted({r.material.upper() for r in dev.regions}
+                   - {"SILICON", "SILICON"}) if False else \
+        sorted({r.material.upper() for r in getattr(dev, "regions", [])
+                if r.material.upper() != "SILICON"})
+    if mixed:
+        raise ValueError(
+            f"region material(s) {', '.join(mixed)} registered but not "
+            "solvable: the numerical core implements silicon only -- "
+            "heterostructure solving requires the M11-S3 backend")
+
+
 def structure_from_domain(dev: DomainDevice):
     """Rebuild (StructureModel, MeshModel) from an authored DomainDevice.
     Raises ValueError on non-silicon region materials -- honest failure
     until a heterostructure-capable backend exists."""
     dev.validate()
+    _refuse_unsolvable_regions(dev)
     regions = [
         RegionSpec(id=r.id, name=r.name,
                    x_min=r.x_min, x_max=r.x_max,
@@ -206,6 +222,7 @@ def spec_from_domain(dev: DomainDevice) -> DeviceSpec:
     construction; only `models`/`T` are applied from the domain object
     afterwards."""
     dev.validate()
+    _refuse_unsolvable_regions(dev)
     if dev.axes is not None:
         # IMPORTED shape: direct reconstruction of the wire object
         return DeviceSpec(

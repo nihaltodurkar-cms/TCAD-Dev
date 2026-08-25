@@ -1,20 +1,29 @@
 """MaterialLibrary: named lookup over pytcad's Semiconductor parameter
 sets, with an educational summary per material.
 
-M1 scope: silicon only -- that is not a limitation of this class but of
-the numerical core (SILICON is the only Semiconductor instance pytcad
-defines; Device2D takes one material for the whole domain).  The library
-is the seam where GaAs / InGaAs / SiGe etc. will appear once a backend
-supports heterostructures.
+Known materials are registry entries; SOLVABLE materials are a subset
+the numerical core actually implements.  Since M11-S1 the library knows
+Ge / GaAs / InGaAs / AlGaAS, and DomainDevice.validate() accepts them in
+authored regions -- but adapters and solver backends still refuse to
+SOLVE them until the heterojunction core (M11-S3) exists.  Keep that
+distinction honest everywhere.
 """
-from pytcad.materials import SILICON, Semiconductor
+from pytcad.materials import (
+    SILICON, GE, GAAS, INGAAS, algaas, Semiconductor,
+)
 
 
 class MaterialLibrary:
     def __init__(self):
         # name -> Semiconductor instance.  Keys are the domain-level
         # identifiers used by Region.material / DomainDevice.material.
-        self._materials = {"SILICON": SILICON}
+        self._materials = {
+            "SILICON": SILICON,
+            "GE": GE,
+            "GAAS": GAAS,
+            "INGAAS": INGAAS,
+            "AL0.3GA0.7AS": algaas(0.3),   # standard HEMT-barrier fraction
+        }
 
     def names(self):
         return sorted(self._materials)

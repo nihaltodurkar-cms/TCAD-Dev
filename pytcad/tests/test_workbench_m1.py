@@ -160,8 +160,12 @@ def test_library_serves_silicon_and_reports_unknowns():
     assert "SILICON" in LIBRARY.names()
     si = LIBRARY.get("SILICON")
     assert si.eps_r == 11.7 and si.chi == 4.05
-    with pytest.raises(KeyError, match="GaAs"):
-        LIBRARY.get("GaAs")
+    # M11-S1: Ge/GaAs/InGaAs/AlGaAS are registered (known != solvable)
+    for name in ("GE", "GAAS", "INGAAS", "AL0.3GA0.7AS"):
+        assert name in LIBRARY.names(), name
+    assert LIBRARY.get("GaAs").eps_r == 12.9
+    with pytest.raises(KeyError, match="Unobtainium"):
+        LIBRARY.get("Unobtainium")
 
 
 def test_library_summary_contains_educational_landmarks():
@@ -214,10 +218,12 @@ def test_region_path_rejects_unsolvable_material_honestly():
         structure, mesh_model = STRUCTURE_EXAMPLES["mosfet_2d_structure"]()
         domain = spec_adapter.domain_from_structure(structure, mesh_model)
         domain.regions[0].material = "SiGe"
+        # domain layer ACCEPTS known materials since M11-S1...
+        domain.validate()
+        # ...while the adapter keeps refusing honestly ("silicon only"
+        # phrase pinned by this test survives in the adapter message)
         with pytest.raises(ValueError, match="silicon only"):
             spec_adapter.spec_from_domain(domain)
-        with pytest.raises(ValueError, match="silicon only"):
-            domain.validate()
     finally:
         LIBRARY._materials.pop("SiGe", None)
 

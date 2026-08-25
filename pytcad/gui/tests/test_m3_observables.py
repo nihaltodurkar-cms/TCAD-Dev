@@ -111,9 +111,15 @@ def test_band_diagram_physics_sanity_on_real_solution(solved_1d):
 
 
 def test_band_diagram_unknown_material_rejected():
-    with pytest.raises(KeyError, match="GaAs"):
+    # M11-S1: GaAs is now a REGISTERED material -- the observable must
+    # accept it (chi = 4.07 eV) instead of rejecting it
+    Ec, Ev, EFn, EFp = obs.band_diagram(
+        psi_V=np.zeros(3), n=np.ones(3), p=np.ones(3),
+        material="GaAs", T=300.0)
+    assert np.allclose(Ec, -4.07)          # -psi - chi at psi = 0
+    with pytest.raises(KeyError):
         obs.band_diagram(psi_V=np.zeros(3), n=np.ones(3), p=np.ones(3),
-                         material="GaAs", T=300.0)
+                         material="Unobtainium", T=300.0)
 
 
 # ----------------------------------------------------------------------

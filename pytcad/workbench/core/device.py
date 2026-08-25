@@ -150,11 +150,11 @@ class DomainDevice:
                         f"region '{r.id}': unknown material "
                         f"'{r.material}' (available: "
                         f"{', '.join(LIBRARY.names())})")
-                if r.material != "SILICON":
-                    raise ValueError(
-                        f"region '{r.material}' is registered but not "
-                        "yet solvable: the numerical core implements "
-                        "silicon only")
+                # M11-S1: heterogeneous KNOWN materials are now legal in
+                # the domain layer.  Solvability is enforced downstream:
+                # adapters (spec.py) and solver backends still refuse
+                # non-silicon jobs until the M11-S3 heterojunction core
+                # exists.  Validation stays the registry check only.
         else:
             # IMPORTED shape: explicit axes + array doping
             if not self.axes:

@@ -98,6 +98,82 @@ class Semiconductor:
 SILICON = Semiconductor()
 
 
+# ---------------------------------------------------------------------------
+# Additional bulk parameter sets (M11-S1).  These make materials KNOWN to
+# validation and the catalog; they do NOT make them solvable -- Device1D/2D/3D
+# assemblies are silicon-only until the M11-S3 heterojunction core lands.
+# Provenance per set: handbook band parameters (Adachi, "Properties of
+# Semiconductor Alloys"); mobility/Auger/lifetime numbers are empirical fits
+# with typical +-10..30% literature spread, stated rather than hidden.
+# ---------------------------------------------------------------------------
+GE = Semiconductor(
+    name="Germanium",
+    eps_r=16.2,
+    chi=4.13,
+    Eg0=0.744, varshni_alpha=4.774e-4, varshni_beta=235.0,
+    Nc300=1.04e19, Nv300=6.0e18,
+    mu_n_min=0.0, mu_n_max=3900.0, mu_n_Nref=1.3e17, mu_n_alpha=0.91,
+    mu_n_Texp=-2.33,
+    mu_p_min=0.0, mu_p_max=1900.0, mu_p_Nref=6.3e16, mu_p_alpha=0.76,
+    mu_p_Texp=-2.23,
+    vsat_n=7.0e6, vsat_p=6.3e6,
+    Cn_auger=2.8e-31, Cp_auger=9.9e-32,
+)
+
+GAAS = Semiconductor(
+    name="Gallium arsenide",
+    eps_r=12.9,
+    chi=4.07,
+    Eg0=1.519, varshni_alpha=5.405e-4, varshni_beta=204.0,   # Gamma valley
+    Nc300=4.7e17, Nv300=7.0e18,
+    mu_n_min=0.0, mu_n_max=8500.0, mu_n_Nref=1.3e17, mu_n_alpha=0.91,
+    mu_n_Texp=-2.33,
+    mu_p_min=0.0, mu_p_max=400.0, mu_p_Nref=6.3e16, mu_p_alpha=0.76,
+    mu_p_Texp=-2.23,
+    vsat_n=1.2e7, vsat_p=9.0e6,
+    Cn_auger=1.0e-30, Cp_auger=1.0e-31,
+)
+
+INGAAS = Semiconductor(
+    # In0.53Ga0.47As lattice-matched to InP
+    name="In0.53Ga0.47As",
+    eps_r=13.9,
+    chi=4.55,
+    Eg0=0.817, varshni_alpha=5.78e-4, varshni_beta=296.0,
+    Nc300=2.1e17, Nv300=7.7e18,
+    mu_n_min=0.0, mu_n_max=12000.0, mu_n_Nref=1.3e17, mu_n_alpha=0.91,
+    mu_n_Texp=-2.33,
+    mu_p_min=0.0, mu_p_max=300.0, mu_p_Nref=6.3e16, mu_p_alpha=0.76,
+    mu_p_Texp=-2.23,
+    vsat_n=1.0e7, vsat_p=8.0e6,
+    Cn_auger=1.0e-30, Cp_auger=1.0e-31,
+)
+
+
+def algaas(x):
+    """Al_x Ga_{1-x} As parameter family (direct-gap regime, x <= 0.45).
+
+    Linear interpolation of eps_r / chi between GaAs and AlAs; direct-gap
+    Varshni Eg0(x) = 1.519 + 1.247*x [eV] below the X-crossing.  Above
+    x=0.45 the gap becomes indirect -- raise instead of silently solving
+    the wrong band structure."""
+    if not 0.0 <= x <= 0.45:
+        raise ValueError(
+            f"AlGaAs mole fraction x={x} outside the direct-gap regime "
+            "(x <= 0.45); indirect-gap sets are not provided")
+    return Semiconductor(
+        name=f"Al{x:.2f}Ga{{1-{x:.2f}}}As",
+        eps_r=12.9 - 2.6 * x,          # linear: GaAs 12.9 -> AlAs 10.3
+        chi=4.07 - 0.85 * x,           # conduction-band offset ~85% of dEg
+        Eg0=1.519 + 1.247 * x,
+        varshni_alpha=5.405e-4, varshni_beta=204.0,
+        Nc300=4.7e17 * (1.0 + 0.5 * x),   # crude DOS scaling, stated honestly
+        Nv300=7.0e18 * (1.0 - 0.3 * x),
+        mu_n_max=8500.0 - 5500.0 * x,
+        mu_p_max=400.0 - 150.0 * x,
+    )
+
+
 # ----------------------------------------------------------------------
 #  Mobility
 # ----------------------------------------------------------------------
