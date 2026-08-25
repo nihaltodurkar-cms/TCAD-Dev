@@ -99,9 +99,19 @@ S2 TRAP-ASSISTED (core extension; needs section-4 sign-off):
 - Jacobian: analytic w.r.t. n/p; the WKB factors are fixed wrt psi
   ONLY if the field is frozen -- for self-consistent fields include
   d(kappa)/d(psi) or accept frozen-field first slice (document!).
-- FIRST RED TEST: extend tests/test_validation.py FD-Jacobian to a
-  device with traps enabled; homojunction-without-traps must remain
-  bit-identical.
+- FIRST RED TEST: COMMITTED as tests/test_m12_tat.py (skipped until
+  the core lands): FD-Jacobian with traps, traps-off bit-identity
+  (np.array_equal on F AND J), charge neutrality, SILC skeleton.
+  Equations (Hurkx, IEEE TED 39, 2090 (1992)):
+      R_TAT = (n*p - n_ie^2) * g(F)
+              / [tau_p*(n + n_1*P_p) + tau_n*(p + p_1*P_n)]
+      P_n/P_p = exp(-2 int kappa(F) dx)   over trap-to-contact barrier
+  Implementation slot: the recombination block of
+  _residual_jacobian -- same residual slots and Jacobian structure as
+  SRH, with dR/dn and dR/dp extended by the g(F) factor.  Models
+  dataclass gains `tat: bool = False` plus sigma_n/sigma_p/E_t fields
+  (default OFF => bit-identical, pinned by test_traps_off_bit_identical
+  using np.array_equal on both F and J).
 - Benchmark gate: SILC-style effective-lifetime vs trap-position curve
   against published dependencies.
 
