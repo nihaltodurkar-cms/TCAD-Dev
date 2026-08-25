@@ -1,31 +1,22 @@
-# Semiconductor Workbench - v0.5.0 Major Architecture Plan
+# Semiconductor Workbench - Architecture Plan
 ==========================================================
-Date: 2026-08-24. Status: M1-M7 SHIPPED; M8-M10 shipped as validated
-first slices (M8: published-value benchmark gate over every registered
-physics model; M9: provenance readout slot on the lab controller;
-M10: deck-format workflow front end translating text -> template ->
-DomainDevice). Full-depth M8/M9/M10 work builds on these slices. (M7: GENUINE DEVSIM backend --
-own mesh built from spec nodes, full drift-diffusion equilibrium via
-devsim's canonical silicon physics, schema-v2 output behind the M3
-protocol. Cross-backend validation gate: same 1D junction solved by
-both engines agrees within 25 mV and both match the analytic
-built-in potential within 5%. devsim stays an OPTIONAL dependency;
-registry auto-detects it.) (M6: process checkpoints map
-losslessly onto 1D DomainDevices via workbench/adapters/process.py;
-optional per-region implant windows as a composition mask -- zero
-numerical changes, old flows byte-identical). (M5: Device Builder expansion --
-parametric pn-diode / NMOS / MOS-C templates in the domain core, Builder
-controller+panel adopting into the existing Structure workbench, NMOS
-defaults pinned by equivalence golden to the shipped example). (M4: Physics Lab
-foundation -- CatalogModel over the real registry, validated toggles
-reaching the executed RunRecord, convergence viewport mode). M3 delivered the
-store/analysis boundary (ABC sweep+solved-result protocol, no more
-isinstance checks, public selected_step_id, service-layer junction
-depth), the observables layer (workbench/analysis, parity-golden vs GUI
-readouts, gm(Vg), band diagram matching the core exactly), and the
-SolverBackend protocol with golden-equality transparency proof.
-M4-M10 still planning. Supersedes the earlier Step-1 plan.txt
-(small-boundary scope); keeps its findings as the audit baseline.
+Date: 2026-08-25 (updated). Status: M1-M10 SHIPPED (v0.5.0 tagged).
+M11 heterostructures SHIPPED (S1 materials, S2 region_materials wire
+format, S3 1D heterojunction core: eps(x) flux-form Poisson, Anderson
+band offsets via carrier-specific ln(nie) SG deltas, per-material
+recombination; S4 2D / S5 HBT+HEMT templates still open).
+M12 tunneling SHIPPED (S1 FN+WKB analysis module with published-
+constant gates; S2 Hurkx trap-assisted tunneling in Device1D, all
+acceptance gates green; S3 density-gradient designed, not started --
+folded into M20 of the parity plan).
+FUTURE: capability growth is governed by SENTAURUS-PARITY-PLAN.md
+(M13 Fermi-Dirac statistics through M30 system-level; three parity
+tiers). M13 is IN IMPLEMENTATION: phase 1 (fermi.py + G1-G3 gates +
+G6a bit-identity goldens) landed; phase 2 (1D core integration,
+gates G4-G8) is the active work item. See that plan for the
+milestone definitions, acceptance gates, and the gate-blocking rule.
+The M1-M10 roadmap below is retained as the shipped architecture
+record; sections 5-7 track the live queue.
 
 Long-term ambition: a learning + research TCAD environment combining the
 capabilities and educational value of DEVSIM / Silvaco / Sentaurus while
@@ -222,53 +213,108 @@ Done criteria carried from M1/M2: every milestone proves behavioral
 equivalence or adds independently validated capability; adversarial
 probing pass before ship; suite green with pre-existing tests unchanged.
 
+M11 - HETEROSTRUCTURES [S1-S3 SHIPPED; S4/S5 OPEN]
+  S1 materials: Ge/GaAs/InGaAs/AlGaAs factory in the MaterialLibrary
+  (Varshni bandgap, Caughey-Thomas mobility, permittivity, affinity --
+  provenance per field). S2 wire: DeviceSpec.region_materials with
+  parse-time validation; solvability refusal at the adapter layer.
+  S3 core: per-node material lists in Device1D; eps(x) harmonic-mean
+  flux-form Poisson (uniform => algebraically identical to the old
+  assembly); Anderson band offsets entering the SG currents through
+  CARRIER-SPECIFIC ln(nie) edge deltas (electron dpsi + dln(nie),
+  hole dpsi - dln(nie) -- opposite signs; a shared delta passes a
+  Jacobian check but breaks hole detailed balance, which is the
+  acceptance test that guards it); per-material recombination.
+  Acceptance: FD-Jacobian across Si/GaAs < 5e-5; detailed balance
+  exact; homojunction path bit-identical.
+  S4 (open): 2D box-integration equivalent (same math, face-normal
+  eps). S5 (open): HBT/HEMT parametric templates + UI.
+
+M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S2 SHIPPED; S3 -> M20]
+  S1: workbench/physics/tunneling.py -- Fowler-Nordheim constants and
+  slope, triangular-barrier WKB kappa/transmission, gated against
+  published values. S2: Hurkx trap-assisted tunneling in Device1D
+  (Models(tat, trap_et_rel); frozen-field approximation documented;
+  WKB factors SI-calibrated -- field in V/m; bulk-Si midgap
+  negligibility asserted as honest physics). Acceptance: FD-Jacobian
+  with traps < 5e-5; traps-off bit-identity; WKB factor-law gate
+  1e7..5e10 V/m; global-charge-balance neutrality. S3 (density
+  gradient) is designed in TUNNELING-PLAN.md section 5 and folded
+  into M20 of the parity plan.
+
+------------------------------------------------------------------------
+4b. FUTURE: SENTAURUS-PARITY ROADMAP (M13-M30)
+------------------------------------------------------------------------
+Capability growth beyond M12 is governed by SENTAURUS-PARITY-PLAN.md:
+three parity tiers (SDevice local-physics parity for silicon 1D/2D;
+SProcess-lite + general geometry; system-level), milestones M13
+(Fermi-Dirac statistics + incomplete ionization -- IN IMPLEMENTATION,
+see M13-FERMI-DIRAC-PLAN.md for the quantitative gate battery G1-G8)
+through M30 (interop/workbench system features), each with published-
+value acceptance gates, dependencies, and sizes. Standing rule 4b
+there: gate-bearing milestones block their dependents until every
+gate is green. The M1-M12 pattern continues unchanged: red tests
+first, FD-Jacobian-first for core changes, bit-identity when a model
+is off, no hidden failures.
+
 ------------------------------------------------------------------------
 5. NEXT IMPLEMENTATION MILESTONE
 ------------------------------------------------------------------------
-M1 and M2 are shipped. Next: M3 - ResultStore / analysis boundary +
-SolverBackend protocol. It pays down every store-layer leak found in the
-audit, promotes analysis into backend-agnostic observables, and defines
-the backend door that M4-M10 walk through - still with zero behavioral
-change, guarded by parity goldens.
+M13 PHASE 2 -- Fermi-Dirac statistics in the 1D core
+(M13-FERMI-DIRAC-PLAN.md sections 3-4; phase 1 -- fermi.py, G1-G3
+function-level gates, G6a pre-edit goldens -- is landed and green).
+Order of work:
+  1. Design spike: pick the generalized-SG scheme (nu-factor vs
+     inverse-FD) using the carrier-specific detailed-balance gates.
+  2. Density path behind Models(fd=False) default; G4 neutrality
+     gates vs independent root-finds.
+  3. G5 FD-Jacobian battery (degenerate step, degenerate Si/GaAs
+     heterointerface, incomplete-ionization rows).
+  4. G6b/c equivalence + off-path bit-identity vs the committed
+     goldens.
+  5. G7 published benchmarks with applicability limits; catalog
+     metadata.
+  6. 2D/3D ports repeat bit-identity + Jacobian + neutrality.
+M15+ stay blocked until every gate is green (standing rule 4b).
 
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Any DEVSIM code, install, or adapter (that is M7, behind the M3
-  protocol).
-- Quantum/tunneling/thermionic/impact-ionization models; any new
-  semiconductor physics (M8, gated on benchmarks + catalog metadata).
+- Fermi-Dirac/incomplete-ionization SOLVER integration (module and
+  gates exist; the core flag lands in M13 phase 2).
+- Impact ionization solver coupling (M15; analysis layer exists;
+  devsim edge_volume_model unit anomaly documented in benchmarks/).
+- Band-to-band tunneling (M16); transient (M17); AC (M18);
+  self-heating (M19); density gradient (M20).
+- Unstructured meshing (M21); iterative linear solvers + continuation
+  (M22); 2D process geometry engine (M23); pair diffusion/TED/
+  segregation (M24); Monte-Carlo implantation (M25); general 3D (M26).
+- Mixed-mode circuit coupling (M27); Schottky/tunnel contacts (M28);
+  hydrodynamic/energy balance (M29); experiments/calibration/interop
+  (M30).
+- Monte-Carlo transport, atomistic kinetic-MC diffusion, radiation/
+  SEE, ferroelectrics, full viscoelastic oxidation mechanics, Maxwell
+  solvers -- permanently out of scope per the parity plan.
 - Rewriting Device classes into compositional equation assembly
-  (deferred until a SECOND concrete model need justifies it - decided
-  at M8).
-- Custom FEM/FVM; new mesh generators.
-- BJT/HEMT/solar-cell device templates (need heterostructure Regions).
-- Generic-engine C-V beyond the validated moscap path.
-- GUI redesign, theme/layout churn, Matplotlib replacement.
-- ANY change to numerical defaults, scalings, or tolerances; no deletion
-  of DeviceSpec or the subprocess contract.
+  (revisited only when a second concrete model need justifies it).
+- ANY change to numerical defaults, scalings, or tolerances; no
+  deletion of DeviceSpec or the subprocess contract.
 
 ------------------------------------------------------------------------
 7. NEXT SESSION QUEUE (priority order, detailed starts)
 ------------------------------------------------------------------------
-1. M7 EXTENSION -- bias ramps in the DEVSIM backend (smallest; unblocks
-   I-V cross-validation). Lift the "EQUILIBRIUM only" refusal: ramp
-   GetContactBiasName parameter per spec.bias / sweep, reuse diode_
-   common.py's ramp loop, emit sweep__* series keys + per-point trace.
-   Tests: cross-backend I-V agreement on the 1D diode vs pytcad's
-   run_sweep within stated tolerances.
-2. M6 UI SLICE -- surface x_range_cm implants and a "checkpoint ->
-   device" action in ProcessPanel.qml (controller slots already exist).
-3. M9 PLOTS -- viewport observables: band diagram + recombination maps
-   as new canvas modes fed from workbench/analysis (data path already
-   exists via RunResult fields); side-by-side model on/off runs.
-4. M8 FIRST NEW MODEL -- thermionic emission or impact ionization;
-   gate: published-value benchmark test in tests/test_model_benchmarks
-   style BEFORE merge; decide compositional assembly only here.
-5. M10 GROWTH -- deck statements beyond templates: sweep/bias commands,
-   file-open integration in Main.qml.
-6. RELEASE PASS -- gui/README v0.5.x final wording, tag v0.5.0.
+1. M13 PHASE 2 (see section 5) -- the only core-touching work;
+   amendment sign-off already recorded in M13-FERMI-DIRAC-PLAN.md;
+   goldens already committed. Entry point: the SG design spike.
+2. M11-S4 -- 2D heterojunction box-integration (designed,
+   HETEROSTRUCTURE-PLAN.md section 7); independent of M13.
+3. M11-S5 -- HBT/HEMT templates + UI on top of S4.
+4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists
+   and is validated; catalog wiring only).
+5. M15 PREP (after M13 green) -- impact ionization coupling design;
+   resolve or bypass the devsim edge_volume_model unit anomaly
+   (benchmarks/README-devsim-II-blocker.md).
 
 Standing rules: every slice ships suite-green with pre-existing tests
 unchanged; adversarial probe pass before each commit; optional deps
-stay optional.
+stay optional; gate-bearing milestones block their dependents.
