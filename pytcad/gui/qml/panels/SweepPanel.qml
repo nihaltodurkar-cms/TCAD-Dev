@@ -225,6 +225,38 @@ Rectangle {
                   : "no family yet"
         }
 
+
+        // ---- C-V: quasi-static MOS capacitance sweep ----------------
+        Label {
+            text: "MOS C-V"
+            color: Theme.textDim; font.pixelSize: 11; font.letterSpacing: 1
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Label { text: "Nsub"; Layout.preferredWidth: 40 }
+            TextField {
+                id: cvNsub
+                objectName: "cvNsubField"; Layout.fillWidth: true
+                text: "-1e17"; validator: DoubleValidator {}
+                ToolTip.visible: hovered; ToolTip.delay: 400
+                ToolTip.text: "Substrate doping [cm^-3], negative for p-type."
+            }
+            Label { text: "tox nm"; Layout.preferredWidth: 42 }
+            TextField {
+                id: cvTox
+                objectName: "cvToxField"; Layout.preferredWidth: 56
+                text: "5.0"; validator: DoubleValidator {}
+            }
+        }
+        Button {
+            objectName: "runCVButton"
+            Layout.fillWidth: true
+            text: "Run C-V"
+            onClicked: if (root.controller) root.controller.cv.runCV(
+                parseFloat(cvNsub.text), parseFloat(cvTox.text),
+                -2.0, 2.0, 0.05)
+        }
+
         Item { Layout.fillHeight: true }
     }
 }

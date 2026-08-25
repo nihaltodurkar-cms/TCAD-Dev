@@ -147,6 +147,8 @@ class AppController(QObject):
         # attribute).
         from .family_sweep_controller import FamilySweepController
         self.family = FamilySweepController(self, parent=self)
+        from .cv_controller import CVController
+        self.cv = CVController(self, parent=self)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
