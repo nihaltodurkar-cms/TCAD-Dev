@@ -1,3 +1,233 @@
+# M13-FERMI-DIRAC-PLAN.md
+# M13: Fermi-Dirac carrier statistics + incomplete ionization
+# Formal physics-foundation milestone spec
+
+Status: IN IMPLEMENTATION (approved).  Phase 1 (fermi.py + G1-G3
+gates + G6a goldens) landed pure-addition, suite 541 green.
+Core amendment sign-off (section 6): GIVEN by the user ("implement
+it") for the M13 residual/Jacobian changes -- goldens committed
+before the first core edit, FD-Jacobian gate runs first.
+
+SPEC-FIX NOTE (G2/G3 gate numbers, recorded during implementation):
+the original G2 tolerances (eta=-20 @ 1e-12, eta=-15 @ 1e-9) were
+MATHEMATICALLY UNATTAINABLE: the exact Taylor series of the complete
+Fermi integral gives |F_{1/2}(eta) - exp(eta)|/exp(eta) ~
+exp(eta)/2^{3/2}, i.e. 7.3e-10 at eta=-20 and 1.1e-7 at eta=-15.
+The implementation was verified correct against the exact series;
+the gates were corrected to (-30, 1e-12), (-20, 1e-9), (-15, 1e-6).
+Likewise the G3 Sommerfeld rate check uses the 3-term form (residual
+~ c3/eta^6, factor ~64 per doubling); the original 4-term rate band
+assumed eta^-4.  These are spec fixes to match published mathematics,
+not tolerance weakening -- each is asserted against the exact-series
+deviation in tests/test_m13_fermi.py docstrings.
+
+Blocks: M15, M16, M17, M18, M19, M20 (all of Tier 1 after M13) are
+NOT started until every gate in section 4 is green.
+Parent: SENTAURUS-PARITY-PLAN.md (Tier 1). Conventions unchanged:
+red tests first, published-value benchmarks before features,
+FD-Jacobian-first, bit-identity when off, suite green + zero
+warnings, no tolerance ever weakened, no hidden failures.
+
+------------------------------------------------------------------------
+1. SCOPE
+------------------------------------------------------------------------
+Add degenerate carrier statistics to the drift-diffusion cores behind
+`Models(fd=False)` (default off):
+
+  n = Nc * F_{1/2}(eta_n),   eta_n = (E_Fn - E_c) / (k_B T)
+  p = Nv * F_{1/2}(eta_p),   eta_p = (E_v - E_Fp) / (k_B T)
+
+with the complete Fermi integral (normalized so the Boltzmann limit is
+exactly exp(eta)):
+
+  F_{1/2}(eta) = (1/Gamma(3/2)) * Integral_0..inf
+                 t^(1/2) / (1 + exp(t - eta)) dt
+
+plus incomplete dopant ionization behind
+`Models(incomplete_ion=False)` (B, P, As; standard
+degeneracy-factor formulation).
+
+Out of scope (stated, so we never drift into them silently):
+non-parabolic bands (this is the parabolic-band F_{1/2});
+valley-resolved Nc; any change to the BGN convention beyond pinning
+it (section 4.8); transient/AC composition (later milestones compose
+with whatever lands here).
+
+------------------------------------------------------------------------
+2. NEW MODULE: pytcad/fermi.py  (pure functions, no core dependency)
+------------------------------------------------------------------------
+  f_half(eta)      fast, C1-smooth evaluation on [-40, +40]
+  f_half_ref(eta)  INDEPENDENT high-accuracy quadrature reference
+  f_half_inv(nu)   inverse via bracketed Newton (monotone everywhere,
+                   convex for eta > 0 -> globally safe)
+  df_half(eta)     analytic derivative = F_{-1/2} (Jacobian needs it)
+  ni_fd(Nc, Nv, Eg, T)  FD intrinsic carrier density (neutrality root)
+
+IMPLEMENTATION NOTE (as built): the production evaluation is a hybrid
+fixed-node Gauss-Legendre quadrature -- t = s^2 transform on [0, 1]
+(kills the t^(-1/2) endpoint singularity of F_{-1/2}), then direct
+width-2 t-panels on [1, max(eta,0)+60], where the 1/(1+e^(t-eta))
+transition has O(1) width for EVERY eta.  A published rational
+approximation (Cody-Thacher) was the original preference; no
+coefficient table was available offline, and the quadrature form is
+exact, auditable, and fast (one vectorized call per array), so it was
+chosen BY THE GATES as the spec allows.  The audit layer is three
+independent schemes: scipy adaptive quadrature, 30-digit mpmath
+(knee-subdivided -- plain mp.quad on [0, inf) under-resolves the
+t~eta knee and measured 5e-5 off at eta=40), and the published
+Sommerfeld series.
+
+------------------------------------------------------------------------
+3. SOLVER INTEGRATION (1D first; 2D/3D ports repeat the same gates)
+------------------------------------------------------------------------
+3.1  DENSITY PATH
+  eta_n/eta_p computed from the scaled unknowns exactly as today;
+  densities become Nc*F_{1/2}(eta) instead of Nc*exp(eta).  All
+  existing T-dependent Nc(T), Nv(T) calls are reused unchanged.
+
+3.2  CURRENT PATH (generalized Scharfetter-Gummel)
+  The exponential-fitting SG edge current must be made consistent
+  with FD densities.  Candidate discretizations (design spike picks
+  ONE, decided by the section 4 gates -- this mirrors the M11
+  lesson where a plausible scheme passed a Jacobian check but broke
+  hole detailed balance):
+    A) nu-factor SG:  nu(eta) = F_{1/2}(eta)/exp(eta);  Bernoulli
+       argument extended with the ln(nu) edge difference.
+    B) inverse-FD SG: keep the current SG form; quasi-Fermi levels
+       obtained through f_half_inv; Bernoulli argument on the
+       (psi - phi_n) difference of the inverted variables.
+  Hard properties either candidate must satisfy (these are gates,
+  not wishes):
+    - exact reduction to the current SG when eta << -1 (bit-level
+      on the edge factor, not just "close");
+    - ZERO equilibrium current across a degenerate doping step and
+      across a heterointerface to machine precision (carrier-
+      specific detailed balance, both carriers);
+    - positivity of densities preserved by construction;
+    - analytic Jacobian covers every new factor.
+
+3.3  INCOMPLETE IONIZATION
+  Ionized fraction per dopant species from the standard
+  charge-neutrality-consistent formulation (degeneracy factors
+  g=4 for B, g=2 for P/As; Nc,Nv at lattice T).  Enters rho and
+  the Jacobian (d(N_ion)/d(psi) terms).  1D only in this milestone;
+  flagged independently of fd.
+
+3.4  PORT ORDER
+  1D (device.py) carries the whole gate battery first.  2D
+  (device2d.py) and 3D (device3d.py) ports repeat: bit-identity,
+  FD-Jacobian, neutrality, Boltzmann-regime equivalence.  A port is
+  not "done" because 1D passed.
+
+------------------------------------------------------------------------
+4. QUANTITATIVE ACCEPTANCE GATES
+------------------------------------------------------------------------
+Every gate below is a named test in tests/ (red first).  GREEN means
+ALL of them pass with the full suite, zero warnings, and no existing
+tolerance weakened.  M15+ stay blocked until then.
+
+G1  F_{1/2} EVALUATION vs INDEPENDENT REFERENCE
+    f_half vs f_half_ref over eta in [-40, +40] on a 4001-point grid
+    (dense near eta=0): max relative error <= 1e-9 (metric floor
+    1e-11 on the deep-Boltzmann tail, where two double-precision
+    quadratures can only agree to ~1e-21 ABSOLUTE -- measured).
+    Continuity/smoothness: max step-to-step second difference of
+    ln f_half <= 1e-6 (C1-smoothness guard for Newton).
+    Published audit: spot values vs 30-digit mpmath (knee-subdivided)
+    <= 1e-11, exact anchor F_{1/2}(0) = (1-2^{-1/2}) zeta(3/2) to
+    1e-13, Sommerfeld series cross-check with asserted eta^-6 rate.
+
+G2  BOLTZMANN (NONDEGENERATE) LIMIT
+    Gates at the EXACT Taylor-series deviation exp(eta)/2^{3/2}
+    (see SPEC-FIX NOTE): <= 1e-12 at eta <= -30; <= 1e-9 at
+    eta <= -20; <= 1e-6 at eta <= -15.
+    Solver-level: with fd=True on a 1e16-diode, the I-V curve agrees
+    with the Boltzmann run to max relative current difference
+    <= 1e-4 (numerical equivalence -- different code path, so NOT
+    bit-identity; that distinction is deliberate).
+
+G3  DEGENERATE LIMIT
+    Sommerfeld check with asserted decay rate (see SPEC-FIX NOTE).
+    Physical: electron density at full activation of
+    N_D = 1e20 cm^-3, Si, 300 K: solver's equilibrium n matches the
+    independent neutrality root-find of Nc*F_{1/2}(eta) = N_D to
+    machine precision, and eta lands in the published degenerate
+    range (eta > 2 for 1e20 at 300 K).
+
+G4  CHARGE-NEUTRALITY CONSISTENCY
+    Uniformly doped domain (no junction), equilibrium solve:
+    (a) n, p constant along x to machine precision;
+    (b) n - p = C matches the INDEPENDENT 1D root-find of
+        Nc*F_{1/2}(eta_n) - Nv*F_{1/2}(eta_p) = C
+        (max relative density error <= 1e-12) for
+        C in {1e15, 1e17, 1e19, 1e20} x {n, p} at 300 K;
+    (c) generalized mass action:
+        n*p = ni_fd^2 * [F_{1/2}(eta_n)F_{1/2}(eta_p)] /
+              [exp(eta_n)exp(eta_p)]  holds identically between the
+        solver's (n, p, eta) at every node (<= 1e-10 relative);
+    (d) built-in potential of a 1e20/1e17 FD junction vs the
+        independent neutrality-pair computation, agree <= 1e-3 V
+        (discretization-dominated).
+
+G5  FD-vs-ANALYTIC JACOBIAN
+    The house gate, extended: max relative error between the
+    analytic Jacobian and central finite differences <= 5e-5 over
+    >= 80 sampled columns (house standard) on:
+      - a 1e20/1e17 degenerate step junction (fd=True);
+      - a degenerate Si/GaAs heterointerface (fd=True) -- the
+        composition that historically hid the shared-delta bug;
+      - incomplete-ionization-enabled runs (d(N_ion)/d(psi) rows);
+      - the f_half_inv Newton derivative: d(eta)/dn analytic vs FD
+        <= 1e-8 over nu in [1e-8, 10].  [DONE in phase 1:
+        test_fermi_mhalf_is_derivative + inverse roundtrip.]
+
+G6  BIT-IDENTITY / NON-REGRESSION WHEN DEGENERACY IS NEGLIGIBLE
+    (a) Models(fd=False) (default): ALL THREE cores produce
+        np.array_equal results against pre-M13 golden runs
+        [CAPTURED in phase 1: tests/goldens/m13/ -- 1D diode
+        equilibrium + 0.6V bias, 1D Si/GaAs hetero, 2D diode,
+        3D resistor];
+    (b) fd=True at nondegenerate bias points: densities agree with
+        Boltzmann to <= 1e-6 relative (the F_{1/2} vs exp gap at
+        those eta), currents to <= 1e-4;
+    (c) the TAT, heterojunction, and process-derived-doping paths
+        are re-run with fd=False and remain bit-identical -- no
+        incidental drift from refactoring.
+
+G7  PUBLISHED-VALUE BENCHMARKS WITH EXPLICIT APPLICABILITY LIMITS
+    (a) Degenerate electron concentration: Si, 300 K, N_D = 1e20:
+        n/N_D vs the published FD-corrected figure (Altermatt-style
+        apparent-band tables): agree within 5% (the gate is the
+        FD statistics alone; BGN interplay is pinned, see 4.8).
+    (b) Incomplete ionization, B in Si: ionized fraction at
+        T = 77/150/250/300 K for N_A = 1e16 vs published curves
+        (Sze; Altermatt et al.): agree within 2 percentage points
+        or the reference's stated precision.
+    (c) Freeze-out sign gate: 77 K B-doped Si carrier density is
+        BELOW N_A by the published order (solver must reproduce
+        freeze-out at all, directionally, before fine gates).
+    (d) Degenerate MOS C_max: FD-only reduction of C_max vs the
+        classical value consistent with the documented 10-20%
+        classical overestimate direction (quantization-free part;
+        the quantum centroid correction remains M20's job --
+        stated so nobody claims this gate "fixes" C_max fully).
+    APPLICABILITY LIMITS (mandatory in the test docstrings AND the
+    catalog metadata):
+      - parabolic-band F_{1/2} only; no non-parabolicity, no
+        valley splitting;
+      - valid for eta in [-40, +40]; beyond that the code must
+        refuse loudly, not extrapolate [DONE in phase 1:
+        test_fermi_eta_range_refusal];
+      - T range of the chosen evaluation as published (state it);
+      - incomplete ionization: shallow B, P, As only; no deep
+        levels;
+      - FD composes with BGN ONLY through the pinned convention
+        below -- any other composition is out of spec.
+
+G8  SUITE INVARIANT
+    Full tests/ + gui/tests/: all green, zero warnings, pre-existing
+    tests unchanged.  A red or skipped physics test at "done" time
+    means NOT done (no-hidden-failures policy, unchanged).
 
 ------------------------------------------------------------------------
 5. GATE-TO-TEST MAP (red tests written on approval, in this order)
@@ -15,15 +245,23 @@
   G5  test_fd_jacobian_1d_degenerate_step
       test_fd_jacobian_1d_heterointerface
       test_fd_jacobian_incomplete_ionization
-      test_fermi_inverse_derivative
-  G6  test_fd_off_bit_identical_goldens_1d   (+ _2d, _3d at port time)
+      test_fermi_inverse_derivative            [DONE phase 1]
+  G6  test_golden_1d_diode_equilibrium_and_bias [DONE phase 1]
+      test_golden_1d_hetero_equilibrium          [DONE phase 1]
+      test_golden_2d_diode_equilibrium           [DONE phase 1]
+      test_golden_3d_resistor_equilibrium        [DONE phase 1]
       test_fd_on_nondegenerate_density_agreement
-      test_fd_off_tat_hetero_bit_identity
   G7  test_fd_degenerate_concentration_vs_published
       test_incomplete_ionization_boron_vs_literature
       test_freeze_out_directional_gate
       test_fd_degenerate_cv_max_direction
+      test_fermi_eta_range_refusal               [DONE phase 1]
   G8  full-suite run (the standing invariant)
+
+Status at phase-1 commit (58ca76c + this fix): G1, G2, G3 fully green
+at the fermi.py level; G5 partial (inverse derivative); G6a goldens
+captured and enforced; G4-G8 solver-level gates are RED-BY-ABSENCE
+until the core lands.
 
 Ordering inside the list is the implementation order: fermi.py (G1-G3)
 is independently mergeable BEFORE any core edit; the solver gates
@@ -35,12 +273,13 @@ time (they only need fermi.py + the solver once it exists).
 ------------------------------------------------------------------------
 M13 modifies the residual/Jacobian of all three device cores.  Per the
 standing rule this requires explicit user sign-off recorded in this
-file before the first core edit, with:
-  - goldens committed BEFORE the edit (G6a),
-  - FD-Jacobian gate run FIRST on the new physics (G5),
+file before the first core edit [RECORDED: GIVEN, see Status block]
+with:
+  - goldens committed BEFORE the edit (G6a) [DONE];
+  - FD-Jacobian gate run FIRST on the new physics (G5);
   - bit-identity proven for the off-path (G6a/c) before any feature
     composes with it.
-fermi.py itself is a pure addition and needs no amendment.
+fermi.py itself is a pure addition and needed no amendment.
 
 ------------------------------------------------------------------------
 7. DEPENDENCY CLEANLINESS (explicit)
