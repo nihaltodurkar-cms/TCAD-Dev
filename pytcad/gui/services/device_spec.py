@@ -159,6 +159,27 @@ class ContactSpec:
     normal_axis: str = "z"
 
 
+def _validate_region_materials(entries):
+    """Structural validation of the region_materials wire field:
+    every entry carries a non-empty string material and a box of 2 or
+    4 finite coordinates.  Registry lookup happens at the domain
+    boundary; here we only guarantee lossless JSON round-trips."""
+    if not isinstance(entries, list):
+        raise ValueError("region_materials must be a list")
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict) \
+                or not isinstance(entry.get("material"), str) \
+                or not entry["material"]:
+            raise ValueError(
+                f"region_materials[{i}] needs a 'material' string")
+        box = entry.get("box")
+        if not isinstance(box, (list, tuple)) or len(box) not in (2, 4) \
+                or not all(isinstance(v, (int, float)) for v in box):
+            raise ValueError(
+                f"region_materials[{i}].box must be [x0,x1] or "
+                "[x0,x1,y0,y1] in cm")
+
+
 def _default_models():
     return {"doping_mobility": True, "field_mobility": False,
             "srh": True, "auger": True, "bgn": True}
@@ -174,6 +195,13 @@ class DeviceSpec:
     contacts: list = field(default_factory=list)
     bias: dict = None                  # {contact_name: V}; None = equilibrium only
     sweep: SweepSpec = None            # v0.4: optional single-contact voltage ramp
+    # M11-S2: optional per-region material overrides (heterostructure
+    # wire format).  Each entry: {"material": <library key>, "box":
+    # [x0, x1] (1D) | [x0, x1, y0, y1] (2D)} in cm, mesh-aligned.
+    # None/absent = uniform device material everywhere.  KNOWN non-
+    # silicon materials are carried LOSSLESSLY; both solver backends
+    # refuse to solve them until the M11-S3 heterojunction core exists.
+    region_materials: list = None
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -182,10 +210,14 @@ class DeviceSpec:
     @classmethod
     def from_dict(cls, d):
         sweep = d.get("sweep")
+        rm = d.get("region_materials")
+        if rm is not None:
+            _validate_region_materials(rm)
         return cls(
             mesh=MeshSpec(**d["mesh"]),
             doping=DopingSpec(**d["doping"]),
             material=d.get("material", "SILICON"),
+            region_materials=rm,
             T=d.get("T", 300.0),
             models=d.get("models") or _default_models(),
             contacts=[ContactSpec(**c) for c in d.get("contacts", [])],

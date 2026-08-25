@@ -162,7 +162,7 @@ def algaas(x):
             f"AlGaAs mole fraction x={x} outside the direct-gap regime "
             "(x <= 0.45); indirect-gap sets are not provided")
     return Semiconductor(
-        name=f"Al{x:.2f}Ga{{1-{x:.2f}}}As",
+        name=f"Al{x:.2f}Ga{1 - x:.2f}As",
         eps_r=12.9 - 2.6 * x,          # linear: GaAs 12.9 -> AlAs 10.3
         chi=4.07 - 0.85 * x,           # conduction-band offset ~85% of dEg
         Eg0=1.519 + 1.247 * x,
