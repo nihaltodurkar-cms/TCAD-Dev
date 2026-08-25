@@ -110,19 +110,23 @@ Sizes: S ~1 session, M ~1-2, L ~2-4, XL ~4+ (with tests, honest).
 === TIER 1: SDevice local-physics parity ===========================
 
 M13  FERMI-DIRAC STATISTICS + INCOMPLETE IONIZATION          [L]
-  Scope: Models(fd=True) switches carrier density from
-  n = Nc exp((EFn-Ec)/kT) to the FD integral
-     n = Nc * F_{1/2}((EFn-Ec)/kT)  (normalized, Dingle or
-     Antic-Gaubas/Schmid tabulation, published coefficients);
-  incomplete ionization for B, P, As with the standard
-  degeneracy-factor formulation (Sze / Altermatt tables).
-  Touches ALL THREE cores' residual+Jacobian (density inverse via
-  FD integral derivative) -> the M11-S3 amendment mechanism applies.
-  Acceptance: FD-off bit-identity; electron density in degenerate
-  Si (1e20) vs published FD tables within stated %; freeze-out of
-  B-doped Si at 77K vs literature carrier density; FD-Jacobian
-  gate on every core; MOS C_max drop vs the documented 10-20%
-  classical overestimate (quantization-free part).
+  Formal physics-foundation milestone -- full spec with
+  quantitative acceptance gates in M13-FERMI-DIRAC-PLAN.md
+  (G1 F_{1/2} vs independent quadrature reference + published
+  spot values; G2 Boltzmann limit; G3 Sommerfeld degenerate
+  limit; G4 charge-neutrality consistency vs independent root
+  finds; G5 FD-Jacobian gates incl. degenerate heterointerface;
+  G6 bit-identity goldens for the off-path; G7 published-value
+  benchmarks with explicit applicability limits; G8 suite
+  invariant).  Scope: Models(fd=False) default, parabolic-band
+  F_{1/2} via a published rational approximation audited against
+  quadrature, generalized SG chosen from candidate schemes by the
+  detailed-balance gates, incomplete ionization (B/P/As) behind
+  its own flag.  DEPENDENCY-CLEAN AND BLOCKING: M13 depends on
+  nothing; M15-M20 may not START until all gates are green.
+  Touches ALL THREE cores' residual+Jacobian -> the M11-S3
+  amendment mechanism applies (goldens committed before the edit,
+  FD-Jacobian-first, bit-identity proven before composition).
   Depends: nothing. FIRST, because every later model composes with
   statistics.
 
@@ -353,6 +357,11 @@ M15 needs M22's continuation only for robustness, not correctness.
    with the model off, acceptance tests before merge.
 2. Every new model lands in tests/test_model_benchmarks.py FIRST with
    published constants; the benchmark error is quoted in the commit.
+4b. GATE BLOCKING: a milestone whose spec defines quantitative
+   acceptance gates (currently M13, see M13-FERMI-DIRAC-PLAN.md
+   section 4) blocks all milestones it declares blocked until every
+   gate is green under the full-suite invariant.  "Mostly green" is
+   not green; a skipped or weakened gate is a hidden failure.
 3. New meshes/linear solvers ship with golden parity tests against
    existing validated paths (tensor-product, spsolve) before anything
    uses them.
@@ -372,5 +381,8 @@ M15 needs M22's continuation only for robustness, not correctness.
    green.  (In flight, this session's open thread.)
 2. M11-S4 (2D heterojunctions) -- design exists; medium.
 3. M12-S3 / M20 (density gradient) -- design exists; medium-large.
-4. M13 (Fermi-Dirac) -- write the red tests + FD-integral benchmark
-   first; amend-core sign-off needed before touching the Jacobians.
+4. M13 (Fermi-Dirac) -- spec formalized in M13-FERMI-DIRAC-PLAN.md;
+   on approval: write the G1-G3 red tests (fermi.py is pure addition,
+   no amendment needed), commit goldens, obtain the amend-core
+   sign-off BEFORE touching any residual/Jacobian.  M15+ stay
+   blocked until every gate in that spec is green.
