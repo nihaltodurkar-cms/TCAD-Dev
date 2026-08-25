@@ -284,9 +284,16 @@ def _build_test_mosfet(Lg=6e-5, Lsd=3e-5, depth=2e-5, Na=1e17, tox_cm=5e-7):
     # 2V gate sweep, no visible subthreshold knee). Lg=600nm/sigma_lat=10nm
     # gives a junction depth of ~23nm/side, an effective channel of
     # ~550nm, and a clean off state (see test_mosfet_vth_matches_moscap_landmark).
-    return build_mosfet(Lg=Lg, Lsd=Lsd, depth=depth, Na=Na, Nsd_peak=1e19,
-                        tox_cm=tox_cm, gate="n+poly", sigma_y=5e-6,
-                        sigma_lat=1e-6, nx=90, ny=50)
+    #
+    # The Nsd_peak=1e19 erfc peak slightly overshoots the core's 1e19
+    # Boltzmann-degeneracy line, so the constructor's doping caveat fires:
+    # these tests INTEND degenerate source/drain regions, so assert the
+    # warning here rather than letting it spray the suite.
+    import pytest
+    with pytest.warns(UserWarning, match="Doping exceeds ~1e19"):
+        return build_mosfet(Lg=Lg, Lsd=Lsd, depth=depth, Na=Na,
+                            Nsd_peak=1e19, tox_cm=tox_cm, gate="n+poly",
+                            sigma_y=5e-6, sigma_lat=1e-6, nx=90, ny=50)
 
 
 def _extract_vth_max_gm(Vg_list, Id, Vds):
@@ -378,9 +385,11 @@ def test_id_vg_monotonic_above_threshold():
 
 def test_mosfet_mesh_independence():
     Id_coarse = id_vg_sweep(_build_test_mosfet(), [1.0], Vds=0.05, verbose=False)[0]
-    dev_fine = build_mosfet(Lg=6e-5, Lsd=3e-5, depth=2e-5, Na=1e17,
-                            Nsd_peak=1e19, tox_cm=5e-7, sigma_y=5e-6,
-                            sigma_lat=1e-6, nx=180, ny=100)
+    import pytest
+    with pytest.warns(UserWarning, match="Doping exceeds ~1e19"):
+        dev_fine = build_mosfet(Lg=6e-5, Lsd=3e-5, depth=2e-5, Na=1e17,
+                                Nsd_peak=1e19, tox_cm=5e-7, sigma_y=5e-6,
+                                sigma_lat=1e-6, nx=180, ny=100)
     Id_fine = id_vg_sweep(dev_fine, [1.0], Vds=0.05, verbose=False)[0]
     assert abs(Id_fine - Id_coarse) / abs(Id_fine) < 0.10, (Id_coarse, Id_fine)
 

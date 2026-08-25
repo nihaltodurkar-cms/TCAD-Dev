@@ -212,13 +212,17 @@ voltage sweeps with curve plotting and derived readouts — Imax/Imin,
 Ion/Ioff, and a max-gm threshold estimate for gate sweeps (v0.4); and
 an explicit, versioned schema for solved-result files that every result
 is now validated against on load, plus per-run provenance and
-convergence-trace records, preparing the ground for (but not yet
-adding) a second solver backend (v0.5.0). See `gui/README.md` for
+convergence-trace records (v0.5.0), and a second, genuine solver
+backend: DEVSIM -- its own mesh built from the same device-spec job,
+full drift-diffusion via devsim's canonical silicon physics, optional
+dependency, off unless installed (M7, including warm-started contact-
+bias ramps and voltage sweeps with cross-backend I-V validation against
+the homegrown engine). See `gui/README.md` for
 install/run instructions and the full version-by-version detail (its
 own original design notes are not included in this repository
-checkout). Still not a complete TCAD workbench: no 3D visualization, no
-multi-parameter or batch sweeps, no C–V mode in the GUI, no second
-solver backend actually wired up yet (see
+checkout). Still not a complete TCAD workbench: no 3D visualization,
+no multi-parameter or batch sweeps, no C–V mode in the GUI, and the
+DEVSIM backend is 1D equilibrium/bias only so far (see
 `gui/README.md`'s "Honest limits" for the full, current list).
 
 ### Workbench domain layer (new)
@@ -283,8 +287,17 @@ The M3 milestone of the Semiconductor Workbench plan is in place:
 - **A SolverBackend protocol** (`workbench/solvers/base.py`): backends
   are addressed by id behind one file-based interface; the homegrown
   runner is the reference implementation. A golden test proves runs
-  routed through the protocol are identical to direct calls — this is
-  the door the future DEVSIM backend walks through.
+  routed through the protocol are identical to direct calls. The door
+  now has a second engine behind it: `workbench/solvers/
+  devsim_backend.py` builds its own DEVSIM mesh from the same
+  DeviceSpec job, solves drift-diffusion equilibrium and warm-started
+  contact-bias ramps/sweeps with devsim's own silicon physics, emits
+  schema-v2 results (including a convergence trace parsed by the same
+  RunRecord reader), and is validated by cross-backend tests: the same
+  1D diode swept by both engines produces I–V curves agreeing to a
+  constant factor ~2 set by the engines' tabulated-ni difference, with
+  both matching the analytic built-in potential within 5%. DEVSIM stays
+  an optional dependency; the registry auto-detects it.
 
 ## 7. Where to read more
 

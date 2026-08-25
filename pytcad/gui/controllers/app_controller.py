@@ -110,9 +110,19 @@ class AppController(QObject):
         # Its defaults equal the wire-format defaults, so this is
         # invisible until a student toggles something.
         from .lab_controller import PhysicsLabController
-        self.lab = PhysicsLabController(self)
+        # Both sub-controllers are exposed to QML as context properties
+        # (gui/app.py), so their lifetime must ride the QObject parent
+        # chain -- Qt children of THIS controller -- not bare Python
+        # attributes. Unparented, they were destroyed whenever Python GC
+        # got around to them, racing QML binding evaluation at shutdown
+        # and printing 'TypeError: Cannot read property ... of null'
+        # for physicsLab/deviceBuilder (the class b381124 fixed for
+        # AppController itself). The first positional still names the
+        # app so they can reach currentStore(); parent=self makes the
+        # engine -> controller -> lab/builder destruction order total.
+        self.lab = PhysicsLabController(self, parent=self)
         from .builder_controller import BuilderController
-        self.builder = BuilderController(self)
+        self.builder = BuilderController(self, parent=self)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
