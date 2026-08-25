@@ -138,7 +138,23 @@ class Device1D:
         self.doping = np.asarray(doping, dtype=float)
         self.Ntot = np.abs(self.doping) if Ntotal is None else np.asarray(Ntotal, float)
         self.T = T
-        self.mat = material
+        # M11-S3: a single Semiconductor keeps the classic behavior; a
+        # per-node sequence defines a heterostructure.  All material
+        # fields below become node arrays in that case, and eps(x)
+        # enters the Poisson flux form while chi/Eg enter the currents
+        # through position-dependent nie (band offsets ride ln(nie)
+        # edge factors -- see _residual_jacobian).
+        if isinstance(material, Semiconductor):
+            self.mats = [material] * len(np.atleast_1d(doping))
+        else:
+            self.mats = [m for m in material]
+            if len(self.mats) != len(np.atleast_1d(doping)):
+                raise ValueError(
+                    "material list length must match the mesh")
+            if not all(isinstance(m, Semiconductor) for m in self.mats):
+                raise TypeError("material entries must be Semiconductor")
+        self.mat = self.mats[0] if isinstance(material, Semiconductor) \
+            else material
         self.models = models or Models()
 
         if self.Ntot.max() > 1e19:
@@ -149,8 +165,11 @@ class Device1D:
             )
 
         self.VT = thermal_voltage(T)
-        self.eps = material.eps_r * EPS0
-        self.ni = material.ni(T)
+        self.eps_arr = np.array([m.eps_r * EPS0 for m in self.mats])
+        self.chi_arr = np.array([m.chi for m in self.mats])
+        self.Eg0_arr = np.array([m.Eg0 for m in self.mats])
+        self.eps = self.eps_arr[0]          # reference (legacy attribute)
+        self.ni = self.mats[0].ni(T)
 
         # Concentration scale.  Using n_i (the classical de Mari choice)
         # makes the scaled majority density ~1e7 and the Poisson residual
@@ -171,20 +190,34 @@ class Device1D:
 
         # --- scaled material fields ---
         self.C = self.doping / self.Ns
-        self.nie = nie_effective(self.Ntot, material, T, self.models.bgn)
+        # per-material grouping: each Semiconductor's parameter set is
+        # applied only on its own nodes (arrays stay node-ordered)
+        self.nie = np.empty(self.N)
+        self.mu_n0 = np.empty(self.N)
+        self.mu_p0 = np.empty(self.N)
+        self.tau_n = np.empty(self.N)
+        self.tau_p = np.empty(self.N)
+        seen_mats = []                               # identity-unique, ordered
+        for mm in self.mats:
+            if not any(mm is m2 for m2 in seen_mats):
+                seen_mats.append(mm)
+        for m in seen_mats:
+            nodes = np.array([mm is m for mm in self.mats])
+            nt = self.Ntot[nodes]
+            self.nie[nodes] = nie_effective(nt, m, T, self.models.bgn)
+            self.mu_n0[nodes] = (
+                mobility_caughey_thomas(nt, m, T, "n")
+                if self.models.doping_mobility
+                else np.full(int(nodes.sum()), m.mu_n_max))
+            self.mu_p0[nodes] = (
+                mobility_caughey_thomas(nt, m, T, "p")
+                if self.models.doping_mobility
+                else np.full(int(nodes.sum()), m.mu_p_max))
+            self.tau_n[nodes] = lifetime_scharfetter(nt, m.tau_n0,
+                                                     m.tau_Nref)
+            self.tau_p[nodes] = lifetime_scharfetter(nt, m.tau_p0,
+                                                     m.tau_Nref)
         self.nie_s = self.nie / self.Ns
-
-        self.mu_n0 = (mobility_caughey_thomas(self.Ntot, material, T, "n")
-                      if self.models.doping_mobility
-                      else np.full(self.N, material.mu_n_max))
-        self.mu_p0 = (mobility_caughey_thomas(self.Ntot, material, T, "p")
-                      if self.models.doping_mobility
-                      else np.full(self.N, material.mu_p_max))
-
-        self.tau_n = lifetime_scharfetter(self.Ntot, material.tau_n0,
-                                          material.tau_Nref)
-        self.tau_p = lifetime_scharfetter(self.Ntot, material.tau_p0,
-                                          material.tau_Nref)
 
         # interface (harmonic-mean) diffusivities, scaled
         self._set_edge_diffusivity(self.mu_n0, self.mu_p0)
@@ -194,6 +227,13 @@ class Device1D:
         self.p = None
 
     # ------------------------------------------------------------------
+    def _eps_tilde_edge(self):
+        """Harmonic-mean scaled permittivity on edges, normalized by the
+        FIRST material's eps so a uniform device gives exactly 1.0
+        everywhere and every residual reduces to its original form."""
+        et_n = self.eps_arr / self.eps_arr[0]
+        return 2.0 * et_n[:-1] * et_n[1:] / (et_n[:-1] + et_n[1:])
+
     def _set_edge_diffusivity(self, mu_n, mu_p):
         """Einstein relation D = mu V_T; harmonic mean onto the interfaces.
 
@@ -237,6 +277,7 @@ class Device1D:
     def solve_equilibrium(self, opts: NewtonOptions = None):
         opts = opts or NewtonOptions()
         h, dV, C, nie = self.h, self.dV, self.C, self.nie_s
+        et = self._eps_tilde_edge()
 
         psi = np.arcsinh(C / (2.0 * nie))          # neutral-bulk guess
         bc = self._contact_values([0.0, 0.0])
@@ -247,18 +288,19 @@ class Device1D:
             p = nie * np.exp(np.clip(-psi, -700, 700))
 
             F = np.zeros(self.N)
-            F[1:-1] = ((psi[2:] - psi[1:-1]) / h[1:]
-                       - (psi[1:-1] - psi[:-2]) / h[:-1]
-                       - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
+            F[1:-1] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
+                   - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
+                   - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
             F[0] = psi[0] - bc[0][0]
             F[-1] = psi[-1] - bc[1][0]
 
             main = np.zeros(self.N)
             lower = np.zeros(self.N - 1)
             upper = np.zeros(self.N - 1)
-            main[1:-1] = -1.0 / h[1:] - 1.0 / h[:-1] - dV[1:-1] * (n[1:-1] + p[1:-1])
-            upper[1:] = 1.0 / h[1:]
-            lower[:-1] = 1.0 / h[:-1]
+            main[1:-1] = (-et[1:] / h[1:] - et[:-1] / h[:-1]
+                          - dV[1:-1] * (n[1:-1] + p[1:-1]))
+            upper[1:] = et[1:] / h[1:]
+            lower[:-1] = et[:-1] / h[:-1]
             main[0] = main[-1] = 1.0
             upper[0] = 0.0
             lower[-1] = 0.0
@@ -294,9 +336,16 @@ class Device1D:
         N, h, dV, C = self.N, self.h, self.dV, self.C
         dn_e, dp_e = self.dn_edge, self.dp_edge
 
-        delta = psi[1:] - psi[:-1]
+        # M11-S3: band-offset-aware SG deltas.  ln(nie) edge factors make
+        # the current vanish identically at equilibrium even across an
+        # abrupt material change; derivatives wrt psi are unchanged
+        # because nie is fixed under the Newton update.
+        delta = ((psi[1:] - psi[:-1])
+                 + np.log(self.nie_s[1:] / self.nie_s[:-1]))
+        delta_psi = psi[1:] - psi[:-1]           # Poisson-side potential drop
         Bp, Bm = bernoulli(delta), bernoulli(-delta)
         dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+        et = self._eps_tilde_edge()
 
         an = dn_e / h
         ap = dp_e / h
@@ -305,9 +354,14 @@ class Device1D:
 
         # recombination (unscaled physical densities)
         n_phys, p_phys = n * self.Ns, p * self.Ns
-        R, dRdn, dRdp = recombination(
-            n_phys, p_phys, self.nie, self.tau_n, self.tau_p, self.mat,
-            auger=self.models.auger)
+        R = np.empty_like(n_phys); dRdn = np.empty_like(n_phys)
+        dRdp = np.empty_like(n_phys)
+        for m in {id(mm): mm for mm in self.mats}.values():
+            nodes = np.array([mm is m for mm in self.mats])
+            R[nodes], dRdn[nodes], dRdp[nodes] = recombination(
+                n_phys[nodes], p_phys[nodes], self.nie[nodes],
+                self.tau_n[nodes], self.tau_p[nodes], m,
+                auger=self.models.auger)
         if not self.models.srh:
             R = np.zeros_like(R); dRdn = np.zeros_like(R); dRdp = np.zeros_like(R)
         Rs = R / self.R0
@@ -325,12 +379,12 @@ class Device1D:
 
         i = np.arange(1, N - 1)
         # --- Poisson ---
-        F[3 * i] = ((psi[2:] - psi[1:-1]) / h[1:]
-                    - (psi[1:-1] - psi[:-2]) / h[:-1]
+        F[3 * i] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
+                    - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
                     - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
-        add(3 * i, 3 * i, -1.0 / h[1:] - 1.0 / h[:-1])
-        add(3 * i, 3 * (i + 1), 1.0 / h[1:])
-        add(3 * i, 3 * (i - 1), 1.0 / h[:-1])
+        add(3 * i, 3 * i, -et[1:] / h[1:] - et[:-1] / h[:-1])
+        add(3 * i, 3 * (i + 1), et[1:] / h[1:])
+        add(3 * i, 3 * (i - 1), et[:-1] / h[:-1])
         add(3 * i, 3 * i + 1, -dV[1:-1])
         add(3 * i, 3 * i + 2, dV[1:-1])
 
@@ -480,11 +534,15 @@ class Device1D:
     def band_diagram(self):
         """Conduction/valence band edges and quasi-Fermi levels [eV]."""
         VT = self.VT
-        Ec = -self.psi * VT - self.mat.chi
-        Ev = Ec - self.mat.Eg(self.T)
+        chi_arr = np.array([m.chi for m in self.mats])
+        Eg_arr = np.array([m.Eg(self.T) for m in self.mats])
+        Ec = -self.psi * VT - chi_arr
+        Ev = Ec - Eg_arr
+        Nc_arr = np.array([m.Nc(self.T) for m in self.mats])
+        Nv_arr = np.array([m.Nv(self.T) for m in self.mats])
         EFn = Ec + VT * np.log(np.maximum(self.n * self.Ns, 1e-30)
-                               / self.mat.Nc(self.T))
+                               / Nc_arr)
         EFp = Ev - VT * np.log(np.maximum(self.p * self.Ns, 1e-30)
-                               / self.mat.Nv(self.T))
+                               / Nv_arr)
         return Ec, Ev, EFn, EFp
 
