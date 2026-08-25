@@ -76,15 +76,10 @@ for name, A, B, expr in (("AlphaN", AN_LO, BN_LO, an_expr),
                         expression=f"-{dc} * EdgeInverseLength * ElectricField/{name}_Eabs")
 CreateEdgeModel(device=dev, region=reg, model="II_PairGen",
                 expression="(AlphaN*abs(ElectronCurrent) + AlphaP*abs(HoleCurrent))")
-import os as _o
-SIGN = _o.environ.get("E_SIGN", "neg")
-SCALE = _o.environ.get("E_SCALE", "1")
-CreateEdgeModel(device=dev, region=reg, model="II_PairGen_S",
-                expression=f"({SCALE})*II_PairGen")
 CreateEdgeModel(device=dev, region=reg, model="II_GenerationE",
-                expression=f"{'+-'[SIGN=='neg']}II_PairGen_S")
+                expression="-II_PairGen")
 CreateEdgeModel(device=dev, region=reg, model="II_GenerationH",
-                expression="+II_PairGen_S")
+                expression="+II_PairGen")
 
 devsim.delete_equation(device=dev, region=reg, name="ElectronContinuityEquation")
 devsim.delete_equation(device=dev, region=reg, name="HoleContinuityEquation")
@@ -97,8 +92,9 @@ for eqname, var, charge, node_gen, flux, ii in (
                     time_node_model=charge, edge_model=flux,
                     node_model=node_gen, edge_volume_model=ii,
                     variable_update="positive")
-for c in devsim.get_contact_list(device=dev):
-    CreateSiliconDriftDiffusionAtContact(dev, reg, c)
+if os.environ.get("RESTORE_CONTACTS", "1") == "1":
+    for c in devsim.get_contact_list(device=dev):
+        CreateSiliconDriftDiffusionAtContact(dev, reg, c)
 print("rewired")
 
 def jtotal():
@@ -107,12 +103,16 @@ def jtotal():
     return float(je[0] + jh[0])
 
 v = 0.0
-while v < 20:
-    v += 0.5
+step = float(os.environ.get("STEP", "0.5"))
+maxv = float(os.environ.get("MAXV", "20"))
+while v < maxv:
+    v += step
     devsim.set_parameter(device=dev, name=GetContactBiasName("right"), value=v)
     try:
-        info = devsim.solve(type="dc", absolute_error=1e6, relative_error=1e-6,
-                            maximum_iterations=50, info=True)
+        info = devsim.solve(type="dc",
+                            absolute_error=float(os.environ.get("ABSTOL", "1e6")),
+                            relative_error=float(os.environ.get("RELTOL", "1e-6")),
+                            maximum_iterations=int(os.environ.get("MAXIT", "50")), info=True)
         ok = bool(info.get("converged"))
         its = info.get("iterations") or ()
         if its:
