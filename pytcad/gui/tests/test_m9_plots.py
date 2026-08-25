@@ -198,3 +198,48 @@ def test_comparison_run_produces_an_overlay_source(gapp, tmp_path):
 def _sweep_contact(controller):
     names = controller.sweepContactNames
     return names[0] if names else ""
+
+
+# -- 2D maps: Bands/Recombination must render real 2D fields ---------------
+@pytest.fixture(scope="module")
+def solved_2d(tmp_path_factory):
+    """A small solved 2D MOSFET through the pytcad backend."""
+    from gui.services import examples
+    from gui.services.solver_backend import validate_result
+    from workbench.solvers.base import SolveRequest, get_backend
+    spec = examples.mosfet_example_spec()
+    d = tmp_path_factory.mktemp("m9_2d")
+    job, out = str(d / "m.json"), str(d / "m.npz")
+    spec.to_json(job)
+    get_backend("pytcad").run(SolveRequest(job_json_path=job,
+                                           out_npz_path=out))
+    validate_result(out)
+    return out
+
+
+def test_bands_mode_renders_2d_map(solved_2d):
+    from gui.services.result_store import NpzResultStore
+    from gui.visualization.mpl_canvas_item import MplCanvasItem
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setStore(NpzResultStore(solved_2d))
+    item.setMode("bands")
+    img = item.renderToImage()
+    assert not img.isNull()
+    colours = {img.pixel(x, y) for x in range(0, img.width(), 17)
+               for y in range(0, img.height(), 17)}
+    assert len(colours) > 4, "2D band map rendered blank"
+
+
+def test_recombination_mode_renders_2d_map(solved_2d):
+    from gui.services.result_store import NpzResultStore
+    from gui.visualization.mpl_canvas_item import MplCanvasItem
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setStore(NpzResultStore(solved_2d))
+    item.setMode("recombination")
+    img = item.renderToImage()
+    assert not img.isNull()
+    colours = {img.pixel(x, y) for x in range(0, img.width(), 17)
+               for y in range(0, img.height(), 17)}
+    assert len(colours) > 4, "2D recombination map rendered blank"

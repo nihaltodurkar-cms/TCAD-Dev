@@ -652,9 +652,27 @@ class MplCanvasItem(QQuickPaintedItem):
         x, psi, n, p, _doping, material, T = data
         axes = self._store.mesh_axes()
         if axes.dimensionality != 1:
-            ax.text(0.5, 0.5, "Band diagrams: 1D results only in this "
-                              "version", ha="center", va="center")
-            ax.set_axis_off()
+            # 2D/3D: render the conduction-band-edge MAP (E_c = -psi-chi).
+            # Element-wise physics, same conventions as the 1D curves.
+            if axes.dimensionality != 2:
+                ax.text(0.5, 0.5, "3D band maps: a later version",
+                        ha="center", va="center")
+                ax.set_axis_off()
+                return
+            from workbench.core.materials import LIBRARY
+            mat = LIBRARY.get(material)
+            y = np.asarray(axes.axes["y"], dtype=float) * 1e4
+            Ec = -psi - mat.chi
+            mesh = ax.pcolormesh(x, y, Ec, shading="nearest",
+                                 cmap="viridis")
+            fig_cbar = ax.figure.colorbar(mesh, ax=ax)
+            fig_cbar.set_label("Ec [eV]")
+            ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+            ax.invert_yaxis()
+            if self._xlim:
+                ax.set_xlim(*self._xlim)
+            if self._ylim:
+                ax.set_ylim(self._ylim[1], self._ylim[0])
             return
         from workbench.analysis.observables import band_diagram
         Ec, Ev, EFn, EFp = band_diagram(psi, n, p, material, T)
@@ -685,9 +703,25 @@ class MplCanvasItem(QQuickPaintedItem):
         x, _psi, n, p, doping, material, T = data
         axes = self._store.mesh_axes()
         if axes.dimensionality != 1:
-            ax.text(0.5, 0.5, "Recombination maps: 1D results only in "
-                              "this version", ha="center", va="center")
-            ax.set_axis_off()
+            if axes.dimensionality != 2:
+                ax.text(0.5, 0.5, "3D recombination maps: a later version",
+                        ha="center", va="center")
+                ax.set_axis_off()
+                return
+            from workbench.analysis.observables import recombination_rate
+            R = recombination_rate(n, p, doping, material, T)
+            y = np.asarray(axes.axes["y"], dtype=float) * 1e4
+            mesh = ax.pcolormesh(x, y,
+                                 np.log10(np.maximum(np.abs(R), 1e-30)),
+                                 shading="nearest", cmap="inferno")
+            cbar = ax.figure.colorbar(mesh, ax=ax)
+            cbar.set_label("log10 |R| [cm^-3 s^-1]")
+            ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+            ax.invert_yaxis()
+            if self._xlim:
+                ax.set_xlim(*self._xlim)
+            if self._ylim:
+                ax.set_ylim(self._ylim[1], self._ylim[0])
             return
         from workbench.analysis.observables import recombination_rate
         R = recombination_rate(n, p, doping, material, T)
