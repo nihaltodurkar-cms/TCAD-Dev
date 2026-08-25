@@ -80,3 +80,41 @@ S3 (DG): LARGE -- modifies Poisson assembly; only after S2 proves the
 S2/S3 modify device cores -> requires the same explicit sign-off
 mechanism as M11-S3 (HETEROSTRUCTURE-PLAN.md section 4).  S1 needs
 nothing and can start immediately.
+
+------------------------------------------------------------------------
+5. S2/S3 DESIGN NOTES (from the code audit -- implement directly)
+------------------------------------------------------------------------
+S2 TRAP-ASSISTED (core extension; needs section-4 sign-off):
+- Injection point: pytcad/device.py `_residual_jacobian`, extending the
+  recombination block exactly like M11-S3 extended Poisson/continuity.
+  Model: trap level E_t (default mid-gap); capture rates
+      c_n = sigma_n * v_th * n(x), c_p likewise;
+  occupancy N_t from steady-state balance including the tunneling
+  escape/addition probabilities
+      P_n(x->surface) = exp(-2 int kappa dx)  [WKB over the barrier
+      portion between trap and contact/oxide].
+- Residual contribution enters BOTH continuity equations as
+  R_TAT - G_TAT with the SAME sign conventions as SRH (verified
+  against test_global_charge_neutrality-style checks).
+- Jacobian: analytic w.r.t. n/p; the WKB factors are fixed wrt psi
+  ONLY if the field is frozen -- for self-consistent fields include
+  d(kappa)/d(psi) or accept frozen-field first slice (document!).
+- FIRST RED TEST: extend tests/test_validation.py FD-Jacobian to a
+  device with traps enabled; homojunction-without-traps must remain
+  bit-identical.
+- Benchmark gate: SILC-style effective-lifetime vs trap-position curve
+  against published dependencies.
+
+S3 DENSITY-GRADIENT (core extension):
+- Add quantum potential Lambda^2 * grad^2(sqrt(n)) / sqrt(n) term to
+  the electron/hole continuity equilibrium expressions as a Model-
+  Catalog flag `density_gradient` (default False -> bit-identical).
+- Lambda^2 = hbar^2/(12 m* q) material property -> Semiconductor gains
+  an m* field (conductivity-band and valence-band effective masses).
+- FD-Jacobian extension first (the grad^2(sqrt n) stencil is wide --
+  five-point); then centroid-shift benchmark (~1 nm inversion offset,
+  Cmax reduction quoted in README section 1).
+
+BOTH SLICES: catalog entries with equations/references/applicability;
+honesty notes that TAT trap densities are fitting parameters unless
+measured; DG is a moment correction, not QM.
