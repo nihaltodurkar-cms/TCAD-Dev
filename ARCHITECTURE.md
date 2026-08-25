@@ -247,3 +247,28 @@ change, guarded by parity goldens.
 - GUI redesign, theme/layout churn, Matplotlib replacement.
 - ANY change to numerical defaults, scalings, or tolerances; no deletion
   of DeviceSpec or the subprocess contract.
+
+------------------------------------------------------------------------
+7. NEXT SESSION QUEUE (priority order, detailed starts)
+------------------------------------------------------------------------
+1. M7 EXTENSION -- bias ramps in the DEVSIM backend (smallest; unblocks
+   I-V cross-validation). Lift the "EQUILIBRIUM only" refusal: ramp
+   GetContactBiasName parameter per spec.bias / sweep, reuse diode_
+   common.py's ramp loop, emit sweep__* series keys + per-point trace.
+   Tests: cross-backend I-V agreement on the 1D diode vs pytcad's
+   run_sweep within stated tolerances.
+2. M6 UI SLICE -- surface x_range_cm implants and a "checkpoint ->
+   device" action in ProcessPanel.qml (controller slots already exist).
+3. M9 PLOTS -- viewport observables: band diagram + recombination maps
+   as new canvas modes fed from workbench/analysis (data path already
+   exists via RunResult fields); side-by-side model on/off runs.
+4. M8 FIRST NEW MODEL -- thermionic emission or impact ionization;
+   gate: published-value benchmark test in tests/test_model_benchmarks
+   style BEFORE merge; decide compositional assembly only here.
+5. M10 GROWTH -- deck statements beyond templates: sweep/bias commands,
+   file-open integration in Main.qml.
+6. RELEASE PASS -- gui/README v0.5.x final wording, tag v0.5.0.
+
+Standing rules: every slice ships suite-green with pre-existing tests
+unchanged; adversarial probe pass before each commit; optional deps
+stay optional.
