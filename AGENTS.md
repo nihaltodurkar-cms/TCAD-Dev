@@ -1,8 +1,10 @@
 # AGENTS.md — Guidance for AI agents working on PyTCAD
 
 Read this before doing anything. Then read `history.md` (current
-state + open items), `ARCHITECTURE.md` (roadmap §4/§7), and any
-`*-PLAN.md` for the milestone you're touching.
+state + open items), `ARCHITECTURE.md` (roadmap + live queue),
+`SENTAURUS-PARITY-PLAN.md` (the governing future plan, M13-M30), and
+the active milestone spec (`M13-FERMI-DIRAC-PLAN.md` while M13 is in
+flight).
 
 ## What this is
 
@@ -103,10 +105,21 @@ precise handoff note in history.md (see M12-S2 precedent).
   anchor); escape as `cm\^-3`.
 - str.replace() patches SILENTLY no-op on stale strings -- always
   assert the replace applied ("assert old in s").
+- The bash tool's cwd RESETS to /home/nihal between calls -- always
+  `cd` or pass workdir; the #1 cause of lost edits.
+- Writing a doc in two parts to the SAME path truncates it (second
+  write replaces the file) -- write once, or append via bash.
 - Keep engine/QObject references alive in tests: dropping the engine
   reference lets GC destroy the whole QML tree mid-test.
 - Heredocs double backslashes: check line continuations after
   writing test files through bash.
+- np.polynomial.legendre.leggauss is module-level (not
+  Legendre.leggauss) in numpy 2.5.
+- GUI controller APIs: familySweep.configureFamily's FIRST arg is the
+  STEPPED CONTACT NAME (string); ViewportPanel.setViewMode takes
+  INTERNAL mode names ("series"/"bands"), not display names
+  ("Curves"/"Bands") -- wrong names silently no-op or render the
+  wrong view.
 - np.trapezoid is the modern name; scipy.sparse diags order (lo,main,up).
 
 **Physics/model conventions (empirically established)**
@@ -119,17 +132,30 @@ precise handoff note in history.md (see M12-S2 precedent).
   but breaks hole detailed balance. Only a carrier-specific
   equilibrium detailed-balance check catches it.
 - TAT WKB factors are SI-calibrated (F in V/m): mixing V/cm underflows
-  every probability and silently reduces TAT to SRH.
+  every probability and silently reduces TAT to SRH. Bulk-Si midgap
+  TAT underflows to exactly 0 at any realizable field -- gate the
+  factor law over synthetic fields, assert device-level enh==1.0 as
+  honest physics.
 - devsim ni tables differ from pytcad's -> cross-backend I-V agrees
   only to a constant ~2x factor.
 - Implant windows beyond substrate length must be rejected by
   validate_flow (keep that guard).
 - Checkpoint npz uses FLAT keys (species_P), not nested dicts.
 - 1D sweep channel name is "device", not the contact name.
+- Fermi integral: Boltzmann-limit deviation is exp(eta)/2^{3/2}
+  (exact Taylor series) -- set limit gates from the published math,
+  not round numbers. mpmath mp.quad on [0, inf) under-resolves the
+  t~eta knee (5e-5 off at eta=40): subdivide [1, eta+20, inf].
 
 ## Milestone state & plans
 
-See `history.md` NEXT section for the live queue. Completed:
-M1-M10 (v0.5.0 tagged), M11-S1/S2/S3 (heterostructure materials/wire/
-1D core), M12-S1 (tunneling FN/WKB). In flight: M12-S2 TAT done,
-M12-S3 DG designed (section 5 of TUNNELING-PLAN.md), M11-S4/S5 pending.
+Governing roadmap: `SENTAURUS-PARITY-PLAN.md` (three parity tiers,
+M13-M30, gate-blocking rule 4b). Completed: M1-M10 (v0.5.0 tagged),
+M11-S1/S2/S3 (heterostructure materials/wire/1D core), M12-S1+S2
+(FN/WKB + Hurkx TAT, all gates green), M13 phase 1 (fermi.py +
+G1-G3 gates + G6a pre-edit goldens; 541 tests, zero warnings).
+ACTIVE: M13 phase 2 (1D core FD integration, gates G4-G8; amendment
+sign-off recorded in M13-FERMI-DIRAC-PLAN.md). BLOCKED until M13
+green: M15+ (parity-plan rule 4b). Open & independent: M11-S4 (2D
+heterojunctions), M11-S5 (HBT/HEMT templates). Live queue:
+ARCHITECTURE.md sections 5-7; session detail: history.md.
