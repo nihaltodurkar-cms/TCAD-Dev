@@ -126,3 +126,48 @@ S4 medium once S3 lands.  S5 medium.
 
 Recommended entry: S1 immediately; S2 next session; S3 planned as its
 own dedicated effort after user sign-off on section 4.
+
+------------------------------------------------------------------------
+7. S3 DESIGN NOTES (from the code audit -- implement directly)
+------------------------------------------------------------------------
+Injection points verified in pytcad/device.py:
+
+- Constructor (:133): `material` may accept a LIST of Semiconductor
+  instances (one per node).  All downstream fields become arrays:
+  nie_s already is one; eps, mu, tau need per-node computation by
+  grouping nodes per material (Caughey-Thomas/lifetime calls are
+  already array-wise over Ntot -- pass each material's params on its
+  node subset).
+
+- Epsilon heterogeneity WITHOUT breaking scaling: keep global Ns/LD
+  from the REFERENCE material (max eps_r); introduce scaled
+  eps_tilde_i = eps_i/eps_ref and rewrite the Poisson residual as the
+  conservative flux form
+      F_i = [eps~_{i+1/2}(psi_{i+1}-psi_i)/h - eps~_{i-1/2}(psi_i-
+            psi_{i-1})/h] / dV_i - rho_i,
+  with harmonic-mean eps~ on edges.  For eps~=1 everywhere this
+  reduces ALGEBRAICALLY to today's F -- the homojunction bit-identical
+  regression (gate a) is then structural, not empirical.  Jacobian
+  additions are the direct derivatives of the two flux coefficients.
+
+- THE CRITICAL SUBTLETY (identified, unsolved tonight): carrier
+  densities are Boltzmann against ni(x), which now VARIES.  The
+  current SG form Jn = an*(n1*Bp - n0*Bm) is slot-key consistent only
+  for spatially constant normalization.  Correct treatment needs the
+  Slotboom/position-dependent-density form with explicit band-offset
+  factors at abrupt interfaces, e.g. edge factor
+      exp(-(chi_{i+1}-chi_i)/VT) * (NC_{i+1}/NC_i)
+  inside the electron current, and the mirror for holes.  Getting the
+  discretization AND its Jacobian right is the heart of S3; budget a
+  dedicated session with the finite-difference Jacobian test extended
+  across an interface as the first red test.
+
+- Contact values (_contact_values): already per-node C/nie_s -> correct
+  per-material ohmic contacts for free once nie_s is per-node.
+
+- band_diagram(): gains chi(x)/Eg(x) arrays trivially.
+
+Recommended first red test for the next session: extend
+test_jacobian_matches_finite_differences to a two-material grid
+(Si/GaAs split at mid-device) -- everything else follows from making
+that green without breaking the homojunction goldens.
