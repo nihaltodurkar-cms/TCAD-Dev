@@ -8,14 +8,17 @@ Sentaurus class). REAL physics only — every educational surface backed
 by actual computation. Never fake, never mock, never weaken tests.
 
 ## STATE (as of this handoff)
-Suite: 450 passed. Tree clean at 8316a0e. Python 3.14, PySide6, devsim
-2.11 installed (optional dep).
+Suite: 459 passed, ZERO warnings (pytest.ini policy). Tree clean at
+cc340a5. Python 3.14, PySide6, devsim 2.11 installed (optional dep).
 SHIPPED: M1 domain core+ModelCatalog; M2 RunRecord+schema v2; M3 store/
 analysis boundaries + SolverBackend protocol; M4 Physics Lab foundation;
 M5 device templates (NMOS golden == shipped example); M6 checkpoints→
-DomainDevices + per-region implants; M7 GENUINE devsim backend
-(equilibrium slice, cross-validated vs pytcad ≤25mV); M8/M9/M10 first
-slices (benchmark gate, provenance rows, deck workflow).
+DomainDevices + per-region implants; M7 GENUINE devsim backend now WITH
+bias ramps + sweeps, cross-backend I-V validated (~2x constant offset
+from tabulated ni), per-stage converge__trace; M8/M9/M10 first slices.
+Also fixed: devsim 1D schema conformance (no fake terminal keys),
+devsim global solve() state leak (device+mesh deleted per run), GUI
+teardown ownership (lab/builder are Qt children of AppController).
 
 ## HARD RULES (never break)
 - pytcad/pytcad numerical core: NO changes except exposing values it
@@ -32,8 +35,7 @@ Plan → user approves → TDD (tests red first) → implement → hard debug
 (user pushes). Honesty over polish: report blockers, document limits.
 
 ## NEXT (priority order, details in ARCHITECTURE.md §7)
-1. M7 extension: bias ramps in devsim backend → cross-backend I-V.
-2. M6 UI: surface x_range_cm implants + checkpoint→device in ProcessPanel.
+1. M6 UI: surface x_range_cm implants + checkpoint→device in ProcessPanel.
 3. M9 plots: band diagram / recombination viewport modes from
    workbench/analysis; model on/off comparison runs.
 4. M8 first new physics model (thermionic or impact ionization) — MUST
@@ -43,6 +45,13 @@ Plan → user approves → TDD (tests red first) → implement → hard debug
 
 ## GOTCHAS LEARNED THE HARD WAY
 - devsim mesher adds nodes if ps < segment length → use FULL spacing.
+- devsim solve() is PROCESS-GLOBAL (no device= arg) → delete your
+  device+mesh in a finally block or stale states fail later solves.
+- pytest warning filters are REGEX: escape '^' ("cm\^-3") or they
+  silently never match.
+- Qt writes QML warnings via a cached C stream, NOT sys.stderr/qInstall
+  MessageHandler for Python-side TypeErrors → test teardown noise by
+  asserting QObject ownership, not by capturing stderr.
 - Engines ship different tabulated ni → cross-backend psi agrees only
   to ~25mV; compare against analytic Vbi too.
 - Implant windows beyond substrate length silently no-op → validate_flow
