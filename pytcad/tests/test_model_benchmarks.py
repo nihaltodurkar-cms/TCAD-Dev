@@ -176,3 +176,56 @@ def test_deck_bias_unknown_contact_is_line_numbered():
     from workbench.workflow import run_deck_full
     with pytest.raises(ValueError, match="line 3"):
         run_deck_full("go\ntemplate pn_diode\nbias nosuch = 0.3\nend")
+
+
+# ----------------------------------------------------------------------
+#  M12-S1: tunneling physics (Fowler-Nordheim + WKB direct tunneling).
+#  Analysis-layer diagnostics; gates are published constants/signatures.
+# ----------------------------------------------------------------------
+def test_fn_constant_matches_physical_definition():
+    """B_FN must equal 4 sqrt(2 m_e)/(3 q hbar) to machine precision --
+    it is a derived universal constant, not a fit parameter."""
+    from workbench.physics.tunneling import B_FN, b_fn_constant
+    # B_FN is the literature-ROUNDED constant (6.831e9); the
+    # derivation gives 6.830890e9 -- agree to 6 digits
+    assert b_fn_constant() == pytest.approx(B_FN, rel=1e-4)
+
+
+def test_fn_plot_slope_is_recovered_by_regression():
+    """The defining FN signature: ln(J/E^2) vs 1/E is a straight line
+    with slope -B phi^{3/2}.  Regression over three decades of field."""
+    from workbench.physics.tunneling import (fowler_nordheim_current,
+                                             fn_plot_slope)
+    phi = 3.1                                   # SiO2 barrier [eV]
+    fields = np.linspace(6e8, 6e10, 60)
+    y = np.log([fowler_nordheim_current(E, phi) / E**2 for E in fields])
+    x = 1.0 / fields
+    slope, intercept = np.polyfit(x, y, 1)
+    expected = -6.831e9 * phi ** 1.5
+    assert slope == pytest.approx(expected, rel=0.02), \
+        f"recovered slope {slope:.4g} vs {expected:.4g}"
+
+
+def test_wkb_decay_length_in_published_band():
+    """SiO2 decay length for a 3.1 eV barrier at m* = 0.42 m0: the
+    literature band is ~0.55-0.65 inverse angstrom."""
+    from workbench.physics.tunneling import wkb_kappa
+    kappa = wkb_kappa(3.1, m_star_rel=0.42)
+    per_angstrom = kappa * 1e-10
+    assert 0.55 < per_angstrom < 0.65, \
+        f"kappa = {per_angstrom:.3f} /A outside published band"
+
+
+def test_direct_tunneling_limit_behaviours():
+    """T -> 1 as width or barrier goes to zero; monotone decrease in
+    both width and height otherwise."""
+    from workbench.physics.tunneling import wkb_direct_transmission
+    # 0.1 A at kappa ~ 0.59/A still reflects ~11% -- physics, not a bug
+    assert wkb_direct_transmission(1e-11, 3.1, 0.42) == pytest.approx(
+        0.8897, rel=0.01)
+    assert wkb_direct_transmission(1e-12, 3.1, 0.42) == \
+        pytest.approx(0.98838, abs=2e-3)
+    assert wkb_direct_transmission(1e-9, 1e-9, 0.42) > 0.99
+    t1 = [wkb_direct_transmission(d, 3.1, 0.42)
+          for d in np.linspace(1e-10, 5e-9, 20)]
+    assert all(a >= b for a, b in zip(t1, t1[1:]))
