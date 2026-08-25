@@ -214,6 +214,10 @@ class AppController(QObject):
         return self.family
 
     @Property(QObject, constant=True)
+    def cvSweep(self):
+        return self.cv
+
+    @Property(QObject, constant=True)
     def regionListModel(self):
         return self._region_list_model
 

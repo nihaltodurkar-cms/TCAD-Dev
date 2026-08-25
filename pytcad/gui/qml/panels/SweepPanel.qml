@@ -252,7 +252,7 @@ Rectangle {
             objectName: "runCVButton"
             Layout.fillWidth: true
             text: "Run C-V"
-            onClicked: if (root.controller) root.controller.cv.runCV(
+            onClicked: if (root.controller) root.controller.cvSweep.runCV(
                 parseFloat(cvNsub.text), parseFloat(cvTox.text),
                 -2.0, 2.0, 0.05)
         }
