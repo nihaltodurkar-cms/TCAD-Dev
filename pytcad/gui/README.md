@@ -1,4 +1,4 @@
-# PyTCAD Desktop GUI (v0.1 – v0.5.0)
+# PyTCAD Desktop GUI (v0.1 – v0.5.x)
 
 A PySide6 / Qt Quick desktop frontend for the PyTCAD solver.
 
@@ -618,6 +618,9 @@ the full stack — QML → Controller → JobRunner (QProcess) → solver_runner
 
 ### Honest limits of v0.4
 
+(Historical record — batch sweeps and the MOS C–V mode arrived later in
+v0.5.x; see those sections.)
+
 - One swept contact per run; every other terminal holds its configured
   bias. No multi-parameter or batch sweeps, no C–V mode.
 - The Boltzmann-statistics degeneracy warning (>~1e19 cm⁻³) applies to
@@ -807,6 +810,47 @@ one-sided abrupt junctions, gated by published values (coefficient table;
 breakdown inside textbook ranges at 1e15/1e16/1e17 cm⁻³). Analysis-layer
 only for now — catalog registration comes together with solver coupling.
 
+### Sweeps growth: family (batch) and MOS C–V
+
+The Sweeps panel grows three tiers. The original single-contact voltage
+sweep stays as-is. Below it, **FAMILY (batch)** re-solves the exact last
+solved device once per stepped terminal voltage while sweeping another
+contact (`configureFamily(stepped, start, stop, step)` +
+`runFamily(swept, start, stop, step)`): every curve re-runs the full
+job→subprocess pipeline, diverged points are flagged, and all curves
+overlay in Curves mode with a per-stepped-value legend. At the bottom,
+the **MOS C–V** section runs the validated `MOSCapacitor` core
+(poly-gate depletion, flat-band modes) through the standard job →
+subprocess → schema-v2 result-store pipeline; the curve is gated
+against the analytic C_ox/C_min landmarks in `gui/tests/test_cv_mode.py`
+and surfaces through `cvSweep.cvStore()`.
+
+### Physics Lab, projects, and the user guide
+
+The **Physics Lab** tab exposes the ModelCatalog interactively: every
+physics model is a checkbox with its exact equation and literature
+reference shown on selection, "Plot convergence" jumps to the stored
+residual trace, and the model toggles feed the next Run (and the
+all-models-off comparison). Project files (v4 schema) carry structure,
+mesh, sweep config and process state through save/load with a
+dirty-marker guard. A 20-page illustrated guide with real GUI
+screenshots — captured headlessly from this very app — lives in
+`../docs/user-guide/`.
+
+### Heterostructures and tunneling reach the wire format (M11/M12)
+
+`DeviceSpec` gains `region_materials`: the material library resolves
+case-insensitive names (Si, Ge, GaAs, InGaAs, AlGaAs factory) per
+region, validation rejects unknown or mixed-unsupported combinations
+loudly, and the homegrown 1D backend passes the per-node material list
+into `Device1D`'s heterojunction core (flux-form Poisson with ε(x),
+Anderson band offsets via ln(nie) edge factors). The analysis layer
+gains `workbench/physics/tunneling.py` (Fowler–Nordheim constants/slope,
+WKB κ/transmission — published-value gated), and the solver-side
+Hurkx trap-assisted tunneling (`Models(tat=True, trap_et_rel=...)`) is
+covered by its own acceptance tests (FD-Jacobian < 5e-5 with traps on;
+traps-off bit-identity; WKB factor-law gate over 1e7–5e10 V/m).
+
 ### Honest limits of v0.5.x
 
 - The DEVSIM backend solves **1D two-terminal silicon devices only**
@@ -820,3 +864,9 @@ only for now — catalog registration comes together with solver coupling.
   2D+ results get an honest placeholder rather than a fake cut.
 - Impact ionization is not yet selectable in the Physics Lab nor coupled
   to any solver's Newton assembly.
+- The DEVSIM backend does not yet accept `region_materials`:
+  heterostructure jobs must use the homegrown 1D backend.
+- The MOS C–V result surfaces through `cvSweep.cvStore()` (and the
+  validated test gates); there is no dedicated C–V plot mode yet.
+- Family sweeps re-solve the *last solved* device; editing the
+  structure after a solve invalidates the batch until the next Run.

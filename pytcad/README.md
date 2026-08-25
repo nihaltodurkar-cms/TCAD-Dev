@@ -1,16 +1,25 @@
-# PyTCAD
+# PyTCAD — numerical core
 
-A compact, readable, **validated** TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation in 1D, 2D (with a real MOSFET), and 3D, plus a desktop GUI — structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
+This is the numerical-core package: process simulation and self-
+consistent drift-diffusion device simulation in 1D, 2D and 3D. The
+project-level README one directory up covers the Semiconductor
+Workbench layer, the desktop GUI, the full validation philosophy, and
+the illustrated user guide in `docs/user-guide/`.
 
-Roughly 2,700 lines for the numerical core below (1D + 2D + 3D; the desktop GUI in `gui/` is separate and documented in `gui/README.md`). No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
+A compact, readable, **validated** TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation in 1D, 2D (with a real MOSFET), and 3D — structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
+
+Roughly 3,000 lines for the numerical core below (1D + 2D + 3D, including heterojunction materials and trap-assisted tunneling). No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
 
 ```
-pytcad/
+pytcad/ (this package)
   constants.py   physical constants, thermal voltage
-  materials.py   ni(T), mobility, lifetimes, bandgap narrowing, recombination
+  materials.py   ni(T), mobility, lifetimes, bandgap narrowing, recombination;
+                 Si, Ge, GaAs heterostructure parameter sets
   mesh.py        non-uniform meshing + Debye-length adequacy check
   process.py     implantation, diffusion, Deal-Grove oxidation
-  device.py      drift-diffusion: Poisson + both continuity equations
+  device.py      drift-diffusion: Poisson + both continuity equations;
+                 per-node heterojunction materials (M11); Hurkx trap-
+                 assisted tunneling (M12)
   moscap.py      MOS capacitor, quasi-static C-V
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity
@@ -19,8 +28,12 @@ pytcad/
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           39 validation tests against analytic limits
-                 (15 1D + 13 2D + 8 3D + 3 process-physics)
+tests/           analytic-limit validation + published-value physics
+                 benchmarks (part of the 527-test suite, zero warnings)
+../workbench/    domain layer: materials library (Si, Ge, GaAs, InGaAs,
+                 AlGaAs), model catalog, solver backends, tunneling and
+                 impact-ionization physics, deck front end
+../gui/          PySide6/QML desktop app
 ```
 
 ---
@@ -98,7 +111,10 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 39 tests pass (15 1D + 13 2D + 8 3D + 3 process-physics). Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
+All tests pass as part of the project-wide 527-test suite (zero
+warnings); every result is classified as literature benchmark,
+analytical validation, model parameterization, or numerical
+regression — see the project README. Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
 
 | Quantity | PyTCAD | Analytic | |
 |---|---|---|---|
@@ -166,7 +182,7 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/                          # 39/39 (15 1D + 13 2D + 8 3D + 3 process)
+pytest tests/ ../gui/tests/            # 527 passed, zero warnings
 ```
 
 Requires `numpy`, `scipy`, `matplotlib` (examples only).
@@ -196,25 +212,17 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 ### Desktop GUI (new)
 
-There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
-v0.1 – v0.5.0) that solves devices in a background process and
-visualizes the result, without the GUI ever blocking or the numerical
-engine changing by a single line. It now covers: a built-in 2D MOSFET
-example (v0.1); a Structure + Mesh workbench for building and
-validating devices from regions, contacts and gates (v0.2); a Process
-Workbench driving pytcad's own 1D substrate/implant/anneal/oxidize
-operations with per-species doping tracking (v0.3); single-contact
-voltage sweeps with curve plotting and derived readouts — Imax/Imin,
-Ion/Ioff, and a max-gm threshold estimate for gate sweeps (v0.4); and
-an explicit, versioned schema for solved-result files that every result
-is now validated against on load, preparing the ground for (but not yet
-adding) a second solver backend (v0.5.0). See `gui/README.md` for
-install/run instructions and the full version-by-version detail (its
-own original design notes are not included in this repository
-checkout). Still not a complete TCAD workbench: no 3D visualization, no
-multi-parameter or batch sweeps, no C–V mode in the GUI, no second
-solver backend actually wired up yet (see
-`gui/README.md`'s "Honest limits" for the full, current list).
+There is a PySide6 / Qt Quick desktop frontend in `../gui/` that solves
+devices in a background process and visualizes the result, without the
+GUI ever blocking or the numerical engine changing by a single line. It
+covers: a Structure + Mesh workbench, a Process Workbench, single- and
+family (batch) voltage sweeps with curve plotting and derived readouts,
+a MOS C–V mode, a Physics Lab panel (every catalog model as a checkbox
+with its equation and reference), Bands/Recombination viewport modes
+with an all-models-off comparison overlay, deck-driven sessions, a
+versioned result schema with per-run provenance, and a second solver
+backend (DEVSIM, optional). See `../gui/README.md` and
+`../docs/user-guide/` for details.
 
 ## 7. Where to read more
 

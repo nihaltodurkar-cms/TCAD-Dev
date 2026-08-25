@@ -2,15 +2,18 @@
 
 A compact, readable, **validated** TCAD toolkit in Python — process simulation and self-consistent drift-diffusion device simulation in 1D, 2D (with a real MOSFET), and 3D, plus a desktop GUI — structured the way commercial TCAD is structured (Sentaurus Process → Sentaurus Device, Silvaco Athena → Atlas).
 
-Roughly 2,700 lines for the numerical core below (1D + 2D + 3D; the desktop GUI in `gui/` is separate and documented in `gui/README.md`). No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks.
+Roughly 3,000 lines for the numerical core below (1D + 2D + 3D, including heterojunction materials and trap-assisted tunneling); the Semiconductor Workbench domain layer (`workbench/`) and the desktop GUI (`gui/`) are separate and documented in `gui/README.md`. No black boxes: every model states its equation, its provenance (theory / measurement / empirical fit), and where it breaks. A 20-page illustrated user guide with real GUI screenshots lives in `docs/user-guide/`.
 
 ```
 pytcad/
   constants.py   physical constants, thermal voltage
-  materials.py   ni(T), mobility, lifetimes, bandgap narrowing, recombination
+  materials.py   ni(T), mobility, lifetimes, bandgap narrowing, recombination;
+                 Si, Ge, GaAs (heterostructure parameter sets)
   mesh.py        non-uniform meshing + Debye-length adequacy check
   process.py     implantation, diffusion, Deal-Grove oxidation
-  device.py      drift-diffusion: Poisson + both continuity equations
+  device.py      drift-diffusion: Poisson + both continuity equations;
+                 per-node heterojunction materials (M11); Hurkx trap-
+                 assisted tunneling (M12)
   moscap.py      MOS capacitor, quasi-static C-V
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity
@@ -19,12 +22,17 @@ pytcad/
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           39 validation tests against analytic limits
-                 (15 1D + 13 2D + 8 3D + 3 process-physics)
-workbench/       Semiconductor Workbench domain layer (M1): Region /
-                 DomainDevice / MaterialLibrary / ModelCatalog as pure
-                 data, plus lossless adapters to DeviceSpec — see
-                 ARCHITECTURE.md
+tests/           527 tests: analytic-limit validation, published-value
+                 physics benchmarks, headless GUI tests — all green,
+                 zero warnings
+workbench/       Semiconductor Workbench domain layer: Region /
+                 DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
+                 AlGaAs) / ModelCatalog as pure data; lossless adapters
+                 to DeviceSpec; SolverBackend protocol (pytcad + devsim);
+                 observables; published-value-gated physics
+                 (impact ionization, Fowler-Nordheim/WKB tunneling);
+                 deck front end — see ARCHITECTURE.md
+docs/user-guide/ in-depth PDF guide (20 pages) with live-app screenshots
 ```
 
 ---
@@ -94,6 +102,8 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | SRH | $\dfrac{np-n_{ie}^2}{\tau_p(n+n_{ie})+\tau_n(p+n_{ie})}$ | theory (mid-gap traps); $\tau$ from **fit** |
 | Auger | $(C_nn+C_pp)(np-n_{ie}^2)$ | measured $C_n, C_p$ |
 | Bandgap narrowing | Slotboom: $\Delta E_g = E_0[\ln(N/N_0)+\sqrt{\ln^2(N/N_0)+\tfrac12}]$ | **empirical fit** to BJT data |
+| Heterojunction band offsets | position-dependent $\varepsilon$, $\chi$, $E_g$; offsets enter through $\ln(n_{ie})$ edge factors with carrier-specific deltas | theory (Anderson rule via $n_{ie}$) |
+| Trap-assisted tunneling | Hurkx: SRH denominator with WKB-enhanced densities, $\tau_p(n + n_{ie}(1{+}P_p)) + \tau_n(p + n_{ie}(1{+}P_n))$ | theory (Hurkx et al. 1992); WKB factors SI-calibrated |
 | Deal–Grove | $x^2 + Ax = B(t+\tau)$ | theory; $A,B$ Arrhenius **fits** |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.
@@ -102,7 +112,14 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 39 tests pass (15 1D + 13 2D + 8 3D + 3 process-physics). Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
+All 527 tests pass — analytic-limit validation, published-value physics
+benchmarks, and headless GUI tests — with a standing zero-warnings
+invariant. Every verification result is classified as one of
+**literature benchmark** (agrees with measured published values),
+**analytical validation** (agrees with closed-form theory independent of
+the solver), **model parameterization** (fitted constant transcribed
+correctly, applicability stated), or **numerical regression**
+(self-consistency gate). Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
 
 | Quantity | PyTCAD | Analytic | |
 |---|---|---|---|
@@ -121,6 +138,12 @@ MOS-C, 5 nm oxide, n⁺poly on p-Si 10¹⁷:
 | $V$ at $C_{min}$ | −0.04 V | $V_{th}$ = +0.09 V |
 
 The reverse-leakage test is worth reading: the current does **not** saturate. It grows as roughly $(V_{bi}+V)^{1.16}$, because the width over which *both* carriers drop below $n_i$ — and hence $R \to -n_i/(\tau_n+\tau_p)$ — widens faster than the depletion width itself at moderate bias. The solver reproduces this and $J = q\int(-R)\,dx$ closes to 3%.
+
+Newer physics gates (each lands in `tests/test_model_benchmarks.py` or a dedicated acceptance test **before** any feature uses it):
+
+- **Heterojunctions (M11):** finite-difference Jacobian across a Si/GaAs interface < 5×10⁻⁵; Anderson band step at the interface; carrier-specific equilibrium detailed balance on both sides (the check that catches a shared band-offset delta); homojunction path bit-identical to the uniform-material code.
+- **Trap-assisted tunneling (M12):** FD-Jacobian with traps on < 5×10⁻⁵; traps-off results bit-identical (`array_equal`) to the SRH-only solver; the Hurkx enhancement factor verified against the first-principles WKB factor law over 10⁷→5×10¹⁰ V/m (monotone onset, low-field limit exactly 1).
+- **Tunneling module (M12-S1):** Fowler–Nordheim constants and slope gated against published values; WKB κ and transmission against the analytic forms.
 
 ---
 
@@ -162,6 +185,23 @@ phis, Qg, C = mos.cv_sweep(np.linspace(-2, 2, 201))
 print(mos.analytic_landmarks())     # phi_F, W_max, C_ox, C_min, V_th, V_FB
 ```
 
+Heterostructure (per-node material list — Si, Ge, GaAs available in
+`pytcad.materials`; InGaAs/AlGaAs via the workbench `MaterialLibrary`):
+
+```python
+from pytcad.materials import SILICON, GAAS
+mats = [SILICON]*10 + [GAAS]*10             # interface exactly at node 10
+dev = Device1D(x, dop, T=300.0, material=mats)
+```
+
+Trap-assisted tunneling (Hurkx enhancement of SRH; trap energy as
+fraction of $E_g$):
+
+```python
+dev = Device1D(x, dop, T=300.0, models=Models(srh=True, tat=True,
+                                              trap_et_rel=0.5))
+```
+
 Run everything:
 
 ```bash
@@ -170,7 +210,7 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/                          # 39/39 (15 1D + 13 2D + 8 3D + 3 process)
+pytest tests/ gui/tests/               # 527 passed, zero warnings
 ```
 
 Requires `numpy`, `scipy`, `matplotlib` (examples only).
@@ -217,13 +257,22 @@ backend: DEVSIM -- its own mesh built from the same device-spec job,
 full drift-diffusion via devsim's canonical silicon physics, optional
 dependency, off unless installed (M7, including warm-started contact-
 bias ramps and voltage sweeps with cross-backend I-V validation against
-the homegrown engine). See `gui/README.md` for
-install/run instructions and the full version-by-version detail (its
-own original design notes are not included in this repository
-checkout). Still not a complete TCAD workbench: no 3D visualization,
-no multi-parameter or batch sweeps, no C–V mode in the GUI, and the
-DEVSIM backend is 1D equilibrium/bias only so far (see
-`gui/README.md`'s "Honest limits" for the full, current list).
+the homegrown engine). Since then the GUI has grown: viewport **Bands**
+and **Recombination** modes with an all-models-off comparison overlay
+and a **Physics Lab** panel (every catalog model as a checkbox with its
+equation and reference); **family (batch) sweeps** that re-solve one
+device for a set of stepped terminal voltages and overlay all curves
+with a legend; a dedicated **MOS C–V** mode running the validated
+`MOSCapacitor` core through the standard job pipeline; deck-driven
+sessions via **File → Open Deck...**; and versioned project files
+carrying structure, mesh, sweep and process state. See `gui/README.md`
+for install/run instructions and the full version-by-version detail.
+Still not a complete TCAD workbench: no 3D visualization; the DEVSIM
+backend solves 1D two-terminal silicon devices only; impact ionization
+is analysis-layer only, not yet solver-coupled (a devsim
+`edge_volume_model` unit anomaly is documented in `benchmarks/`); and
+the C–V result surfaces through the result store rather than a dedicated
+plot (see `gui/README.md`'s "Honest limits" for the full, current list).
 
 ### Workbench domain layer (new)
 
@@ -299,6 +348,39 @@ The M3 milestone of the Semiconductor Workbench plan is in place:
   both matching the analytic built-in potential within 5%. DEVSIM stays
   an optional dependency; the registry auto-detects it.
 
+### Heterostructure materials & 1D heterojunction core (new)
+
+The M11 slice set brings real heterostructures. `workbench/core/
+materials.py` adds Ge, GaAs, InGaAs and an AlGaAs factory to the
+`MaterialLibrary` (Varshni bandgap, Caughey–Thomas mobility, permittivity,
+electron affinity — each with its provenance), `DomainDevice` accepts a
+material per region, and the wire format carries `region_materials`.
+The numerical side (`Device1D`) accepts a per-node material list:
+permittivity becomes position-dependent and enters Poisson in flux
+form, while band offsets enter the currents through position-dependent
+$n_{ie}$ with **carrier-specific** edge factors (electron
+$\Delta\psi + \Delta\ln n_{ie}$, hole $\Delta\psi - \Delta\ln n_{ie}$ —
+opposite signs; a shared delta passes a Jacobian check but breaks hole
+detailed balance, which is exactly the equilibrium test that guards it).
+
+### Tunneling: Fowler–Nordheim/WKB and trap-assisted (new)
+
+Two M12 pieces. `workbench/physics/tunneling.py` is the analysis layer:
+Fowler–Nordheim constants and slope, and triangular-barrier WKB
+$\kappa$ and transmission, each gated in `tests/test_model_benchmarks.py`
+against published values. The solver-side piece is **trap-assisted
+tunneling** in `Device1D` (Hurkx-style): with `Models(tat=True)`, the
+SRH denominator gains WKB escape-probability enhancements
+$P_{n,p} = \exp(-B_{n,p}\,\varphi^{3/2}/F)$ evaluated on the edge field
+in SI units, with the trap level set by `trap_et_rel` as a fraction of
+$E_g$. The frozen-field approximation (probabilities refreshed once per
+bias point, omitted from the analytic Jacobian) is documented, and an
+honest physical note ships with it: bulk-silicon midgap TAT is
+negligible at any realizable junction field — the enhancement targets
+oxides, high-bandgap and narrow-gap materials, which is why the
+acceptance test gates the *factor law* over synthetic fields rather
+than device currents.
+
 ## 7. Where to read more
 
 - **Selberherr, *Analysis and Simulation of Semiconductor Devices* (1984)** — still the reference for the discretised equations, scaling, and Scharfetter–Gummel. Computational.
@@ -307,6 +389,7 @@ The M3 milestone of the Semiconductor Workbench plan is in place:
 - **Plummer, Deal & Griffin, *Silicon VLSI Technology*** — the process side: implantation, diffusion, oxidation, with the models actually used in fabs. Experimental/empirical.
 - **Deal & Grove, *J. Appl. Phys.* 36, 3770 (1965)** — the oxidation model, and honest about its thin-oxide failure. Experimental + theory.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
+- **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 
 ### Workflow front end (new)
 
