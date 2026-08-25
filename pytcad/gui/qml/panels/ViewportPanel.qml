@@ -206,6 +206,15 @@ Rectangle {
         }
     }
 
+    // batch family: redraw series mode whenever a family finishes
+    Connections {
+        target: appController.familySweep
+        function onFamilyChanged() {
+            canvas.setFamilySource(appController.familySweep.curves)
+            if (root.currentMode === "series") root.setViewMode("series")
+        }
+    }
+
     Component.onCompleted: {
         if (controller) canvas.bindController(controller)
         canvas.applyTheme(Theme.dark)

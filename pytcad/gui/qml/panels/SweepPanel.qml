@@ -158,6 +158,68 @@ Rectangle {
             text: "Last arm attempt was rejected -- the fields show the currently armed sweep."
         }
 
+        // ---- batch families: N curves at stepped terminal biases ----
+        Label {
+            text: "FAMILY (batch)"
+            color: Theme.textDim; font.pixelSize: 11; font.letterSpacing: 1
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Label { text: "Step"; Layout.preferredWidth: 46 }
+            ComboBox {
+                id: familySteppedBox
+                objectName: "familySteppedBox"
+                Layout.fillWidth: true
+                model: root.controller ? root.controller.sweepContactNames : []
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Label { text: "V"; Layout.preferredWidth: 12 }
+            TextField {
+                id: famStart
+                objectName: "familyStartField"; Layout.fillWidth: true
+                text: "0.0"; validator: DoubleValidator {}
+            }
+            TextField {
+                id: famStop
+                objectName: "familyStopField"; Layout.fillWidth: true
+                text: "1.0"; validator: DoubleValidator {}
+            }
+            TextField {
+                id: famStep
+                objectName: "familyStepField"; Layout.fillWidth: true
+                text: "0.5"; validator: DoubleValidator {}
+            }
+        }
+        Button {
+            objectName: "runFamilyButton"
+            Layout.fillWidth: true
+            enabled: root.controller && !root.controller.busy
+                     && root.controller.hasResult
+            text: "Run family"
+            onClicked: {
+                var fs = root.controller.familySweep
+                fs.configureFamily(familySteppedBox.currentText,
+                                   parseFloat(famStart.text),
+                                   parseFloat(famStop.text),
+                                   parseFloat(famStep.text))
+                fs.runFamily(contactBox.currentText,
+                             parseFloat(startField.text),
+                             parseFloat(stopField.text),
+                             parseFloat(stepField.text))
+            }
+        }
+        Label {
+            objectName: "familyStatusLabel"
+            color: root.controller && root.controller.familySweep.hasCurves
+                   ? Theme.ok : Theme.textDim
+            font.pixelSize: Theme.fsSmall
+            text: root.controller && root.controller.familySweep.hasCurves
+                  ? root.controller.familySweep.curves.length + " curve(s) ready"
+                  : "no family yet"
+        }
+
         Item { Layout.fillHeight: true }
     }
 }

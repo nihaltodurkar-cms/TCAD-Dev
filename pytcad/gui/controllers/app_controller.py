@@ -142,6 +142,11 @@ class AppController(QObject):
         self.lab = PhysicsLabController(self, parent=self)
         from .builder_controller import BuilderController
         self.builder = BuilderController(self, parent=self)
+        # Batch sweeps: same ownership pattern -- Qt child of THIS
+        # controller, exposed to QML through a property (not a bare
+        # attribute).
+        from .family_sweep_controller import FamilySweepController
+        self.family = FamilySweepController(self, parent=self)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -177,6 +182,11 @@ class AppController(QObject):
     def currentStore(self):
         return self._store
 
+    def lastRunSpec(self):
+        """The spec of the last executed Run -- the base device for
+        batch sweeps.  Public: FamilySweepController reads it."""
+        return self._last_run_spec
+
     # Plain Python instance attributes are NOT visible to QML's
     # meta-object-based property lookup -- an `appController.propertiesModel`
     # binding against a bare attribute silently resolves to undefined,
@@ -196,6 +206,10 @@ class AppController(QObject):
     @Property(QObject, constant=True)
     def consoleModel(self):
         return self._console_model
+
+    @Property(QObject, constant=True)
+    def familySweep(self):
+        return self.family
 
     @Property(QObject, constant=True)
     def regionListModel(self):

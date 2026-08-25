@@ -209,6 +209,19 @@ class MplCanvasItem(QQuickPaintedItem):
     def hasComparisonSource(self):
         return getattr(self, "_comparison_sweep", None) is not None
 
+    # -- batch family overlay ------------------------------------------
+    @Slot("QVariant")
+    def setFamilySource(self, curves):
+        """List of {label, stepped_value, voltages, currents, converged}
+        dicts from FamilySweepController -- drawn as a multi-curve
+        family in "series" mode, one solid line per stepped value."""
+        self._family_curves = curves or []
+        self.update()
+
+    @Slot(result=int)
+    def familyCurveCount(self):
+        return len(getattr(self, "_family_curves", []))
+
     @Slot(result=list)
     def availableSweepChannels(self):
         return list(self._sweep.channels) if self._sweep is not None else []
@@ -764,6 +777,19 @@ class MplCanvasItem(QQuickPaintedItem):
         note = f"  ({n_bad} point(s) did not converge)" if n_bad else ""
         ax.set_xlabel(f"{sw.contact} bias [V]")
         ax.set_ylabel(ylabel)
+        # batch family: one line per stepped value, real solver output
+        family = getattr(self, "_family_curves", []) or []
+        for k, curve in enumerate(family):
+            fv = np.asarray(curve.get("voltages", []), dtype=float)
+            fi = np.asarray(curve.get("currents", []), dtype=float)
+            if fv.size == 0:
+                continue
+            fmarker = "-o" if fv.size <= 40 else "-"
+            colour = self._series_color(1 + k)
+            ax.plot(fv, fi, fmarker, lw=1.1, ms=2.5, color=colour,
+                    alpha=0.9, label=curve.get("label", ""))
+        if family:
+            ax.legend(fontsize=7, frameon=False)
         # M9: overlay the all-models-OFF comparison sweep, dashed, when
         # present and covering the same contact/channel.
         comp = getattr(self, "_comparison_sweep", None)
