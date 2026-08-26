@@ -66,7 +66,7 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 
 | Assumption | Fails when |
 |---|---|
-| Boltzmann statistics | doping ≳ 10¹⁹ cm⁻³ (degeneracy) — the code warns you |
+| Boltzmann statistics (default; `Models(fd=True)` available) | doping ≳ 10¹⁹ cm⁻³ (degeneracy) — the code warns you unless FD is enabled |
 | Full dopant ionisation | cryogenic temperature; deep dopants |
 | Classical (no quantisation) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
@@ -107,6 +107,7 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | Bandgap narrowing | Slotboom: $\Delta E_g = E_0[\ln(N/N_0)+\sqrt{\ln^2(N/N_0)+\tfrac12}]$ | **empirical fit** to BJT data |
 | Heterojunction band offsets | position-dependent $\varepsilon$, $\chi$, $E_g$; offsets enter through $\ln(n_{ie})$ edge factors with carrier-specific deltas | theory (Anderson rule via $n_{ie}$) |
 | Trap-assisted tunneling | Hurkx: SRH denominator with WKB-enhanced densities, $\tau_p(n + n_{ie}(1{+}P_p)) + \tau_n(p + n_{ie}(1{+}P_n))$ | theory (Hurkx et al. 1992); WKB factors SI-calibrated |
+| Fermi-Dirac statistics | $n = N_c F_{1/2}(\eta)$ with nu-factor generalized Scharfetter-Gummel (`Models(fd=True)`); incomplete ionization for shallow B/P/As behind `Models(incomplete_ion=True)` | theory (parabolic-band FD; Bessemoulin-Christensen modified SG); gated vs independent roots and published freeze-out curves |
 | Deal–Grove | $x^2 + Ax = B(t+\tau)$ | theory; $A,B$ Arrhenius **fits** |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.

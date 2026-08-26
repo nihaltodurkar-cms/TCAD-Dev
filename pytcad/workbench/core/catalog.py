@@ -96,6 +96,61 @@ _MODELS = {
         applicability="1D, 2D, 3D; significant above N ~ 1e17 cm^-3",
         enabled_by_default=True,
     ),
+    # M13 phase 2
+    "fd": ModelInfo(
+        key="fd",
+        title="Fermi-Dirac carrier statistics (parabolic-band F_{1/2})",
+        equations=(
+            "n = Nc * F_{1/2}(eta_n),  p = Nv * F_{1/2}(eta_p)",
+            "eta_n = (E_Fn - E_c)/kT,  eta_p = (E_v - E_Fp)/kT",
+            "generalized SG edge factor: delta_n += d ln(nu), nu = "
+            "F(eta)exp(-eta) (carrier-specific opposite signs);",
+            "equilibrium product np_eq = nie_eff^2 * nu_n * nu_p",
+        ),
+        parameters=(),
+        references=(
+            "Lundstrom, Fundamentals of Carrier Transport (2000), ch. 15",
+            "Bessemoulin-Christensen, Netw. Heterog. Media 7 (2012) -- "
+            "modified Scharfetter-Gummel convergence",
+            "validated vs independent quadrature + Sommerfeld series "
+            "(M13 gates G1-G7, tests/test_m13_fermi.py, "
+            "tests/test_m13_solver.py)",
+        ),
+        applicability="1D (device.py); parabolic bands only; valid eta in "
+                      "[-40, +40], exact Boltzmann tail below; composes "
+                      "with Slotboom BGN only through nie_eff as pinned in "
+                      "M13-FERMI-DIRAC-PLAN.md section 4.8",
+        enabled_by_default=False,
+        limitations="No non-parabolic bands, no valley splitting, no "
+                    "density-gradient quantum correction (M20). TAT+FD "
+                    "composition keeps its declared-untested status "
+                    "until M15/M16.",
+    ),
+    "incomplete_ion": ModelInfo(
+        key="incomplete_ion",
+        title="Incomplete dopant ionization (shallow B/P/As)",
+        equations=(
+            "N_D+ = N_D / (1 + g_D exp((E_F - E_D)/kT)),  g_D = 2",
+            "N_A- = N_A / (1 + g_A exp((E_A - E_F)/kT)),  g_A = 4",
+            "E_D = E_c - 45 meV,  E_A = E_v + 45 meV (hydrogenic)",
+        ),
+        parameters=(),
+        references=(
+            "Sze & Ng, Physics of Semiconductor Devices, 3rd ed., ch. 7 "
+            "(freeze-out curves)",
+            "Altermatt et al., IEEE Trans. Electron Devices 49 (2002)",
+            "gated vs literature bands at 77/150/250/300 K "
+            "(tests/test_m13_solver.py G7b/c)",
+        ),
+        applicability="1D (device.py); independent of the fd flag; "
+                      "single-species per profile (majority side carries "
+                      "all dopants); below the Mott transition "
+                      "(~4e18 cm^-3 for Si:P)",
+        enabled_by_default=False,
+        limitations="Hydrogenic model invalid at degenerate doping and "
+                    "for deep levels; no dopant-species input on net-"
+                    "doping profiles; not ported to 2D/3D.",
+    ),
 }
 
 

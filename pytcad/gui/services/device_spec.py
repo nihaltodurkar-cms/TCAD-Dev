@@ -181,8 +181,13 @@ def _validate_region_materials(entries):
 
 
 def _default_models():
+    # M13: fd / incomplete_ion join the wire-format defaults (OFF),
+    # keeping the invariant that this dict equals
+    # ModelCatalog.default_config() and covers every Models dataclass
+    # flag the solver exposes through the catalog.
     return {"doping_mobility": True, "field_mobility": False,
-            "srh": True, "auger": True, "bgn": True}
+            "srh": True, "auger": True, "bgn": True,
+            "fd": False, "incomplete_ion": False}
 
 
 @dataclass

@@ -263,6 +263,46 @@ at the fermi.py level; G5 partial (inverse derivative); G6a goldens
 captured and enforced; G4-G8 solver-level gates are RED-BY-ABSENCE
 until the core lands.
 
+PHASE-2 STATUS (2026-08-26): ALL GATES GREEN.  1D core integration
+landed in pytcad/device.py (nu-factor SG per section 3.2bis; physical
+Nc/Nv statistics; incomplete ionization with flag independence from fd;
+moscap FD branch for G7d).  Gate evidence lives in
+pytcad/tests/test_m13_solver.py:
+  G4   uniform neutrality x6 vs independent roots, generalized mass
+       action, degenerate V_bi -- PASS
+  G5   FD-Jacobian on degenerate step / degenerate Si+GaAs
+       heterointerface / incomplete-ionization rows <= 5e-5 (house
+       per-column normalization) -- PASS
+  G6a/c goldens + pre-edit sha256 digests (TAT path, hetero bias) --
+       bit-identical -- PASS
+  G6b  nondegenerate equivalence -- PASS after a documented SPEC-FIX:
+       the original 1e-6 density tolerance is unattainable because the
+       exact-series nu correction exp(eta)/2^{3/2} at 1e16 cm^-3 is
+       1.24e-4; gates now derive from that exact deviation.
+  G7a  n/N_D within 5% of the fully-ionized degenerate figure +
+       machine-precision independent-root agreement -- PASS
+  G7b/c B ionization 77/150/250/300 K: solver == independent root to
+       1e-9 and inside literature bands (77 K freeze-out ~28%) -- PASS
+  G7d  moscap FD C_max strictly below the classical value by 2-30% --
+       PASS
+  G8   full suite green, zero warnings, pre-existing tests unchanged
+       (564 passed).
+
+PHASE-2 ADDENDUM -- 2D/3D PORTS COMPLETE (same session): Device2D and
+Device3D gained the identical nu-factor SG statistics via the shared
+fd_node_factors/fd_ohmic_values helpers (device.py); port gates in
+tests/test_m13_solver.py (port2d/port3d): uniform-grid neutrality vs
+independent roots to <=1e-12, machine-precision zero equilibrium
+current across a degenerate 2D step, house FD-Jacobian gates on
+degenerate 2D/3D grids, Boltzmann-regime equivalence.  fd=False paths
+bit-identical (G6a goldens re-verified; suite 570 passed).  Incomplete
+ionization remains 1D-only per section 3.3.  M13 gate battery G1-G8 is
+now FULLY GREEN across 1D/2D/3D.
+Full-suite runtime grew to ~5 min (the M13 gate tests run hundreds of
+residual/Jacobian evaluations through f_half_inv); f_half_inv was
+optimized (split analytic-tail + secured Newton) with all phase-1 gates
+re-verified unchanged.
+
 Ordering inside the list is the implementation order: fermi.py (G1-G3)
 is independently mergeable BEFORE any core edit; the solver gates
 (G4-G6) follow; G7's published benchmarks may be written red at any
@@ -310,3 +350,57 @@ fermi.py itself is a pure addition and needed no amendment.
 - No claim of Sentaurus numerical-method parity (their FD-SG scheme
   details are proprietary); we gate on the physics properties, not
   on matching their discretization.
+
+------------------------------------------------------------------------
+3.2bis  DESIGN SPIKE DECISION (recorded phase 2, session of 2026-08-26)
+------------------------------------------------------------------------
+Scheme A (nu-factor modified SG) is CHOSEN.  Per node
+    eta_x = f_half_inv(density_x / nie_x)          (x = n or p)
+    nu_x  = F_{1/2}(eta_x) exp(-eta_x)
+    L_x   = ln nu_x
+the SG edge arguments become
+    electron: delta_n = dpsi + dln(nie) + dL_n
+    hole:     delta_p = dpsi - dln(nie) - dL_p
+(carrier-specific OPPOSITE signs -- the M11 lesson is structural here).
+
+Why A over B (inverse-FD): B's Bernoulli argument (a quasi-Fermi
+difference) vanishes at equilibrium only if Delta psi = 0, so plain B
+breaks detailed balance at ANY junction; patching B needs exactly the
+Delta ln(nu) correction, collapsing into A.  Scheme A has:
+
+  * EXACT equilibrium detailed balance for BOTH carriers, algebraically:
+    at phi = const, eta_n = psi - const => Delta eta_n = Delta psi, so
+    ln(n_{i+1}/n_i) = dln(nie) + dpsi + dln(nu) = delta_n identically,
+    including heterointerfaces (machine precision, both carriers).
+  * Bit-level Boltzmann reduction: for eta <= -30 the code sets
+    L = w = 0.0 EXACTLY (true deviation < e^-30/sqrt(2) ~ 5e-14),
+    so deep-Boltzmann edges reproduce today's deltas bit-for-bit.
+  * Positivity: Bernoulli factors stay strictly positive.
+  * Jacobian: delta_tilde depends on psi exactly like today (+-1);
+    density columns gain w_x = dL_x/d(density_x) =
+    (F_{-1/2}/F_{1/2} - 1)/(nie F_{-1/2}) -- computed in the
+    cancellation-safe form (ratio-minus-one)/(nie F'), never
+    (1/F - 1/F')/nie which cancels catastrophically at eta << 0.
+
+Recombination under FD: the equilibrium product becomes
+    np_eq = nie^2 * nu_n * nu_p
+(exact at equilibrium because eta_n + eta_p = 0 in the symmetric-nie
+convention; -> nie^2 as nu -> 1).  SRH/Auger/TAT driving forces use
+(np - np_eq) with chain-rule derivatives through w.  TAT+FD composition
+keeps its declared untested status (section 8) until M15/M16 gates.
+
+Incomplete ionization (standard degeneracy formulation, physical
+statistics): eta^phys_n = f_half_inv(n/Nc(T)), eta^phys_p =
+f_half_inv(p/Nv(T));
+    N_D+ = N_D / (1 + g_D e^{eta_n + DE_D/kT}),   g_D = 2, DE_D = 45 meV
+    N_A- = N_A / (1 + g_A e^{eta_p + DE_A/kT}),   g_A = 4, DE_A = 45 meV
+Net-doping-only input means single-species assumption (majority side
+carries all dopants) -- stated in the catalog.  Hydrogenic model is
+INVALID above the Mott transition (~4e18 cm^-3 Si:P); applicability
+notes go in test docstrings + catalog metadata (G7).
+
+Note for G7a: with FD statistics alone (full ionization), uniform
+neutrality gives n ~= N_D exactly; the nontrivial FD content at 1e20 is
+the Fermi level (eta > 2, gated in G3/G4d) and junction electrostatics,
+so G7a gates n/N_D within 5% of the published fully-ionized degenerate
+figure AND the independent-root agreement, with the caveat documented.

@@ -64,13 +64,141 @@ M_E_CONST = 9.1093837015e-31      # kg
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
-from .constants import Q, EPS0, thermal_voltage
+from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .fermi import (
+    FERMI_ETA_MAX, FERMI_ETA_MIN, f_half, f_half_inv, f_mhalf,
+)
 from .materials import (
     SILICON, Semiconductor, mobility_caughey_thomas, mobility_field,
     nie_effective, lifetime_scharfetter, recombination,
 )
 
 D0_REF = 1.0  # reference diffusivity for scaling [cm^2/s]
+
+
+# ----------------------------------------------------------------------
+#  M13 Fermi-Dirac helpers (asymmetric eta policy -- see docstrings)
+# ----------------------------------------------------------------------
+def fd_density(nc, eta):
+    """n = nc * F_{1/2}(eta) with the M13 asymmetric eta policy.
+
+    Below FERMI_ETA_MIN the integral switches to its EXACT Boltzmann
+    tail exp(eta) (the deviation there is exp(eta)/2^{3/2} < 1e-18 --
+    far below double precision; minority carriers at cryogenic
+    temperature reach eta ~ -170, where quadrature evaluation would be
+    wasted anyway).  Above FERMI_ETA_MAX we refuse loudly -- beyond
+    +40 the parabolic-band model itself is invalid (G7 applicability);
+    no silent extrapolation.  The two branches agree to 1e-14 at the
+    boundary."""
+    eta = np.asarray(eta, dtype=float)
+    if np.any(eta > FERMI_ETA_MAX):
+        raise ValueError(
+            f"FD density argument eta={eta.max():.1f} exceeds "
+            f"+{FERMI_ETA_MAX:.0f}: outside the validated Fermi-integral "
+            f"range (M13 G7 applicability).  Refusing to extrapolate.")
+    shp = eta.shape
+    e1 = eta.ravel()
+    lo = e1 < FERMI_ETA_MIN
+    # f_half's fixed-node quadrature is vectorized over 1-D inputs
+    # only -- flatten, evaluate, restore (any-shape grids supported).
+    out = np.where(lo,
+                   nc * np.exp(np.minimum(e1, 700.0)),
+                   nc * f_half(np.clip(e1, FERMI_ETA_MIN, FERMI_ETA_MAX)))
+    return out.reshape(shp)
+
+
+def fd_ddensity_deta(nc, eta):
+    """d(nc F(eta))/d(eta) matching fd_density piecewise: f_mhalf
+    inside the validated range, the exact tail derivative nc*exp(eta)
+    below FERMI_ETA_MIN, loud refusal above."""
+    eta = np.asarray(eta, dtype=float)
+    if np.any(eta > FERMI_ETA_MAX):
+        raise ValueError(
+            f"FD density argument eta={eta.max():.1f} exceeds "
+            f"+{FERMI_ETA_MAX:.0f} (M13 G7 applicability).")
+    shp = eta.shape
+    e1 = eta.ravel()
+    lo = e1 < FERMI_ETA_MIN
+    tail = np.exp(np.minimum(e1, 700.0))
+    out = np.where(lo, nc * tail,
+                   nc * f_mhalf(np.clip(e1, FERMI_ETA_MIN,
+                                        FERMI_ETA_MAX)))
+    return out.reshape(shp)
+
+
+def fd_node_factors(nc_s, nv_s, n, p):
+    """nu-factor SG quantities on ARBITRARILY shaped density grids
+    (shared by the 1D/2D/3D cores; plan section 3.2bis).
+
+    L_x = ln nu_x with nu = F(eta) exp(-eta); w_x = dL/d(density) in
+    the cancellation-safe form (F'/F - 1)/(Nc_s F').  For eta <= -30
+    both are set to EXACT 0.0 (deep-Boltzmann edges reproduce the
+    Boltzmann scheme bit-for-bit), and those nodes never enter
+    f_half_inv at all."""
+    thr = float(f_half(-30.0))
+    Ln = np.zeros_like(n)
+    Lp = np.zeros_like(p)
+    wn = np.zeros_like(n)
+    wp = np.zeros_like(p)
+    # broadcast DOS against the density grid so scalar-DOS cores
+    # (2D/3D) and per-node arrays (1D heterojunctions) both work
+    den_n = np.broadcast_to(np.asarray(nc_s, dtype=float), np.shape(n))
+    den_p = np.broadcast_to(np.asarray(nv_s, dtype=float), np.shape(p))
+    mn = (n / den_n) > thr
+    mp = (p / den_p) > thr
+    if bool(mn.any()):
+        en = f_half_inv(np.maximum(n[mn], 1e-300) / den_n[mn])
+        Fn = f_half(en)
+        dFn = f_mhalf(en)
+        Ln[mn] = np.log(Fn) - en
+        wn[mn] = (dFn / Fn - 1.0) / (den_n[mn] * dFn)
+    if bool(mp.any()):
+        ep = f_half_inv(np.maximum(p[mp], 1e-300) / den_p[mp])
+        Fp = f_half(ep)
+        dFp = f_mhalf(ep)
+        Lp[mp] = np.log(Fp) - ep
+        wp[mp] = (dFp / Fp - 1.0) / (den_p[mp] * dFp)
+    return Ln, Lp, wn, wp
+
+
+def fd_ohmic_values(C, nc_s, nv_s, ln_gn, eg_kt, V, VT):
+    """FD ohmic-contact values for ARBITRARY node sets (vectorized
+    bisection; the exact Boltzmann closed form is recovered as
+    F -> exp).  All inputs broadcast against each other; C is the SCALED
+    net doping at the contact nodes.  Returns (psi0, n0, p0) scaled."""
+    C = np.asarray(C, dtype=float)
+
+    def dens(e):
+        return fd_density(nc_s, np.minimum(e, FERMI_ETA_MAX)), \
+            fd_density(nv_s, np.minimum(-e - eg_kt, FERMI_ETA_MAX))
+
+    lo = -eg_kt - (FERMI_ETA_MAX - FERMI_ETA_MIN) - 1.0
+    hi = np.full(np.shape(C), float(FERMI_ETA_MAX))
+
+    def g(e):
+        n_, p_ = dens(e)
+        return n_ - p_ - C
+
+    flo, fhi = g(lo), g(hi)
+    if np.any(flo > 0) or np.any(fhi < 0):
+        raise ValueError(
+            "FD contact neutrality root not bracketed at a contact "
+            "(doping outside the model's validated regime?)")
+    for _ in range(300):
+        mid = 0.5 * (lo + hi)
+        left = g(mid) < 0
+        lo = np.where(left, mid, lo)
+        hi = np.where(left, hi, mid)
+        if np.all(hi - lo < 3e-15 * (1.0 + np.abs(lo))):
+            break
+    e0 = 0.5 * (lo + hi)
+    if np.any(e0 > FERMI_ETA_MAX - 2.0):
+        raise ValueError(
+            "FD contact eta beyond the validated range; refusing "
+            "(M13 G7 applicability limit).")
+    n0, p0 = dens(e0)
+    psi0 = V / VT + e0 + ln_gn
+    return psi0, n0, p0
 
 
 # ----------------------------------------------------------------------
@@ -113,6 +241,16 @@ class Models:
     # denominator).  Default OFF => bit-identical to plain SRH.
     tat: bool = False
     trap_et_rel: float = 0.5          # trap level as fraction of Eg
+    # M13 phase 2: Fermi-Dirac carrier statistics (parabolic-band
+    # F_{1/2}, nu-factor generalized SG -- plan section 3.2bis).
+    # Default OFF => bit-identical to Boltzmann (G6a goldens).
+    fd: bool = False
+    # M13 phase 2: incomplete dopant ionization (shallow B/P/As,
+    # degeneracy factors g_D=2 / g_A=4, DeltaE=45 meV).  Independent
+    # of fd; 1D only in this milestone.  Hydrogenic model: invalid
+    # above the Mott transition (~4e18 cm^-3) and for compensated
+    # profiles (net-doping input carries no species split).
+    incomplete_ion: bool = False
     auger: bool = True
     bgn: bool = True               # bandgap narrowing
 
@@ -167,7 +305,7 @@ class Device1D:
             else material
         self.models = models or Models()
 
-        if self.Ntot.max() > 1e19:
+        if self.Ntot.max() > 1e19 and not getattr(self.models, "fd", False):
             warnings.warn(
                 "Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here "
                 "overestimate the carrier density. Treat results in the "
@@ -229,6 +367,33 @@ class Device1D:
                                                      m.tau_Nref)
         self.nie_s = self.nie / self.Ns
 
+        # --- M13: physical band-DOS arrays for Fermi-Dirac statistics.
+        # The Boltzmann core works in the symmetric-nie gauge; FD needs
+        # the true Nc/Nv-asymmetric statistics:
+        #     n = Nc F(eta_n),  eta_n = psi - phi_n - ln(Nc/nie)
+        #     p = Nv F(eta_p),  eta_p = -psi + phi_p - ln(Nv/nie)
+        # which reproduces nie*exp(+-psi) exactly in the Boltzmann
+        # limit and keeps every M11 ln(nie) edge factor intact.
+        self.nc_s = np.empty(self.N)
+        self.nv_s = np.empty(self.N)
+        self.ln_gn = np.empty(self.N)
+        self.ln_gp = np.empty(self.N)
+        self.eg_kt = np.empty(self.N)
+        for m in seen_mats:
+            nodes = np.array([mm is m for mm in self.mats])
+            self.nc_s[nodes] = m.Nc(T) / self.Ns
+            self.nv_s[nodes] = m.Nv(T) / self.Ns
+            self.ln_gn[nodes] = np.log(
+                self.nc_s[nodes] / self.nie_s[nodes])
+            self.ln_gp[nodes] = np.log(
+                self.nv_s[nodes] / self.nie_s[nodes])
+            self.eg_kt[nodes] = m.Eg(T) / (KB_EV * T)
+        # M13 incomplete ionization: dopant split from the net doping.
+        # Single-species assumption (majority side carries all dopants);
+        # documented in Models.incomplete_ion.
+        self.nd_arr = np.maximum(self.doping, 0.0) / self.Ns   # scaled N_D
+        self.na_arr = np.maximum(-self.doping, 0.0) / self.Ns  # scaled N_A
+
         # interface (harmonic-mean) diffusivities, scaled
         self._set_edge_diffusivity(self.mu_n0, self.mu_p0)
 
@@ -259,6 +424,140 @@ class Device1D:
         self.dn_edge = hmean(mu_n) * self.VT / D0_REF
         self.dp_edge = hmean(mu_p) * self.VT / D0_REF
 
+    # ------------------------------------------------------------------
+    #  M13 Fermi-Dirac core helpers
+    # ------------------------------------------------------------------
+    def _fd_eta(self, n, p):
+        """Physical reduced Fermi energies from the slot densities.
+
+        eta_n = f_half_inv(n / Nc_s), eta_p = f_half_inv(p / Nv_s).
+        Pure functions of the density unknowns (the psi dependence is
+        implicit in the Newton iterate)."""
+        en = f_half_inv(np.maximum(n, 1e-300) / self.nc_s)
+        ep = f_half_inv(np.maximum(p, 1e-300) / self.nv_s)
+        return en, ep
+
+    def _fd_factors(self, n, p):
+        """nu-factor SG quantities per node (plan section 3.2bis).
+
+        L_x = ln nu_x with nu = F(eta) exp(-eta); the SG edge arguments
+        gain +dL_n (electrons) and -dL_p (holes).  w_x = dL/d(density)
+        in the cancellation-safe form (F'/F - 1)/(Nc_s F').  For
+        eta <= -30 both are set to EXACT 0.0: the true |L| there is
+        below e^-30/sqrt(2) ~ 5e-14, so deep-Boltzmann edges reproduce
+        today's deltas bit-for-bit.  Nodes that far out are never sent
+        through f_half_inv at all (their factor is zero by definition),
+        which keeps the hot path proportional to the number of
+        moderately-degenerate nodes only."""
+        return fd_node_factors(self.nc_s, self.nv_s, n, p)
+
+    def _ionized_C(self, n, p):
+        """Incomplete-ionization net ionized doping (scaled) and its
+        derivatives wrt the scaled slot densities.
+
+            N_D+ = N_D / (1 + g_D e^{eta_n + dEd/kT}),   g_D = 2
+            N_A- = N_A / (1 + g_A e^{eta_p + dEa/kT}),   g_A = 4
+
+        Shallow hydrogenic B/P/As only (dE = 45 meV); single-species
+        (majority side carries all dopants)."""
+        en, ep = self._fd_eta(n, p)
+        ded_kt = 0.045 / (KB_EV * self.T)
+        ed_n = np.exp(np.minimum(en + ded_kt, 700.0))    # e^{eta_n+dE/kT}
+        ea_p = np.exp(np.minimum(ep + ded_kt, 700.0))
+        ndp = self.nd_arr / (1.0 + 2.0 * ed_n)
+        nam = self.na_arr / (1.0 + 4.0 * ea_p)
+        # chain: d(eta)/d(density) = 1/(Nc_s F'(eta)) with the exact
+        # tail derivative exp(eta) below the validated range
+        # (consistent with fd_density's piecewise policy)
+        tail_n = np.exp(np.minimum(en, 700.0))
+        tail_p = np.exp(np.minimum(ep, 700.0))
+        den_n = np.where(en >= FERMI_ETA_MIN,
+                         f_mhalf(np.clip(en, FERMI_ETA_MIN,
+                                         FERMI_ETA_MAX)), tail_n)
+        den_p = np.where(ep >= FERMI_ETA_MIN,
+                         f_mhalf(np.clip(ep, FERMI_ETA_MIN,
+                                         FERMI_ETA_MAX)), tail_p)
+        detn = 1.0 / np.maximum(self.nc_s * den_n, 1e-300)
+        detp = 1.0 / np.maximum(self.nv_s * den_p, 1e-300)
+        dndp_dn = -2.0 * ed_n / (1.0 + 2.0 * ed_n) ** 2 \
+            * self.nd_arr * detn
+        dnam_dp = -4.0 * ea_p / (1.0 + 4.0 * ea_p) ** 2 \
+            * self.na_arr * detp
+        cion = ndp - nam                 # scaled (ND+ - NA-)/Ns
+        return cion, dndp_dn, -dnam_dp   # d cion/dn, d cion/dp
+
+    def _fd_neutral_eta(self, C):
+        """Vectorized ohmic-contact / bulk-equilibrium root in eta.
+
+        Solves g(e) = n(e) - p(e) - C_ion(e) = 0 node-by-node, where
+        C_ion is the net IONIZED doping: identically C under full
+        ionization, otherwise ND+(e) - NA-(e) from the incomplete-
+        ionization model (single-species per node, so g is strictly
+        increasing -- each component rises with e).  C is the length-N
+        array of scaled net doping.  Used for ohmic contact values and
+        the equilibrium initial guess."""
+        lo = -self.eg_kt - (FERMI_ETA_MAX - FERMI_ETA_MIN) - 1.0
+        hi = np.full(self.N, float(FERMI_ETA_MAX))
+
+        def g(e):
+            # upper-side clamp keeps the evaluation inside the
+            # validated range even at the extreme bracket ends (the
+            # root itself sits far away; the sign there is unambiguous)
+            n_ = fd_density(self.nc_s, np.minimum(e, FERMI_ETA_MAX))
+            p_ = fd_density(self.nv_s,
+                            np.minimum(-e - self.eg_kt,
+                                       FERMI_ETA_MAX))
+            if getattr(self.models, "incomplete_ion", False):
+                ded_kt = 0.045 / (KB_EV * self.T)
+                ndp = self.nd_arr / (1.0 + 2.0 * np.exp(
+                    np.minimum(np.minimum(e, FERMI_ETA_MAX) + ded_kt,
+                               700.0)))
+                nam = self.na_arr / (1.0 + 4.0 * np.exp(
+                    np.minimum(np.minimum(-e - self.eg_kt,
+                                          FERMI_ETA_MAX) + ded_kt,
+                               700.0)))
+                cion = ndp - nam
+            else:
+                cion = C
+            return n_ - p_ - cion
+
+        flo, fhi = g(lo), g(hi)
+        if np.any(flo > 0) or np.any(fhi < 0):
+            raise ValueError(
+                "FD contact neutrality root not bracketed; doping "
+                "outside the model's validated regime?")
+        for _ in range(300):
+            mid = 0.5 * (lo + hi)
+            left = g(mid) < 0
+            lo = np.where(left, mid, lo)
+            hi = np.where(left, hi, mid)
+            if np.all(hi - lo < 3e-15 * (1.0 + np.abs(lo))):
+                break
+        res = 0.5 * (lo + hi)
+        # a root pinned to the +40 saturation boundary means the state
+        # itself is outside the validated model range -- refuse loudly
+        if np.any(res > FERMI_ETA_MAX - 2.0):
+            raise ValueError(
+                "FD neutrality eta beyond the validated range; refusing "
+                "(M13 G7 applicability limit).")
+        return res
+
+    def _fd_contact_values(self, V):
+        """FD ohmic contacts: local neutrality with physical-statistics
+        mass action n0 = Nc F(e), p0 = Nv F(-e - Eg/kT), and
+        psi0 = V/V_T + e + ln(Nc/nie) -- reduces exactly to the
+        Boltzmann form as F -> exp."""
+        e_nodes = self._fd_neutral_eta(self.C)
+        out = []
+        for i, node in enumerate((0, self.N - 1)):
+            e0 = float(e_nodes[node])
+            n0 = float(fd_density(self.nc_s[node], e0))
+            ep0 = -e0 - self.eg_kt[node]
+            p0 = float(fd_density(self.nv_s[node], ep0))
+            psi0 = V[i] / self.VT + e0 + self.ln_gn[node]
+            out.append((float(psi0), float(n0), float(p0)))
+        return out
+
     def _contact_values(self, V):
         """Ohmic contact: local charge neutrality + thermal equilibrium.
 
@@ -272,6 +571,12 @@ class Device1D:
         density comes out with only two correct digits.
         """
         out = []
+        # M13: the FD contact solver handles incomplete ionization too,
+        # and reduces exactly to the Boltzmann closed form below, so any
+        # ionization-enabled run routes through it (flag independence).
+        if getattr(self.models, "fd", False) or \
+                getattr(self.models, "incomplete_ion", False):
+            return self._fd_contact_values(V)
         for i in (0, self.N - 1):
             C, nie = self.C[i], self.nie_s[i]
             root = np.sqrt(C * C + 4.0 * nie * nie)
@@ -292,19 +597,56 @@ class Device1D:
         opts = opts or NewtonOptions()
         h, dV, C, nie = self.h, self.dV, self.C, self.nie_s
         et = self._eps_tilde_edge()
+        fd = getattr(self.models, "fd", False)
+        ion = getattr(self.models, "incomplete_ion", False)
 
-        psi = np.arcsinh(C / (2.0 * nie))          # neutral-bulk guess
+        if fd or ion:
+            # M13: eta-space neutral guess (the Boltzmann arcsinh form
+            # overshoots badly when ln(Nc/nie) is large -- e.g. GaAs,
+            # cryogenic T); psi = eta + ln(Nc/nie) per node.
+            psi = self._fd_neutral_eta(C) + self.ln_gn
+        else:
+            psi = np.arcsinh(C / (2.0 * nie))      # neutral-bulk guess
         bc = self._contact_values([0.0, 0.0])
         psi[0], psi[-1] = bc[0][0], bc[1][0]
 
         for it in range(opts.max_iter):
-            n = nie * np.exp(np.clip(psi, -700, 700))
-            p = nie * np.exp(np.clip(-psi, -700, 700))
+            if fd:
+                # M13: FD equilibrium densities slaved to psi
+                # (phi_n = phi_p = 0):  n = Nc F(psi - ln(Nc/nie)),
+                # p = Nv F(-psi - Eg/kT - ln(Nv/nie)).
+                en = psi - self.ln_gn
+                ep = -psi - self.ln_gp
+                n = fd_density(self.nc_s, en)
+                p = fd_density(self.nv_s, ep)
+                dnp = (fd_ddensity_deta(self.nc_s, en)
+                       + fd_ddensity_deta(self.nv_s, ep))
+            else:
+                n = nie * np.exp(np.clip(psi, -700, 700))
+                p = nie * np.exp(np.clip(-psi, -700, 700))
+                dnp = n + p
+            # M13: incomplete ionization under EITHER statistics;
+            # rho = n - p - C_ion with the slaved-density chain
+            # d(rho)/d(psi) = (1-dcden)*dn/dpsi + (1+dcdp)*|dp/dpsi|
+            # (eta_p falls as psi rises, cancelling the carrier sign).
+            c_eff = C
+            if getattr(self.models, "incomplete_ion", False):
+                cion, dcden, dcdp = self._ionized_C(n, p)
+                c_eff = cion
+                if fd:
+                    fddn = fd_ddensity_deta(self.nc_s,
+                                            psi - self.ln_gn)
+                    fddp = fd_ddensity_deta(self.nv_s,
+                                            -psi - self.ln_gp)
+                    dnp = dnp - dcden * fddn + dcdp * fddp
+                else:
+                    dnp = dnp - dcden * n + dcdp * p
 
             F = np.zeros(self.N)
             F[1:-1] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
                    - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
-                   - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
+                   - dV[1:-1] * (n[1:-1] - p[1:-1]
+                                 - c_eff[1:-1]))
             F[0] = psi[0] - bc[0][0]
             F[-1] = psi[-1] - bc[1][0]
 
@@ -312,7 +654,7 @@ class Device1D:
             lower = np.zeros(self.N - 1)
             upper = np.zeros(self.N - 1)
             main[1:-1] = (-et[1:] / h[1:] - et[:-1] / h[:-1]
-                          - dV[1:-1] * (n[1:-1] + p[1:-1]))
+                          - dV[1:-1] * dnp[1:-1])
             upper[1:] = et[1:] / h[1:]
             lower[:-1] = et[:-1] / h[:-1]
             main[0] = main[-1] = 1.0
@@ -339,8 +681,14 @@ class Device1D:
             warnings.warn("Equilibrium Poisson solve did not converge.")
 
         self.psi = psi
-        self.n = nie * np.exp(np.clip(psi, -700, 700))
-        self.p = nie * np.exp(np.clip(-psi, -700, 700))
+        if fd:
+            en = psi - self.ln_gn
+            ep = -psi - self.ln_gp
+            self.n = fd_density(self.nc_s, en)
+            self.p = fd_density(self.nv_s, ep)
+        else:
+            self.n = nie * np.exp(np.clip(psi, -700, 700))
+            self.p = nie * np.exp(np.clip(-psi, -700, 700))
         return self
 
     # ------------------------------------------------------------------
@@ -399,6 +747,29 @@ class Device1D:
         dlnnie = np.log(self.nie_s[1:] / self.nie_s[:-1])
         delta = (psi[1:] - psi[:-1]) + dlnnie          # electrons
         delta_p = (psi[1:] - psi[:-1]) - dlnnie        # holes
+        # --- M13: Fermi-Dirac nu-factor SG (plan section 3.2bis) ---
+        # eta recovered from the density iterate; the SG argument gains
+        # the degeneracy-factor edge difference with CARRIER-SPECIFIC
+        # opposite signs:
+        #   electron: delta_n = dpsi + dln(nie_s) + dL_n
+        #   hole:     delta_p = dpsi - dln(nie_s) - dL_p
+        # At phi = const this makes Delta ln(n) == delta_n identically,
+        # so the equilibrium edge current vanishes to machine precision,
+        # across degenerate steps AND heterointerfaces.  For eta <= -30
+        # L and w are exactly 0.0, so deep-Boltzmann edges are
+        # bit-identical to the Boltzmann scheme.  The psi-columns of
+        # the Jacobian are UNCHANGED (delta_tilde depends on psi exactly
+        # like delta); only the density columns gain w terms.
+        fd = getattr(self.models, "fd", False)
+        if fd:
+            Ln, Lp, wn, wp = self._fd_factors(n, p)
+            nu_n = np.exp(Ln)
+            nu_p = np.exp(Lp)
+            delta = delta + (Ln[1:] - Ln[:-1])
+            delta_p = delta_p - (Lp[1:] - Lp[:-1])
+        else:
+            Ln = Lp = wn = wp = None
+            nu_n = nu_p = None
         Bp, Bm = bernoulli(delta), bernoulli(-delta)
         dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
         Bp_h, Bm_h = bernoulli(delta_p), bernoulli(-delta_p)
@@ -412,14 +783,30 @@ class Device1D:
 
         # recombination (unscaled physical densities)
         n_phys, p_phys = n * self.Ns, p * self.Ns
+        # M13: FD equilibrium product np_eq = nie^2 nu_n nu_p (exact at
+        # equilibrium because eta_n + eta_p = -Eg/kT identically there;
+        # -> nie^2 as nu -> 1).  Chain-rule derivatives wrt the SCALED
+        # slot densities converted to physical units.
+        npq_args = {}
+        if fd:
+            npq = self.nie ** 2 * nu_n * nu_p          # physical [cm^-3]
+            # chain-rule derivatives wrt the SCALED slot densities,
+            # converted to physical-per-physical for recombination():
+            # d(npq)/d n_phys = (dnpq/dn_scaled)/Ns
+            dnpq_dns = self.nie ** 2 * nu_p * nu_n * wn    # per scaled n
+            dnpq_dps = self.nie ** 2 * nu_n * nu_p * wp    # per scaled p
+            npq_args = dict(np_eq=npq,
+                            dnpq_dn=dnpq_dns / self.Ns,
+                            dnpq_dp=dnpq_dps / self.Ns)
         R = np.empty_like(n_phys); dRdn = np.empty_like(n_phys)
         dRdp = np.empty_like(n_phys)
         for m in {id(mm): mm for mm in self.mats}.values():
             nodes = np.array([mm is m for mm in self.mats])
+            args = {k: v[nodes] for k, v in npq_args.items()}
             R[nodes], dRdn[nodes], dRdp[nodes] = recombination(
                 n_phys[nodes], p_phys[nodes], self.nie[nodes],
                 self.tau_n[nodes], self.tau_p[nodes], m,
-                auger=self.models.auger)
+                auger=self.models.auger, **args)
         if not self.models.srh:
             R = np.zeros_like(R); dRdn = np.zeros_like(R); dRdp = np.zeros_like(R)
 
@@ -438,14 +825,20 @@ class Device1D:
         # traps-off is deterministically bit-identical
         if getattr(self.models, "tat", False) and (
                 bool(self._Pn.any()) or bool(self._Pp.any())):
-            nie2 = self.nie * self.nie
+            # M13+TAT: same FD driving-force correction as SRH/Auger
+            # (np_eq = nie^2 nu_n nu_p); composition with frozen-field
+            # TAT stays declared-untested until M15/M16 (plan section 8)
+            nie2 = npq_args["np_eq"] if fd else self.nie * self.nie
+            dqdn = dnpq_dns / self.Ns if fd else 0.0
+            dqdp = dnpq_dps / self.Ns if fd else 0.0
             den = (self.tau_p * (n_phys + self.nie * (1.0 + self._Pp))
                    + self.tau_n * (p_phys + self.nie * (1.0 + self._Pn)))
-            R = (n_phys * p_phys - nie2) / den
-            dRdn = (p_phys * den - (n_phys * p_phys - nie2)
-                    * self.tau_p) / (den * den)
-            dRdp = (n_phys * den - (n_phys * p_phys - nie2)
-                    * self.tau_n) / (den * den)
+            excess = n_phys * p_phys - nie2
+            R = excess / den
+            dRdn = ((p_phys - dqdn) * den - excess * self.tau_p) \
+                / (den * den)
+            dRdp = ((n_phys - dqdp) * den - excess * self.tau_n) \
+                / (den * den)
         Rs = R / self.R0
         dRs_dn = dRdn * self.Ns / self.R0      # d(R/R0)/d(n/Ns)
         dRs_dp = dRdp * self.Ns / self.R0
@@ -461,14 +854,27 @@ class Device1D:
 
         i = np.arange(1, N - 1)
         # --- Poisson ---
-        F[3 * i] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
-                    - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
-                    - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
+        # M13 incomplete ionization: rho = n - p - C_ion(n, p)
+        # (works under Boltzmann statistics too -- flag independence)
+        if getattr(self.models, "incomplete_ion", False):
+            cion, dcden, dcdp = self._ionized_C(n, p)
+            F[3 * i] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
+                        - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
+                        - dV[1:-1] * (n[1:-1] - p[1:-1] - cion[1:-1]))
+        else:
+            cion = dcden = dcdp = None
+            F[3 * i] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
+                        - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
+                        - dV[1:-1] * (n[1:-1] - p[1:-1] - C[1:-1]))
         add(3 * i, 3 * i, -et[1:] / h[1:] - et[:-1] / h[:-1])
         add(3 * i, 3 * (i + 1), et[1:] / h[1:])
         add(3 * i, 3 * (i - 1), et[:-1] / h[:-1])
-        add(3 * i, 3 * i + 1, -dV[1:-1])
-        add(3 * i, 3 * i + 2, dV[1:-1])
+        if cion is not None:
+            add(3 * i, 3 * i + 1, -dV[1:-1] * (1.0 - dcden[1:-1]))
+            add(3 * i, 3 * i + 2, dV[1:-1] * (1.0 + dcdp[1:-1]))
+        else:
+            add(3 * i, 3 * i + 1, -dV[1:-1])
+            add(3 * i, 3 * i + 2, dV[1:-1])
 
         # --- electron continuity:  Jn_{i+1/2} - Jn_{i-1/2} - R dV = 0 ---
         F[3 * i + 1] = Jn[1:] - Jn[:-1] - Rs[1:-1] * dV[1:-1]
@@ -481,6 +887,19 @@ class Device1D:
         add(3 * i + 1, 3 * i, -dJn_dpsiR[1:] - dJn_dpsiR[:-1])
         add(3 * i + 1, 3 * (i + 1), dJn_dpsiR[1:])
         add(3 * i + 1, 3 * (i - 1), dJn_dpsiR[:-1])
+        if fd:
+            # M13: density columns gain the d(delta_tilde)/dn chain.
+            # Per edge (verified against finite differences):
+            #   d(Jn_edge)/d(n_{k+1}) = an(Bp + Sn w_{k+1})
+            #   d(Jn_edge)/d(n_k)     = an(-Bm - Sn w_k)
+            # (delta_n carries +L_k - L_{k+1}, so d(delta)/d(n_k)=-w);
+            # row flips give central -w(an S)_both, outer +an S w.
+            Sn = n[1:] * dBp + n[:-1] * dBm
+            add(3 * i + 1, 3 * i + 1,
+                -wn[1:-1] * (an[1:] * Sn[1:] + an[:-1] * Sn[:-1]))
+            add(3 * i + 1, 3 * (i + 1) + 1, an[1:] * Sn[1:] * wn[2:])
+            add(3 * i + 1, 3 * (i - 1) + 1,
+                an[:-1] * Sn[:-1] * wn[:-2])
 
         # --- hole continuity:  Jp_{i+1/2} - Jp_{i-1/2} + R dV = 0 ---
         F[3 * i + 2] = Jp[1:] - Jp[:-1] + Rs[1:-1] * dV[1:-1]
@@ -496,6 +915,23 @@ class Device1D:
         add(3 * i + 2, 3 * i, -dJp_dpsiR[1:] - dJp_dpsiR[:-1])
         add(3 * i + 2, 3 * (i + 1), dJp_dpsiR[1:])
         add(3 * i + 2, 3 * (i - 1), dJp_dpsiR[:-1])
+        if fd:
+            # M13 hole mirror: delta_tilde_p carries -dL_p, so every
+            # w-term enters with the OPPOSITE sign to the electron
+            # block (carrier-specific -- the property the M11 lesson
+            # and the G5 hetero gate protect).
+            Sp = p[1:] * dBm_h + p[:-1] * dBp_h
+            # Verified per-edge: d(Jp_edge)/d(p_{k+1}) =
+            # -ap(Bm_h + Sp w_{k+1}), d(Jp_edge)/d(p_k) =
+            # +ap(Bp_h + Sp w_k); row flips give
+            # central w(ap_r Sp_r + ap_l Sp_l), right -ap Sp w,
+            # left -ap Sp w.
+            add(3 * i + 2, 3 * i + 2,
+                wp[1:-1] * (ap[1:] * Sp[1:] + ap[:-1] * Sp[:-1]))
+            add(3 * i + 2, 3 * (i + 1) + 2,
+                -ap[1:] * Sp[1:] * wp[2:])
+            add(3 * i + 2, 3 * (i - 1) + 2,
+                -ap[:-1] * Sp[:-1] * wp[:-2])
 
         # --- Dirichlet contacts ---
         for k, node in enumerate((0, N - 1)):
@@ -628,6 +1064,14 @@ class Device1D:
         Ev = Ec - Eg_arr
         Nc_arr = np.array([m.Nc(self.T) for m in self.mats])
         Nv_arr = np.array([m.Nv(self.T) for m in self.mats])
+        if getattr(self.models, "fd", False):
+            # M13: physical-statistics quasi-Fermi levels -- a Boltzmann
+            # log would misplace E_F by many kT in degenerate regions.
+            en = f_half_inv(np.maximum(self.n_cm3, 1e-300) / Nc_arr)
+            ep = f_half_inv(np.maximum(self.p_cm3, 1e-300) / Nv_arr)
+            EFn = Ec + KB_EV * self.T * en
+            EFp = Ev - KB_EV * self.T * ep
+            return Ec, Ev, EFn, EFp
         EFn = Ec + VT * np.log(np.maximum(self.n * self.Ns, 1e-30)
                                / Nc_arr)
         EFp = Ev - VT * np.log(np.maximum(self.p * self.Ns, 1e-30)

@@ -260,7 +260,8 @@ def lifetime_scharfetter(N, tau0, Nref):
 
 
 def recombination(n, p, nie, tau_n, tau_p, mat: Semiconductor,
-                  auger: bool = True):
+                  auger: bool = True, np_eq=None, dnpq_dn=None,
+                  dnpq_dp=None):
     """Net recombination rate R [cm^-3 s^-1] and its derivatives dR/dn, dR/dp.
 
     SRH with mid-gap traps (n1 = p1 = n_ie):
@@ -273,19 +274,33 @@ def recombination(n, p, nie, tau_n, tau_p, mat: Semiconductor,
 
     Both vanish at equilibrium (np = n_ie^2) as they must.  Returned
     derivatives are exact and feed the Newton Jacobian.
+
+    M13 Fermi-Dirac composition (plan section 3.2bis): passing
+    np_eq = nie_eff^2 * nu_n * nu_p replaces the equilibrium product
+    nie^2 so R vanishes identically at an FD equilibrium; dnpq_dn /
+    dnpq_dp are d(np_eq)/dn / d(np_eq)/dp for the exact chain rule.
+    Defaults None reproduce the legacy Boltzmann form bit-for-bit.
     """
-    ni2 = nie * nie
+    ni2 = nie * nie if np_eq is None else np_eq
     excess = n * p - ni2
 
     den = tau_p * (n + nie) + tau_n * (p + nie)
     R = excess / den
-    dRdn = (p * den - excess * tau_p) / den**2
-    dRdp = (n * den - excess * tau_n) / den**2
+    if np_eq is None:
+        dRdn = (p * den - excess * tau_p) / den**2
+        dRdp = (n * den - excess * tau_n) / den**2
+    else:
+        dRdn = ((p - dnpq_dn) * den - excess * tau_p) / den**2
+        dRdp = ((n - dnpq_dp) * den - excess * tau_n) / den**2
 
     if auger:
         C = mat.Cn_auger * n + mat.Cp_auger * p
         R = R + C * excess
-        dRdn = dRdn + mat.Cn_auger * excess + C * p
-        dRdp = dRdp + mat.Cp_auger * excess + C * n
+        if np_eq is None:
+            dRdn = dRdn + mat.Cn_auger * excess + C * p
+            dRdp = dRdp + mat.Cp_auger * excess + C * n
+        else:
+            dRdn = dRdn + mat.Cn_auger * excess + C * (p - dnpq_dn)
+            dRdp = dRdp + mat.Cp_auger * excess + C * (n - dnpq_dp)
 
     return R, dRdn, dRdp

@@ -29,12 +29,15 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
-from .constants import Q, EPS0, thermal_voltage
+from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .materials import (
     SILICON, Semiconductor, mobility_caughey_thomas, nie_effective,
     lifetime_scharfetter, recombination,
 )
-from .device import D0_REF, bernoulli, dbernoulli, Models, NewtonOptions
+from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
+                     fd_ddensity_deta, fd_node_factors, fd_ohmic_values,
+                     Models, NewtonOptions)
+from .fermi import FERMI_ETA_MAX
 from .mesh2d import Mesh2D, control_volume_widths
 from .moscap import EPS_OX_R
 
@@ -127,7 +130,8 @@ class Device2D:
                 "Device2D (see design spec, deferred items)."
             )
 
-        if self.Ntot.max() > 1e19:
+        self.fd = bool(getattr(self.models, "fd", False))
+        if self.Ntot.max() > 1e19 and not self.fd:
             warnings.warn(
                 "Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here "
                 "overestimate the carrier density. Treat results in the "
@@ -154,6 +158,15 @@ class Device2D:
         self.C = self.doping / self.Ns
         self.nie = nie_effective(self.Ntot, material, T, self.models.bgn)
         self.nie_s = self.nie / self.Ns
+
+        # M13: physical band-DOS scalars for Fermi-Dirac statistics
+        # (single-material core; same construction as Device1D)
+        self.nc_s = float(material.Nc(T)) / self.Ns
+        self.nv_s = float(material.Nv(T)) / self.Ns
+        nie0 = float(np.asarray(self.nie_s).reshape(-1)[0])  # uniform
+        self.ln_gn = float(np.log(self.nc_s / nie0))
+        self.ln_gp = float(np.log(self.nv_s / nie0))
+        self.eg_kt = float(material.Eg(T)) / KB_EV / T
 
         self.mu_n0 = (mobility_caughey_thomas(self.Ntot, material, T, "n")
                       if self.models.doping_mobility
@@ -187,6 +200,56 @@ class Device2D:
         self.bcs[name] = GateBC(i, j, kappa, Vfb, Vg)
         return self.bcs[name]
 
+    def _contact_values(self, C_nodes, V, nie_nodes=None):
+        """Ohmic values at a contact's nodes (M13: FD-aware; the FD
+        bisection reduces exactly to the Boltzmann closed form)."""
+        if self.fd:
+            return fd_ohmic_values(C_nodes, self.nc_s, self.nv_s,
+                                   self.ln_gn, self.eg_kt, V, self.VT)
+        return _ohmic_values(C_nodes, nie_nodes, V, self.VT)
+
+    def _bulk_psi_guess(self):
+        """Neutral-bulk potential per node: eta-space root under FD
+        (the Boltzmann arcsinh guess overshoots the FD gauge), the
+        classic arcsinh otherwise."""
+        if not self.fd:
+            return np.arcsinh(self.C / (2.0 * self.nie_s))
+        lo = -self.eg_kt - 80.0
+        hi = float(FERMI_ETA_MAX)
+
+        def g(e):
+            n_ = fd_density(self.nc_s, np.minimum(e, FERMI_ETA_MAX))
+            p_ = fd_density(self.nv_s,
+                            np.minimum(-e - self.eg_kt, FERMI_ETA_MAX))
+            return n_ - p_ - self.C
+
+        flo, fhi = g(lo), g(hi)
+        if np.any(flo > 0) or np.any(fhi < 0):
+            raise ValueError("2D FD bulk guess: root not bracketed")
+        lo = np.full(self.C.shape, lo)
+        for _ in range(200):
+            mid = 0.5 * (lo + hi)
+            left = g(mid) < 0
+            lo = np.where(left, mid, lo)
+            hi = np.where(left, hi, mid)
+            if np.all(hi - lo < 1e-13 * (1.0 + np.abs(lo))):
+                break
+        e0 = 0.5 * (lo + hi)
+        if np.any(e0 > FERMI_ETA_MAX - 2.0):
+            raise ValueError(
+                "FD substrate eta beyond the validated range (G7).")
+        return e0 + self.ln_gn
+
+    def _fd_slaved_densities(self, psi):
+        """Equilibrium slaving under FD: n = Nc F(psi-ln(Nc/nie)),
+        p = Nv F(-psi-ln(Nv/nie)); returns n, p and d(n+p)/d(psi)."""
+        en = psi - self.ln_gn
+        ep = -psi - self.ln_gp
+        n = fd_density(self.nc_s, en)
+        p = fd_density(self.nv_s, ep)
+        dnp = fd_ddensity_deta(self.nc_s, en)             + fd_ddensity_deta(self.nv_s, ep)
+        return n, p, dnp
+
     # ------------------------------------------------------------------
     #  Poisson-only residual/Jacobian (used by solve_equilibrium)
     # ------------------------------------------------------------------
@@ -198,8 +261,12 @@ class Device2D:
         hx, hy, dVx, dVy, dV = self.hx, self.hy, self.dVx, self.dVy, self.dV
         C, nie = self.C, self.nie_s
 
-        n = nie * np.exp(np.clip(psi, -700, 700))
-        p = nie * np.exp(np.clip(-psi, -700, 700))
+        if self.fd:
+            n, p, dnp = self._fd_slaved_densities(psi)
+        else:
+            n = nie * np.exp(np.clip(psi, -700, 700))
+            p = nie * np.exp(np.clip(-psi, -700, 700))
+            dnp = n + p
 
         Fx = (psi[:, 1:] - psi[:, :-1]) / hx[None, :]      # (Ny, Nx-1)
         Fy = (psi[1:, :] - psi[:-1, :]) / hy[:, None]      # (Ny-1, Nx)
@@ -219,7 +286,7 @@ class Device2D:
         vals = np.concatenate([-wx, -wx, wx, wx, -wy, -wy, wy, wy])
 
         diag_k = np.arange(N)
-        diag_v = (-dV * (n + p)).ravel()
+        diag_v = (-dV * dnp).ravel()
         rows = np.concatenate([rows, diag_k])
         cols = np.concatenate([cols, diag_k])
         vals = np.concatenate([vals, diag_v])
@@ -255,7 +322,8 @@ class Device2D:
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
                 kk = bc.j * Nx + bc.i
-                psi0, _, _ = _ohmic_values(C[bc.j, bc.i], nie[bc.j, bc.i], 0.0, self.VT)
+                psi0 = self._contact_values(C[bc.j, bc.i], 0.0,
+                                            nie[bc.j, bc.i])[0]
                 F_flat[kk] = psi.ravel()[kk] - psi0
                 contact_k.append(kk)
         if contact_k:
@@ -273,9 +341,8 @@ class Device2D:
     def solve_equilibrium(self, opts: NewtonOptions = None):
         opts = opts or NewtonOptions()
         Ny, Nx = self.Ny, self.Nx
-        C, nie = self.C, self.nie_s
 
-        psi = np.arcsinh(C / (2.0 * nie))
+        psi = self._bulk_psi_guess()
         for it in range(opts.max_iter):
             F, J = self._residual_jacobian_poisson(psi)
             d = spsolve(J.tocsc(), -F.ravel()).reshape(Ny, Nx)
@@ -289,8 +356,11 @@ class Device2D:
             warnings.warn("2D equilibrium Poisson solve did not converge.")
 
         self.psi = psi
-        self.n = nie * np.exp(np.clip(psi, -700, 700))
-        self.p = nie * np.exp(np.clip(-psi, -700, 700))
+        if self.fd:
+            self.n, self.p, _ = self._fd_slaved_densities(psi)
+        else:
+            self.n = self.nie_s * np.exp(np.clip(psi, -700, 700))
+            self.p = self.nie_s * np.exp(np.clip(-psi, -700, 700))
         return self
 
     # ------------------------------------------------------------------
@@ -301,37 +371,72 @@ class Device2D:
         hx, hy, dVx, dVy, dV = self.hx, self.hy, self.dVx, self.dVy, self.dV
         C = self.C
 
+        # --- M13: nu-factor SG (plan section 3.2bis; shared with the
+        # 1D core).  Electron deltas gain +dL_n, hole deltas -dL_p
+        # (carrier-specific opposite signs); psi-columns of the
+        # Jacobian are UNCHANGED because delta_tilde keeps its +-1
+        # psi-dependence, density columns gain the w-chain below. ---
+        fd = self.fd
+        if fd:
+            Ln, Lp, wn, wp = fd_node_factors(self.nc_s, self.nv_s,
+                                             n, p)
+            nu_n = np.exp(Ln)
+            nu_p = np.exp(Lp)
+
         # --- Scharfetter-Gummel currents, per axis ---
         dx = psi[:, 1:] - psi[:, :-1]
+        if fd:
+            dx = dx + (Ln[:, 1:] - Ln[:, :-1])
         Bp_x, Bm_x = bernoulli(dx), bernoulli(-dx)
         dBp_x, dBm_x = dbernoulli(dx), dbernoulli(-dx)
+        dxp = psi[:, 1:] - psi[:, :-1]
+        if fd:
+            dxp = dxp - (Lp[:, 1:] - Lp[:, :-1])
+        Bpx_h, Bmx_h = bernoulli(dxp), bernoulli(-dxp)
+        dBpx_h, dBmx_h = dbernoulli(dxp), dbernoulli(-dxp)
         an_x = self.dn_edge_x / hx[None, :]
         ap_x = self.dp_edge_x / hx[None, :]
         Jn_x = an_x * (n[:, 1:] * Bp_x - n[:, :-1] * Bm_x)
-        Jp_x = -ap_x * (p[:, 1:] * Bm_x - p[:, :-1] * Bp_x)
+        Jp_x = -ap_x * (p[:, 1:] * Bmx_h - p[:, :-1] * Bpx_h)
 
         dy = psi[1:, :] - psi[:-1, :]
+        if fd:
+            dy = dy + (Ln[1:, :] - Ln[:-1, :])
         Bp_y, Bm_y = bernoulli(dy), bernoulli(-dy)
         dBp_y, dBm_y = dbernoulli(dy), dbernoulli(-dy)
+        dyp = psi[1:, :] - psi[:-1, :]
+        if fd:
+            dyp = dyp - (Lp[1:, :] - Lp[:-1, :])
+        Bpy_h, Bmy_h = bernoulli(dyp), bernoulli(-dyp)
+        dBpy_h, dBmy_h = dbernoulli(dyp), dbernoulli(-dyp)
         an_y = self.dn_edge_y / hy[:, None]
         ap_y = self.dp_edge_y / hy[:, None]
         Jn_y = an_y * (n[1:, :] * Bp_y - n[:-1, :] * Bm_y)
-        Jp_y = -ap_y * (p[1:, :] * Bm_y - p[:-1, :] * Bp_y)
+        Jp_y = -ap_y * (p[1:, :] * Bmy_h - p[:-1, :] * Bpy_h)
 
         # --- recombination (unscaled physical densities) ---
         n_phys, p_phys = n * self.Ns, p * self.Ns
+        npq_args = {}
+        if fd:
+            npq = self.nie ** 2 * nu_n * nu_p          # physical
+            dnpq_dns = self.nie ** 2 * nu_p * nu_n * wn    # per scaled n
+            dnpq_dps = self.nie ** 2 * nu_n * nu_p * wp    # per scaled p
+            npq_args = dict(np_eq=npq,
+                            dnpq_dn=dnpq_dns / self.Ns,
+                            dnpq_dp=dnpq_dps / self.Ns)
         R, dRdn, dRdp = recombination(
             n_phys, p_phys, self.nie, self.tau_n, self.tau_p, self.mat,
-            auger=self.models.auger)
+            auger=self.models.auger, **npq_args)
         if not self.models.srh:
             R = np.zeros_like(R); dRdn = np.zeros_like(R); dRdp = np.zeros_like(R)
         Rs = R / self.R0
         dRs_dn = dRdn * self.Ns / self.R0
         dRs_dp = dRdp * self.Ns / self.R0
 
-        # --- Poisson residual (same as _residual_jacobian_poisson) ---
-        Fx_psi = dx / hx[None, :]
-        Fy_psi = dy / hy[:, None]
+        # --- Poisson residual (pure potential differences -- NOT the
+        # fd-modified SG deltas dx/dy above; M13 fix) ---
+        Fx_psi = (psi[:, 1:] - psi[:, :-1]) / hx[None, :]
+        Fy_psi = (psi[1:, :] - psi[:-1, :]) / hy[:, None]
         div_x = np.zeros((Ny, Nx)); div_x[:, :-1] += Fx_psi; div_x[:, 1:] -= Fx_psi
         div_y = np.zeros((Ny, Nx)); div_y[:-1, :] += Fy_psi; div_y[1:, :] -= Fy_psi
         F_psi = dVy[:, None] * div_x + dVx[None, :] * div_y - dV * (n - p - C)
@@ -369,27 +474,50 @@ class Device2D:
         scatter(kLx, kRx, wx_psi, 0, 0, -np.ones_like(wx_psi), 0, np.ones_like(wx_psi))
         scatter(kSy, kNy, wy_psi, 0, 0, -np.ones_like(wy_psi), 0, np.ones_like(wy_psi))
 
-        # electron continuity row (comp 1), from Jn_x / Jn_y
-        dJn_dpsiR_x = an_x * (n[:, 1:] * dBp_x + n[:, :-1] * dBm_x)
+        # electron continuity row (comp 1), from Jn_x / Jn_y.
+        # M13 fd: psi-columns unchanged; density columns gain the
+        # verified per-edge chain (device.py derivation):
+        #   d(Jn)/d(n_{k+1}) = an(Bp + Sn w_{k+1})
+        #   d(Jn)/d(n_k)     = an(-Bm - Sn w_k)
+        Snx = n[:, 1:] * dBp_x + n[:, :-1] * dBm_x
+        Sny = n[1:, :] * dBp_y + n[:-1, :] * dBm_y
+        dJn_dpsiR_x = an_x * Snx
         dJn_dn_L_x, dJn_dn_R_x = -an_x * Bm_x, an_x * Bp_x
+        if fd:
+            dJn_dn_L_x = dJn_dn_L_x - an_x * Snx * wn[:, :-1]
+            dJn_dn_R_x = dJn_dn_R_x + an_x * Snx * wn[:, 1:]
         wx_dVy = np.broadcast_to(dVy[:, None], (Ny, Nx - 1))
         scatter(kLx, kRx, wx_dVy, 1, 0, -dJn_dpsiR_x, 0, dJn_dpsiR_x)
         scatter(kLx, kRx, wx_dVy, 1, 1, dJn_dn_L_x, 1, dJn_dn_R_x)
 
-        dJn_dpsiR_y = an_y * (n[1:, :] * dBp_y + n[:-1, :] * dBm_y)
+        dJn_dpsiR_y = an_y * Sny
         dJn_dn_L_y, dJn_dn_R_y = -an_y * Bm_y, an_y * Bp_y
+        if fd:
+            dJn_dn_L_y = dJn_dn_L_y - an_y * Sny * wn[:-1, :]
+            dJn_dn_R_y = dJn_dn_R_y + an_y * Sny * wn[1:, :]
         wy_dVx = np.broadcast_to(dVx[None, :], (Ny - 1, Nx))
         scatter(kSy, kNy, wy_dVx, 1, 0, -dJn_dpsiR_y, 0, dJn_dpsiR_y)
         scatter(kSy, kNy, wy_dVx, 1, 1, dJn_dn_L_y, 1, dJn_dn_R_y)
 
-        # hole continuity row (comp 2), from Jp_x / Jp_y
-        dJp_dpsiR_x = ap_x * (p[:, 1:] * dBm_x + p[:, :-1] * dBp_x)
-        dJp_dp_L_x, dJp_dp_R_x = ap_x * Bp_x, -ap_x * Bm_x
+        # hole continuity row (comp 2), from Jp_x / Jp_y.
+        # M13 fd (verified per-edge):
+        #   d(Jp)/d(p_{k+1}) = -ap(Bm_h + Sp w_{k+1})
+        #   d(Jp)/d(p_k)     = +ap(Bp_h + Sp w_k)
+        Spx = p[:, 1:] * dBmx_h + p[:, :-1] * dBpx_h
+        Spy = p[1:, :] * dBmy_h + p[:-1, :] * dBpy_h
+        dJp_dpsiR_x = ap_x * Spx
+        dJp_dp_L_x, dJp_dp_R_x = ap_x * Bpx_h, -ap_x * Bmx_h
+        if fd:
+            dJp_dp_L_x = dJp_dp_L_x + ap_x * Spx * wp[:, :-1]
+            dJp_dp_R_x = dJp_dp_R_x - ap_x * Spx * wp[:, 1:]
         scatter(kLx, kRx, wx_dVy, 2, 0, -dJp_dpsiR_x, 0, dJp_dpsiR_x)
         scatter(kLx, kRx, wx_dVy, 2, 2, dJp_dp_L_x, 2, dJp_dp_R_x)
 
-        dJp_dpsiR_y = ap_y * (p[1:, :] * dBm_y + p[:-1, :] * dBp_y)
-        dJp_dp_L_y, dJp_dp_R_y = ap_y * Bp_y, -ap_y * Bm_y
+        dJp_dpsiR_y = ap_y * Spy
+        dJp_dp_L_y, dJp_dp_R_y = ap_y * Bpy_h, -ap_y * Bmy_h
+        if fd:
+            dJp_dp_L_y = dJp_dp_L_y + ap_y * Spy * wp[:-1, :]
+            dJp_dp_R_y = dJp_dp_R_y - ap_y * Spy * wp[1:, :]
         scatter(kSy, kNy, wy_dVx, 2, 0, -dJp_dpsiR_y, 0, dJp_dpsiR_y)
         scatter(kSy, kNy, wy_dVx, 2, 2, dJp_dp_L_y, 2, dJp_dp_R_y)
 
@@ -431,7 +559,9 @@ class Device2D:
             if isinstance(bc, DirichletBC):
                 V = voltages.get(name, bc.V)
                 kk = bc.j * Nx + bc.i
-                psi0, n0, p0 = _ohmic_values(self.C[bc.j, bc.i], self.nie_s[bc.j, bc.i], V, self.VT)
+                psi0, n0, p0 = self._contact_values(
+                    self.C[bc.j, bc.i], V,
+                    self.nie_s[bc.j, bc.i])
                 F3[kk, 0] = psi.ravel()[kk] - psi0
                 F3[kk, 1] = n.ravel()[kk] - n0
                 F3[kk, 2] = p.ravel()[kk] - p0
@@ -476,7 +606,9 @@ class Device2D:
         psi, n, p = self.psi.copy(), self.n.copy(), self.p.copy()
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
-                psi0, n0, p0 = _ohmic_values(self.C[bc.j, bc.i], self.nie_s[bc.j, bc.i], bc.V, self.VT)
+                psi0, n0, p0 = self._contact_values(
+                    self.C[bc.j, bc.i], bc.V,
+                    self.nie_s[bc.j, bc.i])
                 psi[bc.j, bc.i], n[bc.j, bc.i], p[bc.j, bc.i] = psi0, n0, p0
 
         cur_voltages = {name: bc.V for name, bc in self.bcs.items() if isinstance(bc, DirichletBC)}

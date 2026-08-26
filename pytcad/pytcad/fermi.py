@@ -184,28 +184,54 @@ def f_half_inv(nu):
             f"f_half_inv: nu={nu1.max():.6g} exceeds "
             f"F_1/2({FERMI_ETA_MAX})={nu_max:.6g} -- the inverse is "
             f"only validated on the eta range [-40, 40] (M13 G7).")
-    lo = np.maximum(np.log(nu1) - 1.0, FERMI_ETA_MIN)
-    hi = np.minimum((0.75 * np.sqrt(np.pi) * nu1) ** (2.0 / 3.0) + 1.0,
-                    FERMI_ETA_MAX)
-    # F(hi) > (4/(3 sqrt(pi))) hi^1.5 >= nu by construction (all
-    # Sommerfeld terms positive for eta > 0; for nu <= F(1) the +1
-    # covers the bracket).
-    for _ in range(200):
-        mid = np.clip(0.5 * (lo + hi), FERMI_ETA_MIN, FERMI_ETA_MAX)
-        fm = f_half(mid)
-        left = fm > nu1
-        hi = np.where(left, mid, hi)
-        lo = np.where(left, lo, mid)
-        if np.all(hi - lo < 1e-14 * (1.0 + np.abs(lo))):
-            break
-    res = 0.5 * (lo + hi)
-    # Newton polish (derivative = F_{-1/2} > 0, monotone -> safe)
-    for _ in range(3):
-        f = f_half(res)
-        d = f_mhalf(res)
-        step = (f - nu1) / np.maximum(d, 1e-300)
-        res = np.clip(res - np.clip(step, -0.5, 0.5),
-                      FERMI_ETA_MIN, FERMI_ETA_MAX)
+    # Split inversion (numerically identical output, far fewer
+    # quadrature evaluations than pure bisection -- this sits in the
+    # hot path of the M13 FD core):
+    #   * nu < 1e-12 (deep Boltzmann): eta = ln(nu) analytically.
+    #     The exact deviation is exp(eta)/2^{3/2}, i.e. an ABSOLUTE
+    #     eta error <= nu/2.83 <= 3.5e-13 here -- far inside every
+    #     phase-1 roundtrip gate.
+    #   * otherwise: Newton secured by a maintained bracket (F is
+    #     monotone, so this stays globally safe like bisection).
+    res = np.empty_like(nu1)
+    small = nu1 < 1e-12
+    res[small] = np.log(nu1[small])
+    if bool((~small).any()):
+        nud = nu1[~small]
+        lo = np.maximum(np.log(nud) - 1.0, FERMI_ETA_MIN)
+        hi = np.minimum((0.75 * np.sqrt(np.pi) * nud) ** (2.0 / 3.0)
+                        + 1.0, FERMI_ETA_MAX)
+        # F(hi) > (4/(3 sqrt(pi))) hi^1.5 >= nu by construction (all
+        # Sommerfeld terms positive for eta > 0; for nu <= F(1) the +1
+        # covers the bracket).
+        # Start from ln(nu) on the moderate-Boltzmann side (eta error
+        # there is exp(eta)/2^{3/2}, already small) and mid-bracket on
+        # the degenerate side; secured Newton finishes in a few steps.
+        r = np.where(nud < 0.5,
+                     np.log(np.maximum(nud, 1e-300)),
+                     0.5 * (lo + hi))
+        r = np.clip(r, lo, hi)
+        for _ in range(50):
+            f = f_half(r)
+            d = np.maximum(f_mhalf(r), 1e-300)
+            left = f > nud
+            hi = np.where(left, np.minimum(r, hi), hi)
+            lo = np.where(left, lo, np.maximum(r, lo))
+            new = np.clip(r - (f - nud) / d, lo, hi)
+            done = np.all((hi - lo < 1e-14 * (1.0 + np.abs(lo)))
+                          | (np.abs(new - r) <= 1e-14
+                             * (1.0 + np.abs(r))))
+            r = new
+            if done:
+                break
+        # Newton polish (derivative = F_{-1/2} > 0, monotone -> safe)
+        for _ in range(3):
+            f = f_half(r)
+            d = f_mhalf(r)
+            step = (f - nud) / np.maximum(d, 1e-300)
+            r = np.clip(r - np.clip(step, -0.5, 0.5),
+                        FERMI_ETA_MIN, FERMI_ETA_MAX)
+        res[~small] = r
     return res[0] if scalar else res
 
 

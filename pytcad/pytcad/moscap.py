@@ -26,7 +26,9 @@ import numpy as np
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
 
-from .constants import Q, EPS0, thermal_voltage
+from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .device import fd_density, fd_ddensity_deta
+from .fermi import FERMI_ETA_MAX, FERMI_ETA_MIN, f_half
 from .materials import SILICON, Semiconductor, nie_effective
 
 EPS_OX_R = 3.9   # SiO2 relative permittivity
@@ -74,7 +76,8 @@ class MOSCapacitor:
     """
 
     def __init__(self, Nsub, tox_cm, gate="n+poly", Qf=0.0, T=300.0,
-                 material: Semiconductor = SILICON, L_cm=2e-4, nx=1200):
+                 material: Semiconductor = SILICON, L_cm=2e-4, nx=1200,
+                 fd=False):
         self.mat = material
         self.T = T
         self.VT = thermal_voltage(T)
@@ -100,7 +103,45 @@ class MOSCapacitor:
 
         self.C = self.Nsub / self.Ns
         self.nie_s = self.nie / self.Ns
-        self.psi_b = np.arcsinh(self.C / (2.0 * self.nie_s))    # scaled
+
+        # M13: Fermi-Dirac statistics branch (physical Nc/Nv form,
+        # same construction as Device1D; default OFF => bit-identical).
+        self.fd = bool(fd)
+        if self.fd:
+            nc_s = material.Nc(T) / self.Ns
+            nv_s = material.Nv(T) / self.Ns
+            self.nc_s, self.nv_s = float(nc_s), float(nv_s)
+            self.ln_gn = float(np.log(nc_s / self.nie_s))
+            self.ln_gp = float(np.log(nv_s / self.nie_s))
+            self.eg_kt = material.Eg(T) / (KB_EV * T)
+
+        if self.fd:
+            # neutral-bulk potential from the FD neutrality root
+            # (the Boltzmann arcsinh guess has the wrong gauge when
+            # ln(Nc/nie) is comparable to the doping eta)
+            lo, hi = -self.eg_kt - 80.0, float(FERMI_ETA_MAX)
+
+            def imb(e):
+                return (fd_density(self.nc_s, e)
+                        - fd_density(self.nv_s,
+                                     -e - self.eg_kt)) - self.C
+
+            for _ in range(200):
+                mid = 0.5 * (lo + hi)
+                if imb(mid) < 0:
+                    lo = mid
+                else:
+                    hi = mid
+                if hi - lo < 1e-13 * (1.0 + abs(lo)):
+                    break
+            eta_b = 0.5 * (lo + hi)
+            if eta_b > FERMI_ETA_MAX - 2.0:
+                raise ValueError(
+                    "FD substrate neutrality eta beyond the validated "
+                    "range (M13 G7 applicability).")
+            self.psi_b = float(eta_b + self.ln_gn)
+        else:
+            self.psi_b = np.arcsinh(self.C / (2.0 * self.nie_s))
         self.kappa = self.eps_ox * self.LD / (self.eps_s * self.tox)
 
         self.Vfb = flatband_voltage(Nsub, tox_cm, gate, Qf, T, material)
@@ -122,8 +163,19 @@ class MOSCapacitor:
 
         for _ in range(max_iter):
             e = np.clip(psi, -700, 700)
-            n = self.nie_s * np.exp(e)
-            p = self.nie_s * np.exp(-e)
+            if self.fd:
+                # M13: physical-statistics densities (same construction
+                # and piecewise eta policy as Device1D)
+                en = e - self.ln_gn
+                ep = -e - self.ln_gp
+                n = fd_density(self.nc_s, en)
+                p = fd_density(self.nv_s, ep)
+                dnp = fd_ddensity_deta(self.nc_s, en) \
+                    + fd_ddensity_deta(self.nv_s, ep)
+            else:
+                n = self.nie_s * np.exp(e)
+                p = self.nie_s * np.exp(-e)
+                dnp = n + p
             rho = n - p - self.C
 
             F = np.zeros(n_nodes)
@@ -140,10 +192,10 @@ class MOSCapacitor:
             up = np.zeros(n_nodes - 1)
             lo = np.zeros(n_nodes - 1)
             main[1:-1] = (-1.0 / h[1:] - 1.0 / h[:-1]
-                          - dV[1:-1] * (n[1:-1] + p[1:-1]))
+                          - dV[1:-1] * dnp[1:-1])
             up[1:] = 1.0 / h[1:]
             lo[:-1] = 1.0 / h[:-1]
-            main[0] = -1.0 / h[0] - self.kappa - dV[0] * (n[0] + p[0])
+            main[0] = -1.0 / h[0] - self.kappa - dV[0] * dnp[0]
             up[0] = 1.0 / h[0]
             main[-1] = 1.0
             lo[-1] = 0.0
