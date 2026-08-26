@@ -148,18 +148,23 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
 
 
 def _refuse_unsolvable_regions(dev):
-    """Known-but-not-solvable materials stop HERE: the domain layer
-    accepts them since M11-S1, but no backend can solve them until the
-    M11-S3 heterojunction core exists."""
+    """DATA-LOSS guard (M11-S4): the numerical cores solve per-node
+    material lists fine, but the StructureModel round-trip below cannot
+    carry per-region materials yet -- letting a heterogeneous DomainDevice
+    through here would silently solve an all-silicon device.  Carrying
+    materials through the GUI structure model is M11-S5 work; until then
+    heterostructure jobs go through raw DeviceSpecs (region_materials),
+    which the backend pipeline rasterizes end to end."""
     mixed = sorted({r.material.upper() for r in dev.regions}
                    - {"SILICON", "SILICON"}) if False else \
         sorted({r.material.upper() for r in getattr(dev, "regions", [])
                 if r.material.upper() != "SILICON"})
     if mixed:
         raise ValueError(
-            f"region material(s) {', '.join(mixed)} registered but not "
-            "solvable: the numerical core implements silicon only -- "
-            "heterostructure solving requires the M11-S3 backend")
+            f"region material(s) {', '.join(mixed)} would be silently "
+            "dropped by the structure-model round-trip (materials ride "
+            "only on DeviceSpec.region_materials): solve via the job "
+            "pipeline, or wait for M11-S5 structure-model support")
 
 
 def structure_from_domain(dev: DomainDevice):

@@ -146,7 +146,22 @@ class Device3D:
                      else np.asarray(Ntotal, dtype=float).reshape(
                          self.Nz, self.Ny, self.Nx))
         self.T = T
-        self.mat = material
+        # M11-S4: a single Semiconductor keeps the classic behavior; a
+        # flat per-node sequence (row-major, length Nx*Ny*Nz) defines a
+        # 3D heterostructure -- same conventions as Device1D/Device2D.
+        if isinstance(material, Semiconductor):
+            self.mats = [material] * self.N
+        else:
+            mats_flat = list(material)
+            if len(mats_flat) != self.N:
+                raise ValueError(
+                    "material list length must equal Nx*Ny*Nz "
+                    f"({self.N}); got {len(mats_flat)}")
+            if not all(isinstance(m, Semiconductor) for m in mats_flat):
+                raise TypeError("material entries must be Semiconductor")
+            self.mats = mats_flat
+        self.mat = material if isinstance(material, Semiconductor) \
+            else self.mats[0]
         self.models = models or Models()
         if self.models.field_mobility:
             raise NotImplementedError(
@@ -163,8 +178,10 @@ class Device3D:
             )
 
         self.VT = thermal_voltage(T)
-        self.eps = material.eps_r * EPS0
-        self.ni = material.ni(T)
+        self.eps_arr = np.array([m.eps_r * EPS0 for m in self.mats])
+        self.eps0 = float(self.eps_arr[0])   # reference (legacy scalar)
+        self.eps = self.eps0                 # legacy attribute name
+        self.ni = self.mats[0].ni(T)
 
         self.Ns = max(float(np.abs(self.doping).max()), self.ni)
         self.LD = np.sqrt(self.eps * self.VT / (Q * self.Ns))
@@ -184,27 +201,64 @@ class Device3D:
                    * self.dVx[None, None, :])    # (Nz,Ny,Nx), scaled volume
 
         self.C = self.doping / self.Ns
-        self.nie = nie_effective(self.Ntot, material, T, self.models.bgn)
+
+        # M11-S4: per-material grouping (mirrors Device1D/Device2D).
+        shp = (self.Nz, self.Ny, self.Nx)
+        nie_f = np.empty(self.N); mu_n_f = np.empty(self.N)
+        mu_p_f = np.empty(self.N); taun_f = np.empty(self.N)
+        taup_f = np.empty(self.N); nc_f = np.empty(self.N)
+        nv_f = np.empty(self.N); egkt_f = np.empty(self.N)
+        seen_mats = []
+        for mm in self.mats:
+            if not any(mm is m2 for m2 in seen_mats):
+                seen_mats.append(mm)
+        nt_flat = self.Ntot.ravel()
+        for m in seen_mats:
+            nodes = np.array([mm is m for mm in self.mats])
+            nt = nt_flat[nodes]
+            nie_f[nodes] = nie_effective(nt, m, T, self.models.bgn)
+            mu_n_f[nodes] = (
+                mobility_caughey_thomas(nt, m, T, "n")
+                if self.models.doping_mobility
+                else np.full(int(nodes.sum()), m.mu_n_max))
+            mu_p_f[nodes] = (
+                mobility_caughey_thomas(nt, m, T, "p")
+                if self.models.doping_mobility
+                else np.full(int(nodes.sum()), m.mu_p_max))
+            taun_f[nodes] = lifetime_scharfetter(nt, m.tau_n0,
+                                                 m.tau_Nref)
+            taup_f[nodes] = lifetime_scharfetter(nt, m.tau_p0,
+                                                 m.tau_Nref)
+            nc_f[nodes] = m.Nc(T)
+            nv_f[nodes] = m.Nv(T)
+            egkt_f[nodes] = m.Eg(T) / KB_EV / T
+        self.nie = nie_f.reshape(shp)
         self.nie_s = self.nie / self.Ns
 
-        # M13: physical band-DOS scalars for FD statistics (single-
-        # material core; same construction as Device1D/Device2D)
-        self.nc_s = float(material.Nc(T)) / self.Ns
-        self.nv_s = float(material.Nv(T)) / self.Ns
-        nie0 = float(np.asarray(self.nie_s).reshape(-1)[0])  # uniform
-        self.ln_gn = float(np.log(self.nc_s / nie0))
-        self.ln_gp = float(np.log(self.nv_s / nie0))
-        self.eg_kt = float(material.Eg(T)) / KB_EV / T
+        # M13 fd DOS: per-node grids (composes with heterojunctions)
+        self.nc_s = nc_f.reshape(shp) / self.Ns
+        self.nv_s = nv_f.reshape(shp) / self.Ns
+        self.ln_gn = np.log(self.nc_s / self.nie_s)
+        self.ln_gp = np.log(self.nv_s / self.nie_s)
+        self.eg_kt = egkt_f.reshape(shp)
 
-        self.mu_n0 = (mobility_caughey_thomas(self.Ntot, material, T, "n")
-                      if self.models.doping_mobility
-                      else np.full((self.Nz, self.Ny, self.Nx), material.mu_n_max))
-        self.mu_p0 = (mobility_caughey_thomas(self.Ntot, material, T, "p")
-                      if self.models.doping_mobility
-                      else np.full((self.Nz, self.Ny, self.Nx), material.mu_p_max))
+        self.mu_n0 = mu_n_f.reshape(shp)
+        self.mu_p0 = mu_p_f.reshape(shp)
 
-        self.tau_n = lifetime_scharfetter(self.Ntot, material.tau_n0, material.tau_Nref)
-        self.tau_p = lifetime_scharfetter(self.Ntot, material.tau_p0, material.tau_Nref)
+        self.tau_n = taun_f.reshape(shp)
+        self.tau_p = taup_f.reshape(shp)
+
+        # M11-S4: harmonic-mean scaled permittivity on edges,
+        # normalized by the FIRST node's eps (uniform => exactly 1.0,
+        # so every residual reduces ALGEBRAICALLY to the legacy form).
+        et = (self.eps_arr / self.eps0).reshape(shp)
+
+        def hmean3d(lo, hi):
+            return 2.0 * lo * hi / (lo + hi)
+
+        self.et_x = hmean3d(et[:, :, :-1], et[:, :, 1:])
+        self.et_y = hmean3d(et[:, :-1, :], et[:, 1:, :])
+        self.et_z = hmean3d(et[:-1, :, :], et[1:, :, :])
 
         def hmean(lo, hi):
             return 2.0 * lo * hi / (lo + hi)
@@ -229,14 +283,6 @@ class Device3D:
         kappa = eps_ox * self.LD / (self.eps * tox_cm)
         self.bcs[name] = GateBC(i, j, k, kappa, Vfb, Vg, normal_axis)
         return self.bcs[name]
-
-    def _contact_values(self, C_nodes, V, nie_nodes=None):
-        """Ohmic values at a contact's nodes (M13: FD-aware; the FD
-        bisection reduces exactly to the Boltzmann closed form)."""
-        if self.fd:
-            return fd_ohmic_values(C_nodes, self.nc_s, self.nv_s,
-                                   self.ln_gn, self.eg_kt, V, self.VT)
-        return _ohmic_values(C_nodes, nie_nodes, V, self.VT)
 
     def _bulk_psi_guess(self):
         """Neutral-bulk potential per node (FD eta-space root or the
@@ -279,6 +325,18 @@ class Device3D:
             + fd_ddensity_deta(self.nv_s, ep)
         return n, p, dnp
 
+    def _bc_contact_values(self, bc, V):
+        """Ohmic values at a contact's nodes (M11-S4 per-node materials;
+        M13 FD-aware)."""
+        k, j, i = bc.k, bc.j, bc.i
+        if self.fd:
+            return fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
+                                   self.nv_s[k, j, i],
+                                   self.ln_gn[k, j, i],
+                                   self.eg_kt[k, j, i], V, self.VT)
+        return _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
+                             V, self.VT)
+
     def _gate_face_weight(self, bc: GateBC):
         """Control-volume face AREA the gate's flux crosses, per node,
         depending on which axis the gate's face is normal to."""
@@ -305,9 +363,10 @@ class Device3D:
             p = nie * np.exp(np.clip(-psi, -700, 700))
             dnp = n + p
 
-        Fx = (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
-        Fy = (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
-        Fz = (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
+        # M11-S4: position-dependent eps in flux form (uniform => 1.0)
+        Fx = self.et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
+        Fy = self.et_y * (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
+        Fz = self.et_z * (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
 
         div_x = np.zeros((Nz, Ny, Nx)); div_x[:, :, :-1] += Fx; div_x[:, :, 1:] -= Fx
         div_y = np.zeros((Nz, Ny, Nx)); div_y[:, :-1, :] += Fy; div_y[:, 1:, :] -= Fy
@@ -363,9 +422,7 @@ class Device3D:
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
-                psi0 = self._contact_values(self.C[bc.k, bc.j, bc.i],
-                                            0.0,
-                                            self.nie_s[bc.k, bc.j, bc.i])[0]
+                psi0 = self._bc_contact_values(bc, 0.0)[0]
                 F_flat[kk] = psi.ravel()[kk] - psi0
                 contact_k.append(kk)
         if contact_k:
@@ -425,15 +482,22 @@ class Device3D:
             nu_n = np.exp(Ln)
             nu_p = np.exp(Lp)
 
+        # --- M11-S4: Anderson band offsets via CARRIER-SPECIFIC
+        # ln(nie) edge deltas (electron +dln(nie), hole -dln(nie));
+        # composes additively with the fd nu-factors. ---
+        dlnnie_x = np.log(self.nie_s[:, :, 1:] / self.nie_s[:, :, :-1])
+        dlnnie_y = np.log(self.nie_s[:, 1:, :] / self.nie_s[:, :-1, :])
+        dlnnie_z = np.log(self.nie_s[1:, :, :] / self.nie_s[:-1, :, :])
+
         # --- Scharfetter-Gummel currents, per axis ---
-        dx = psi[:, :, 1:] - psi[:, :, :-1]
+        dx = psi[:, :, 1:] - psi[:, :, :-1] + dlnnie_x
         if fd:
             dx = dx + (Ln[:, :, 1:] - Ln[:, :, :-1])
         Bp_x, Bm_x = bernoulli(dx), bernoulli(-dx)
         dBp_x, dBm_x = dbernoulli(dx), dbernoulli(-dx)
         an_x = self.dn_edge_x / hx[None, None, :]
         ap_x = self.dp_edge_x / hx[None, None, :]
-        dxp = psi[:, :, 1:] - psi[:, :, :-1]
+        dxp = psi[:, :, 1:] - psi[:, :, :-1] - dlnnie_x
         if fd:
             dxp = dxp - (Lp[:, :, 1:] - Lp[:, :, :-1])
         Bpx_h, Bmx_h = bernoulli(dxp), bernoulli(-dxp)
@@ -443,12 +507,12 @@ class Device3D:
         Jn_x = an_x * (n[:, :, 1:] * Bp_x - n[:, :, :-1] * Bm_x)
         Jp_x = -ap_x * (p[:, :, 1:] * Bmx_h - p[:, :, :-1] * Bpx_h)
 
-        dy = psi[:, 1:, :] - psi[:, :-1, :]
+        dy = psi[:, 1:, :] - psi[:, :-1, :] + dlnnie_y
         if fd:
             dy = dy + (Ln[:, 1:, :] - Ln[:, :-1, :])
         Bp_y, Bm_y = bernoulli(dy), bernoulli(-dy)
         dBp_y, dBm_y = dbernoulli(dy), dbernoulli(-dy)
-        dyp = psi[:, 1:, :] - psi[:, :-1, :]
+        dyp = psi[:, 1:, :] - psi[:, :-1, :] - dlnnie_y
         if fd:
             dyp = dyp - (Lp[:, 1:, :] - Lp[:, :-1, :])
         Bpy_h, Bmy_h = bernoulli(dyp), bernoulli(-dyp)
@@ -458,12 +522,12 @@ class Device3D:
         Jn_y = an_y * (n[:, 1:, :] * Bp_y - n[:, :-1, :] * Bm_y)
         Jp_y = -ap_y * (p[:, 1:, :] * Bmy_h - p[:, :-1, :] * Bpy_h)
 
-        dz = psi[1:, :, :] - psi[:-1, :, :]
+        dz = psi[1:, :, :] - psi[:-1, :, :] + dlnnie_z
         if fd:
             dz = dz + (Ln[1:, :, :] - Ln[:-1, :, :])
         Bp_z, Bm_z = bernoulli(dz), bernoulli(-dz)
         dBp_z, dBm_z = dbernoulli(dz), dbernoulli(-dz)
-        dzp = psi[1:, :, :] - psi[:-1, :, :]
+        dzp = psi[1:, :, :] - psi[:-1, :, :] - dlnnie_z
         if fd:
             dzp = dzp - (Lp[1:, :, :] - Lp[:-1, :, :])
         Bpz_h, Bmz_h = bernoulli(dzp), bernoulli(-dzp)
@@ -483,20 +547,30 @@ class Device3D:
             npq_args = dict(np_eq=npq,
                             dnpq_dn=dnpq_dns / self.Ns,
                             dnpq_dp=dnpq_dps / self.Ns)
-        R, dRdn, dRdp = recombination(
-            n_phys, p_phys, self.nie, self.tau_n, self.tau_p, self.mat,
-            auger=self.models.auger, **npq_args)
+        # M11-S4: per-material recombination parameter sets
+        R = np.empty_like(n_phys); dRdn = np.empty_like(n_phys)
+        dRdp = np.empty_like(n_phys)
+        nflat, pflat = n_phys.ravel(), p_phys.ravel()
+        nief, taunf, taupf = (self.nie.ravel(), self.tau_n.ravel(),
+                              self.tau_p.ravel())
+        for m in {id(mm): mm for mm in self.mats}.values():
+            nodes = np.array([mm is m for mm in self.mats])
+            (R.ravel()[nodes], dRdn.ravel()[nodes],
+             dRdp.ravel()[nodes]) = recombination(
+                nflat[nodes], pflat[nodes], nief[nodes], taunf[nodes],
+                taupf[nodes], m, auger=self.models.auger, **{
+                    k: v.ravel()[nodes] for k, v in npq_args.items()})
         if not self.models.srh:
             R = np.zeros_like(R); dRdn = np.zeros_like(R); dRdp = np.zeros_like(R)
         Rs = R / self.R0
         dRs_dn = dRdn * self.Ns / self.R0
         dRs_dp = dRdp * self.Ns / self.R0
 
-        # --- Poisson residual (pure potential differences -- NOT the
-        # fd-modified SG deltas above; M13 fix, mirrors device2d.py) ---
-        Fx_psi = (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
-        Fy_psi = (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
-        Fz_psi = (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
+        # --- Poisson residual: pure potential differences (NOT the
+        # fd-modified deltas; M13 fix) times the M11-S4 edge eps ---
+        Fx_psi = self.et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
+        Fy_psi = self.et_y * (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
+        Fz_psi = self.et_z * (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
         div_x = np.zeros((Nz, Ny, Nx)); div_x[:, :, :-1] += Fx_psi; div_x[:, :, 1:] -= Fx_psi
         div_y = np.zeros((Nz, Ny, Nx)); div_y[:, :-1, :] += Fy_psi; div_y[:, 1:, :] -= Fy_psi
         div_z = np.zeros((Nz, Ny, Nx)); div_z[:-1, :, :] += Fz_psi; div_z[1:, :, :] -= Fz_psi
@@ -547,9 +621,9 @@ class Device3D:
         wz_area = np.broadcast_to(dVx[None, None, :] * dVy[None, :, None], (Nz - 1, Ny, Nx))
 
         # Poisson row (comp 0), depends on psi at both edge endpoints
-        wx_h = wx_area / hx[None, None, :]
-        wy_h = wy_area / hy[None, :, None]
-        wz_h = wz_area / hz[:, None, None]
+        wx_h = wx_area * self.et_x / hx[None, None, :]
+        wy_h = wy_area * self.et_y / hy[None, :, None]
+        wz_h = wz_area * self.et_z / hz[:, None, None]
         scatter(kLx, kRx, wx_h, 0, 0, -np.ones_like(wx_h), 0, np.ones_like(wx_h))
         scatter(kSy, kNy, wy_h, 0, 0, -np.ones_like(wy_h), 0, np.ones_like(wy_h))
         scatter(kDz, kUz, wz_h, 0, 0, -np.ones_like(wz_h), 0, np.ones_like(wz_h))
@@ -652,9 +726,7 @@ class Device3D:
             if isinstance(bc, DirichletBC):
                 V = voltages.get(name, bc.V)
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
-                psi0, n0, p0 = self._contact_values(
-                    self.C[bc.k, bc.j, bc.i], V,
-                    self.nie_s[bc.k, bc.j, bc.i])
+                psi0, n0, p0 = self._bc_contact_values(bc, V)
                 F3[kk, 0] = psi.ravel()[kk] - psi0
                 F3[kk, 1] = n.ravel()[kk] - n0
                 F3[kk, 2] = p.ravel()[kk] - p0
@@ -693,9 +765,7 @@ class Device3D:
         psi, n, p = self.psi.copy(), self.n.copy(), self.p.copy()
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
-                psi0, n0, p0 = self._contact_values(
-                    self.C[bc.k, bc.j, bc.i], bc.V,
-                    self.nie_s[bc.k, bc.j, bc.i])
+                psi0, n0, p0 = self._bc_contact_values(bc, bc.V)
                 psi[bc.k, bc.j, bc.i] = psi0
                 n[bc.k, bc.j, bc.i] = n0
                 p[bc.k, bc.j, bc.i] = p0

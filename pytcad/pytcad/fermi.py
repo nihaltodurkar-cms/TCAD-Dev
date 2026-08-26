@@ -42,12 +42,46 @@ FERMI_ETA_MAX = +40.0
 _GL_ORDER = 48
 _gn, _gw = np.polynomial.legendre.leggauss(_GL_ORDER)
 # Hybrid evaluation: [0, 1] in s (t = s^2 transform, kills the t^(-1/2)
-# endpoint singularity of F_{-1/2}), then [1, t_max] directly in t with
-# width-2 panels.  In t the 1/(1+e^(t-eta)) transition has O(1) width
-# for EVERY eta -- unlike in s, where it narrows as 1/(2 sqrt(eta)) and
-# defeated uniform panels at eta = 40 (measured 1.2e-7).
+# endpoint singularity of F_{-1/2}), then [1, t_hi] directly in t.
+# In t the 1/(1+e^(t-eta)) transition has O(1) width for EVERY eta --
+# unlike in s, where it narrows as 1/(2 sqrt(eta)) and defeated uniform
+# panels at eta = 40 (measured 1.2e-7).
 _PANEL_WIDTH_T = 2.0
 _T_SWITCH = 1.0
+# Per-node upper truncation: the Fermi factor is suppressed by
+# exp(-(t - eta)), so integrating past t = max(eta, 0) + 40 contributes
+# less than e^-40 ~ 4e-18 RELATIVE -- far below every gate this module
+# feeds.  Nodes are then BUCKETED by their required panel count so the
+# evaluation cost tracks the actual eta distribution instead of the
+# global maximum (the M13 FD solver inverts whole density grids every
+# Newton iterate).
+_T_TAIL = 60.0
+# Deep-Boltzmann evaluation: below this eta the fixed-node quadrature
+# cannot resolve a mass feature located at t ~ exp(eta) (a grid on
+# t in [0,1] misses it -- measured 2.5e-4 relative error at eta=-37.8
+# against 40-digit mpmath), while the exact Taylor series
+#     F_j(eta) = sum_{k>=1} (-1)^{k+1} exp(k eta) / k^(j+1)
+# converges to machine precision in a handful of terms.  Debug-pass
+# finding (M13 G4 generalized-mass-action gate).
+_SERIES_ETA = -10.0
+
+
+def _fd_series(eta, power):
+    """sum_{k>=1} (-1)^{k+1} exp(k eta)/k**power, exact for eta <= -10."""
+    e = np.asarray(eta, dtype=float)
+    out = np.zeros_like(e)
+    sign = 1.0
+    k = 1
+    while True:
+        term = sign * np.exp(k * e) / k ** power
+        out = out + term
+        if np.all(np.abs(term) <= 1e-18 * (np.abs(out) + 1e-300)):
+            break
+        if k > 200:                       # unreachable for eta <= -10
+            break
+        sign = -sign
+        k += 1
+    return out
 
 
 def _inv_softplus(x):
@@ -90,43 +124,78 @@ def _gl_eval(eta, fn_s, fn_t):
     wA = 0.5 * _gw
     totA = (fn_s(sA[None, :], eta1[:, None]) * wA[None, :]).sum(axis=1)
 
-    # region B: width-2 panels on [1, t_max]
-    tmax = np.maximum(eta1, 0.0) + 60.0
-    n_pan = np.ceil((tmax - _T_SWITCH) / _PANEL_WIDTH_T).astype(int)
-    np_max = int(n_pan.max())
-    k_lo = np.minimum(np.arange(np_max)[None, :], n_pan[:, None])
-    k_hi = np.minimum(np.arange(1, np_max + 1)[None, :], n_pan[:, None])
-    a = _T_SWITCH + (tmax[:, None] - _T_SWITCH) * k_lo / n_pan[:, None]
-    b = _T_SWITCH + (tmax[:, None] - _T_SWITCH) * k_hi / n_pan[:, None]
-    half = 0.5 * (b - a)
-    mid = 0.5 * (a + b)
-    t = mid[:, :, None] + half[:, :, None] * _gn[None, None, :]
-    w = half[:, :, None] * _gw[None, None, :]
-    vals = fn_t(t.reshape(n, -1),
-                np.repeat(eta1[:, None], np_max * _GL_ORDER, axis=1))
-    totB = (vals * w.reshape(n, -1)).sum(axis=1)
+    # region B: per-node truncation t_hi = eta + _T_TAIL (margin 60:
+    # the dropped tail scales as sqrt(t_hi)*exp(-margin) -- a smaller
+    # margin measurably degrades mid-negative etas; verified against the
+    # G1 gate), skipped for nodes whose remainder sits below t = 1;
+    # nodes then bucket by required panel count (avoids the
+    # rectangular-grid waste that made whole-grid evaluations cost the
+    # global maximum)
+    t_hi = eta1 + _T_TAIL
+    needs = t_hi > _T_SWITCH
+    out = np.zeros(n)
+    kk_off = np.arange(_GL_ORDER)
+    if bool(needs.any()):
+        n_pan = np.maximum(
+            np.ceil((t_hi[needs] - _T_SWITCH) / _PANEL_WIDTH_T).astype(int),
+            1)
+        idx_all = np.nonzero(needs)[0]
+        for pv in np.unique(n_pan):
+            idx = idx_all[n_pan == pv]
+            e_sub = eta1[idx]
+            hi_sub = t_hi[idx]
+            edges = _T_SWITCH + (hi_sub[:, None] - _T_SWITCH) \
+                * np.arange(pv + 1)[None, :] / pv
+            a = edges[:, :-1]
+            b = edges[:, 1:]
+            half = 0.5 * (b - a)
+            mid = 0.5 * (a + b)
+            t = mid[:, :, None] + half[:, :, None] * _gn[None, None, :]
+            w = half[:, :, None] * _gw[None, None, :]
+            vals = fn_t(t.reshape(idx.size, -1),
+                        np.repeat(e_sub[:, None], pv * _GL_ORDER, axis=1))
+            out[idx] = (vals * w.reshape(idx.size, -1)).sum(axis=1)
 
-    total = totA + totB
+    total = totA + out
     return total[0] if scalar else total
 
 
 def f_half(eta):
     """Complete Fermi integral F_{1/2}(eta), normalized to exp(eta)."""
-    return _gl_eval(
-        eta,
-        lambda s, e: (4.0 / np.sqrt(np.pi)) * s * s
-        * _inv_softplus(s * s - e),
-        lambda t, e: (2.0 / np.sqrt(np.pi)) * np.sqrt(t)
-        * _inv_softplus(t - e))
+    arr = np.asarray(eta, dtype=float)
+    scalar = (arr.ndim == 0)
+    a1 = np.atleast_1d(arr)
+    _check_eta(a1)
+    res = np.empty_like(a1)
+    deep = a1 <= _SERIES_ETA
+    if bool(deep.any()):
+        res[deep] = _fd_series(a1[deep], 1.5)
+    if bool((~deep).any()):
+        res[~deep] = _gl_eval(a1[~deep],
+                              lambda s, e: (4.0 / np.sqrt(np.pi)) * s * s
+                              * _inv_softplus(s * s - e),
+                              lambda t, e: (2.0 / np.sqrt(np.pi))
+                              * np.sqrt(t) * _inv_softplus(t - e))
+    return res[0] if scalar else res
 
 
 def f_mhalf(eta):
     """F_{-1/2}(eta) = d F_{1/2} / d eta (same normalization family)."""
-    return _gl_eval(
-        eta,
-        lambda s, e: (2.0 / np.sqrt(np.pi)) * _inv_softplus(s * s - e),
-        lambda t, e: (1.0 / np.sqrt(np.pi)) * t ** -0.5
-        * _inv_softplus(t - e))
+    arr = np.asarray(eta, dtype=float)
+    scalar = (arr.ndim == 0)
+    a1 = np.atleast_1d(arr)
+    _check_eta(a1)
+    res = np.empty_like(a1)
+    deep = a1 <= _SERIES_ETA
+    if bool(deep.any()):
+        res[deep] = _fd_series(a1[deep], 0.5)
+    if bool((~deep).any()):
+        res[~deep] = _gl_eval(a1[~deep],
+                              lambda s, e: (2.0 / np.sqrt(np.pi))
+                              * _inv_softplus(s * s - e),
+                              lambda t, e: (1.0 / np.sqrt(np.pi))
+                              * t ** -0.5 * _inv_softplus(t - e))
+    return res[0] if scalar else res
 
 
 def df_half(eta):

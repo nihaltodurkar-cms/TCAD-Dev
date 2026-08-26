@@ -76,11 +76,60 @@ the two catalog/wire-format pin points listed below).
 - Catalog: fd + incomplete_ion entries with equations/references/
   applicability/limits (G7 metadata requirement).
 
+## STATE ADDENDUM 2 -- M11-S4 LANDED IN THE SAME TREE (2026-08-26,
+UNCOMMITTED): Device2D per-node material lists (flat row-major
+sequences), harmonic-mean edge eps normalized by eps[0] (uniform
+devices ALGEBRAICALLY identical -- array_equal gate), carrier-specific
+ln(nie) deltas per axis composing additively with fd nu-factors,
+grouped per-material parameters, fd DOS now PER-NODE grids in Device2D
+(so fd composes with heterojunctions correctly).  Gates:
+tests/test_m11s4_2d_hetero.py (5 tests: homojunction array_equal
+bit-identity; FD-Jacobian across Si/GaAs <=5e-5; machine-precision
+zero equilibrium current both carriers; dimensional reduction to the
+validated 1D heterojunction; fd+hetero Jacobian).  Suite: 580 passed,
+zero warnings.  HONEST GAPS CLOSED in the same session:
+(1) Device3D heterojunction core ported (same machinery; gates incl.
+    3D->2D dimensional reduction to machine precision -- a debug cycle
+    found the et_x eps factors missing from the 3D Poisson fluxes, the
+    reduction gate caught it);
+(2) deck/GUI pipeline now SOLVES non-silicon jobs: solver_runner
+    resolves spec.material + region_materials through the workbench
+    MaterialLibrary and rasterizes per-node material lists into
+    build_device (boxes [x0,x1]/[x0,x1,y0,y1]/[x0,x1,y0,y1,z0,z1];
+    parse-time validation extended to arity 6; unknown names raise
+    KeyError loudly pre-solve; all-silicon jobs keep the legacy
+    constructor path bit-for-bit).  gui/tests/test_m11_wire.py's
+    refusal pin REWRITTEN as solves-and-differs + unknown-material
+    refusal; adapter _refuse_unsolvable_regions is now an honest
+    DATA-LOSS guard (structure model cannot carry materials yet --
+    that remains M11-S5 work) with its pin test updated.
+
+## DEBUG-PASS ADDENDUM (2026-08-26, post-M11-S4 adversarial probing;
+suite 581 passed, zero warnings, runtime 7:01 -> 4:45):
+- fd bias solves probed in 2D/3D (converge, terminal-current
+  conservation ~1e-5 on coarse meshes); moscap fd C-V finite/sane.
+- fermi.py _gl_eval REWORKED: per-node truncation t_hi=eta+60 plus
+  panel-count bucketing (rectangular grid made every node pay the
+  global-max cost); AND a genuine latent defect fixed: deep-tail
+  f_half carried ~2.5e-4 RELATIVE error (fixed-node grid cannot resolve
+  a feature at t~exp(eta)) -- eta<=-10 now uses the EXACT Taylor series
+  sum(-1)^(k+1) e^{keta}/k^{3/2} (f_mhalf: /k^{1/2}); all G1 gates
+  re-verified green.  Suite speedup is a side effect.
+- fd_density tail crossover moved -40 -> -35: the exact exponential is
+  accurate to 2.5e-16 relative there, MORE accurate than quadrature on
+  1e-12-scale values (exposed by the G4 neutrality gate).
+- Pipeline hardening: region_materials boxes selecting NO mesh nodes
+  used to be a silent no-op -- now refuse loudly ("selects no mesh
+  nodes"); overlap semantics documented as last-wins; 3D box6 jobs
+  verified end-to-end through the backend; regression test added
+  (test_empty_box_fails_loudly).
+
 ## NEXT (priority order)
-1. Commit the M13 working tree (user decides message/split).
+1. Commit the working tree (user decides message/split: M13 phase 2 +
+   M11-S4 are logically separate commits).
 2. M15 prep (impact ionization solver coupling) -- UNBLOCKED: the full
-   M13 gate battery G1-G8 is green across 1D/2D/3D (suite 570 passed,
-   zero warnings; +6 port tests in tests/test_m13_solver.py).
+   M13 gate battery G1-G8 is green across 1D/2D/3D (suite previously
+   570; now 575 with the S4 gates).
 2D/3D PORT NOTES (for future sessions): shared helpers live in
 pytcad/device.py (fd_node_factors, fd_ohmic_values, fd_density with
 the exact Boltzmann tail below eta=-40 and loud refusal above +40);
@@ -111,6 +160,26 @@ it). Incomplete ionization stays 1D-only (plan section 3.3).
 Plan → user approves → TDD (tests red first) → implement → hard debug
 (fuzz/probe the new code adversarially, fix, regression tests) → commit
 (user pushes). Honesty over polish: report blockers, document limits.
+
+## DEBUG-PASS ADDENDUM (2026-08-26, post-M11-S4 adversarial probing;
+suite 581 passed, zero warnings, runtime 7:01 -> 4:45):
+- fd bias solves probed in 2D/3D (converge, terminal-current
+  conservation ~1e-5 on coarse meshes); moscap fd C-V finite/sane.
+- fermi.py _gl_eval REWORKED: per-node truncation t_hi=eta+60 plus
+  panel-count bucketing (rectangular grid made every node pay the
+  global-max cost); AND a genuine latent defect fixed: deep-tail
+  f_half carried ~2.5e-4 RELATIVE error (fixed-node grid cannot resolve
+  a feature at t~exp(eta)) -- eta<=-10 now uses the EXACT Taylor series
+  sum(-1)^(k+1) e^{keta}/k^{3/2} (f_mhalf: /k^{1/2}); all G1 gates
+  re-verified green.  Suite speedup is a side effect.
+- fd_density tail crossover moved -40 -> -35: the exact exponential is
+  accurate to 2.5e-16 relative there, MORE accurate than quadrature on
+  1e-12-scale values (exposed by the G4 neutrality gate).
+- Pipeline hardening: region_materials boxes selecting NO mesh nodes
+  used to be a silent no-op -- now refuse loudly ("selects no mesh
+  nodes"); overlap semantics documented as last-wins; 3D box6 jobs
+  verified end-to-end through the backend; regression test added
+  (test_empty_box_fails_loudly).
 
 ## NEXT (priority order)
 1. M13 PHASE 2 (see OPEN ITEM above) — design spike for the FD-SG

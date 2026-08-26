@@ -1,16 +1,24 @@
 # Heterostructure Regions -- Milestone Plan (M11 proposal)
 
-Status: S1-S3 SHIPPED (materials layer; DeviceSpec.region_materials
+Status: S1-S4 SHIPPED (materials layer; DeviceSpec.region_materials
 wire format with parse-time validation; 1D heterojunction core --
 eps(x) harmonic-mean flux-form Poisson, Anderson band offsets via
 CARRIER-SPECIFIC ln(nie) SG deltas, per-material recombination;
 acceptance: FD-Jacobian across Si/GaAs < 5e-5, detailed balance
-exact, homojunction bit-identical).  S4 (2D box-integration) and S5
-(HBT/HEMT templates + UI) remain OPEN and are queued in
-ARCHITECTURE.md section 7 / SENTAURUS-PARITY-PLAN.md.  Key lesson
-(section 4 mechanism proved necessary): a shared band-offset delta
-passed the FD-Jacobian but broke hole detailed balance -- only a
-carrier-specific equilibrium check catches that class.
+exact, homojunction bit-identical).  S4 SHIPPED 2026-08-26: the same
+physics on Device2D's box integration -- per-node material lists,
+harmonic-mean edge eps normalized so uniform devices stay
+bit-identical, carrier-specific ln(nie) deltas per axis, grouped
+per-material parameters; gates in tests/test_m11s4_2d_hetero.py
+(homojunction array_equal bit-identity; FD-Jacobian across Si/GaAs
+<= 5e-5; machine-precision zero equilibrium current, both carriers;
+dimensional reduction to the validated 1D heterojunction solution;
+fd+hetero composition Jacobian).  S5 (HBT/HEMT templates + UI)
+remains OPEN and is queued in ARCHITECTURE.md section 7 /
+SENTAURUS-PARITY-PLAN.md.  Key lesson (section 4 mechanism proved
+necessary): a shared band-offset delta passed the FD-Jacobian but
+broke hole detailed balance -- only a carrier-specific equilibrium
+check catches that class.
 
 Read alongside ARCHITECTURE.md sections 3/4/6 and history.md.
 

@@ -221,9 +221,11 @@ def test_region_path_rejects_unsolvable_material_honestly():
         domain.regions[0].material = "SiGe"
         # domain layer ACCEPTS known materials since M11-S1...
         domain.validate()
-        # ...while the adapter keeps refusing honestly ("silicon only"
-        # phrase pinned by this test survives in the adapter message)
-        with pytest.raises(ValueError, match="silicon only"):
+        # ...while the adapter keeps refusing honestly: the refusal is
+        # a DATA-LOSS guard now (M11-S4: the cores solve hetero devices,
+        # but the structure-model round-trip cannot carry per-region
+        # materials yet), not a capability gap
+        with pytest.raises(ValueError, match="silently dropped"):
             spec_adapter.spec_from_domain(domain)
     finally:
         LIBRARY._materials.pop("SiGe", None)

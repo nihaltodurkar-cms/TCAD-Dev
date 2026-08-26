@@ -82,28 +82,30 @@ D0_REF = 1.0  # reference diffusivity for scaling [cm^2/s]
 def fd_density(nc, eta):
     """n = nc * F_{1/2}(eta) with the M13 asymmetric eta policy.
 
-    Below FERMI_ETA_MIN the integral switches to its EXACT Boltzmann
-    tail exp(eta) (the deviation there is exp(eta)/2^{3/2} < 1e-18 --
-    far below double precision; minority carriers at cryogenic
-    temperature reach eta ~ -170, where quadrature evaluation would be
-    wasted anyway).  Above FERMI_ETA_MAX we refuse loudly -- beyond
-    +40 the parabolic-band model itself is invalid (G7 applicability);
-    no silent extrapolation.  The two branches agree to 1e-14 at the
-    boundary."""
+    Below eta = -35 the integral switches to its EXACT Boltzmann tail
+    exp(eta): the FD deviation there is exp(eta)/2^{3/2} <= 2.5e-16
+    RELATIVE -- below double precision and MORE accurate than evaluating
+    the quadrature on a 1e-12-scale value (minority carriers reach
+    eta ~ -170 at cryogenic temperature).  Above FERMI_ETA_MAX we refuse
+    loudly -- beyond +40 the parabolic-band model itself is invalid (G7
+    applicability); no silent extrapolation.  The branches agree to
+    ~2e-16 at the crossover."""
     eta = np.asarray(eta, dtype=float)
     if np.any(eta > FERMI_ETA_MAX):
         raise ValueError(
             f"FD density argument eta={eta.max():.1f} exceeds "
             f"+{FERMI_ETA_MAX:.0f}: outside the validated Fermi-integral "
             f"range (M13 G7 applicability).  Refusing to extrapolate.")
-    shp = eta.shape
-    e1 = eta.ravel()
-    lo = e1 < FERMI_ETA_MIN
+    shp = np.broadcast_shapes(np.shape(nc), eta.shape)
+    e1 = np.broadcast_to(np.asarray(eta, dtype=float), shp).ravel()
+    c1 = np.broadcast_to(np.asarray(nc, dtype=float), shp).ravel()
+    lo = e1 < -35.0
     # f_half's fixed-node quadrature is vectorized over 1-D inputs
     # only -- flatten, evaluate, restore (any-shape grids supported).
     out = np.where(lo,
-                   nc * np.exp(np.minimum(e1, 700.0)),
-                   nc * f_half(np.clip(e1, FERMI_ETA_MIN, FERMI_ETA_MAX)))
+                   c1 * np.exp(np.minimum(e1, 700.0)),
+                   c1 * f_half(np.clip(e1, FERMI_ETA_MIN,
+                                       FERMI_ETA_MAX)))
     return out.reshape(shp)
 
 
@@ -116,12 +118,13 @@ def fd_ddensity_deta(nc, eta):
         raise ValueError(
             f"FD density argument eta={eta.max():.1f} exceeds "
             f"+{FERMI_ETA_MAX:.0f} (M13 G7 applicability).")
-    shp = eta.shape
-    e1 = eta.ravel()
-    lo = e1 < FERMI_ETA_MIN
+    shp = np.broadcast_shapes(np.shape(nc), eta.shape)
+    e1 = np.broadcast_to(np.asarray(eta, dtype=float), shp).ravel()
+    c1 = np.broadcast_to(np.asarray(nc, dtype=float), shp).ravel()
+    lo = e1 < -35.0
     tail = np.exp(np.minimum(e1, 700.0))
-    out = np.where(lo, nc * tail,
-                   nc * f_mhalf(np.clip(e1, FERMI_ETA_MIN,
+    out = np.where(lo, c1 * tail,
+                   c1 * f_mhalf(np.clip(e1, FERMI_ETA_MIN,
                                         FERMI_ETA_MAX)))
     return out.reshape(shp)
 

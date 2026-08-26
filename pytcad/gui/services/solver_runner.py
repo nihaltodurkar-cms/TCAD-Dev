@@ -75,11 +75,59 @@ def build_doping(doping_spec, shape):
     return values, ntotal
 
 
+def build_material_grid(spec):
+    """M11-S4/S5 pipeline wiring: resolve spec.material plus
+    region_materials boxes into a flat per-node material list through
+    the workbench MaterialLibrary (case-insensitive).  Returns None for
+    an all-silicon device so the legacy single-material constructor
+    path (and its bit-identity guarantees) stays untouched.  Unknown
+    material names raise KeyError here -- loudly, before any solve."""
+    from workbench.core.materials import MaterialLibrary
+    entries = getattr(spec, "region_materials", None) or []
+    lib = MaterialLibrary()
+    d = spec.mesh.dimensionality
+    names = ("x", "y", "z")[:d]
+    axes = {a: np.asarray(spec.mesh.axes[a], dtype=float) for a in names}
+    shape = tuple(axes[a].size for a in names)      # (Nx,) | (Ny,Nx) | (Nz,Ny,Nx)
+    base = lib.get(spec.material)
+    silicon_only = str(spec.material).upper() in ("SILICON", "SI") \
+        and not entries
+    if silicon_only:
+        return None
+    grid = np.empty(shape, dtype=object)
+    grid[:] = base
+    for k, entry in enumerate(entries):
+        mat = lib.get(entry["material"])
+        box = entry["box"]
+        mask = np.ones(shape, dtype=bool)
+        for ax_name, (lo, hi) in zip(names,
+                                     (box[0:2], box[2:4], box[4:6])[:d]):
+            a = axes[ax_name]
+            tol = 1e-9 * max(1.0, float(np.abs(a).max()))
+            sel = (a >= lo - tol) & (a <= hi + tol)
+            # broadcast the axis selection across the other dimensions
+            bshape = [1] * d
+            bshape[names.index(ax_name)] = a.size
+            mask = mask & sel.reshape(bshape)
+        if not mask.any():
+            raise ValueError(
+                f"region_materials[{k}] ('{entry['material']}') selects "
+                "no mesh nodes -- box does not intersect the mesh axes "
+                "(boxes are mesh-aligned per the wire-format contract)")
+        grid[mask] = mat          # later entries override earlier ones
+    return grid.ravel().tolist()
+
+
 def build_device(spec, mesh_obj, doping, ntotal):
     models = Models(**spec.models)
+    mats = build_material_grid(spec)
     d = spec.mesh.dimensionality
     cls = {1: Device1D, 2: Device2D, 3: Device3D}[d]
-    return cls(mesh_obj, doping, Ntotal=ntotal, T=spec.T, models=models)
+    if mats is None:
+        return cls(mesh_obj, doping, Ntotal=ntotal, T=spec.T,
+                   models=models)
+    return cls(mesh_obj, doping, Ntotal=ntotal, T=spec.T, models=models,
+               material=mats)
 
 
 def register_contacts(device, spec):
@@ -433,19 +481,10 @@ def _solve_all(device, spec, opts):
 
 def run_job(job_path, out_path, capture_trace=True):
     spec = DeviceSpec.from_json(job_path)
-    # honesty guard: the cores always solve silicon; non-silicon labels
-    # must fail loudly instead of silently solving the wrong material
-    offenders = {str(getattr(spec, "material", "SILICON")).upper()}
-    for entry in (getattr(spec, "region_materials", None) or []):
-        offenders.add(str(entry["material"]).upper())
-    offenders.discard("SILICON")
-    offenders.discard("SI")
-    if offenders:
-        names = ", ".join(sorted(offenders))
-        raise ValueError(
-            f"material(s) {names} are carried losslessly but not solvable: "
-            "the numerical core implements silicon only -- heterostructure "
-            "solving requires the M11-S3 backend")
+    # M11-S4/S5: non-silicon jobs are SOLVED -- region_materials are
+    # resolved through the MaterialLibrary and rasterized into per-node
+    # material lists inside build_device.  Unknown material names fail
+    # loudly there (KeyError), before any solve starts.
     if spec.sweep is not None:
         # Fail fast on an unexecutable sweep, BEFORE paying for the
         # equilibrium solve.

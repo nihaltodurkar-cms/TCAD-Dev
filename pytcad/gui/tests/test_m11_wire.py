@@ -76,15 +76,59 @@ def _dump(region_materials):
     }
 
 
-def test_pytcad_backend_refuses_hetero_jobs_honestly(tmp_path):
+def test_pytcad_backend_solves_hetero_jobs(tmp_path):
+    """M11-S4 pipeline: a 1D Si|GaAs region_materials job now SOLVES
+    through the backend, and its solution differs from the all-silicon
+    run (the Anderson band offset is physical, not decorative)."""
     from workbench.solvers.base import SolveRequest, get_backend
-    spec = _spec([{"material": "GAAS", "box": [0.0, 1e-4]}])
-    job = str(tmp_path / "het.json")
-    out = str(tmp_path / "het.npz")
-    spec.to_json(job)
-    with pytest.raises(ValueError, match="M11-S3"):
-        get_backend("pytcad").run(
-            SolveRequest(job_json_path=job, out_npz_path=out))
+    het = _spec([{"material": "GAAS", "box": [1e-4, 2e-4]}])
+    si = _spec(None)
+    out_h = str(tmp_path / "het.npz")
+    out_s = str(tmp_path / "si.npz")
+    jh, js = str(tmp_path / "het.json"), str(tmp_path / "si.json")
+    het.to_json(jh); si.to_json(js)
+    get_backend("pytcad").run(SolveRequest(job_json_path=jh,
+                                           out_npz_path=out_h))
+    get_backend("pytcad").run(SolveRequest(job_json_path=js,
+                                           out_npz_path=out_s))
+    psi_h = np.load(out_h)["field__potential"]
+    psi_s = np.load(out_s)["field__potential"]
+    assert np.isfinite(psi_h).all()
+    assert not np.array_equal(psi_h, psi_s), \
+        "heterostructure job solved identically to silicon-only"
+    # unknown material still fails loudly, before any solve
+    bad = _spec([{"material": "UNOBTANIUM", "box": [0.0, 1e-4]}])
+    jb = str(tmp_path / "bad.json")
+    ob = str(tmp_path / "bad.npz")
+    bad.to_json(jb)
+    with pytest.raises(KeyError, match="UNOBTANIUM"):
+        get_backend("pytcad").run(SolveRequest(job_json_path=jb,
+                                               out_npz_path=ob))
+
+
+def test_empty_box_fails_loudly():
+    """M11-S4 debug pass: a region_materials box that selects NO mesh
+    nodes used to be a silent no-op -- it must refuse instead."""
+    from gui.services.solver_runner import build_material_grid
+    spec = _spec([{"material": "GAAS", "box": [5e-3, 6e-3]}])
+    with pytest.raises(ValueError, match="selects no mesh nodes"):
+        build_material_grid(spec)
+
+
+def test_region_materials_3d_boxes_parse(tmp_path):
+    """M11-S4: 6-coordinate boxes (3D) parse and round-trip."""
+    spec = DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": [0.0, 1e-4], "y": [0.0, 1e-4],
+                            "z": [0.0, 1e-4]}),
+        doping=DopingSpec(kind="array", values=[1e16] * 8),
+        contacts=[],
+        region_materials=[{"material": "GAAS",
+                           "box": [0.0, 1e-4, 0.0, 1e-4, 0.0, 5e-5]}])
+    path = str(tmp_path / "job3d.json")
+    spec.to_json(path)
+    restored = DeviceSpec.from_json(path)
+    assert restored.region_materials == spec.region_materials
 
 
 def test_uniform_silicon_job_is_unaffected(tmp_path):

@@ -173,11 +173,11 @@ def _validate_region_materials(entries):
             raise ValueError(
                 f"region_materials[{i}] needs a 'material' string")
         box = entry.get("box")
-        if not isinstance(box, (list, tuple)) or len(box) not in (2, 4) \
+        if not isinstance(box, (list, tuple)) or len(box) not in (2, 4, 6) \
                 or not all(isinstance(v, (int, float)) for v in box):
             raise ValueError(
-                f"region_materials[{i}].box must be [x0,x1] or "
-                "[x0,x1,y0,y1] in cm")
+                f"region_materials[{i}].box must be [x0,x1], "
+                "[x0,x1,y0,y1] or [x0,x1,y0,y1,z0,z1] in cm")
 
 
 def _default_models():
