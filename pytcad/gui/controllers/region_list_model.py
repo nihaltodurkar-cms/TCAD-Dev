@@ -11,6 +11,7 @@ class RegionListModel(QAbstractListModel):
     BoundsRole = Qt.UserRole + 3
     DopingRole = Qt.UserRole + 4
     PriorityRole = Qt.UserRole + 5
+    MaterialRole = Qt.UserRole + 6
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,6 +32,8 @@ class RegionListModel(QAbstractListModel):
             return [r.x_min, r.x_max, r.y_min, r.y_max]
         if role == self.DopingRole:
             return r.net_doping_cm3
+        if role == self.MaterialRole:
+            return r.material
         if role == self.PriorityRole:
             # compositing priority IS list position: regions.py's
             # rasterize_doping applies regions in list order, later
@@ -42,7 +45,8 @@ class RegionListModel(QAbstractListModel):
     def roleNames(self):
         return {self.IdRole: b"regionId", self.NameRole: b"name",
                 self.BoundsRole: b"bounds", self.DopingRole: b"doping",
-                self.PriorityRole: b"priority"}
+                self.PriorityRole: b"priority",
+                self.MaterialRole: b"material"}
 
     def refresh(self, regions):
         self.beginResetModel()

@@ -6,7 +6,9 @@ format, S3 1D heterojunction core: eps(x) flux-form Poisson, Anderson
 band offsets via carrier-specific ln(nie) SG deltas, per-material
 recombination; S4 2D box-integration heterojunction core shipped
 2026-08-26 with the full gate battery incl. dimensional reduction to
-1D; S5 HBT+HEMT templates still open).
+1D; S5 shipped the same day: structure-model materials are lossless
+end-to-end and the HBT/HEMT parametric templates solve through the
+pipeline -- M11 COMPLETE except optional devsim hetero support).
 M12 tunneling SHIPPED (S1 FN+WKB analysis module with published-
 constant gates; S2 Hurkx trap-assisted tunneling in Device1D, all
 acceptance gates green; S3 density-gradient designed, not started --

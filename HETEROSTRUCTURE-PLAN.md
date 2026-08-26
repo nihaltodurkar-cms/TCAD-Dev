@@ -13,9 +13,18 @@ per-material parameters; gates in tests/test_m11s4_2d_hetero.py
 (homojunction array_equal bit-identity; FD-Jacobian across Si/GaAs
 <= 5e-5; machine-precision zero equilibrium current, both carriers;
 dimensional reduction to the validated 1D heterojunction solution;
-fd+hetero composition Jacobian).  S5 (HBT/HEMT templates + UI)
-remains OPEN and is queued in ARCHITECTURE.md section 7 /
-SENTAURUS-PARITY-PLAN.md.  Key lesson (section 4 mechanism proved
+fd+hetero composition Jacobian).  S5 SHIPPED 2026-08-26: per-region
+materials ride the whole authored path (Region.material ->
+RegionSpec.material -> region_materials emitted by to_device_spec for
+every non-silicon region; the M11-S4 data-loss guard is GONE -- the
+round-trip is lossless), and the HBT / HEMT parametric templates build
+on top: AlGaAs/GaAs layered stacks (wide-gap emitter/base/collector;
+buffer/channel/barrier + Schottky gate) that solve end-to-end through
+the backend pipeline.  GUI: region editor gains a Material combobox
+fed from the library (setRegionMaterial with undo; canonical keys).
+Gates in gui/tests/test_m11s5_templates.py.  The M11 milestone is now
+COMPLETE except devsim-backend hetero support (explicitly optional/
+last per the plan).  Key lesson (section 4 mechanism proved
 necessary): a shared band-offset delta passed the FD-Jacobian but
 broke hole detailed balance -- only a carrier-specific equilibrium
 check catches that class.

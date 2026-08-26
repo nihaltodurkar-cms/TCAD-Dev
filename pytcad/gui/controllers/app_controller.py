@@ -243,6 +243,13 @@ class AppController(QObject):
     # only to be handed opaquely into a @Slot(object, object) on the
     # Python side (MplCanvasItem.setStructureSource) -- QML never reads
     # attributes off them directly.
+    @Property("QVariantList", constant=True)
+    def materialNames(self):
+        """M11-S5: registered library keys for the region-material
+        editor (sorted, canonical uppercase keys)."""
+        from workbench.core.materials import LIBRARY
+        return LIBRARY.names()
+
     @Property(str, notify=structureChanged)
     def structureMaterial(self):
         return self.structure.material if self.structure else "Silicon"
@@ -546,6 +553,28 @@ class AppController(QObject):
         self._push(lambda: setattr(region, "net_doping_cm3", net_doping_cm3),
                   lambda: setattr(region, "net_doping_cm3", old),
                   "set region doping")
+
+    @Slot(str, str)
+    def setRegionMaterial(self, region_id, material):
+        """M11-S5: per-region material editing (MaterialLibrary key,
+        case-insensitive on resolve; stored verbatim)."""
+        region = self.structure.find_region(region_id)
+        if region is None:
+            return
+        from workbench.core.materials import LIBRARY
+        key = next((n for n in LIBRARY.names()
+                    if n.upper() == str(material).upper()), None)
+        if key is None:
+            raise KeyError(
+                f"unknown material '{material}' (available: "
+                f"{', '.join(LIBRARY.names())})")
+        material = key                          # canonical key stored
+        old = region.material
+        def apply(m):
+            region.material = m
+        self._push(lambda: apply(material),
+                   lambda: apply(old),
+                   f"set region material to {material}")
 
     @Slot(str, int)
     def moveRegion(self, region_id, offset):

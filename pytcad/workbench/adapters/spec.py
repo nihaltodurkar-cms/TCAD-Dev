@@ -112,6 +112,7 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
             id=r.id, name=r.name,
             x_min=r.x_min, x_max=r.x_max, y_min=r.y_min, y_max=r.y_max,
             doping_cm3=r.net_doping_cm3,
+            material=r.material,
         )
         for r in structure.regions
     ]
@@ -147,37 +148,17 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
     return domain
 
 
-def _refuse_unsolvable_regions(dev):
-    """DATA-LOSS guard (M11-S4): the numerical cores solve per-node
-    material lists fine, but the StructureModel round-trip below cannot
-    carry per-region materials yet -- letting a heterogeneous DomainDevice
-    through here would silently solve an all-silicon device.  Carrying
-    materials through the GUI structure model is M11-S5 work; until then
-    heterostructure jobs go through raw DeviceSpecs (region_materials),
-    which the backend pipeline rasterizes end to end."""
-    mixed = sorted({r.material.upper() for r in dev.regions}
-                   - {"SILICON", "SILICON"}) if False else \
-        sorted({r.material.upper() for r in getattr(dev, "regions", [])
-                if r.material.upper() != "SILICON"})
-    if mixed:
-        raise ValueError(
-            f"region material(s) {', '.join(mixed)} would be silently "
-            "dropped by the structure-model round-trip (materials ride "
-            "only on DeviceSpec.region_materials): solve via the job "
-            "pipeline, or wait for M11-S5 structure-model support")
-
-
 def structure_from_domain(dev: DomainDevice):
     """Rebuild (StructureModel, MeshModel) from an authored DomainDevice.
-    Raises ValueError on non-silicon region materials -- honest failure
-    until a heterostructure-capable backend exists."""
+    M11-S5: per-region materials are carried losslessly (Region.material
+    -> RegionSpec.material -> region_materials on the wire)."""
     dev.validate()
-    _refuse_unsolvable_regions(dev)
     regions = [
         RegionSpec(id=r.id, name=r.name,
                    x_min=r.x_min, x_max=r.x_max,
                    y_min=r.y_min, y_max=r.y_max,
-                   net_doping_cm3=r.doping_cm3)
+                   net_doping_cm3=r.doping_cm3,
+                   material=r.material)
         for r in dev.regions
     ]
     contacts = [
@@ -227,7 +208,9 @@ def spec_from_domain(dev: DomainDevice) -> DeviceSpec:
     construction; only `models`/`T` are applied from the domain object
     afterwards."""
     dev.validate()
-    _refuse_unsolvable_regions(dev)
+    # M11-S5: per-region materials ride the whole authored path
+    # (Region.material -> RegionSpec.material -> region_materials);
+    # unknown library keys still fail loudly in DomainDevice.validate.
     if dev.axes is not None:
         # IMPORTED shape: direct reconstruction of the wire object
         return DeviceSpec(

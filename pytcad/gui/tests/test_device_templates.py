@@ -28,7 +28,8 @@ from workbench.core.templates import TEMPLATES, get_template, list_templates
 #  registry + parameter validation (pure domain core)
 # ----------------------------------------------------------------------
 def test_registry_lists_the_three_founder_templates():
-    assert list_templates() == ["mos_capacitor", "nmos", "pn_diode"]
+    assert list_templates() == ["hbt", "hemt", "mos_capacitor", "nmos",
+                                "pn_diode"]
     for tid in ("pn_diode", "nmos", "mos_capacitor"):
         t = get_template(tid)
         assert t.title and t.description and t.params
@@ -112,7 +113,8 @@ def test_builder_adopts_into_structure_workbench(qapp=None):
     app = AppController()
     b = BuilderController(app)
 
-    assert b.templateIds == ["mos_capacitor", "nmos", "pn_diode"]
+    assert b.templateIds == ["hbt", "hemt", "mos_capacitor", "nmos",
+                             "pn_diode"]
     b.selectTemplate("pn_diode")
     b.setParameterValue("na_cm3", "-1e18")
     b.build()
@@ -153,7 +155,7 @@ def test_qml_panel_drives_a_real_build(gapp=None):
     panel = root.findChild(object, "deviceTemplatesPanel")
     assert panel is not None
     box = root.findChild(object, "templateBox")
-    assert box.property("count") == 3
+    assert box.property("count") == 5      # pn_diode, mos_cap, nmos, hemt, hbt
 
     titles = [str(t) for t in
               root.findChild(object, "templateParamColumn").children()] if False else None

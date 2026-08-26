@@ -26,6 +26,11 @@ class RegionSpec:
     y_min: float
     y_max: float
     net_doping_cm3: float          # signed: + donor/n-type, - acceptor/p-type
+    # M11-S5: MaterialLibrary key carried per region (canonical
+    # uppercase default so authored paths and templates compare equal).
+    # Emitted as DeviceSpec.region_materials for every non-silicon
+    # region by to_device_spec().  Resolution is case-insensitive.
+    material: str = "SILICON"
 
     def to_dict(self):
         return asdict(self)
@@ -295,12 +300,23 @@ class StructureModel:
         bias = {c.name: c.V for c in self.contacts}
         bias.update({g.name: g.V for g in self.gates})
 
+        # M11-S5: per-region materials ride the wire format -- one box
+        # per non-silicon region, in declaration order (later entries
+        # win on overlap, mirroring rasterize_doping).  Silicon regions
+        # stay implicit (the spec-level material covers them), keeping
+        # all-silicon specs byte-identical to their legacy form.
+        rm = [{"material": r.material,
+               "box": [max(r.x_min, 0.0), min(r.x_max, self.width_cm),
+                       max(r.y_min, 0.0), min(r.y_max, self.height_cm)]}
+              for r in self.regions
+              if r.material.upper() not in ("SILICON", "SI")]
         return DeviceSpec(
             mesh=mesh_spec,
             doping=DopingSpec(kind="array", values=doping.tolist()),
             material="SILICON", T=T,
             contacts=contacts,
             bias=bias,
+            region_materials=(rm if rm else None),
         )
 
 

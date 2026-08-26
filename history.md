@@ -124,6 +124,30 @@ suite 581 passed, zero warnings, runtime 7:01 -> 4:45):
   verified end-to-end through the backend; regression test added
   (test_empty_box_fails_loudly).
 
+## STATE ADDENDUM 3 -- M11-S5 LANDED (2026-08-26, UNCOMMITTED):
+structure-model materials are LOSSLESS end-to-end: RegionSpec gained a
+material key, to_device_spec() EMITS region_materials for every non-
+silicon region (boxes = region rectangles clamped to extent; silicon
+regions stay implicit so all-silicon specs stay byte-identical),
+domain round-trips preserve them exactly, and the M11-S4 data-loss
+guard was REMOVED (its pin test flipped to lossless-carry).  Templates:
+"hbt" (AlGaAs/GaAs n-p-n: wide-gap emitter stripe, p+ base with a
+left-edge ohmic restricted to its layer, collector bottom) and "hemt"
+(GaAs buffer/channel/barrier + Schottky gate via manual Vfb=-0.8
+between top-surface source/drain) -- both solve at equilibrium through
+the backend (gates T1-T5 in gui/tests/test_m11s5_templates.py incl.
+the AlGaAs/GaAs conduction-band step check).  GUI: regionListModel
+MaterialRole + controller.setRegionMaterial (case-insensitive resolve,
+canonical key stored, undo-aware) + materialNames property +
+regionMaterialBox combobox in DopingEditor.qml.  DEBUG finding during
+S5: Device2D/Device3D bias-phase convergence divided relative updates
+by RAW densities -- deep-minority barrier nodes pinned the criterion
+to roundoff (limit cycle ~8.5e-7); both cores now use a density floor
+of 1e-10 scaled in the criterion (equilibrium paths untouched; no
+bias goldens exist for 2D/3D so bit-identity is unaffected; 1D left
+as-is where diode1d_fwd golden pins behavior).  Suite: 589 passed,
+zero warnings.
+
 ## NEXT (priority order)
 1. Commit the working tree (user decides message/split: M13 phase 2 +
    M11-S4 are logically separate commits).
@@ -180,6 +204,30 @@ suite 581 passed, zero warnings, runtime 7:01 -> 4:45):
   nodes"); overlap semantics documented as last-wins; 3D box6 jobs
   verified end-to-end through the backend; regression test added
   (test_empty_box_fails_loudly).
+
+## STATE ADDENDUM 3 -- M11-S5 LANDED (2026-08-26, UNCOMMITTED):
+structure-model materials are LOSSLESS end-to-end: RegionSpec gained a
+material key, to_device_spec() EMITS region_materials for every non-
+silicon region (boxes = region rectangles clamped to extent; silicon
+regions stay implicit so all-silicon specs stay byte-identical),
+domain round-trips preserve them exactly, and the M11-S4 data-loss
+guard was REMOVED (its pin test flipped to lossless-carry).  Templates:
+"hbt" (AlGaAs/GaAs n-p-n: wide-gap emitter stripe, p+ base with a
+left-edge ohmic restricted to its layer, collector bottom) and "hemt"
+(GaAs buffer/channel/barrier + Schottky gate via manual Vfb=-0.8
+between top-surface source/drain) -- both solve at equilibrium through
+the backend (gates T1-T5 in gui/tests/test_m11s5_templates.py incl.
+the AlGaAs/GaAs conduction-band step check).  GUI: regionListModel
+MaterialRole + controller.setRegionMaterial (case-insensitive resolve,
+canonical key stored, undo-aware) + materialNames property +
+regionMaterialBox combobox in DopingEditor.qml.  DEBUG finding during
+S5: Device2D/Device3D bias-phase convergence divided relative updates
+by RAW densities -- deep-minority barrier nodes pinned the criterion
+to roundoff (limit cycle ~8.5e-7); both cores now use a density floor
+of 1e-10 scaled in the criterion (equilibrium paths untouched; no
+bias goldens exist for 2D/3D so bit-identity is unaffected; 1D left
+as-is where diode1d_fwd golden pins behavior).  Suite: 589 passed,
+zero warnings.
 
 ## NEXT (priority order)
 1. M13 PHASE 2 (see OPEN ITEM above) — design spike for the FD-SG

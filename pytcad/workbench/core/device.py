@@ -143,9 +143,11 @@ class DomainDevice:
             for r in self.regions:
                 r.validate()
                 # Fail loudly rather than silently solving the wrong
-                # material: multi-material regions need a backend that
-                # supports heterostructures (none does today).
-                if r.material not in LIBRARY.names():
+                # material.  M11-S5: lookup is CASE-INSENSITIVE (the
+                # MaterialLibrary contract -- legacy labels like the
+                # StructureModel default 'Silicon' must resolve).
+                if r.material.upper() not in {n.upper()
+                                              for n in LIBRARY.names()}:
                     raise ValueError(
                         f"region '{r.id}': unknown material "
                         f"'{r.material}' (available: "

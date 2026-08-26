@@ -212,21 +212,23 @@ def test_model_flag_change_propagates_on_region_path():
         "authored-path models were not taken from the DomainDevice"
 
 
-def test_region_path_rejects_unsolvable_material_honestly():
+def test_region_path_carries_region_materials_losslessly():
+    """M11-S5: the former data-loss refusal is GONE.  A non-silicon
+    region material now rides the whole authored path and comes back
+    intact through the structure round-trip."""
     from pytcad.materials import Semiconductor
-    LIBRARY.register("SiGe", Semiconductor(name="SiGe"))   # known, NOT solvable
+    LIBRARY.register("SiGe", Semiconductor(name="SiGe"))
     try:
         structure, mesh_model = STRUCTURE_EXAMPLES["mosfet_2d_structure"]()
         domain = spec_adapter.domain_from_structure(structure, mesh_model)
         domain.regions[0].material = "SiGe"
-        # domain layer ACCEPTS known materials since M11-S1...
-        domain.validate()
-        # ...while the adapter keeps refusing honestly: the refusal is
-        # a DATA-LOSS guard now (M11-S4: the cores solve hetero devices,
-        # but the structure-model round-trip cannot carry per-region
-        # materials yet), not a capability gap
-        with pytest.raises(ValueError, match="silently dropped"):
-            spec_adapter.spec_from_domain(domain)
+        domain.validate()                     # known key accepted
+        spec = spec_adapter.spec_from_domain(domain)
+        assert spec.region_materials,             "authored path emitted no region_materials"
+        assert spec.region_materials[0]["material"] == "SiGe"
+        # lossless round-trip back through the structure model
+        structure2, _ = spec_adapter.structure_from_domain(domain)
+        assert (structure2.regions[0].material.upper() == "SIGE")
     finally:
         LIBRARY._materials.pop("SiGe", None)
 

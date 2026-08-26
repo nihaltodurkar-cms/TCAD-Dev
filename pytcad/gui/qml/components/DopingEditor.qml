@@ -9,7 +9,7 @@ import ".."
 ColumnLayout {
     property var controller
     property string regionId: ""
-    property var regionData: null   // {name, bounds:[xmin,xmax,ymin,ymax], doping}
+    property var regionData: null   // {name, bounds:[xmin,xmax,ymin,ymax], doping, material}
 
     Label { text: "Doping region"; color: Theme.textDim; font.pixelSize: 11 }
 
@@ -19,6 +19,29 @@ ColumnLayout {
             Layout.fillWidth: true
             text: regionData ? regionData.name : ""
             onEditingFinished: if (regionId) controller.renameRegion(regionId, text)
+        }
+    }
+
+    // M11-S5: per-region material (MaterialLibrary keys; the resolved
+    // key is what to_device_spec() emits into region_materials)
+    RowLayout {
+        Label { text: "Material"; color: Theme.textDim; Layout.preferredWidth: 90 }
+        ComboBox {
+            id: materialBox
+            objectName: "regionMaterialBox"
+            Layout.fillWidth: true
+            model: controller ? controller.materialNames : []
+            displayText: {
+                var m = regionData ? regionData.material : ""
+                if (!m) return "SILICON"
+                for (var i = 0; i < model.length; i++)
+                    if (model[i].toUpperCase() === m.toUpperCase())
+                        return model[i]
+                return m
+            }
+            onActivated: if (regionId)
+                controller.setRegionMaterial(regionId,
+                                             model[currentIndex])
         }
     }
 

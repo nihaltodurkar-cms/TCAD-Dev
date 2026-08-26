@@ -21,6 +21,7 @@ Rectangle {
                     name: controller.regionListModel.data(idx, Qt.UserRole + 2),
                     bounds: controller.regionListModel.data(idx, Qt.UserRole + 3),
                     doping: controller.regionListModel.data(idx, Qt.UserRole + 4),
+                    material: controller.regionListModel.data(idx, Qt.UserRole + 6),
                 }
             }
         }

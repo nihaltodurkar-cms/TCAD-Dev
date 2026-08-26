@@ -787,8 +787,18 @@ class Device3D:
             psi = psi + dpsi
             n, p = n_new, p_new
 
-            rel_n = np.abs(n_new / np.maximum(n_old, 1e-300) - 1.0).max()
-            rel_p = np.abs(p_new / np.maximum(p_old, 1e-300) - 1.0).max()
+            # M11-S5: relative updates are measured against a density
+            # floor -- deep-minority nodes (e.g. inside an AlGaAs
+            # barrier, p ~ 1e-13 scaled) otherwise pin the criterion to
+            # roundoff and stall the solve at a harmless limit cycle.
+            # Densities below 1e-10 scaled carry <= 1e-10 of the local
+            # Poisson charge; their exact value is numerically
+            # meaningless.  Equilibrium (slaved-carrier) solves are
+            # unaffected.
+            rel_n = (np.abs(n_new - n_old)
+                     / np.maximum(n_old, 1e-10)).max()
+            rel_p = (np.abs(p_new - p_old)
+                     / np.maximum(p_old, 1e-10)).max()
             err = max(np.abs(dpsi).max(), rel_n, rel_p)
             if opts.verbose:
                 print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
