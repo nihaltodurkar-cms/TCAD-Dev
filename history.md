@@ -948,3 +948,93 @@ dependent C-V difference from the fd=True/D_it=0 baseline.
 Full suite: 697 passed, 1 xfailed (M14 G-A only), 0 failed -- Addendum
 13's 696-test baseline plus this one new regression test, zero
 regressions.
+
+## STATE ADDENDUM 15 -- M21 PHASE 2 (2D/3D ADAPTIVE MESHING) HARD-DEBUG
+PASS: SIX REAL BUGS, INCLUDING ONE THAT HAD BEEN SILENTLY BREAKING
+PHASE 1 TOO, 2026-08-28 (same day as addenda 11-14):
+
+User reported that running the existing (uncommitted, already-written)
+M21 phase 2 work -- pytcad/adapt.py's reduce_x/y/z, default_indicator_
+2d/3d, refine_2d/3d, adapt_solve_2d/3d, plus the 25-test gate battery
+in tests/test_m21_phase2.py -- exhausted the host's RAM. This had
+apparently never been run to a clean pass before. An adversarial
+review (not just re-running with a bigger machine) found six real
+bugs, none of them subtle physics mistakes -- the kind that crash or
+silently disable a check rather than nudge a number:
+
+1. STALE IMPORT BROKE PHASE 1 TOO. adapt.py's import line was renamed
+   to `debye_length as _debye_length` for phase 2's own debye checks,
+   but `indicator_debye` -- PHASE 1 code, called every pass by
+   adapt_solve_1d -- still called the old bare `debye_length` name.
+   NameError, unconditionally. 10 of test_m21_adapt.py's 17 tests were
+   already failing before this pass touched anything; phase 1's
+   "17 gates green" status (Addendum 9) had gone stale the moment
+   phase 2's import edit landed, and nothing had re-run phase 1 since.
+2. 3D Debye-check broadcasting bug: `diff(mesh.y)[:, None, None]`
+   instead of `[None, :, None]` -- puts the Ny-1 axis in the wrong
+   position, ValueError on any mesh where Nz != Ny-1 (always).
+3. adapt_solve_3d called the 2D-only reduce_x/reduce_y on 3D-shaped
+   indicator arrays -- the 3D driver's real refinement path had never
+   once completed; every prior "pass" took the degenerate empty-
+   indicator branch instead. Fixed by generalising reduce_x/reduce_y
+   to handle 3D input (matching reduce_z's existing convention).
+4. `prev_q` was only ever updated inside the degenerate empty-
+   indicator branch in BOTH adapt_solve_2d and adapt_solve_3d, so
+   `delta` stayed inf forever in the normal path and the tol-based
+   convergence check -- the entire point of the `tol` parameter -- was
+   dead code, copied from adapt_solve_1d's structure but missing the
+   one unconditional `prev_q = q` line that makes it work.
+5. The drivers' own default `qoi` fallbacks (_qoi_2d/_qoi_3d, used
+   when a caller passes qoi=None) forgot `.ravel()` before multiplying
+   by mesh.dV -- crashes on any real device. Invisible because every
+   test in the file supplied its own correctly-raveled qoi.
+6. THE HEADLINE BUG: test_m21_phase2.py's own _build_2d/_build_3d
+   helpers built doping via `np.meshgrid(x, y, [z], indexing='ij')`
+   (shape (Nx,Ny,[Nz])) then handed it to Device2D/3D, which reshape
+   their doping argument to (Ny,Nx)/(Nz,Ny,Nx) -- a FLAT reshape, not
+   a transpose. Whenever Nx != Ny (2D) or the triple isn't symmetric
+   (3D) -- true of virtually every mesh in the file -- this silently
+   REINTERPRETS the buffer with the wrong axis order. Measured: ~49%
+   of doping nodes ended up with the wrong value for their position.
+   Because doping only ever takes one of two values, the array's
+   CONTENTS looked completely normal on inspection; only the spatial
+   PLACEMENT was corrupted. Every 3D test in the file had therefore
+   been exercising a scrambled, non-physical doping profile instead of
+   a clean p-n junction along x -- which is what made bugs 2-5's
+   symptoms so confusing to disentangle (mysterious z-axis violations,
+   non-monotonic-looking convergence, "close but not quite" agreement
+   numbers) before this was found.
+
+Once the doping was un-scrambled, several tests' OWN mesh/domain
+choices turned out to be independently wrong: two G3 reference meshes
+and two other tests reused phase 1's 1D-only fine graded_mesh recipes
+tensor-producted across 2-3 axes, reaching 3.6-4.8 MILLION nodes fed
+into a DIRECT sparse solve -- this is what actually exhausted the
+host's RAM. Fixed with coarser, still-adequate references, several at
+Debye-scale domains (W=D=1.0e-5 cm rather than the diode's usual
+2.0e-4/1.0e-4 cm -- at this doping a uniform y/z mesh across the wider
+domain violates h/L_D<=1 on every cell, so "already adequate" is only
+achievable at Debye scale). Two convergence-gate tests also had node
+budgets sized against the OLD (scrambled) doping and were now too
+tight against the real physics -- one fixed by moving to a Debye-scale
+domain (converges at 65,648 nodes vs. millions needed at the wide
+domain), one by raising the budget to 700,000 nodes (a direct 2D solve
+handles that in well under a minute; 2D fill-in is far more forgiving
+than 3D). All fixes made under a `ulimit -v` memory cap so a
+recurrence fails loudly instead of repeating the RAM exhaustion.
+
+Full suite (`tests/ gui/tests/`, `-n 6`): 722 passed, 1 xfailed (M14
+G-A only, unrelated), 0 failed. tests/test_m21_adapt.py 17/17 and
+tests/test_m21_phase2.py 25/25, both independently confirmed green.
+Zero regressions elsewhere. Full defect ledger:
+pytcad/M21-MESHING-PLAN.md section 13.
+
+GOTCHA ADDED TO THE RUNNING LIST: a meshgrid built with `indexing='ij'`
+and then handed to a function that reshapes it to a DIFFERENT axis
+order is a silent data-corruption bug, not a crash -- numpy's flat
+`.reshape` never checks that the semantic axis order matches, only
+that the total element count does. When two arrays with only a
+handful of distinct values (like a doping array with just -na/nd) get
+reshaped this way, the corruption is invisible under `print()` or
+`np.unique()` -- it only shows up as spatial nonsense, and only if you
+go looking for it node-by-node against the intended geometry.

@@ -16,7 +16,7 @@ now COMPLETE -- see ARCHITECTURE.md section 5 and M15-IONIZATION-
 PLAN.md).  PHASE 3 (solver-level MPI distribution) is SCOPED ONLY, not
 started -- see section 1.
 
-Roadmap slot: SENTAURUS-PARITY-PLAN.md line 234, "M22 LINEAR SOLVER
+Roadmap slot: ARCHITECTURE.md section 4b.2, "M22 LINEAR SOLVER
 MODERNIZATION + CONTINUATION [L]".
 
 ------------------------------------------------------------------------

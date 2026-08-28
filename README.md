@@ -404,7 +404,7 @@ than device currents.
 - **Plummer, Deal & Griffin, *Silicon VLSI Technology*** — the process side: implantation, diffusion, oxidation, with the models actually used in fabs. Experimental/empirical.
 - **Deal & Grove, *J. Appl. Phys.* 36, 3770 (1965)** — the oxidation model, and honest about its thin-oxide failure. Experimental + theory.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
-**Project roadmap.** `SENTAURUS-PARITY-PLAN.md` governs all future
+**Project roadmap.** `ARCHITECTURE.md` section 4b governs all future
 capability growth (three parity tiers, milestones M13–M30 with
 published-value acceptance gates). M13 (Fermi-Dirac statistics) is
 COMPLETE; the active milestone specs are `pytcad/M14-SURFACE-

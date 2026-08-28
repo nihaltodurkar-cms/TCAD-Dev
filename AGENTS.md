@@ -1,8 +1,8 @@
 # AGENTS.md — Guidance for AI agents working on PyTCAD
 
-Read this before doing anything. Then read `session history/history.md`
-(current state + open items), `ARCHITECTURE.md` (roadmap + live queue),
-`SENTAURUS-PARITY-PLAN.md` (the governing future plan, M13-M30), and
+Read this before doing anything. Then read `history.md`
+(current state + open items), `ARCHITECTURE.md` (roadmap + live queue,
+including the governing future plan in section 4b, M13-M30), and
 the active milestone spec (currently `pytcad/M15-IONIZATION-PLAN.md`,
 `pytcad/M21-MESHING-PLAN.md`, and `pytcad/M22-LINSOLVE-PLAN.md` -- see
 "Milestone state & plans" below for what's actually open).
@@ -36,10 +36,10 @@ gui/
 tests/             core validation (incl. test_model_benchmarks.py --
                    new physics MUST land here first)
 gui/tests/         GUI-level tests (headless QML pattern)
-SENTAURUS-PARITY-PLAN.md   governing roadmap M13-M30
+ARCHITECTURE.md sec 4b   governing roadmap M13-M30
 pytcad/M14-SURFACE-MOBILITY-PLAN.md / M15-IONIZATION-PLAN.md /
   M21-MESHING-PLAN.md / M22-LINSOLVE-PLAN.md   active milestone plans
-session history/history.md   session-by-session state + handoff notes
+history.md   session-by-session state + handoff notes
 ```
 
 ## Commands (run from `pytcad/`)
@@ -92,7 +92,7 @@ with `pytest.warns` in the test that intends it.
 Plan -> user approves -> TDD (red first) -> implement -> hard debug
 (fuzz/probe adversarially, run live app/examples) -> commit.
 Working tree may be left dirty ONLY with openly-failing tests and a
-precise handoff note in `session history/history.md` (see M12-S2
+precise handoff note in `history.md` (see M12-S2
 precedent).
 
 ## Gotchas learned the hard way (each cost a debugging session)
@@ -183,8 +183,8 @@ precedent).
 
 ## Milestone state & plans
 
-Governing roadmap: `SENTAURUS-PARITY-PLAN.md` (three parity tiers,
-M13-M30, gate-blocking rule 4b). Completed: M1-M10 (v0.5.0 tagged),
+Governing roadmap: `ARCHITECTURE.md` section 4b (three parity tiers,
+M13-M30, gate-blocking rule 4b.4). Completed: M1-M10 (v0.5.0 tagged),
 M11-S1..S5 (heterostructure materials/wire/1D+2D core, HBT/HEMT
 templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13
 (Fermi-Dirac + incomplete ionization, G1-G8 all green -- unblocked
@@ -225,4 +225,4 @@ guard), and saved projects silently dropping the Physics Lab's model
 toggles (project_store SCHEMA_VERSION 4->5, "models" key; see
 gui/tests/test_persistence_v5.py).
 Live queue: ARCHITECTURE.md sections 5-7; session detail:
-`session history/history.md`.
+`history.md`.

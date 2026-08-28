@@ -47,7 +47,7 @@ findings from resuming:
       not done.
 
 ------------------------------------------------------------------------
-## 1. SPEC (from SENTAURUS-PARITY-PLAN.md section 2, M14)
+## 1. SPEC (from ARCHITECTURE.md section 4b.2, M14)
 
 **Scope:**
   - Lombardi CVT (surface roughness + phonon + Coulomb components) for
@@ -212,7 +212,7 @@ G-E: FD-Jacobian
 ------------------------------------------------------------------------
 ## 5. AMENDMENT MECHANISM
 
-Per SENTAURUS-PARITY-PLAN.md standing rule 1:
+Per ARCHITECTURE.md section 4b.4 standing rule 1:
 1. Goldens committed BEFORE the core edit: tests/goldens/m14/*.npz
 2. G-D (bit-identity) verified FIRST
 3. G-E (FD-Jacobian) verified

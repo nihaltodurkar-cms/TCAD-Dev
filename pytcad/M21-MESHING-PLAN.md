@@ -2,12 +2,15 @@
 # M21: Solution-driven adaptive meshing (h-refinement)
 # Formal milestone spec
 
-Status: **PHASE 1 IMPLEMENTED, GATES GREEN.**  pytcad/adapt.py plus
-tests/test_m21_adapt.py (17 tests).  Phases 2 and 3 not started.
-Section 10 records the decisions taken; section 11 records what the
-implementation changed about the design and what it found.
+Status: **PHASES 1-2 IMPLEMENTED, GATES GREEN.**  pytcad/adapt.py plus
+tests/test_m21_adapt.py (17 tests, phase 1) and tests/test_m21_phase2.py
+(25 tests, phase 2, 2026-08-28).  Phase 3 not started.  Section 10
+records the decisions taken; section 11 records what phase 1's
+implementation changed about the design and what it found; section 13
+records phase 2's hard-debug pass -- six real bugs found and fixed,
+including one that had been silently breaking phase 1 too.
 
-Roadmap slot: SENTAURUS-PARITY-PLAN.md line 224, "M21 GENERAL 2D
+Roadmap slot: ARCHITECTURE.md section 4b.2, "M21 GENERAL 2D
 MESHING + FV ASSEMBLY [XL]".  That entry bundles four separable pieces
 (optional-dependency meshers; Delaunay FV assembly; solution-driven
 adaptive refinement; tensor-product-as-special-case).  This plan
@@ -426,3 +429,136 @@ the tensor-product path (standing rule 3); 3D (tetrahedral) repeat of
 the same conformality check across a solid-solid interface, which is
 a materially harder case than the 2D curve-curve interface tested
 here.  See ARCHITECTURE.md section 7 for where this sits in the queue.
+
+------------------------------------------------------------------------
+13. IMPLEMENTATION RECORD -- PHASE 2 HARD-DEBUG PASS (2026-08-28)
+------------------------------------------------------------------------
+Phase 2 (reduce_x/y/z, default_indicator_2d/3d, refine_2d/3d,
+adapt_solve_2d/3d in pytcad/adapt.py; the 25-test gate battery in
+tests/test_m21_phase2.py) was already present in the tree when this
+pass started, but had never been run to a clean, memory-safe green --
+running it the first time drove the host to tens of GB of resident
+memory. An adversarial pass over the whole file found and fixed SIX
+real bugs, none of them subtle physics mistakes -- the kind that crash
+or silently disable a check rather than produce a slightly-wrong
+number:
+
+D1  STALE IMPORT NAME BROKE PHASE 1 TOO.  adapt.py's import was
+    `from .mesh import debye_length as _debye_length` (renamed for
+    phase 2's own debye checks, which correctly use `_debye_length`),
+    but `indicator_debye` -- PHASE 1 code, called on every single pass
+    of `adapt_solve_1d` -- still called the old bare name `debye_length`.
+    This raised `NameError` unconditionally, and had been doing so the
+    whole time phase 2 code sat in the tree: 10 of test_m21_adapt.py's
+    17 tests were failing before this pass touched anything. Fixed by
+    updating the one stale call site to `_debye_length`.
+
+D2  3D DEBYE-CONSTRAINT BROADCASTING BUG.  `adapt_solve_3d`'s per-axis
+    Debye check built `debye_y` as
+    `np.diff(mesh.y)[:, None, None] / minimum(LD[:, :-1, :], LD[:, 1:, :])`
+    -- putting the `Ny-1` axis in position 0, but `LD[:, :-1, :]` has
+    shape `(Nz, Ny-1, Nx)` and needs it in position 1. Raises
+    `ValueError` on any mesh where `Nz != Ny-1` (i.e. essentially
+    always). Fixed to `[None, :, None]`.
+
+D3  3D DRIVER CALLED THE 2D-ONLY REDUCERS.  `adapt_solve_3d` called
+    `reduce_x(eta_x)` / `reduce_y(eta_y)` where `eta_x`/`eta_y` from
+    `default_indicator_3d` are 3-D arrays; `reduce_x`/`reduce_y` raised
+    `ValueError` on anything but a 2-D array. This meant the 3D driver's
+    main refinement path -- as opposed to its degenerate empty-indicator
+    branch -- had never actually completed once. Fixed by generalising
+    `reduce_x`/`reduce_y` to accept a 3-D indicator too (mean over the
+    two axes perpendicular to the target axis, matching `reduce_z`'s
+    existing 3-D convention), rather than writing separate 3D-only
+    reducers.
+
+D4  `prev_q` NEVER UPDATED -- THE TOL-BASED CONVERGENCE CHECK WAS DEAD
+    CODE.  `adapt_solve_1d` sets `prev_q = q` unconditionally every pass
+    (right after the Debye-adequacy check), so `delta` is meaningful on
+    every subsequent pass regardless of whether cells get marked.
+    `adapt_solve_2d`/`3d` copied the surrounding structure but the
+    `prev_q = q` line ended up ONLY inside the degenerate
+    empty-indicator branch, which real (non-trivial) indicator data
+    essentially never takes. Net effect: `delta` stayed `inf` forever
+    in the normal path, so the `tol` parameter was silently ignored and
+    every real run terminated via "nothing left to mark" or a resource
+    limit, never via measured QoI convergence. Fixed by restructuring
+    both drivers to check Debye adequacy (not indicator emptiness) for
+    the tol-gated exit and to set `prev_q = q` unconditionally per pass,
+    mirroring `adapt_solve_1d`'s placement exactly.
+
+D5  DEFAULT `qoi` FUNCTIONS WERE THEMSELVES BROKEN.  `adapt_solve_2d`/
+    `3d`'s own fallback `_qoi_2d`/`_qoi_3d` (used when a caller passes
+    `qoi=None`) computed `rho * dev.mesh.dV` without `.ravel()`ing
+    `rho` first -- `rho` is `(Ny,Nx)`/`(Nz,Ny,Nx)`-shaped but `mesh.dV`
+    is flat, so this raises on any real device. Invisible in this
+    file's own test suite because every test supplies its own
+    (correctly raveled) `qoi`. Fixed both.
+
+D6  TEST-HELPER DOPING ARRAY SILENTLY SCRAMBLED (the headline bug).
+    `_build_2d`/`_build_3d` built doping via
+    `np.meshgrid(x, y, [z,] indexing='ij')` giving shape `(Nx, Ny, [Nz])`,
+    then passed it to `Device2D`/`Device3D`, which reshape their
+    `doping` argument to `(Ny, Nx)` / `(Nz, Ny, Nx)` -- a FLAT reshape,
+    not a transpose. Whenever `Nx != Ny` (2D) or the full triple isn't
+    symmetric (3D) -- true of virtually every mesh in this file,
+    adaptive or not -- this reinterprets the flat buffer with the wrong
+    axis order. Measured: ~49% of doping nodes ended up with the wrong
+    value for their position. Because doping only ever takes one of two
+    values (-na or nd), the array's CONTENTS looked completely normal
+    under inspection; only the spatial PLACEMENT was corrupted, so this
+    was invisible short of checking node-by-node against the intended
+    step function. Every 3D test in the file had therefore been
+    exercising a scrambled, non-physical doping profile, not a clean
+    p-n junction along x -- which explains the otherwise-mysterious
+    z-axis Debye violations, non-monotonic convergence, and generally
+    "off" agreement numbers seen while diagnosing D1-D5. Fixed by
+    building the doping array directly in the correct (Ny,Nx) /
+    (Nz,Ny,Nx) order via a 1-D broadcast (doping depends only on x; no
+    meshgrid needed at all).
+
+TEST-DATA FIXES, DOWNSTREAM OF D6.  Once the doping was no longer
+scrambled, several tests' own mesh/domain choices turned out to be
+wrong on their own terms, independent of any adapt.py bug:
+
+  - Two G3 "resolved reference" tests (2D and 3D) and two other tests
+    (`test_adequate_3d_mesh_is_returned_unchanged`,
+    `test_driver_3d_preserves_physics_flag`) reused phase 1's 1D-only
+    `graded_mesh(h_min=5e-9, h_max=5e-8)`/`(h_min=2e-8, h_max=2e-7)`
+    recipes, tensor-producted across a second or third axis and pushed
+    through Device2D/3D's DIRECT sparse solve. That is safe as a 1D
+    node count (12020/3020) but not once multiplied out: the 3D cases
+    reached 3.6-4.8 MILLION nodes, and Device3D's `spsolve` tried to
+    allocate hundreds of MB just for the Jacobian's index arrays --
+    this is what drove the host to tens of GB resident. Fixed by
+    picking coarser, still-meaningfully-finer references (verified
+    debye-adequate at ~5,600-65,000 nodes for the affected 3D cases,
+    using W=D=1.0e-5 cm Debye-scale domains rather than the diode's
+    usual 2.0e-4/1.0e-4 cm width -- at this doping (1e16/1e17,
+    L_D_min ~ 1.29e-6 cm) a uniform y/z mesh across the wider domain
+    violates the h/L_D<=1 constraint on EVERY cell, so "already
+    adequate" or "converges in a handful of passes" is only actually
+    achievable at Debye scale).
+
+  - `test_qoi_3d_converges_monotonically` and
+    `test_2d_separable_refinement_adds_nodes` asserted `cause ==
+    "converged"` at node budgets (100000 / 200000) that, against the
+    now-correct doping, are genuinely too small: the wide-domain 3D
+    case needs the Debye constraint resolved across the FULL y/z
+    extent (per-axis checks average over the other two axes, so
+    locality doesn't help), which forces near-uniform bisection of all
+    three axes every pass (~7x node growth per pass) -- reaching
+    tol=1e-2 that way needs millions of nodes, and a DIRECT 3D solve
+    cannot fit that in memory (measured: SuperLU's `gssv` runs out of
+    memory around ~240,000 nodes on this host). Fixed the 3D case the
+    same way as the mesh-size fixes above (Debye-scale domain; measured
+    to converge cleanly at 65,648 nodes) and raised the 2D case's
+    budget to 700,000 nodes (measured to converge at ~559,000 -- large
+    but a direct 2D solve handles it in well under a minute).
+
+VERIFICATION.  All fixes applied with `ulimit -v` memory caps during
+development so a recurrence would fail loudly (`MemoryError`) rather
+than exhaust the host again. Final state: tests/test_m21_adapt.py 17/17
+passed, tests/test_m21_phase2.py 25/25 passed, full suite (`tests/
+gui/tests/`, `-n 6`) 722 passed / 1 xfailed (M14 G-A, unrelated) / 0
+failed -- zero regressions elsewhere in the tree.
