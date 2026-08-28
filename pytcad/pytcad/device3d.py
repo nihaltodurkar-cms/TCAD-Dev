@@ -170,6 +170,12 @@ class Device3D:
                 "Canali field-dependent mobility is not implemented in "
                 "Device3D (see design spec, deferred items)."
             )
+        if self.models.S_n != 0.0 or self.models.S_p != 0.0:
+            raise NotImplementedError(
+                "Models.S_n/S_p (M14 surface recombination velocity) is "
+                "implemented in Device1D and Device2D only -- never in "
+                "the M14 plan's scope for Device3D. Refusing rather than "
+                "silently ignoring the flag.")
         if getattr(self.models, "impact", False):
             raise NotImplementedError(
                 "Impact ionization (Models(impact=True)) is implemented "

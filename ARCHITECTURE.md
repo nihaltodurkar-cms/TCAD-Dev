@@ -270,7 +270,13 @@ M11 - HETEROSTRUCTURES [S1-S3 SHIPPED; S4/S5 OPEN]
   S4 SHIPPED: 2D box-integration equivalent (same math, face-normal
   eps; dimensional-reduction-to-1D gate). S5 SHIPPED: HBT/HEMT
   parametric templates + UI (regionMaterialBox in DopingEditor.qml,
-  controller.setRegionMaterial).
+  controller.setRegionMaterial). T5's own gate test
+  (test_hemt_band_step_at_interface) was a false-negative test bug, not
+  a physics gap: it diffed chi along axis=1 (x), but the HEMT's buffer/
+  channel/barrier layers are stacked along y, so that diff was always
+  exactly zero regardless of whether the real band step existed. Fixed
+  2026-08-28 to diff along axis=0; the real step measures 0.20 eV,
+  comfortably clearing the 0.15 eV gate.
 
 M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S2 SHIPPED; S3 -> M20]
   S1: workbench/physics/tunneling.py -- Fowler-Nordheim constants and
@@ -302,12 +308,25 @@ core changes, bit-identity when a model is off, no hidden failures.
 
 Status by milestone (2026-08-27):
   M13 Fermi-Dirac + incomplete ionization        COMPLETE (G1-G8)
-  M14 surface/inversion mobility                 PARTIAL: mobility_cvt
-                                                  wired (G-D/G-E green);
-                                                  G-A xfail (B_n/B_p
-                                                  unverified); G-B/G-C/
-                                                  driving_force/catalog
-                                                  not started
+  M14 surface/inversion mobility                 MOSTLY COMPLETE
+                                                  (2026-08-28): G-B (D_it
+                                                  in moscap.py), G-C
+                                                  (S_n/S_p in Device1D
+                                                  only -- Device2D
+                                                  attempted, found to be
+                                                  a no-op, reverted to
+                                                  an explicit raise),
+                                                  driving_force
+                                                  (descoped, no 2D/3D
+                                                  consumer exists), and
+                                                  catalog registration
+                                                  (surface_mobility) all
+                                                  landed. G-A remains
+                                                  OPEN, blocked on a
+                                                  paywalled primary
+                                                  source (see M14-
+                                                  SURFACE-MOBILITY-
+                                                  PLAN.md)
   M15 impact ionization coupling                 COMPLETE (all gates
                                                   green, 2026-08-28)
   M16 band-to-band tunneling                     not started
@@ -465,11 +484,13 @@ Independent candidates for the next milestone (any order):
    shows both are easy to get backwards silently.
 4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists and
    is validated; catalog wiring only).
-5. M14 remainder -- G-B (D_it C-V stretch-out), G-C (S_n/S_p surface
-   recombination wiring -- now loudly refused via Models.__post_init__
-   rather than silently no-op, but still not actually implemented),
-   driving_force, catalog registration. See
-   pytcad/M14-SURFACE-MOBILITY-PLAN.md section 6.
+5. M14 remainder -- LANDED 2026-08-28: G-B (D_it C-V stretch-out), G-C
+   (S_n/S_p surface recombination in Device1D), catalog registration
+   (surface_mobility). driving_force descoped (no consumer). Only G-A
+   (Lombardi phonon-term constants, blocked on a paywalled source) and
+   S_n/S_p in Device2D (attempted, found to be a no-op, reverted to an
+   explicit raise -- needs a per-contact-adjacency generalization not
+   yet built) remain open. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
 
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
@@ -534,18 +555,18 @@ recorded here so they are tracked rather than silently absent):
 ------------------------------------------------------------------------
 7. NEXT SESSION QUEUE (priority order, detailed starts)
 ------------------------------------------------------------------------
-1. M15 R1 -- outer fixed-point loop closure near avalanche onset (see
-   section 5). This is the only thing standing between M15 and a
-   truthful COMPLETE status.
-2. M22 phase 2 -- continuation driver (the 3D-scaling gate that used
-   to head this list is now closed via node-block-Jacobi
-   preconditioning; see section 4b).
+1. [DONE 2026-08-28] M15 R1 -- CLOSED, see section 5; this queue entry
+   predates that closure.
+2. [DONE 2026-08-28] M22 phase 2 -- continuation driver LANDED (the 3D-
+   scaling gate that used to head this list is closed via node-block-
+   Jacobi preconditioning; see section 4b).
 3. M21 phase 2 -- 2D/3D separable adaptive refinement.
 4. M16 BAND-TO-BAND TUNNELING, with residual-ordering and snapshot-
    ordering gates written FIRST this time (see section 5 item 4).
-5. M14 remainder -- G-B/G-C/driving_force/catalog (see section 5
-   item 5); M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT --
-   small, independent, low-risk.
+5. [DONE 2026-08-28] M14 remainder -- G-B/G-C(1D)/catalog LANDED;
+   driving_force descoped, G-C(2D) and G-A remain open (see section 5
+   item 5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT --
+   small, independent, low-risk, still open.
 6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native
    `__cxa_deleted_virtual` abort inside `QQuickPaintedItem::
    updatePaintNode`, ~1-in-3 to 1-in-5 full-suite runs). Root cause:

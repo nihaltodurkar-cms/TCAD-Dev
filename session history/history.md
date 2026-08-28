@@ -761,3 +761,190 @@ Full suite after items 2-4: 687 passed, 1 xfailed (pre-existing,
 unrelated), 1 failed (test_hemt_band_step_at_interface, same
 pre-existing unrelated HEMT failure as Addendum 10) -- zero
 regressions against the 675/2/1 baseline measured right after item 3.
+
+## STATE ADDENDUM 12 -- LAST KNOWN FAILURE FIXED (ROOT-CAUSED, NOT
+PATCHED), M14 G-A LITERATURE SEARCH BLOCKED ON A PAYWALL (2026-08-28,
+same day as Addendum 11):
+
+1. User asked to "fix these logically" after seeing
+   test_hemt_band_step_at_interface fail on their own local run --
+   the same failure Addenda 10 and 11 had both carried forward as
+   "pre-existing, unrelated." Root-caused rather than re-labeled:
+   gui/tests/test_m11s5_templates.py's T5 gate diffed the per-node
+   electron-affinity field chi along axis=1 (x) to find the AlGaAs/
+   GaAs interface, but _build_hemt's buffer/channel/barrier regions
+   (workbench/core/templates.py) each span the FULL x-width and only
+   differ in their y-bounds -- chi is therefore exactly constant along
+   x and only steps between rows along y. dchi along axis=1 was
+   mathematically always 0.0, independent of whether the real coupled
+   physics was right; the test could never have caught a regression.
+   Verified with a standalone diagnostic before touching the test:
+   axis=0 gives a real 0.255 eV chi discontinuity (matches the
+   0.85*0.3=0.255 eV Anderson-affinity prediction) and a 0.20 eV actual
+   band step, clearing the 0.15 eV gate with margin. Fixed the test's
+   axis (0, not 1) with a comment explaining why the old version was a
+   false negative. Full suite after the fix: 688 passed, 1 xfailed
+   (M14 G-A, unrelated), 0 failed -- the suite's last known failure is
+   gone.
+
+2. Follow-up: user asked to research online/published sources for the
+   M14 G-A xfail's missing Lombardi acoustic-phonon constants (B_n/B_p)
+   rather than continue leaving them permanently unverified. FOUND:
+   COMSOL's "Lombardi Surface Mobility" documentation transcribes the
+   1988 paper's equations directly and shows the real acoustic-phonon
+   term is a TWO-part, doping-dependent expression (mu1/(E/Eref) +
+   mu2*(N/Nref)^beta/[(E/Eref)^(1/3)*(T/Tref)]) -- materials.py's
+   mobility_cvt() currently implements only a simplified single term
+   with no doping dependence at all, a structural gap the earlier
+   session's "B_n unverified" framing had not identified. NOT FOUND,
+   despite an exhaustive search (COMSOL docs, Synopsys Sentaurus and
+   Silvaco ATLAS manual references, Stanford's dead Prophet TCAD site,
+   a TU Wien thesis chapter, a CERN parameter compilation, a general
+   mobility-modeling lecture, a blocked ResearchGate table): the actual
+   numeric mu1/mu2/beta/E_ref/N_ref/T_ref values. Confirmed via a
+   direct Unpaywall API query (DOI 10.1109/43.9186) that the original
+   paper has ZERO open-access copies anywhere -- this is a real
+   paywall block, not a search-effort gap. materials.py was NOT
+   touched (implementing the right equation shape with guessed
+   constants would replace one unverified number with several, exactly
+   what this function's own standing comment already refused to do).
+   Findings recorded in M14-SURFACE-MOBILITY-PLAN.md's new "G-A
+   LITERATURE SEARCH" section and flagged as a spawned task asking the
+   user for either the paper (institutional access) or a Sentaurus/
+   Silvaco manual PDF, either of which almost certainly has the table.
+
+## STATE ADDENDUM 13 -- M14 REMAINDER (G-B, G-C, CATALOG) LANDED, TWO
+SELF-CAUGHT FORMULA ERRORS FOUND AND FIXED BY ACTUALLY RUNNING THE
+NUMBERS (2026-08-28, same day as addenda 11-12):
+
+User asked to do M14's remaining scope (G-B D_it, G-C S_n/S_p,
+driving_force, catalog registration). Plan-mode exploration surfaced
+two scope corrections agreed with the user up front: driving_force
+descoped entirely (its only consumer, Canali field-dependent mobility,
+is unconditionally NotImplementedError in Device2D/Device3D -- nothing
+for "quasi_fermi" to switch); S_n/S_p targeted at Device1D AND Device2D
+(not Device3D, never in the M14 plan's scope for this feature).
+
+1. D_it (G-B, moscap.py): the plan's own formula is `Q_it =
+   q*D_it*phi_s`. A first pass "corrected" this to `q^2*D_it*phi_s`,
+   citing a half-remembered textbook heuristic without re-deriving it --
+   presented to the user as a deliberate physics correction, with their
+   explicit sign-off requested and given. Implemented, then found
+   NUMERICALLY to be a complete no-op (the coefficient came out ~1e-21x
+   the scale of the existing `kappa` term -- no C-V curve moved at all,
+   even at D_it=1e13). Re-derived from first principles instead: D_it
+   [cm^-2 eV^-1] times a band-bending shift of dphi_s VOLTS is a
+   dphi_s-eV energy shift numerically (eV = q*volts, the entire point
+   of the unit), giving dN_it = D_it*dphi_s and dQ_it = q*dN_it -- ONE
+   factor of q, not two. The plan's ORIGINAL text was right; the
+   "correction" (which had already been implemented and reported to the
+   user as correct) was wrong. Fixed to `q*D_it`; verified a real,
+   monotonic C-V stretch-out (0.02 dimensionless coefficient at
+   D_it=1e11, comparable to kappa=0.86 -- the right order of magnitude
+   this time). Separately found the plan's own D_it=1e11 test point does
+   NOT clear its own stated >1% C_max gate for this MOSCapacitor's
+   parameters (measured 0.1%) -- D_it=1e12 does (1.07%, +0.2V threshold
+   shift) -- so the regression test uses 1e12, a still-realistic "poor
+   interface" density, documented inline rather than silently swapped.
+
+2. S_n/S_p (G-C, device.py/device2d.py): the first wiring attempt (both
+   dimensionalities) used `F_n[node] = (n[node]-n0)*(1+S_scaled)`,
+   chosen specifically because it reduces to the exact existing
+   Dirichlet bits at S=0 with no branching -- an elegant-looking
+   formula that is, on inspection, a mathematical no-op: multiplying an
+   already-zero-at-convergence residual by any nonzero constant cannot
+   change its root, so n stayed pinned to n0 EXACTLY regardless of S.
+   Caught by numerical verification (n[0] bit-identical across 4+ orders
+   of magnitude of S_n) BEFORE writing a single test around it or
+   reporting it as done. Redone as a genuine Robin flux-balance derived
+   from steady-state particle conservation in the boundary half-box (the
+   one SG edge current touching the boundary node balances the
+   recombination sink) -- this does NOT reduce to Dirichlet at S=0 (S=0
+   there means zero current, a materially different BC), so S=0 is an
+   explicit branch back to the original code, not an algebraic limit.
+   Verified: FD-Jacobian < 5e-5 (electron and hole rows, both contacts,
+   Device1D), and the textbook-correct signature -- boundary carrier
+   density converges MONOTONICALLY to the S=0/Dirichlet value as S grows
+   (S=1e-2 -> 7.4e-2 cm^-3; S=1e10 -> 1.139e4 cm^-3, matching S=0 to 4
+   digits). The plan's own G-C target formula (J_leak ~ q*S*ni/2) turned
+   out to be the WRONG physics scenario entirely -- that is the classic
+   MOS depletion-region surface-generation-current formula (n~p~ni at a
+   depleted surface), not applicable to an ohmic contact's Robin BC
+   where n0/p0 are full equilibrium values -- so the gate is validated
+   against the monotonic-convergence signature instead.
+   Porting the (now-corrected) fix to Device2D hit the identical no-op
+   bug again (confirmed: n[0,0] bit-identical across 7 orders of
+   magnitude of S_n in a 2D diode) -- fixing it properly needs the same
+   flux-balance approach generalized to find, per contact node, which
+   neighbor is "into the bulk" and whether the relevant edge is x- or
+   y-directed, which is genuinely harder for an arbitrary 2D contact
+   shape than 1D's two fixed endpoints. Rather than ship a broken 2D
+   implementation under time pressure, reverted device2d.py to raise
+   NotImplementedError (mirroring the existing field_mobility/impact
+   per-dimension-guard convention) and reported the scope reduction to
+   the user directly instead of silently narrowing it.
+
+3. Catalog registration: added "surface_mobility" (the already-
+   implemented, already-gated Lombardi CVT toggle) to
+   workbench/core/catalog.py and gui/services/device_spec.py's
+   _default_models(), following the existing ModelInfo template.
+   Updated the three tests asserting the exact 8-key catalog set
+   (test_workbench_m1.py, test_physics_lab.py x2 assertions) to the new
+   9-key set -- not a weakened check, a corrected one. S_n/S_p and D_it
+   deliberately NOT added as catalog boolean toggles: they are
+   continuous physical magnitudes, and a checkbox has no way to
+   represent "how much" -- forcing them into the {model_key: bool} wire
+   format would mean inventing a scientifically arbitrary "enabled"
+   value. They stay Python-API parameters, same framing M12-S2 already
+   uses for TAT (model exists and is validated; catalog wiring only).
+
+Full suite after all of the above: 696 passed, 1 xfailed (M14 G-A only,
+still blocked on the paywalled Lombardi 1988 paper), 0 failed -- the
+688-test baseline (Addendum 12) plus 8 new tests (5 in
+test_m14_surface_mobility.py, 3 in test_cv_physics_validation.py), zero
+regressions.
+
+GOTCHA ADDED TO THE RUNNING LIST: a formula that "reduces to the
+existing code at the default value" is not automatically a valid
+generalization -- if the reduction works by multiplying an
+already-satisfied residual by a constant (rather than genuinely
+changing what equation is being solved), the parameter has no effect
+at ANY value, not just the default. The tell is that it "looks
+elegant" (no branching needed); the fix is to always numerically sweep
+the new parameter across several orders of magnitude and confirm the
+SOLUTION actually moves, not just that the code runs without error --
+exactly the check that caught this twice in one session (D_it and
+S_n/S_p, independently, via the same kind of formula).
+
+## STATE ADDENDUM 14 -- HARD-DEBUG PASS ON M14 (S_n/S_p x fd INTERACTION
+BUG FOUND AND FIXED), 2026-08-28 (same day as addenda 11-13):
+
+User asked for a "hard debug" pass on the M14 work just landed. Rather
+than re-confirm what Addendum 13's own tests already covered, targeted
+interactions between the new S_n/S_p Robin BC and every OTHER Models
+flag it can be combined with: tat, incomplete_ion, impact (checked both
+at equilibrium and at a biased/impact-active operating point), and bgn
+all came back clean (boundary FD-Jacobian error 1e-9 to 1e-10).
+
+fd=True + S_n/S_p != 0.0 did NOT come back clean: ~1.2e-3 boundary
+FD-Jacobian error, 25x over the 5e-5 gate. Found by restricting the
+FD-Jacobian probe to just the 6 boundary columns instead of random
+full-matrix sampling -- a handful of boundary columns among thousands
+is easy for random sampling to miss, and every M14 test that had
+already passed FD-Jacobian used fd=False, so this gap was invisible to
+them by construction. Root cause: M13 Fermi-Dirac statistics add a
+density-dependent chain-rule correction to the SG edge-current Jacobian
+(the wn/wp-weighted terms the INTERIOR electron/hole continuity rows
+already apply when fd=True) that Addendum 13's boundary Robin rows
+reused the base SG terms from but never extended with. Fixed by adding
+the identical correction (mirrored for holes with the opposite sign,
+matching the interior rows' own convention) to the boundary stamps;
+verified error drops to ~7.7e-9, fd=False unaffected. New regression
+test: test_g_e_fd_jacobian_with_surface_recombination_and_fd_statistics.
+MOSCapacitor's own fd=True + D_it>0 (different code, no shared risk)
+was checked too -- converges cleanly and produces a real, D_it-
+dependent C-V difference from the fd=True/D_it=0 baseline.
+
+Full suite: 697 passed, 1 xfailed (M14 G-A only), 0 failed -- Addendum
+13's 696-test baseline plus this one new regression test, zero
+regressions.

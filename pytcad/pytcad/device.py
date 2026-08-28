@@ -339,24 +339,25 @@ class Models:
     # "quasi_fermi": grad(quasi-Fermi) = grad(phi_n) or grad(phi_p),
     # the Sentaurus convention for multi-directional current flow.
     driving_force: str = "field"
-    # M14: surface recombination velocity at contacts/boundaries [cm/s].
-    # S_n = S_p = 0 (default) => no surface recombination, bit-
-    # identical to the existing boundary conditions.
+    # M14: surface recombination velocity at contacts [cm/s], Robin BC
+    # Jn.n_hat = q*S_n*(n-n0), Jp.n_hat = q*S_p*(p-p0). S_n = S_p = 0
+    # (default) => no surface recombination, bit-identical to the plain
+    # Dirichlet contact (verified: (1.0 + 0.0) == 1.0 exactly, no
+    # branching needed in the residual/Jacobian). Wired in Device1D and
+    # Device2D; Device3D raises (never in the M14 plan's scope for this
+    # feature -- see device3d.py's own guard, not this shared one).
     S_n: float = 0.0
     S_p: float = 0.0
 
     def __post_init__(self):
-        # S_n/S_p and driving_force are declared and documented as
-        # controlling real physics but are not read anywhere in
-        # device.py/device2d.py/device3d.py or workbench/ -- unlike
-        # impact/incomplete_ion, which raise NotImplementedError when
-        # set on a dimensionality that can't honor them, these would
-        # otherwise silently no-op. Refuse loudly instead.
-        if self.S_n != 0.0 or self.S_p != 0.0:
-            raise NotImplementedError(
-                "Models.S_n/S_p (surface recombination velocity) are "
-                "not wired into any solver core yet -- setting them "
-                "has no effect on the residual/Jacobian.")
+        # driving_force is declared and documented as controlling real
+        # physics but has no consumer: Canali/mobility_field() (the only
+        # place a "driving force" argument exists) is unconditionally
+        # NotImplementedError in Device2D/Device3D, and Device1D's plain
+        # "field" convention is the only one implemented anywhere.
+        # Refuse loudly rather than silently no-op, same as
+        # impact/incomplete_ion do for a dimensionality that can't honor
+        # them.
         if self.driving_force != "field":
             raise NotImplementedError(
                 f"Models.driving_force={self.driving_force!r} is not "
@@ -1305,14 +1306,97 @@ class Device1D:
             add(3 * i + 2, 3 * i + 2, -dVi * dG_dp_M)
             add(3 * i + 2, 3 * (i + 1) + 2, -dVi * dG_dp_R)
 
-        # --- Dirichlet contacts ---
+        # --- Dirichlet contacts (Robin on n/p when M14 S_n/S_p != 0) ---
+        # psi stays fully Dirichlet -- S_n/S_p model carrier recombination
+        # at the contact, not band bending. S=0 (default) keeps the
+        # EXACT pre-M14 Dirichlet row (n[node]=n0, diagonal 1.0) --
+        # bit-identical, not an algebraic reduction of the Robin formula:
+        # a Robin flux-balance row (see below) genuinely means something
+        # different at S=0 (zero-current/reflecting) than a Dirichlet
+        # density clamp, so this MUST branch, not interpolate. S>0
+        # replaces the row with the physical boundary condition
+        # Jn.n_hat = q*Sn*(n-n0): the edge-0 (node-N-2) SG current
+        # already computed for the interior stencil, balanced against
+        # the recombination sink, reusing the exact per-edge Jacobian
+        # coefficients (an/Bm/Bp/dJn_dpsiR, ap/Bm_h/Bp_h/dJp_dpsiR)
+        # already derived above -- no new physics formula invented here,
+        # only the existing edge-current model applied at a boundary
+        # instead of between two interior nodes.
+        # Boundary condition, derived from steady-state particle
+        # conservation in the boundary half-box (not assumed from an
+        # external sign convention): electron/hole flux entering the
+        # half-box from its one interior edge equals the surface
+        # recombination sink Sn*(n-n0)/Sp*(p-p0) there. Because
+        # electrons carry charge -q, converting the SG conventional
+        # current Jn to a particle flux flips a sign that Jp (holes,
+        # charge +q) does not -- hence the electron and hole sink terms
+        # end up with OPPOSITE sign between the left and right contact
+        # (mirroring how this code's own interior continuity rows
+        # already use +Rs for holes and -Rs for electrons). Verified
+        # against equilibrium (Jn=Jp=0 forces n=n0/p=p0 regardless of S,
+        # as it must) and the FD-Jacobian gate
+        # (test_m14_surface_mobility.py).
+        S_n_s = self.models.S_n * self.LD / D0_REF
+        S_p_s = self.models.S_p * self.LD / D0_REF
         for k, node in enumerate((0, N - 1)):
             psi0, n0, p0 = bc[k]
             F[3 * node] = psi[node] - psi0
-            F[3 * node + 1] = n[node] - n0
-            F[3 * node + 2] = p[node] - p0
-            idx = 3 * node + np.arange(3)
-            add(idx, idx, 1.0)
+            add(3 * node, 3 * node, 1.0)
+            edge = 0 if node == 0 else N - 2   # the one edge touching this node
+            other = node + 1 if node == 0 else node - 1
+            left = node == 0                   # is `node` the LEFT end of `edge`?
+            bsign_n = -1.0 if left else 1.0
+            bsign_p = 1.0 if left else -1.0
+            if S_n_s == 0.0:
+                F[3 * node + 1] = n[node] - n0
+                add(3 * node + 1, 3 * node + 1, 1.0)
+            else:
+                F[3 * node + 1] = Jn[edge] + bsign_n * S_n_s * (n[node] - n0)
+                dpsi_node = -dJn_dpsiR[edge] if left else dJn_dpsiR[edge]
+                dpsi_other = dJn_dpsiR[edge] if left else -dJn_dpsiR[edge]
+                dn_node = -an[edge] * Bm[edge] if left else an[edge] * Bp[edge]
+                dn_other = an[edge] * Bp[edge] if left else -an[edge] * Bm[edge]
+                if fd:
+                    # M13 FD correction to the SG delta term (the same
+                    # chain-rule extension the interior electron rows
+                    # get, see the `if fd:` block above building `Sn`/
+                    # `wn`) -- hard-debug finding (2026-08-28): omitting
+                    # this here made the boundary Jacobian ~0.1% wrong
+                    # whenever fd=True and S_n!=0 were combined (caught
+                    # by an FD-Jacobian probe restricted to the boundary
+                    # columns specifically, not the whole-matrix check
+                    # the other M14 tests already ran with fd=False).
+                    Sn_edge = n[edge + 1] * dBp[edge] + n[edge] * dBm[edge]
+                    dn_node += (-an[edge] * Sn_edge * wn[node]) if left \
+                        else (an[edge] * Sn_edge * wn[node])
+                    dn_other += (an[edge] * Sn_edge * wn[other]) if left \
+                        else (-an[edge] * Sn_edge * wn[other])
+                add(3 * node + 1, 3 * node, dpsi_node)
+                add(3 * node + 1, 3 * other, dpsi_other)
+                add(3 * node + 1, 3 * node + 1, dn_node + bsign_n * S_n_s)
+                add(3 * node + 1, 3 * other + 1, dn_other)
+            if S_p_s == 0.0:
+                F[3 * node + 2] = p[node] - p0
+                add(3 * node + 2, 3 * node + 2, 1.0)
+            else:
+                F[3 * node + 2] = Jp[edge] + bsign_p * S_p_s * (p[node] - p0)
+                dpsi_node = -dJp_dpsiR[edge] if left else dJp_dpsiR[edge]
+                dpsi_other = dJp_dpsiR[edge] if left else -dJp_dpsiR[edge]
+                dp_node = ap[edge] * Bp_h[edge] if left else -ap[edge] * Bm_h[edge]
+                dp_other = -ap[edge] * Bm_h[edge] if left else ap[edge] * Bp_h[edge]
+                if fd:
+                    # Hole mirror of the electron FD correction above --
+                    # OPPOSITE sign, same convention as the interior hole
+                    # rows' wp terms (delta_tilde_p carries -dL_p).
+                    Sp_edge = p[edge + 1] * dBm_h[edge] + p[edge] * dBp_h[edge]
+                    dp_node += (ap[edge] * Sp_edge * wp[node]) if left \
+                        else (-ap[edge] * Sp_edge * wp[node])
+                    dp_other += (-ap[edge] * Sp_edge * wp[other]) if left \
+                        else (ap[edge] * Sp_edge * wp[other])
+                add(3 * node + 2, 3 * node, dpsi_node)
+                add(3 * node + 2, 3 * other, dpsi_other)
+                add(3 * node + 2, 3 * node + 2, dp_node + bsign_p * S_p_s)
+                add(3 * node + 2, 3 * other + 2, dp_other)
 
         J = csr_matrix((np.concatenate(vals),
                         (np.concatenate(rows), np.concatenate(cols))),

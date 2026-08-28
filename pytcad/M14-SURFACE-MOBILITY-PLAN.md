@@ -1,7 +1,12 @@
 # M14-SURFACE-MOBILITY-PLAN.md
 # Surface & Inversion-Layer Mobility + Interface Recombination
 
-Status: IN IMPLEMENTATION (resumed after a mid-session crash, 2026-08-27)
+Status: MOSTLY COMPLETE (2026-08-28). G-B (D_it), G-C (S_n/S_p in
+Device1D), G-D, G-E, and catalog registration are all green. G-A
+remains OPEN, blocked on a paywalled primary source (see "G-A
+LITERATURE SEARCH" below). S_n/S_p in Device2D was attempted, found to
+be a no-op, and reverted to an explicit NotImplementedError rather than
+shipped broken -- see "G-C, DEVICE2D" below.
 Owner: session handoff via history.md
 
 RESUMED-SESSION NOTE: the prior session crashed after writing
@@ -231,20 +236,193 @@ Per SENTAURUS-PARITY-PLAN.md standing rule 1:
     scope (no leakage to other edges/axes) and that the toggle is real
     (finite, different, and only ever REDUCES the surface edge
     mobility relative to bulk)
-[ ] G-A: surface mobility curve -- OPEN, xfail, B_n/B_p unverified
-[ ] G-B: D_it C-V stretch-out -- not started (moscap.py untouched)
-[x] G-C precondition: S_n/S_p/driving_force now REFUSE loudly
-    (Models.__post_init__ raises NotImplementedError if S_n/S_p != 0.0
-    or driving_force != "field") instead of being silently accepted
-    and doing nothing -- a hard-debug finding: they were declared and
-    documented as controlling real physics but read nowhere in
-    device.py/device2d.py/device3d.py/workbench/, unlike impact/
-    incomplete_ion which already got this same loud-refusal treatment.
-    The actual physics (surface recombination BC, alternate driving-
-    force convention) is still NOT implemented -- this only stops the
-    silent-no-op failure mode; G-C/driving_force itself is still open.
-[ ] driving_force flag -- not started (declared, now loudly refused
-    rather than silently ignored; still not wired)
-[ ] catalog registration -- not started
-[ ] Full suite green -- see full-suite run recorded at the end of this
-    session's history.md addendum
+[ ] G-A: surface mobility curve -- OPEN, xfail, B_n/B_p unverified.
+    2026-08-28 research pass (see "G-A LITERATURE SEARCH" addendum
+    below): confirmed the primary source is paywalled with zero open-
+    access copies; found the correct multi-term equation FORM via a
+    citation-grade secondary source, but not the numeric constants.
+    Blocked pending a primary-source PDF from the user.
+[x] G-B: D_it C-V stretch-out -- LANDED 2026-08-28 in moscap.py.
+    Q_it = q*D_it*phi_s (see "G-B/G-C IMPLEMENTATION" below for a
+    correction to this formula's derivation and to which D_it value
+    actually clears the plan's own gate). D_it=0.0 bit-identical
+    (test_g_b_dit_zero_is_bit_identical_to_no_dit).
+[x] G-C: S_n/S_p surface recombination velocity -- LANDED 2026-08-28 in
+    Device1D ONLY (see "G-B/G-C IMPLEMENTATION" below for the physics
+    derivation, the initial no-op bug it corrects, and why Device2D was
+    reverted rather than shipped broken). S_n=S_p=0.0 bit-identical
+    (test_g_d_bit_identity_when_s_off_1d). Device2D/Device3D raise
+    NotImplementedError (test_s_n_s_p_raise_in_device2d_and_device3d).
+[x] driving_force flag -- DESCOPED (user decision, 2026-08-28): its
+    only consumer would be Canali/mobility_field(), which is
+    unconditionally NotImplementedError in Device2D/Device3D -- there
+    is nothing for "quasi_fermi" to switch. Left exactly as it was
+    (Models.__post_init__ still raises for anything but "field").
+    Revisit only once/if Canali is ported to 2D.
+[x] catalog registration -- "surface_mobility" added to
+    workbench/core/catalog.py and gui/services/device_spec.py's
+    _default_models() (2026-08-28). S_n/S_p and D_it deliberately NOT
+    added as catalog boolean toggles -- they are continuous physical
+    magnitudes (cm/s, cm^-2 eV^-1), and forcing them into the
+    {model_key: bool} wire-format contract would mean inventing a
+    scientifically arbitrary "canonical enabled value." They stay
+    Python-API parameters (Models(S_n=...), MOSCapacitor(D_it=...)),
+    same framing M12-S2 already uses for TAT.
+[x] Full suite green: 696 passed, 1 xfailed (G-A only), 0 failed --
+    688 baseline + 8 new tests, zero regressions.
+
+## G-B/G-C IMPLEMENTATION, 2026-08-28
+
+Both features hit a real error along the way, each caught by actually
+running the numbers rather than trusting a formula (the same discipline
+this repo's standing rules already demand for every other milestone).
+
+**G-B (D_it):** a first pass "corrected" the plan's own `Q_it =
+q*D_it*phi_s` to `q^2*D_it*phi_s`, citing a half-remembered textbook
+heuristic without re-deriving it. Implemented, then found NUMERICALLY
+to be a no-op (~1e-21x the scale of the existing `kappa` term -- see
+moscap.py's own diagnostic in its module docstring). Re-derived from
+first principles instead: D_it [cm^-2 eV^-1] times a band-bending shift
+of dphi_s VOLTS is a dphi_s-eV energy shift numerically (eV = q*volts,
+by definition), giving dN_it = D_it*dphi_s and dQ_it = q*dN_it -- ONE
+factor of q. The plan's original text was right; the "correction" was
+wrong. Implemented as `q*D_it`; verified a real, monotonic C-V
+stretch-out. Separately, the plan's own D_it=1e11 test point does NOT
+clear its own >1% C_max gate for this MOSCapacitor's parameters
+(measured 0.1%, not >1%) -- D_it=1e12 does (1.07% C_max shift, +0.2V
+threshold shift), so the gate test uses 1e12 instead (still a realistic
+"poor interface" density; real D_it spans ~1e10-1e12 cm^-2 eV^-1).
+
+**G-C (S_n/S_p):** the FIRST wiring attempt (both Device1D and
+Device2D) used `F_n[node] = (n[node]-n0)*(1+S_scaled)` -- an algebraic
+generalization chosen because it reduces to the exact existing Dirichlet
+bits at S=0 with no branching. This is a NO-OP: multiplying an
+already-zero-at-convergence residual by any nonzero constant does not
+change its root, so n stayed pinned to n0 EXACTLY regardless of S --
+confirmed numerically (n[0] identical across 4 orders of magnitude of
+S_n). Caught before writing any test around it. Redone as a genuine
+Robin flux-balance, derived from steady-state particle conservation in
+the boundary half-box (not assumed from an external convention): the
+one SG edge current touching the boundary node equals the recombination
+sink S*(n-n0)/S*(p-p0). This does NOT reduce to Dirichlet at S=0 (S=0
+there means zero current, a different boundary condition), so S=0 is
+handled as an explicit branch back to the original Dirichlet code, not
+an algebraic limit. Verified: FD-Jacobian < 5e-5 (both electron and
+hole rows, both contacts), and the physically correct signature -- as
+S_n increases from near-zero to very large, the boundary electron
+density converges MONOTONICALLY to the S=0/Dirichlet ("ideal ohmic
+contact") value (measured S=1e-2 -> 7.4e-2 cm^-3; S=1e10 -> 1.139e4
+cm^-3, matching S=0's value to 4 digits), matching the textbook
+qualitative behavior of a finite surface recombination velocity. The
+plan's own G-C target formula (`J_leak ~ q*S*ni/2`) turned out not to
+apply to this boundary condition at all -- that is the classic MOS
+DEPLETION-REGION surface-generation-current formula (n~p~ni at a
+depleted/intrinsic surface, e.g. Grove's Si surface-generation-velocity
+theory), a different physical scenario from an ohmic contact's
+Jn.n_hat=q*Sn*(n-n0) where n0/p0 are full equilibrium values -- so the
+test validates the monotonic-convergence signature instead.
+
+**G-C, DEVICE2D:** porting the (corrected) Device1D fix to Device2D hit
+the same no-op bug the first Device1D attempt had (confirmed
+numerically: n[0,0] identical across 7 orders of magnitude of S_n in a
+2D diode). Fixing it properly requires the same flux-balance approach,
+generalized to find, per contact node, WHICH neighbor is "into the
+bulk" and whether the relevant SG edge is x- or y-directed -- trivial
+for 1D's two fixed endpoints, genuinely harder for an arbitrary 2D
+contact shape (add_contact accepts any i,j list, not just a domain
+edge). Not implemented this pass. Device2D.__init__ now raises
+NotImplementedError for S_n/S_p != 0.0 with the full explanation inline,
+matching the existing per-dimension-guard convention (field_mobility,
+impact). Device3D was never in this feature's scope either way.
+
+## HARD-DEBUG PASS, 2026-08-28 (post-implementation)
+
+A dedicated adversarial pass over the newly-landed G-B/G-C code,
+targeting interactions with OTHER models rather than re-confirming what
+the landing tests already covered. Checked S_n/S_p (Device1D) against
+every other Models flag that can be combined with it: tat, incomplete_ion,
+impact, bgn all measured clean (boundary FD-Jacobian error 1e-9 to 1e-10,
+both at equilibrium and at a biased/impact-active operating point).
+
+**fd=True + S_n/S_p != 0.0 was NOT clean**: boundary FD-Jacobian error of
+~1.2e-3 (25x over the 5e-5 gate), found by restricting the FD-Jacobian
+probe to just the 6 boundary columns rather than random full-matrix
+sampling (a handful of boundary columns among thousands is easy for
+random sampling to miss entirely -- every other M14 test that passed
+FD-Jacobian used fd=False, so this gap was invisible to them by
+construction). Root cause: M13's Fermi-Dirac statistics add a
+doping/density-dependent chain-rule correction to the SG edge-current
+Jacobian (the `wn`/`wp`-weighted terms the INTERIOR electron/hole
+continuity rows already apply when fd=True) that the new boundary Robin
+rows reused the base an*Bm/an*Bp terms from but never extended with.
+Fixed by adding the identical correction (mirrored for holes, opposite
+sign, same convention the interior rows already use) to the boundary
+stamps; verified error drops to ~7.7e-9, and the fd=False case is
+unaffected (regression-checked). New test:
+test_g_e_fd_jacobian_with_surface_recombination_and_fd_statistics.
+
+MOSCapacitor's own fd=True + D_it>0 combination was also checked
+(different code, no shared risk with the Device1D fix above, but the
+same "does this Newton loop even converge" question applies) --
+converges cleanly, finite, and produces a real D_it-dependent C-V
+difference from the fd=True/D_it=0 baseline.
+
+## G-A LITERATURE SEARCH, 2026-08-28 (blocked, materials.py NOT touched)
+
+User asked to research online/published sources for the correct Lombardi
+acoustic-phonon constants (B_n/B_p, or whatever the real parameter set
+turns out to be) rather than continue leaving G-A unverified indefinitely.
+
+FOUND: COMSOL's "Lombardi Surface Mobility" application-note PDF
+transcribes the 1988 paper's equations directly (not a paraphrase --
+its own model source uses these exact symbols), and gives the
+acoustic-phonon term as a TWO-part expression, not the single term
+mobility_cvt() currently implements:
+
+    mu_ac,n = mu1,n / (E_perp,n / E_ref)
+              + [mu2,n * (N/N_ref)^beta_n] / [(E_perp,n/E_ref)^(1/3) * (T/T_ref)]
+
+    (mu_sr,n = delta_n / E_perp,n^2 -- unchanged, already verified)
+
+    N = Na- + Nd+
+
+This means the code's current `B / (T * E_eff^(1/3))` is missing an
+entire additive term (mu1/(E/E_ref)) AND the doping-dependence factor
+(N/N_ref)^beta -- a structural gap, not just a wrong constant. This is
+new, useful information even without new numbers: no single
+recalibrated B_n could ever reproduce the real curve shape, because
+the real model has doping dependence this one doesn't.
+
+NOT FOUND, despite an extensive search: the actual numeric values of
+mu1,n, mu2,n, beta_n, E_ref, N_ref, T_ref (and the hole equivalents).
+Checked and exhausted:
+  - COMSOL's own docs (equations only, defers numbers to Ref. 1)
+  - Synopsys Sentaurus Device User Guide and Silvaco ATLAS User's
+    Manual (both reference a full "Lombardi model" / CVT parameter
+    table by section title -- Sentaurus calls it "Named Parameter Sets
+    for Lombardi Model" -- but the freely-crawlable web versions never
+    expose the numbers themselves; the full ATLAS manual PDF is too
+    large (>10MB) to fetch whole, and a direct curl download timed out
+    from this sandbox)
+  - Stanford's old Prophet TCAD docs, which explicitly claim to have a
+    "Table 3" with these values -- server unreachable (connection
+    refused), and web.archive.org is blocked from this environment
+  - A TU Wien PhD thesis chapter dedicated to inversion-layer mobility
+    models -- discusses Lombardi by name and gives full equations for
+    the related Darwish model, but no Lombardi numbers
+  - A CERN detector-simulation TCAD parameter compilation, a general
+    mobility-modeling course PDF (Vasileska, ASU), and a
+    ResearchGate-hosted table figure (blocked, HTTP 403)
+  - The original paper itself: confirmed via a direct Unpaywall API
+    query (DOI 10.1109/43.9186) that it is_oa=false with ZERO
+    oa_locations -- there is no legal open-access copy anywhere, not
+    just none this search happened to find.
+
+CONCLUSION: this is genuinely blocked on external material, not on
+search effort. Flagged as a spawned background task (dismissed/tracked
+outside this file) asking the user for either the original 1988 paper
+(institutional IEEE Xplore access) or a Sentaurus/Silvaco manual PDF
+they may already have, since both almost certainly contain the table.
+materials.py is UNCHANGED -- implementing the two-term form now with
+guessed mu1/E_ref/N_ref would replace one unverified constant with
+several, which is worse, not better, than the current honest xfail.

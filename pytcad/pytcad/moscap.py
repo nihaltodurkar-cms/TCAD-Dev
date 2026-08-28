@@ -18,8 +18,25 @@ C_min, because minority carriers cannot be generated fast enough.
 
 Not included: quantum confinement of the inversion layer (shifts the charge
 centroid ~1 nm off the interface and lowers C_max by 10-20% in thin-oxide
-devices), poly-gate depletion, interface trap capacitance D_it, and
-tunnelling leakage through oxides below ~2 nm.
+devices), poly-gate depletion, and tunnelling leakage through oxides below
+~2 nm.
+
+M14 (2026-08-28): interface trap capacitance D_it. C_it = q * D_it
+[F/cm^2], matching M14-SURFACE-MOBILITY-PLAN.md's spec text exactly.
+(A first pass here second-guessed this as "should be q^2*D_it" from a
+misremembered textbook heuristic, without re-deriving it -- that
+version is numerically negligible, off by ~1e-21x kappa, i.e. it does
+nothing. Re-derived from first principles instead: D_it [cm^-2 eV^-1]
+times an energy shift in eV gives a state-density shift in cm^-2; a
+band-bending change of dphi_s volts is a dphi_s-eV energy shift
+numerically (the entire point of the eV unit, eV = q*volts), so
+dN_it = D_it*dphi_s [cm^-2] and dQ_it = q*dN_it = q*D_it*dphi_s --
+ONE factor of q, not two. Verified numerically: q*D_it at D_it=1e11 is
+~0.02 in the same dimensionless units kappa=0.86 uses -- a real,
+measurable fraction; the q^2 version was ~1e-21, i.e. a no-op.)
+Q_it = C_it * phi_s, phi_s already referenced to flatband (phi_s=0
+there), so phi_s_0 does not appear separately. Default D_it=0.0 is
+bit-identical to the pre-M14 solve.
 """
 
 import numpy as np
@@ -73,11 +90,14 @@ class MOSCapacitor:
     tox_cm  : oxide thickness [cm]
     gate    : 'n+poly', 'p+poly', 'Al', or a work function in eV
     Qf      : fixed oxide charge [cm^-2] (positive charge, as usual for SiO2)
+    D_it    : interface trap density [cm^-2 eV^-1] (M14); 0.0 (default) is
+              bit-identical to the no-D_it solve. See module docstring
+              for the C_it = q^2*D_it formula and citation.
     """
 
     def __init__(self, Nsub, tox_cm, gate="n+poly", Qf=0.0, T=300.0,
                  material: Semiconductor = SILICON, L_cm=2e-4, nx=1200,
-                 fd=False):
+                 fd=False, D_it=0.0):
         self.mat = material
         self.T = T
         self.VT = thermal_voltage(T)
@@ -144,6 +164,16 @@ class MOSCapacitor:
             self.psi_b = np.arcsinh(self.C / (2.0 * self.nie_s))
         self.kappa = self.eps_ox * self.LD / (self.eps_s * self.tox)
 
+        # M14: interface-trap term, dimensionless (same scaling as
+        # kappa): dit_coeff * (psi[0]-psi_b) == Q_it_scaled, where
+        # Q_it = C_it*phi_s = q*D_it*phi_s and phi_s=(psi[0]-psi_b)*VT
+        # -- the VT cancels against the 1/VT that nondimensionalizing
+        # Q_it into the flux-balance residual introduces (same algebra
+        # that makes kappa dimensionless for the Cox*(Vg-Vfb-phi_s)
+        # term). D_it=0.0 (default) makes this exactly 0.0.
+        self.D_it = float(D_it)
+        self.dit_coeff = Q * self.D_it * self.LD / self.eps_s
+
         self.Vfb = flatband_voltage(Nsub, tox_cm, gate, Qf, T, material)
 
     # ------------------------------------------------------------------
@@ -187,9 +217,11 @@ class MOSCapacitor:
             F[1:-1] = ((psi[2:] - psi[1:-1]) / h[1:]
                        - (psi[1:-1] - psi[:-2]) / h[:-1]
                        - dV[1:-1] * rho[1:-1])
-            # surface node: half box with the gate flux entering
+            # surface node: half box with the gate flux entering, minus
+            # the M14 interface-trap charge (0.0 at the default D_it=0)
             F[0] = ((psi[1] - psi[0]) / h[0]
                     + self.kappa * (Vg_s - Vfb_s - (psi[0] - self.psi_b))
+                    - self.dit_coeff * (psi[0] - self.psi_b)
                     - dV[0] * rho[0])
             F[-1] = psi[-1] - self.psi_b
 
@@ -200,7 +232,7 @@ class MOSCapacitor:
                           - dV[1:-1] * dnp[1:-1])
             up[1:] = 1.0 / h[1:]
             lo[:-1] = 1.0 / h[:-1]
-            main[0] = -1.0 / h[0] - self.kappa - dV[0] * dnp[0]
+            main[0] = -1.0 / h[0] - self.kappa - self.dit_coeff - dV[0] * dnp[0]
             up[0] = 1.0 / h[0]
             main[-1] = 1.0
             lo[-1] = 0.0
@@ -245,7 +277,10 @@ class MOSCapacitor:
             guess = psi
             ps = (psi[0] - self.psi_b) * self.VT
             phis.append(ps)
-            Qg.append(self.Cox * (Vg - self.Vfb - ps))
+            # M14: Q_g = Cox*(Vg-Vfb-phi_s) - Q_it, Q_it = q*D_it*phi_s
+            # (0.0 at the default D_it=0) -- consistent with solve_psi's
+            # own dit_coeff term, which is what actually shapes phi_s(Vg).
+            Qg.append(self.Cox * (Vg - self.Vfb - ps) - Q * self.D_it * ps)
         phis, Qg = np.array(phis), np.array(Qg)
         C = np.gradient(Qg, Vg_list)
         return phis, Qg, C

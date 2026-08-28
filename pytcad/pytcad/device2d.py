@@ -146,6 +146,22 @@ class Device2D:
                 "Canali field-dependent mobility is not implemented in "
                 "Device2D (see design spec, deferred items)."
             )
+        if self.models.S_n != 0.0 or self.models.S_p != 0.0:
+            raise NotImplementedError(
+                "Models.S_n/S_p (M14 surface recombination velocity) is "
+                "implemented in Device1D only. A first Device2D attempt "
+                "generalized the Dirichlet contact row to "
+                "(n-n0)*(1+S_scaled) -- verified (by direct numerical "
+                "check, not assumed) to be a NO-OP: multiplying an "
+                "already-zero-at-convergence residual by a nonzero "
+                "constant does not change its root, so n was still "
+                "pinned to n0 regardless of S. A correct 2D Robin BC "
+                "needs a genuine SG edge-current flux balance like "
+                "Device1D's (see its _residual_jacobian), generalized to "
+                "find, per contact node, whichever neighbor is 'into the "
+                "bulk' -- non-trivial for an arbitrary 2D contact shape, "
+                "unlike 1D's two fixed endpoints. Not yet implemented; "
+                "refusing rather than silently repeating the same bug.")
         if getattr(self.models, "impact", False):
             raise NotImplementedError(
                 "Impact ionization (Models(impact=True)) is implemented "

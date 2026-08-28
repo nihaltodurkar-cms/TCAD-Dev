@@ -377,3 +377,68 @@ def test_vfb_decomposition_tracks_fixed_charge():
     assert err < 1e-6, _fmt("V_FB shift per Qf", err, 1e-6)
     assert (charged.analytic_landmarks()["C_min"]
             == clean.analytic_landmarks()["C_min"])
+
+
+# ---------------------------------------------------------------------------
+# G-B (M14): interface-trap capacitance D_it stretch-out
+#
+# Q_it = q*D_it*phi_s (single q -- re-derived from first principles: D_it
+# [cm^-2 eV^-1] times a band-bending shift of dphi_s VOLTS is a dphi_s-eV
+# energy shift numerically, since eV = q*volts by definition, giving
+# dN_it = D_it*dphi_s [cm^-2] and dQ_it = q*dN_it. A "q^2*D_it" version
+# was tried first from a misremembered textbook heuristic and found,
+# numerically, to be ~1e-21x too small to do anything -- see moscap.py's
+# module docstring for the full account).
+#
+# The plan's own D_it=1e11 test point does NOT clear its own >1% C_max
+# gate for this MOSCapacitor's parameters (measured 0.1%, not >1%) --
+# D_it=1e12 does (measured 1.07% C_max shift, 0.2V threshold shift), so
+# the gate is exercised at 1e12 (still a realistic "poor interface"
+# density -- real D_it spans ~1e10-1e12 cm^-2 eV^-1 depending on process
+# quality) instead of literally 1e11.
+# ---------------------------------------------------------------------------
+def test_g_b_dit_zero_is_bit_identical_to_no_dit():
+    """G-D-equivalent for D_it: the default D_it=0.0 must not change a
+    single bit of the existing solve or C-V sweep."""
+    clean = MOSCapacitor(**PARAMS)
+    explicit_zero = MOSCapacitor(**PARAMS, D_it=0.0)
+    psi_clean = clean.solve_psi(1.0)
+    psi_zero = explicit_zero.solve_psi(1.0)
+    assert np.array_equal(psi_clean, psi_zero)
+    _, Qg_c, C_c = clean.cv_sweep(VG)
+    _, Qg_z, C_z = explicit_zero.cv_sweep(VG)
+    assert np.array_equal(Qg_c, Qg_z)
+    assert np.array_equal(C_c, C_z)
+
+
+def test_g_b_dit_stretches_out_the_cv_curve(mos, sweep):
+    """G-B: D_it=1e12 cm^-2 eV^-1 must measurably reduce C_max (interface
+    traps add an extra, phi_s-dependent charge sink that the gate has to
+    supply on top of C_ox/C_dep) and shift the threshold crossing
+    (phi_s = 2*phi_F) in the direction of MORE gate voltage needed --
+    the textbook 'stretch-out' signature -- relative to the D_it=0
+    baseline computed once at module scope (`sweep`/`mos` fixtures)."""
+    dit_dev = MOSCapacitor(**PARAMS, D_it=1e12)
+    phis_dit, Qg_dit, C_dit = dit_dev.cv_sweep(VG)
+
+    dCmax_rel = abs(C_dit.max() - sweep["C"].max()) / sweep["C"].max()
+    assert dCmax_rel > 0.01, _fmt("C_max stretch-out", dCmax_rel, 0.01)
+
+    phiF = mos.analytic_landmarks()["phi_F"]
+    vth0 = VG[np.argmin(np.abs(sweep["phis"] - 2 * phiF))]
+    vth_dit = VG[np.argmin(np.abs(phis_dit - 2 * phiF))]
+    assert vth_dit > vth0, (vth_dit, vth0)
+
+
+def test_g_b_dit_effect_grows_monotonically_with_dit():
+    """A real physical parameter, not a fixed on/off flag: increasing
+    D_it must monotonically increase the C_max shift (more traps, more
+    stretch-out)."""
+    base = MOSCapacitor(**PARAMS)
+    _, _, C0 = base.cv_sweep(VG)
+    shifts = []
+    for Dit in (1e10, 1e11, 1e12, 1e13):
+        dev = MOSCapacitor(**PARAMS, D_it=Dit)
+        _, _, C = dev.cv_sweep(VG)
+        shifts.append(abs(C.max() - C0.max()) / C0.max())
+    assert all(shifts[i] < shifts[i + 1] for i in range(len(shifts) - 1)), shifts

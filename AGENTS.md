@@ -194,9 +194,13 @@ pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
 ACTIVE / OPEN:
   M14 surface mobility -- PARTIAL: mobility_cvt() wired for
     Device2D.models.surface_mobility (G-D/G-E green); G-A (absolute
-    curve vs Takagi/Taur) xfail'd, B_n/B_p phonon constants unverified
-    against a primary source; G-B/G-C/driving_force/catalog not
-    started. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+    curve vs Takagi/Taur) xfail'd -- 2026-08-28 research confirmed the
+    real Lombardi phonon term is two-part and doping-dependent (this
+    code has a one-term stand-in), but the numeric constants are
+    blocked on the 1988 primary source, which is paywalled with zero
+    open-access copies (verified via Unpaywall); G-B/G-C/driving_force/
+    catalog not started. See pytcad/M14-SURFACE-MOBILITY-PLAN.md's
+    "G-A LITERATURE SEARCH" section.
   M21 meshing -- phase 1 (1D adaptive h-refinement) shipped; geometry
     foundation decided as gmsh (validated via conformality check, not
     just chosen); phases 2-3 not started. See

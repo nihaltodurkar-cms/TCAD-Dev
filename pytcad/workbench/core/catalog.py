@@ -150,6 +150,30 @@ _MODELS = {
                     "supported; near-BV convergence requires the "
                     "staged-generation continuation.",
     ),
+    "surface_mobility": ModelInfo(
+        key="surface_mobility",
+        title="Surface/inversion-layer mobility (Lombardi CVT)",
+        equations=(
+            "1/mu_eff = 1/mu_CT + 1/mu_phonon + 1/mu_SR",
+            "mu_phonon = B / (T * E_eff^{1/3})",
+            "mu_SR = delta / E_eff^2  (delta in V/s)",
+        ),
+        parameters=(),
+        references=(
+            "Lombardi, Manzini, Saporito & Vanzi, IEEE Trans. CAD 7(11), "
+            "1164-1171 (1988)",
+            "COMSOL 'Lombardi Surface Mobility' documentation (delta_n/"
+            "delta_p numeric cross-check)",
+        ),
+        applicability="2D (device2d.py) MOSFET channel with a gate "
+                      "contact; raises in 1D/3D",
+        enabled_by_default=False,
+        limitations="Phonon term is a simplified single-parameter stand-"
+                    "in, not Lombardi's full doping-dependent two-term "
+                    "form (M14 G-A, open -- see M14-SURFACE-MOBILITY-"
+                    "PLAN.md); applied lagged in the Newton loop, scoped "
+                    "to mesh row 0 (the gate-adjacent surface).",
+    ),
     "incomplete_ion": ModelInfo(
         key="incomplete_ion",
         title="Incomplete dopant ionization (shallow B/P/As)",
