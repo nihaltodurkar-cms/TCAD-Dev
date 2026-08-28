@@ -119,7 +119,7 @@ def test_validate_rejects_unknown_dimensionality():
 def test_catalog_keys_match_the_solver_models_flags():
     assert set(ModelCatalog.list()) == {
         "doping_mobility", "field_mobility", "srh", "auger", "bgn",
-        "fd", "incomplete_ion"}
+        "fd", "incomplete_ion", "impact"}
     # the catalog's default config IS the wire-format default
     assert ModelCatalog.default_config() == _default_models()
 

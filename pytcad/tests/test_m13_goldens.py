@@ -31,6 +31,28 @@ def _save(name, **arrays):
     np.savez(_golden_path(name), **arrays)
 
 
+_MESHES = None
+
+
+def _frozen_mesh(key):
+    """The EXACT mesh a golden was captured on, frozen at capture time.
+
+    The goldens pin SOLVER behaviour ("any future core refactor must
+    reproduce them EXACTLY").  They used to rebuild their meshes by
+    calling the mesh generator, which silently coupled them to it: any
+    correction there would fail these gates for a reason that has
+    nothing to do with the solver.  Freezing the node arrays decouples
+    the two and makes the gate strictly stronger.
+    """
+    global _MESHES
+    if _MESHES is None:
+        path = os.path.join(GOLDEN_DIR, "frozen_meshes.npz")
+        if not os.path.exists(path):
+            pytest.skip("frozen_meshes.npz missing")
+        _MESHES = np.load(path)
+    return _MESHES[key]
+
+
 def _load(name):
     if not os.path.exists(_golden_path(name)):
         pytest.skip(f"golden {name}.npz missing -- regenerate with "
@@ -52,9 +74,7 @@ def _compare(name, **arrays):
 # ---------------------------------------------------------------- fixtures
 def _diode_1d():
     from pytcad import Device1D, Models, NewtonOptions
-    from pytcad.mesh import graded_mesh
-    x = graded_mesh(2.0e-4, [1.0e-4], h_min=1.0e-8, h_max=1.0e-6,
-                    ratio=1.12)
+    x = _frozen_mesh("diode1d_x")
     dop = np.where(x < 1.0e-4, -1e17, 1e17)
     dev = Device1D(x, dop, T=300.0, models=Models(bgn=True, auger=True))
     return dev, NewtonOptions
@@ -93,10 +113,8 @@ def test_golden_2d_diode_equilibrium():
     pytest.importorskip("scipy")
     from pytcad import Device2D, Models
     from pytcad.mesh2d import Mesh2D
-    from pytcad.mesh import graded_mesh
-
-    x = graded_mesh(1.0e-4, [0.5e-4], 5e-7, 5e-6, 1.2)
-    y = graded_mesh(0.5e-4, [0.0], 5e-7, 5e-6, 1.2)
+    x = _frozen_mesh("diode2d_x")
+    y = _frozen_mesh("diode2d_y")
     mesh = Mesh2D(x, y)
     dop = np.tile(np.where(x < 0.5e-4, -1e17, 1e17), (y.size, 1))
     dev = Device2D(mesh, dop, models=Models(bgn=False))
@@ -112,10 +130,8 @@ def test_golden_3d_resistor_equilibrium():
     pytest.importorskip("scipy")
     from pytcad import Device3D, Models
     from pytcad.mesh3d import Mesh3D
-    from pytcad.mesh import graded_mesh
-
     x = np.linspace(0.0, 1.0e-4, 9)
-    y = graded_mesh(0.5e-4, [0.0], 1e-6, 5e-6, 1.3)
+    y = _frozen_mesh("resistor3d_y")
     z = np.linspace(0.0, 0.5e-4, 5)
     mesh = Mesh3D(x, y, z)
     dop = np.zeros((mesh.Nz, mesh.Ny, mesh.Nx))

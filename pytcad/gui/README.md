@@ -831,8 +831,9 @@ The **Physics Lab** tab exposes the ModelCatalog interactively: every
 physics model is a checkbox with its exact equation and literature
 reference shown on selection, "Plot convergence" jumps to the stored
 residual trace, and the model toggles feed the next Run (and the
-all-models-off comparison). Project files (v4 schema) carry structure,
-mesh, sweep config and process state through save/load with a
+all-models-off comparison). Project files (v5 schema — see "Project
+schema v5" below) carry structure, mesh, sweep config, process state,
+and the Physics Lab's model config through save/load with a
 dirty-marker guard. A 20-page illustrated guide with real GUI
 screenshots — captured headlessly from this very app — lives in
 `../docs/user-guide/`.
@@ -851,6 +852,51 @@ Hurkx trap-assisted tunneling (`Models(tat=True, trap_et_rel=...)`) is
 covered by its own acceptance tests (FD-Jacobian < 5e-5 with traps on;
 traps-off bit-identity; WKB factor-law gate over 1e7–5e10 V/m).
 
+### Project schema v5 and the GUI end-to-end smoke test (2026-08-28)
+
+`gui/tests/test_smoke_e2e.py` drives the real rendered QML tree only
+(`create_engine()` + `findChild(objectName)` + real property get/set +
+`QMetaObject.invokeMethod()` for signals) across the two device-
+construction paths the interactive GUI actually has: the Process Flow
+(substrate/implant/anneal/oxidize, always 1D) and the Structure/Device-
+Builder templates (region boxes, always 2D). It exercises every
+physics-model toggle, contact/gate/mesh editors, IV and CV sweeps,
+invalid-input handling, and save/reload — cross-checked against the
+same analytic built-in-potential and C–V-landmark formulas
+`tests/test_validation.py` and `test_cv_mode.py` already use. It also
+confirmed there is no GUI path to a `Device3D` or the DEVSIM backend
+(both recorded as N/A, not worked around). Several `ContactEditor`/
+`GateEditor`/`MeshEditor`/`DopingEditor`/`SubstrateEditor`/
+`ImplantEditor` QML controls had no `objectName` at all before this —
+added so they can be driven as real QML rather than guessed at.
+
+Two real defects surfaced and were fixed:
+- Numeric QML fields (contact/gate voltage, gate tox, region doping,
+  every process-step parameter) let `parseFloat("")`/`parseFloat("abc")`
+  (NaN) through to the solver silently, unlike the sweep panel and the
+  implant-window fields, which already validated. Fixed with a shared
+  finite-number guard in `app_controller.py`.
+- Saving a project never persisted the Physics Lab's model config;
+  reloading always reset every model to `ModelCatalog.default_config()`.
+  Fixed via a v5 project-schema bump: one new optional key, `"models"`
+  (a dict or `null`). v2–v4 files simply lack the key, which loads as
+  `model_config=None` — the documented signal to leave the Physics Lab
+  untouched, so old projects still load byte-identically.
+  `PhysicsLabController.setModelConfig()` merges the restored dict onto
+  the catalog defaults rather than replacing wholesale, so a partial or
+  malformed saved config degrades to documented defaults for the
+  missing/bad keys instead of raising. See `gui/tests/test_persistence_v5.py`
+  for the persistence-layer round-trip and backward-compatibility tests.
+
+A `ListView`/`Repeater`-specific limitation of Qt's offscreen test
+platform was also confirmed along the way: delegate items (the Physics
+Lab's checkboxes, the Device Builder's per-parameter fields) never get
+incubated without a real running event loop, so those two spots in the
+smoke test call the exact controller method the delegate's own signal
+handler invokes — the same substitute pattern `test_device_templates.py`
+had already adopted (visible there as a disabled `if False` probe) for
+the identical wall.
+
 ### Honest limits of v0.5.x
 
 - The DEVSIM backend solves **1D two-terminal silicon devices only**
@@ -862,8 +908,14 @@ traps-off bit-identity; WKB factor-law gate over 1e7–5e10 V/m).
   analytic results instead.
 - Band/recombination modes read stored fields of the current result;
   2D+ results get an honest placeholder rather than a fake cut.
-- Impact ionization is not yet selectable in the Physics Lab nor coupled
-  to any solver's Newton assembly.
+- Impact ionization is selectable in the Physics Lab and fully coupled
+  into the homegrown 1D solver's Newton assembly (M15, all gates green
+  — see ARCHITECTURE.md section 5); the DEVSIM backend does not support
+  it.
+- Neither device dimensionality nor solver backend has a GUI selector:
+  the Process Flow always builds 1D, Structure/Device-Builder templates
+  always build 2D, there is no GUI path to a `Device3D`, and DEVSIM can
+  only be selected from a job's JSON, not from any panel.
 - The DEVSIM backend does not yet accept `region_materials`:
   heterostructure jobs must use the homegrown 1D backend.
 - The MOS C–V result surfaces through `cvSweep.cvStore()` (and the

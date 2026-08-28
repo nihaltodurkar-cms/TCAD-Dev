@@ -114,6 +114,30 @@ class PhysicsLabController(QObject):
         self._catalog.refresh()
         self.configChanged.emit()
 
+    @Slot("QVariant")
+    def setModelConfig(self, config):
+        """Bulk-restore a model config -- used by project load (M-persist:
+        the config a project was saved with). Merges onto the catalog
+        defaults rather than replacing wholesale, so a config missing a
+        key (an old save, or a future model this build doesn't know
+        about being silently dropped) degrades to that key's documented
+        default instead of raising or leaving it unset."""
+        if not isinstance(config, dict):
+            self.labError.emit(
+                f"model config must be a dict of {{model_key: bool}}, got "
+                f"{type(config).__name__}")
+            return
+        merged = ModelCatalog.default_config()
+        merged.update({k: v for k, v in config.items() if k in merged})
+        try:
+            ModelCatalog.validate(merged)
+        except ValueError as exc:
+            self.labError.emit(str(exc))
+            return
+        self._config = merged
+        self._catalog.refresh()
+        self.configChanged.emit()
+
     @Slot(str)
     def selectModel(self, key):
         self._selected = key

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import ".."
 
 ColumnLayout {
+    objectName: "gateEditor"
     property var controller
     property string gateId: ""
     property var gateData: null   // {name, tox, vfbMode, vfbValue, voltage}
@@ -19,6 +20,7 @@ ColumnLayout {
             ToolTip.text: "Gate-oxide thickness. Below ~2 nm direct tunneling leakage appears -- not modeled here."
         }
         TextField {
+            objectName: "gateToxField"
             Layout.fillWidth: true
             text: gateData ? (gateData.tox * 1e7).toString() : ""
             onEditingFinished: if (gateId) controller.setGateToxCm(gateId, parseFloat(text) / 1e7)
@@ -33,6 +35,7 @@ ColumnLayout {
             ToolTip.text: "Gate voltage vs body. Above threshold it inverts the surface and forms a channel."
         }
         TextField {
+            objectName: "gateVoltageField"
             Layout.fillWidth: true
             text: gateData ? gateData.voltage.toString() : ""
             onEditingFinished: if (gateId) controller.setGateVoltage(gateId, parseFloat(text))
@@ -43,6 +46,7 @@ ColumnLayout {
         Label { text: "Vfb mode"; color: Theme.textDim; Layout.preferredWidth: 80 }
         ComboBox {
             id: modeBox
+            objectName: "gateVfbModeBox"
             model: ["computed", "manual"]
             currentIndex: gateData && gateData.vfbMode === "manual" ? 1 : 0
             onActivated: if (gateId) controller.setGateVfbMode(
@@ -54,6 +58,7 @@ ColumnLayout {
         Label { text: "Vfb [V]"; color: Theme.textDim; Layout.preferredWidth: 80 }
         TextField {
             id: manualField
+            objectName: "gateVfbValueField"
             Layout.fillWidth: true
             // Python None crosses to QML as undefined, not null (PySide's
             // QVariant() mapping) -- `!= null` (loose) catches both;

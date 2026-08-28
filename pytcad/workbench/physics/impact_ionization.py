@@ -19,34 +19,20 @@ import math
 
 import numpy as np
 
-# Published coefficient tables [A in cm^-1, B in V/cm].
-# van Overstraeten & de Man, Solid-State Electron. 13, 583 (1970),
-# low-field / high-field split at E0 = 5e5 V/cm, values as tabulated in
-# the Sentaurus/Taurus device manuals.
-E_SWITCH = 5e5                      # V/cm
-ALPHA_N_LOW = {"A": 7.03e5, "B": 1.231e6}
-ALPHA_N_HIGH = {"A": 7.03e5, "B": 1.231e6}
-ALPHA_P_LOW = {"A": 1.582e6, "B": 2.036e6}
-ALPHA_P_HIGH = {"A": 6.71e5, "B": 1.693e6}
-
-
-def _alpha(E, low, high):
-    """Piecewise alpha(E) = A exp(-B/E); vectorized, E in V/cm."""
-    E = np.asarray(E, dtype=float)
-    out = np.where(E < E_SWITCH,
-                   low["A"] * np.exp(-low["B"] / np.maximum(E, 1e-9)),
-                   high["A"] * np.exp(-high["B"] / np.maximum(E, 1e-9)))
-    return float(out) if out.ndim == 0 else out
-
-
-def alpha_n(E):
-    """Electron ionization coefficient [cm^-1]."""
-    return _alpha(E, ALPHA_N_LOW, ALPHA_N_HIGH)
-
-
-def alpha_p(E):
-    """Hole ionization coefficient [cm^-1]."""
-    return _alpha(E, ALPHA_P_LOW, ALPHA_P_HIGH)
+# M15: the coefficient tables and alpha(E) live in the numerical CORE
+# (pytcad/ionization.py -- single source of truth; this module re-
+# exports them so existing callers/tests are untouched).  alpha_n/
+# alpha_p are re-exported directly (not re-wrapped around the private
+# _alpha helper) so this module can never drift out of sync with the
+# core's per-carrier switch points again -- a local wrapper here
+# calling the old single-switch _alpha(E, low, high) signature is
+# exactly what broke silently when the core switched to per-carrier
+# E_SWITCH_N/E_SWITCH_P (2026-08-28 bug fix, see pytcad/ionization.py).
+from pytcad.ionization import (  # noqa: F401
+    ALPHA_N_HIGH, ALPHA_N_LOW, ALPHA_P_HIGH, ALPHA_P_LOW,
+    E_SWITCH, E_SWITCH_N, E_SWITCH_P,
+    alpha_n, alpha_p,
+)
 
 
 def ionization_integral(V, N_doping, n_points=2000):

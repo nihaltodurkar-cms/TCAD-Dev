@@ -187,7 +187,8 @@ def _default_models():
     # flag the solver exposes through the catalog.
     return {"doping_mobility": True, "field_mobility": False,
             "srh": True, "auger": True, "bgn": True,
-            "fd": False, "incomplete_ion": False}
+            "fd": False, "incomplete_ion": False,
+            "impact": False}
 
 
 @dataclass

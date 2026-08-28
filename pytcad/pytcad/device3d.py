@@ -37,6 +37,8 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+from . import linsolve
+
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .materials import (
     SILICON, Semiconductor, mobility_caughey_thomas, nie_effective,
@@ -167,6 +169,21 @@ class Device3D:
             raise NotImplementedError(
                 "Canali field-dependent mobility is not implemented in "
                 "Device3D (see design spec, deferred items)."
+            )
+        if getattr(self.models, "impact", False):
+            raise NotImplementedError(
+                "Impact ionization (Models(impact=True)) is implemented "
+                "in Device1D only (M15 scope; 2D/3D ports are a follow-"
+                "up slice).  Refusing rather than silently ignoring the "
+                "flag -- a silently dropped physics model is a hidden "
+                "failure."
+            )
+        if getattr(self.models, "incomplete_ion", False):
+            raise NotImplementedError(
+                "Incomplete dopant ionization "
+                "(Models(incomplete_ion=True)) is implemented in "
+                "Device1D only (M13 plan section 3.3).  Refusing rather "
+                "than silently ignoring the flag."
             )
 
         self.fd = bool(getattr(self.models, "fd", False))
@@ -316,9 +333,14 @@ class Device3D:
         return e0 + self.ln_gn
 
     def _fd_slaved_densities(self, psi):
-        """Equilibrium slaving under FD + d(n+p)/d(psi)."""
-        en = psi - self.ln_gn
-        ep = -psi - self.ln_gp
+        """Equilibrium slaving under FD + d(n+p)/d(psi).
+
+        eta is clamped to FERMI_ETA_MAX before evaluating (matching the
+        np.minimum(..., FERMI_ETA_MAX) guard used for the bulk-guess
+        bisection above) so a transient Newton overshoot cannot abort
+        the whole solve when the converged answer would be valid."""
+        en = np.minimum(psi - self.ln_gn, FERMI_ETA_MAX)
+        ep = np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX)
         n = fd_density(self.nc_s, en)
         p = fd_density(self.nv_s, ep)
         dnp = fd_ddensity_deta(self.nc_s, en) \
@@ -444,7 +466,13 @@ class Device3D:
         psi = self._bulk_psi_guess()
         for it in range(opts.max_iter):
             F, J = self._residual_jacobian_poisson(psi)
-            d = spsolve(J.tocsc(), -F.ravel()).reshape(Nz, Ny, Nx)
+            # linsolve.solve_linear(method="direct") no longer
+            # reformats A before calling spsolve, so passing the same
+            # J.tocsc() this always used keeps this bit-identical while
+            # adding the finiteness/singularity checks every other
+            # Newton loop in this file already goes through.
+            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(), method="direct")
+            d = d.reshape(Nz, Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
             if opts.verbose:
@@ -456,6 +484,20 @@ class Device3D:
 
         self.psi = psi
         if self.fd:
+            # _fd_slaved_densities clamps eta to FERMI_ETA_MAX to survive
+            # a TRANSIENT overshoot during iteration; it must not also
+            # silently accept a CONVERGED eta genuinely outside the
+            # validated range here -- check the raw, unclamped eta so a
+            # genuinely-invalid converged state still refuses loudly
+            # (M13 G7), matching fd_density's own contract.
+            en_raw = psi - self.ln_gn
+            ep_raw = -psi - self.ln_gp
+            if np.any(en_raw > FERMI_ETA_MAX) or np.any(ep_raw > FERMI_ETA_MAX):
+                raise ValueError(
+                    f"FD equilibrium converged to eta_n={en_raw.max():.1f} / "
+                    f"eta_p={ep_raw.max():.1f}, beyond +{FERMI_ETA_MAX:.0f}: "
+                    "outside the validated Fermi-integral range (M13 G7 "
+                    "applicability).  Refusing to extrapolate.")
             self.n, self.p, _ = self._fd_slaved_densities(psi)
         else:
             self.n = self.nie_s * np.exp(np.clip(psi, -700, 700))
@@ -775,7 +817,12 @@ class Device3D:
 
         for it in range(opts.max_iter):
             F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
-            du = spsolve(J.tocsc(), -F)
+            if opts.linsolve == "direct":
+                du = spsolve(J.tocsc(), -F)
+            else:
+                du, _ = linsolve.solve_linear(
+                    J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
+                    block_size=3)
             dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)

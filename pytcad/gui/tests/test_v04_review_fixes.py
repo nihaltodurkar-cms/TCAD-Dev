@@ -152,7 +152,7 @@ def test_cancel_kill_timer_spares_next_run(qapp=None):
 # ----------------------------------------------------------------------
 # I-6 + M-2: Vth uses the held-terminal bias; gate-only rows gated
 # ----------------------------------------------------------------------
-def _controller_with_swept_result(spec_bias=None, swept_contact="left"):
+def _controller_with_swept_result(tmp_path, spec_bias=None, swept_contact="left"):
     qapp = QCoreApplication.instance() or QCoreApplication([])
     from gui.controllers.app_controller import AppController
     app = AppController()
@@ -185,24 +185,24 @@ def _controller_with_swept_result(spec_bias=None, swept_contact="left"):
         # ideal linear turn-on crossing zero at Vg = +0.3
         "sweep__current__device": (np.linspace(-1.0, 1.0, 11) - 0.3) * 1e-3,
     }
-    path = "/tmp/opencode/review_fix_test.npz"
+    path = str(tmp_path / "review_fix_test.npz")
     np.savez(path + ".tmp.npz", **d)
     os.replace(path + ".tmp.npz", path)
     app._on_finished(path)
     return app
 
 
-def test_vth_row_uses_held_terminal_bias_as_vds():
+def test_vth_row_uses_held_terminal_bias_as_vds(tmp_path):
     app = _controller_with_swept_result(
-        spec_bias={"right": 0.5}, swept_contact="gate")
+        tmp_path, spec_bias={"right": 0.5}, swept_contact="gate")
     rows = dict(app._properties_for("results"))
     # linear curve crosses at 0.3; vds correction subtracts 0.25
     got = float(rows["Sweep Vth (max-gm est.)"].split()[0])
     assert got == pytest.approx(0.05, abs=1e-9), rows["Sweep Vth (max-gm est.)"]
 
 
-def test_ion_ioff_and_vth_rows_only_for_gate_sweeps():
-    app = _controller_with_swept_result(spec_bias={"right": 0.5},
+def test_ion_ioff_and_vth_rows_only_for_gate_sweeps(tmp_path):
+    app = _controller_with_swept_result(tmp_path, spec_bias={"right": 0.5},
                                         swept_contact="left")
     rows = dict(app._properties_for("results"))
     assert "Sweep Ion/Ioff" not in rows, \

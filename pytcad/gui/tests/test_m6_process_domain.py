@@ -24,10 +24,10 @@ from gui.services.process_model import (
 from gui.services.process_runner import run_flow
 
 
-def _flow(steps):
+def _flow(steps, tmp_path):
     flow = ProcessFlow(steps=steps)
-    flow_path = "/tmp/opencode/m6_flow.json"
-    manifest_path = "/tmp/opencode/m6_manifest.json"
+    flow_path = str(tmp_path / "m6_flow.json")
+    manifest_path = str(tmp_path / "m6_manifest.json")
     for p in (flow_path, manifest_path):
         if os.path.exists(p):
             os.remove(p)
@@ -57,9 +57,9 @@ def _implant(sid, **extra):
 # ----------------------------------------------------------------------
 #  checkpoint state -> DomainDevice (lossless)
 # ----------------------------------------------------------------------
-def test_state_maps_to_valid_imported_domain_device():
+def test_state_maps_to_valid_imported_domain_device(tmp_path):
     from workbench.adapters.process import domain_from_process_state
-    manifest = _flow([_substrate(), _implant("i1")])
+    manifest = _flow([_substrate(), _implant("i1")], tmp_path)
     x = np.asarray(manifest["state_paths"])
     # load the actual checkpoint for the last step
     store_paths = manifest["state_paths"]
@@ -83,7 +83,7 @@ def test_spec_from_1d_checkpoint_solves(tmp_path):
 
     manifest = _flow([_substrate(), _implant("i1", **{"x_range_cm": [0.0, 5e-4]}),
                       _implant("i2", species="B", energy_keV=30.0,
-                               dose_cm2=2e14)])
+                               dose_cm2=2e14)], tmp_path)
     store = ProcessResultStore(manifest)
     dev = store.domain_device("i1")
     dev.validate()
@@ -105,12 +105,12 @@ def test_spec_from_1d_checkpoint_solves(tmp_path):
 # ----------------------------------------------------------------------
 #  per-region implants
 # ----------------------------------------------------------------------
-def test_region_mask_implants_only_inside_window():
+def test_region_mask_implants_only_inside_window(tmp_path):
     manifest_masked = _flow([
         _substrate(),
         _implant("win", **{"x_range_cm": [0.0, 5e-4]}),
-    ])
-    manifest_open = _flow([_substrate(), _implant("open")])
+    ], tmp_path)
+    manifest_open = _flow([_substrate(), _implant("open")], tmp_path)
 
     sm = np.load(manifest_masked["state_paths"]["win"])
     so = np.load(manifest_open["state_paths"]["open"])
@@ -123,12 +123,12 @@ def test_region_mask_implants_only_inside_window():
     assert np.max(np.abs(sm["net_doping"][inside])) > 1e16
 
 
-def test_full_range_mask_matches_unmasked_exactly():
-    manifest_a = _flow([_substrate(), _implant("a")])
+def test_full_range_mask_matches_unmasked_exactly(tmp_path):
+    manifest_a = _flow([_substrate(), _implant("a")], tmp_path)
     manifest_b = _flow([
         _substrate(),
         _implant("b", **{"x_range_cm": [0.0, 1e-3]}),
-    ])
+    ], tmp_path)
     da = np.load(manifest_a["state_paths"]["a"])
     db = np.load(manifest_b["state_paths"]["b"])
     assert np.array_equal(da["net_doping"], db["net_doping"])

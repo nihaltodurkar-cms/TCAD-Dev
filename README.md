@@ -26,8 +26,8 @@ tests/           541 tests: analytic-limit validation, published-value
                  physics benchmarks, headless GUI tests — all green,
                  zero warnings
   fermi.py       complete Fermi-Dirac integrals F_{1/2}, F_{-1/2},
-                 inverse, FD intrinsic density (M13 phase 1; solver
-                 integration is the active work item)
+                 inverse, FD intrinsic density, tabulated fast path
+                 (M13, COMPLETE: wired through the full solver core)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -214,10 +214,14 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/ gui/tests/               # 541 passed, zero warnings
+pytest tests/ gui/tests/               # full suite, serial
+pytest tests/ gui/tests/ -n 6 -m "not slow" -q   # fast dev loop (parallel)
 ```
 
-Requires `numpy`, `scipy`, `matplotlib` (examples only).
+Requires `numpy`, `scipy`, `matplotlib` (examples only); `pip install -r
+requirements-dev.txt` for `pytest`/`pytest-xdist` to run tests. Cap
+parallel workers at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see
+AGENTS.md's Commands section for why.
 
 ---
 
@@ -268,15 +272,22 @@ equation and reference); **family (batch) sweeps** that re-solve one
 device for a set of stepped terminal voltages and overlay all curves
 with a legend; a dedicated **MOS C–V** mode running the validated
 `MOSCapacitor` core through the standard job pipeline; deck-driven
-sessions via **File → Open Deck...**; and versioned project files
-carrying structure, mesh, sweep and process state. See `gui/README.md`
-for install/run instructions and the full version-by-version detail.
-Still not a complete TCAD workbench: no 3D visualization; the DEVSIM
-backend solves 1D two-terminal silicon devices only; impact ionization
-is analysis-layer only, not yet solver-coupled (a devsim
-`edge_volume_model` unit anomaly is documented in `benchmarks/`); and
-the C–V result surfaces through the result store rather than a dedicated
-plot (see `gui/README.md`'s "Honest limits" for the full, current list).
+sessions via **File → Open Deck...**; and versioned project files (schema v5)
+carrying structure, mesh, sweep, process state, and the Physics Lab's
+model config. See `gui/README.md` for install/run instructions and the
+full version-by-version detail. A real-QML end-to-end smoke test
+(`gui/tests/test_smoke_e2e.py`) drives every exposed parameter across
+the GUI's two device-construction paths (Process Flow, always 1D;
+Structure/Device-Builder templates, always 2D) and confirmed there is
+no GUI path to a 3D device or the DEVSIM backend.
+Still not a complete TCAD workbench: no 3D visualization or GUI-level
+3D device construction; the DEVSIM backend solves 1D two-terminal
+silicon devices only and has no GUI selector of its own (a devsim
+`edge_volume_model` unit anomaly is documented in `benchmarks/`); impact
+ionization is solver-coupled and Physics-Lab-selectable for the
+homegrown 1D backend only, not DEVSIM; and the C–V result surfaces
+through the result store rather than a dedicated plot (see
+`gui/README.md`'s "Honest limits" for the full, current list).
 
 ### Workbench domain layer (new)
 
@@ -395,8 +406,10 @@ than device currents.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
 **Project roadmap.** `SENTAURUS-PARITY-PLAN.md` governs all future
 capability growth (three parity tiers, milestones M13–M30 with
-published-value acceptance gates); `M13-FERMI-DIRAC-PLAN.md` is the
-active physics-foundation milestone spec.
+published-value acceptance gates). M13 (Fermi-Dirac statistics) is
+COMPLETE; the active milestone specs are `pytcad/M14-SURFACE-
+MOBILITY-PLAN.md`, `pytcad/M15-IONIZATION-PLAN.md`,
+`pytcad/M21-MESHING-PLAN.md`, and `pytcad/M22-LINSOLVE-PLAN.md`.
 
 - **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 

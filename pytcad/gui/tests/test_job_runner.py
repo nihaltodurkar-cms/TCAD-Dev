@@ -171,10 +171,18 @@ def test_process_run_cancel_removes_the_state_dir_and_tmp_files(qapp, tmp_path):
     means a cancel now has a single directory it can safely delete
     outright."""
     from gui.services.process_model import ProcessFlow, ProcessStep
+    # The flow must still be RUNNING when the cancel timer fires at
+    # 500 ms, or there is nothing to cancel and the runner reports
+    # "finished".  Four anneal steps used to take ~15 s, which was
+    # ample; fixing mesh.graded_mesh's stub final cell (it was 2.5-5.5x
+    # SMALLER than the requested h_min, and an explicit diffusion step
+    # is limited by h^2) made process runs ~78x faster, so four steps
+    # now complete in ~0.2 s.  120 steps take ~4.9 s -- a ~10x margin
+    # over the timer.
     steps = _small_process_flow().steps + [
         ProcessStep(id=f"a{k}", name="Anneal", operation="anneal",
                    parameters={"temperature_C": 950.0, "time_s": 600.0})
-        for k in range(4)
+        for k in range(120)
     ]
     flow = ProcessFlow(steps=steps)
     runner = JobRunner(work_dir=str(tmp_path), module="gui.services.process_runner")

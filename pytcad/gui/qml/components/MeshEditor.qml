@@ -10,10 +10,11 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Nx"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        SpinBox { id: nxBox; from: 2; to: 2000; value: 80 }
+        SpinBox { id: nxBox; objectName: "meshNxBox"; from: 2; to: 2000; value: 80 }
         Label { text: "Ny"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        SpinBox { id: nyBox; from: 2; to: 2000; value: 40 }
+        SpinBox { id: nyBox; objectName: "meshNyBox"; from: 2; to: 2000; value: 40 }
         Button {
+            objectName: "meshApplyButton"
             text: "Apply"
             onClicked: if (controller) controller.setMeshNxNy(nxBox.value, nyBox.value)
         }
@@ -22,6 +23,7 @@ ColumnLayout {
     RowLayout {
         Label { text: "Grading"; color: Theme.textDim; Layout.preferredWidth: 60 }
         ComboBox {
+            objectName: "meshGradingBox"
             model: ["uniform", "graded"]
             onActivated: if (controller) controller.setMeshGrading(currentText)
         }

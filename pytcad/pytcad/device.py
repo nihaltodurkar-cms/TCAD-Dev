@@ -52,8 +52,10 @@ the de Mari scaling
 which brings every residual to order unity.
 """
 
-from dataclasses import dataclass
+import os
 import warnings
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -64,10 +66,78 @@ M_E_CONST = 9.1093837015e-31      # kg
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+from . import linsolve
+
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .fermi import (
     FERMI_ETA_MAX, FERMI_ETA_MIN, f_half, f_half_inv, f_mhalf,
 )
+from .ionization import alpha_n as _ii_alpha_n
+from .ionization import alpha_p as _ii_alpha_p
+from .ionization import dalpha_dE as _ii_dalpha_dE
+from .ionization import Q_E as _II_Q
+
+# M15 R1b, ATTEMPT 3 (2026-08-28): impact-ionization generation is
+# coupled DIRECTLY into the Newton residual/Jacobian every iterate
+# (dG/dpsi, dG/dn, dG/dp folded into _residual_jacobian, chain-ruled
+# through the same SG flux partials already computed there) -- no
+# frozen source, no outer fixed-point loop.  This Jacobian is UNCHANGED
+# from attempts 1 and 2 (both FD-Jacobian-validated); what changed is
+# giving pytcad.continuation.arc_length_sweep's corrector its OWN
+# generation-strength ramp (see arc_length_sweep's `strength_stages`
+# parameter), rather than relying on solve_bias's ladder, which the
+# corrector never calls into (that composition gap was attempt 2's
+# failure).  A generation-strength continuation ladder is kept for
+# Newton robustness navigating the stiff avalanche onset -- see
+# _II_STAGES below -- but it now ramps a single scalar multiplying the
+# LIVE, fully-coupled term, not a cached array.
+_II_STAGES = (0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0)
+# The leading 0.0 stage is a plain drift-diffusion Newton solve (no
+# generation at all) at the NEW bias before any coupling turns on.  It
+# replaces the old frozen-source model's implicit protection against
+# the contact-stamping field spike: solve_bias stamps psi[0]/psi[-1] to
+# the new bias while interior nodes still hold the OLD bias's converged
+# profile, so the cell adjacent to the contact reads a transient field
+# of order (bias step)/(cell width) -- MV/cm scale for the nm-scale
+# contact cells this milestone's test devices use -- until Newton
+# relaxes it away.  The frozen model never saw this because it computed
+# gs from the smooth PRE-stamp state once and cached it; live coupling
+# has no such protection, so without a generation-free relaxation pass
+# first, alpha(E) evaluated at that transient spike injects enormous
+# spurious generation at iteration 0 and Newton can lock onto a bogus
+# high-field state pinned at the contact instead of the real solution
+# (verified: E-field at the contact-adjacent node reached ~4e6 V/cm at
+# a bias where the impact=False device -- solving the identical contact
+# stamp with no generation term at all -- settles at ~2.6e-8 V/cm).
+
+# R1b coupling also chain-rules dG/dn, dG/dp through sign(Jn)/sign(Jp)
+# (section 1's spec: "including sign(J) factors, valid away from J=0
+# crossings").  In practice an edge current crosses zero SOMEWHERE in
+# every biased diode (electron and hole current trade off along the
+# device), so a literal sign()/abs() makes |Jn|/|Jp| non-differentiable
+# at points Newton's own iterates land on or near -- not a rare probe-
+# state edge case but a routine occurrence that stalled the Newton
+# backtracking outright (verified: an iterate at a node with a ~1e-9-
+# scaled Jp sitting on a ~50-scaled slope, i.e. a hair from its zero
+# crossing, made every trial step a non-descent direction).  Both
+# |J| and sign(J) are smoothed with a fixed tiny regularizer:
+#   smooth_abs(J)  = sqrt(J^2 + eps^2)
+#   smooth_sign(J) = J / sqrt(J^2 + eps^2)
+# eps is _II_J_EPS_REL times the LARGER of the two edge-current arrays'
+# max magnitude for that residual evaluation, so it scales with whatever
+# current regime the device is in and only perturbs the immediate
+# neighbourhood of an exact zero crossing (a 1e-6 relative deviation
+# everywhere else is far below the 5e-5 FD-Jacobian gate and orders of
+# magnitude below the physics being resolved).
+_II_J_EPS_REL = 1e-6
+
+
+def _ii_smooth_abs(J, eps):
+    return np.sqrt(J * J + eps * eps)
+
+
+def _ii_smooth_sign(J, eps):
+    return J / np.sqrt(J * J + eps * eps)
 from .materials import (
     SILICON, Semiconductor, mobility_caughey_thomas, mobility_field,
     nie_effective, lifetime_scharfetter, recombination,
@@ -254,8 +324,44 @@ class Models:
     # above the Mott transition (~4e18 cm^-3) and for compensated
     # profiles (net-doping input carries no species split).
     incomplete_ion: bool = False
+    # M15: local van Overstraeten-de Man impact ionization.  Default
+    # OFF => bit-identical to the plain solver (goldens).
+    impact: bool = False
     auger: bool = True
     bgn: bool = True               # bandgap narrowing
+    # M14: surface / inversion-layer mobility (Lombardi CVT).
+    # Default OFF => bit-identical to the solver without surface
+    # scattering (golden gate G-D).  Applied lagged in the Newton
+    # loop on 2D devices with a gate contact; raises in 1D/3D.
+    surface_mobility: bool = False
+    # M14: driving-force choice for high-field mobility in 2D.
+    # "field" (default): parallel electric field E (existing behavior).
+    # "quasi_fermi": grad(quasi-Fermi) = grad(phi_n) or grad(phi_p),
+    # the Sentaurus convention for multi-directional current flow.
+    driving_force: str = "field"
+    # M14: surface recombination velocity at contacts/boundaries [cm/s].
+    # S_n = S_p = 0 (default) => no surface recombination, bit-
+    # identical to the existing boundary conditions.
+    S_n: float = 0.0
+    S_p: float = 0.0
+
+    def __post_init__(self):
+        # S_n/S_p and driving_force are declared and documented as
+        # controlling real physics but are not read anywhere in
+        # device.py/device2d.py/device3d.py or workbench/ -- unlike
+        # impact/incomplete_ion, which raise NotImplementedError when
+        # set on a dimensionality that can't honor them, these would
+        # otherwise silently no-op. Refuse loudly instead.
+        if self.S_n != 0.0 or self.S_p != 0.0:
+            raise NotImplementedError(
+                "Models.S_n/S_p (surface recombination velocity) are "
+                "not wired into any solver core yet -- setting them "
+                "has no effect on the residual/Jacobian.")
+        if self.driving_force != "field":
+            raise NotImplementedError(
+                f"Models.driving_force={self.driving_force!r} is not "
+                "implemented -- only the default 'field' driving force "
+                "is wired into the mobility model.")
 
 
 @dataclass
@@ -265,6 +371,14 @@ class NewtonOptions:
     tol_residual: float = 1e-10
     max_dpsi: float = 5.0          # damping cap on scaled potential update
     verbose: bool = False
+    # M22: linear-solve method for the Newton update.  "direct" is
+    # scipy spsolve, EXACTLY -- the default, bit-identical to every
+    # pre-M22 solve (gated: tests/test_m22_linsolve.py G1).  "gmres" /
+    # "bicgstab" precondition with ILU and are gated to agree with the
+    # direct solution within linsolve_rtol (G3), never to return a
+    # non-converged iterate silently (G4).
+    linsolve: str = "direct"
+    linsolve_rtol: float = 1e-10
 
 
 # ----------------------------------------------------------------------
@@ -403,10 +517,24 @@ class Device1D:
         self.psi = None
         self.n = None
         self.p = None
+        # M15 frozen impact-ionization field/source (per bias solve;
+        # cleared by solve_equilibrium -- no generation at V=0 gauge)
+        self._ii_E = None
+        self._ii_gs = None
+        # M15: last generation source array _residual_jacobian actually
+        # computed and integrated (live, fully-coupled -- see R1b fix
+        # above), kept for introspection/tests.  None whenever
+        # Models.impact is False; never read back into the residual.
+        self._ii_gs_cache = None
+        # M15 generation-strength continuation multiplier; see _II_STAGES.
+        self._ii_strength = 1.0
         # M12-S2 frozen-field WKB escape probabilities (None until the
         # first TAT-enabled residual evaluation freezes them)
         self._Pn = None
         self._Pp = None
+        # M22 phase 2: convergence status of the last solve_bias call.
+        self.last_converged = None
+        self.last_newton_err = None
 
     # ------------------------------------------------------------------
     def _eps_tilde_edge(self):
@@ -618,8 +746,16 @@ class Device1D:
                 # M13: FD equilibrium densities slaved to psi
                 # (phi_n = phi_p = 0):  n = Nc F(psi - ln(Nc/nie)),
                 # p = Nv F(-psi - Eg/kT - ln(Nv/nie)).
-                en = psi - self.ln_gn
-                ep = -psi - self.ln_gp
+                # Clamp to FERMI_ETA_MAX before evaluating, matching the
+                # np.minimum(..., FERMI_ETA_MAX) guard used for the same
+                # quantity elsewhere in this file (e.g. the neutral-guess
+                # bisection above): a transient Newton overshoot must not
+                # abort the whole solve when the converged answer would
+                # be valid -- fd_density/fd_ddensity_deta still refuse
+                # loudly for any eta that is genuinely out of range once
+                # this loop actually converges.
+                en = np.minimum(psi - self.ln_gn, FERMI_ETA_MAX)
+                ep = np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX)
                 n = fd_density(self.nc_s, en)
                 p = fd_density(self.nv_s, ep)
                 dnp = (fd_ddensity_deta(self.nc_s, en)
@@ -637,10 +773,10 @@ class Device1D:
                 cion, dcden, dcdp = self._ionized_C(n, p)
                 c_eff = cion
                 if fd:
-                    fddn = fd_ddensity_deta(self.nc_s,
-                                            psi - self.ln_gn)
-                    fddp = fd_ddensity_deta(self.nv_s,
-                                            -psi - self.ln_gp)
+                    fddn = fd_ddensity_deta(
+                        self.nc_s, np.minimum(psi - self.ln_gn, FERMI_ETA_MAX))
+                    fddp = fd_ddensity_deta(
+                        self.nv_s, np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX))
                     dnp = dnp - dcden * fddn + dcdp * fddp
                 else:
                     dnp = dnp - dcden * n + dcdp * p
@@ -673,7 +809,13 @@ class Device1D:
             vals = np.concatenate([main, lower, upper])
             A = csr_matrix((vals, (rows, cols)), shape=(self.N, self.N))
 
-            d = spsolve(A, -F)
+            # linsolve.solve_linear(method="direct") no longer
+            # reformats A before calling spsolve (that reformatting was
+            # itself the bug -- see linsolve.py), so this is now
+            # actually bit-identical to the raw spsolve(A, -F) call
+            # while adding the finiteness/singularity checks every
+            # other Newton loop in this file already goes through.
+            d, _ = linsolve.solve_linear(A, -F, method="direct")
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
             if opts.verbose:
@@ -683,12 +825,28 @@ class Device1D:
         else:
             warnings.warn("Equilibrium Poisson solve did not converge.")
 
+        self._ii_gs = None               # no II source at equilibrium
+        self._ii_gs_cache = None         # clear frozen generation cache
         self.psi = psi
         if fd:
-            en = psi - self.ln_gn
-            ep = -psi - self.ln_gp
-            self.n = fd_density(self.nc_s, en)
-            self.p = fd_density(self.nv_s, ep)
+            # The clamp above in the loop protects against a TRANSIENT
+            # overshoot during iteration; it must not also silently
+            # accept a CONVERGED eta genuinely outside the validated
+            # range -- that would defeat fd_density's own "no silent
+            # extrapolation" refusal (M13 G7) for exactly the states it
+            # exists to catch, not just the states it was supposed to
+            # protect. Check the raw, unclamped eta here instead of
+            # clamping-and-forgetting.
+            en_raw = psi - self.ln_gn
+            ep_raw = -psi - self.ln_gp
+            if np.any(en_raw > FERMI_ETA_MAX) or np.any(ep_raw > FERMI_ETA_MAX):
+                raise ValueError(
+                    f"FD equilibrium converged to eta_n={en_raw.max():.1f} / "
+                    f"eta_p={ep_raw.max():.1f}, beyond +{FERMI_ETA_MAX:.0f}: "
+                    "outside the validated Fermi-integral range (M13 G7 "
+                    "applicability).  Refusing to extrapolate.")
+            self.n = fd_density(self.nc_s, en_raw)
+            self.p = fd_density(self.nv_s, ep_raw)
         else:
             self.n = nie * np.exp(np.clip(psi, -700, 700))
             self.p = nie * np.exp(np.clip(-psi, -700, 700))
@@ -733,6 +891,76 @@ class Device1D:
         safe_F = np.maximum(F, 1.0)
         self._Pn = np.exp(-B_n * phi_n ** 1.5 / safe_F)
         self._Pp = np.exp(-B_p * phi_p ** 1.5 / safe_F)
+
+    def _ii_compute_E_from_state(self, psi):
+        """Compute node-centered electric field magnitudes from psi.
+        
+        Returns E_node array [V/cm] for use in alpha(E) lookup.
+        The field is the average of adjacent edge fields.
+        """
+        N = self.N
+        c_edge = self.VT / (self.LD * self.h)
+        e_mag = np.abs(np.diff(psi)) * c_edge
+        E_node = np.empty(N); E_node[0], E_node[-1] = e_mag[0], e_mag[-1]
+        E_node[1:-1] = 0.5 * (e_mag[:-1] + e_mag[1:])
+        return E_node
+
+    def _ii_compute_gs_frozen(self, psi, n, p, alpha_n, alpha_p):
+        """Compute the generation-source VALUE gs(psi, n, p, alpha).
+
+        gs = Kgen * (alpha_n * Sn + alpha_p * Sp)   [scaled units]
+        where Sn/Sp are node-centered incident-edge |J| sums
+        [physical A/cm^2] and Kgen = 0.5 / (q * R0).  alpha_n/alpha_p
+        are passed in (evaluated by the caller from whatever E it wants
+        -- this function is agnostic to whether that E is live or a
+        snapshot).  Returns gs [scaled cm^-3 s^-1].
+
+        R1b fix (2026-08-28): _residual_jacobian now calls this with a
+        LIVE alpha(E) every Newton iterate and adds the matching
+        analytic dG/dpsi, dG/dn, dG/dp terms itself -- this function
+        only ever computes the value, never a frozen/cached one.  Name
+        kept for continuity with the ionization-source formula; nothing
+        about the computation itself is frozen.
+        """
+        N = self.N
+        h = self.h
+        dn_e = self.dn_edge
+        dp_e = self.dp_edge
+        # SG edge currents from the given state.  These MUST use the
+        # same Scharfetter-Gummel deltas as _residual_jacobian: under
+        # Fermi-Dirac statistics the residual carries the M13 nu-factor
+        # edge differences, and reconstructing |Jn|/|Jp| without them
+        # overstates the generation source by ~13 orders of magnitude
+        # (impact+fd ran away at -12 V before this was matched).
+        dlnnie = np.log(self.nie_s[1:] / self.nie_s[:-1])
+        delta = (psi[1:] - psi[:-1]) + dlnnie
+        delta_p = (psi[1:] - psi[:-1]) - dlnnie
+        if getattr(self.models, "fd", False):
+            Ln, Lp, _wn, _wp = self._fd_factors(n, p)
+            delta = delta + (Ln[1:] - Ln[:-1])
+            delta_p = delta_p - (Lp[1:] - Lp[:-1])
+        Bp = bernoulli(delta)
+        Bm = bernoulli(-delta)
+        Bp_h = bernoulli(delta_p)
+        Bm_h = bernoulli(-delta_p)
+        an = dn_e / h
+        ap = dp_e / h
+        Jn = an * (n[1:] * Bp - n[:-1] * Bm)
+        Jp = -ap * (p[1:] * Bm_h - p[:-1] * Bp_h)
+        # Node-centered incident-edge |J| sums [physical A/cm^2].
+        # Smoothed (see _II_J_EPS_REL) so the generation source stays
+        # differentiable across an edge's zero-current crossing --
+        # matched exactly by the analytic Jacobian in _residual_jacobian.
+        j_eps = _II_J_EPS_REL * max(float(np.abs(Jn).max()),
+                                     float(np.abs(Jp).max()), 1e-300)
+        aJn_ph = _ii_smooth_abs(Jn, j_eps) * self.J0
+        aJp_ph = _ii_smooth_abs(Jp, j_eps) * self.J0
+        Sn = np.empty(N); Sn[0], Sn[-1] = aJn_ph[0], aJn_ph[-1]
+        Sn[1:-1] = aJn_ph[:-1] + aJn_ph[1:]
+        Sp = np.empty(N); Sp[0], Sp[-1] = aJp_ph[0], aJp_ph[-1]
+        Sp[1:-1] = aJp_ph[:-1] + aJp_ph[1:]
+        Kgen = 0.5 / (_II_Q * self.R0)
+        return Kgen * (alpha_n * Sn + alpha_p * Sp)
 
     def _residual_jacobian(self, psi, n, p, bc):
         N, h, dV, C = self.N, self.h, self.dV, self.C
@@ -846,6 +1074,16 @@ class Device1D:
         dRs_dn = dRdn * self.Ns / self.R0      # d(R/R0)/d(n/Ns)
         dRs_dp = dRdp * self.Ns / self.R0
 
+        # --- M15: local impact ionization (van Overstraeten-de Man).
+        # R1b fix (2026-08-28): the generation source is computed LIVE
+        # from the current (psi, n, p) every Newton iterate -- no
+        # frozen/cached source, no outer fixed-point loop.  The model
+        # flag is authoritative: impact=False never reads or writes
+        # self._ii_gs_cache, so a cache left over from an earlier
+        # impact=True solve cannot leak into an impact=False residual.
+        ii_enabled = getattr(self.models, "impact", False)
+        self._ii_gs_cache = None   # overwritten below once computed if enabled
+
         F = np.zeros(3 * N)
         rows, cols, vals = [], [], []
 
@@ -856,6 +1094,7 @@ class Device1D:
             rows.append(r); cols.append(c); vals.append(np.array(v))
 
         i = np.arange(1, N - 1)
+
         # --- Poisson ---
         # M13 incomplete ionization: rho = n - p - C_ion(n, p)
         # (works under Boltzmann statistics too -- flag independence)
@@ -906,6 +1145,7 @@ class Device1D:
 
         # --- hole continuity:  Jp_{i+1/2} - Jp_{i-1/2} + R dV = 0 ---
         F[3 * i + 2] = Jp[1:] - Jp[:-1] + Rs[1:-1] * dV[1:-1]
+
         add(3 * i + 2, 3 * i + 2, ap[1:] * Bp_h[1:] + ap[:-1] * Bm_h[:-1]
             + dRs_dp[1:-1] * dV[1:-1])
         add(3 * i + 2, 3 * (i + 1) + 2, -ap[1:] * Bm_h[1:])
@@ -936,6 +1176,135 @@ class Device1D:
             add(3 * i + 2, 3 * (i - 1) + 2,
                 -ap[:-1] * Sp[:-1] * wp[:-2])
 
+        # --- M15 impact-ionization generation (R1b: fully coupled) -----
+        # MUST come after BOTH continuity rows above: those assign with
+        # `=`, so a generation term added before them is silently
+        # discarded (the defect that made II inert at every bias).
+        # Interior nodes only -- the Dirichlet stamping below overwrites
+        # rows 0 and N-1, so boundary generation cannot be represented.
+        #
+        # G_i = Kgen*(alpha_n(E_i)*Sn_i + alpha_p(E_i)*Sp_i), with
+        # E_i the node field (avg of adjacent edge fields), Sn_i/Sp_i
+        # the node-centered incident-edge |Jn|/|Jp| sums.  Full chain
+        # rule: dG/dpsi through d(alpha)/dE (E0 kink documented in the
+        # test) AND through d|J|/dpsi (sign(J) times the SAME dJ/dpsi
+        # partials already built above for the continuity Jacobian);
+        # dG/dn through d|Jn|/dn only (Sn depends on n, not p); dG/dp
+        # through d|Jp|/dp only.  No frozen-field approximation.
+        if ii_enabled:
+            E_node = self._ii_compute_E_from_state(psi)
+            alpha_n_E = _ii_alpha_n(E_node)
+            alpha_p_E = _ii_alpha_p(E_node)
+            gs_full = self._ii_compute_gs_frozen(
+                psi, n, p, alpha_n_E, alpha_p_E)
+            strength = getattr(self, "_ii_strength", 1.0)
+            self._ii_gs_cache = (gs_full * strength).copy()
+
+            F[3 * i + 1] += strength * gs_full[1:-1] * dV[1:-1]
+            F[3 * i + 2] -= strength * gs_full[1:-1] * dV[1:-1]
+
+            dalpha_n_E = _ii_dalpha_dE(E_node, "n")
+            dalpha_p_E = _ii_dalpha_dE(E_node, "p")
+            alpha_n_i = alpha_n_E[1:-1]; alpha_p_i = alpha_p_E[1:-1]
+            dalpha_n_i = dalpha_n_E[1:-1]; dalpha_p_i = dalpha_p_E[1:-1]
+
+            # Node field E_i = 0.5*(e_mag[i-1] + e_mag[i]); e_mag_k =
+            # |psi_{k+1}-psi_k| * c_edge_k.
+            c_edge = self.VT / (self.LD * h)
+            dpsi_edge = psi[1:] - psi[:-1]
+            s_edge = np.sign(dpsi_edge)
+            dEedge_dleft = -s_edge * c_edge     # d(e_mag_k)/d psi_k
+            dEedge_dright = s_edge * c_edge     # d(e_mag_k)/d psi_{k+1}
+            dEi_dpsi_L = 0.5 * dEedge_dleft[:-1]
+            dEi_dpsi_M = 0.5 * (dEedge_dright[:-1] + dEedge_dleft[1:])
+            dEi_dpsi_R = 0.5 * dEedge_dright[1:]
+
+            # Smoothed |J|/sign(J) -- see _II_J_EPS_REL.  j_eps must be
+            # computed identically to _ii_compute_gs_frozen's (same
+            # formula, same Jn/Jp) so gs_full's value and this block's
+            # derivative are evaluating literally the same function.
+            j_eps = _II_J_EPS_REL * max(float(np.abs(Jn).max()),
+                                         float(np.abs(Jp).max()), 1e-300)
+            aJn_ph = _ii_smooth_abs(Jn, j_eps) * self.J0
+            aJp_ph = _ii_smooth_abs(Jp, j_eps) * self.J0
+            Sn_i = aJn_ph[:-1] + aJn_ph[1:]
+            Sp_i = aJp_ph[:-1] + aJp_ph[1:]
+            sgn_Jn = _ii_smooth_sign(Jn, j_eps)
+            sgn_Jp = _ii_smooth_sign(Jp, j_eps)
+
+            # Per-edge d(Jn_edge)/d* -- same quantities already built
+            # above for the electron-continuity Jacobian.
+            dJn_dpsi_L = -dJn_dpsiR
+            dJn_dpsi_R = dJn_dpsiR
+            dJn_dn_L = -an * Bm
+            dJn_dn_R = an * Bp
+            if fd:
+                dJn_dn_L = dJn_dn_L - an * Sn[:len(an)] * wn[:-1]
+                dJn_dn_R = dJn_dn_R + an * Sn[:len(an)] * wn[1:]
+
+            dJp_dpsi_L = -dJp_dpsiR
+            dJp_dpsi_R = dJp_dpsiR
+            dJp_dp_L = ap * Bp_h
+            dJp_dp_R = -ap * Bm_h
+            if fd:
+                dJp_dp_L = dJp_dp_L + ap * Sp[:len(ap)] * wp[:-1]
+                dJp_dp_R = dJp_dp_R - ap * Sp[:len(ap)] * wp[1:]
+
+            dSn_dpsi_L = sgn_Jn[:-1] * dJn_dpsi_L[:-1] * self.J0
+            dSn_dpsi_M = (sgn_Jn[:-1] * dJn_dpsi_R[:-1]
+                          + sgn_Jn[1:] * dJn_dpsi_L[1:]) * self.J0
+            dSn_dpsi_R = sgn_Jn[1:] * dJn_dpsi_R[1:] * self.J0
+            dSn_dn_L = sgn_Jn[:-1] * dJn_dn_L[:-1] * self.J0
+            dSn_dn_M = (sgn_Jn[:-1] * dJn_dn_R[:-1]
+                        + sgn_Jn[1:] * dJn_dn_L[1:]) * self.J0
+            dSn_dn_R = sgn_Jn[1:] * dJn_dn_R[1:] * self.J0
+
+            dSp_dpsi_L = sgn_Jp[:-1] * dJp_dpsi_L[:-1] * self.J0
+            dSp_dpsi_M = (sgn_Jp[:-1] * dJp_dpsi_R[:-1]
+                          + sgn_Jp[1:] * dJp_dpsi_L[1:]) * self.J0
+            dSp_dpsi_R = sgn_Jp[1:] * dJp_dpsi_R[1:] * self.J0
+            dSp_dp_L = sgn_Jp[:-1] * dJp_dp_L[:-1] * self.J0
+            dSp_dp_M = (sgn_Jp[:-1] * dJp_dp_R[:-1]
+                        + sgn_Jp[1:] * dJp_dp_L[1:]) * self.J0
+            dSp_dp_R = sgn_Jp[1:] * dJp_dp_R[1:] * self.J0
+
+            Kgen = 0.5 / (_II_Q * self.R0)
+
+            def _dG_dpsi(dEi, dSn, dSp):
+                return Kgen * (dalpha_n_i * dEi * Sn_i + alpha_n_i * dSn
+                               + dalpha_p_i * dEi * Sp_i + alpha_p_i * dSp)
+
+            dG_dpsi_L = strength * _dG_dpsi(dEi_dpsi_L, dSn_dpsi_L, dSp_dpsi_L)
+            dG_dpsi_M = strength * _dG_dpsi(dEi_dpsi_M, dSn_dpsi_M, dSp_dpsi_M)
+            dG_dpsi_R = strength * _dG_dpsi(dEi_dpsi_R, dSn_dpsi_R, dSp_dpsi_R)
+            dG_dn_L = strength * Kgen * alpha_n_i * dSn_dn_L
+            dG_dn_M = strength * Kgen * alpha_n_i * dSn_dn_M
+            dG_dn_R = strength * Kgen * alpha_n_i * dSn_dn_R
+            dG_dp_L = strength * Kgen * alpha_p_i * dSp_dp_L
+            dG_dp_M = strength * Kgen * alpha_p_i * dSp_dp_M
+            dG_dp_R = strength * Kgen * alpha_p_i * dSp_dp_R
+
+            dVi = dV[1:-1]
+            add(3 * i + 1, 3 * (i - 1), dVi * dG_dpsi_L)
+            add(3 * i + 1, 3 * i, dVi * dG_dpsi_M)
+            add(3 * i + 1, 3 * (i + 1), dVi * dG_dpsi_R)
+            add(3 * i + 1, 3 * (i - 1) + 1, dVi * dG_dn_L)
+            add(3 * i + 1, 3 * i + 1, dVi * dG_dn_M)
+            add(3 * i + 1, 3 * (i + 1) + 1, dVi * dG_dn_R)
+            add(3 * i + 1, 3 * (i - 1) + 2, dVi * dG_dp_L)
+            add(3 * i + 1, 3 * i + 2, dVi * dG_dp_M)
+            add(3 * i + 1, 3 * (i + 1) + 2, dVi * dG_dp_R)
+
+            add(3 * i + 2, 3 * (i - 1), -dVi * dG_dpsi_L)
+            add(3 * i + 2, 3 * i, -dVi * dG_dpsi_M)
+            add(3 * i + 2, 3 * (i + 1), -dVi * dG_dpsi_R)
+            add(3 * i + 2, 3 * (i - 1) + 1, -dVi * dG_dn_L)
+            add(3 * i + 2, 3 * i + 1, -dVi * dG_dn_M)
+            add(3 * i + 2, 3 * (i + 1) + 1, -dVi * dG_dn_R)
+            add(3 * i + 2, 3 * (i - 1) + 2, -dVi * dG_dp_L)
+            add(3 * i + 2, 3 * i + 2, -dVi * dG_dp_M)
+            add(3 * i + 2, 3 * (i + 1) + 2, -dVi * dG_dp_R)
+
         # --- Dirichlet contacts ---
         for k, node in enumerate((0, N - 1)):
             psi0, n0, p0 = bc[k]
@@ -953,7 +1322,7 @@ class Device1D:
     # ------------------------------------------------------------------
     def solve_bias(self, V, opts: NewtonOptions = None):
         if getattr(self.models, "tat", False):
-            self._Pn = None          # fresh frozen-field snapshot
+            self._Pn = None
             self._Pp = None
         """Solve at applied bias V = [V_left, V_right] (volts)."""
         opts = opts or NewtonOptions()
@@ -961,45 +1330,120 @@ class Device1D:
             self.solve_equilibrium(opts)
 
         psi, n, p = self.psi.copy(), self.n.copy(), self.p.copy()
+
+        last_converged = False
+
+        # M15 R1b: generation is computed LIVE inside _residual_jacobian
+        # every Newton iterate (no frozen field snapshot, no cached
+        # source) -- see the constants block and _residual_jacobian's
+        # "M15 impact-ionization generation" section.  A generation-
+        # strength continuation (self._ii_strength, ramped below) is
+        # kept purely for Newton robustness at the stiff avalanche
+        # onset; it multiplies the live, fully-coupled term and its
+        # Jacobian consistently, so it never desyncs residual from
+        # Jacobian the way a frozen source could.
+        ii_enabled = getattr(self.models, "impact", False)
+        self._ii_strength = 1.0
+
         bc = self._contact_values(V)
         psi[0], n[0], p[0] = bc[0]
         psi[-1], n[-1], p[-1] = bc[1]
 
-        for it in range(opts.max_iter):
-            if self.models.field_mobility:
-                E = -(psi[1:] - psi[:-1]) * self.VT / (self.h * self.LD)
-                mu_n = mobility_field(self.mu_n0, np.r_[np.abs(E), np.abs(E[-1])],
-                                      self.mat, "n")
-                mu_p = mobility_field(self.mu_p0, np.r_[np.abs(E), np.abs(E[-1])],
-                                      self.mat, "p")
-                self._set_edge_diffusivity(mu_n, mu_p)
+        # One Newton solve at the current frozen gs.  Returns
+        # (converged, err).  This is the ONLY Newton implementation --
+        # the staged continuation and the outer fixed-point loop below
+        # both drive it, rather than carrying their own copies.
+        def _newton():
+            nonlocal psi, n, p
+            err = float("inf")
+            for it in range(opts.max_iter):
+                if self.models.field_mobility:
+                    E = -(psi[1:] - psi[:-1]) * self.VT / (self.h * self.LD)
+                    mu_n = mobility_field(
+                        self.mu_n0, np.r_[np.abs(E), np.abs(E[-1])],
+                        self.mat, "n")
+                    mu_p = mobility_field(
+                        self.mu_p0, np.r_[np.abs(E), np.abs(E[-1])],
+                        self.mat, "p")
+                    self._set_edge_diffusivity(mu_n, mu_p)
 
-            F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
-            du = spsolve(J.tocsc(), -F)
-            dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
+                F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
+                if opts.linsolve == "direct":
+                    du = spsolve(J.tocsc(), -F)
+                else:
+                    du, _ = linsolve.solve_linear(
+                        J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
+                        block_size=3)
+                dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
 
-            dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
-            # keep densities positive: never let them fall below 1/10 or rise
-            # above 10x in a single Newton step
-            n_old, p_old = n, p
-            n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
-            p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
-            psi = psi + dpsi
-            n, p = n_new, p_new
+                dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
+                n_old, p_old = n, p
+                n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
+                p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
 
-            # Convergence is judged on the UPDATE, not the residual: the
-            # Poisson residual subtracts terms of order 1/h^2 and hits a
-            # floating-point cancellation floor well above tol_residual.
-            rel_n = np.abs(n_new / np.maximum(n_old, 1e-300) - 1.0).max()
-            rel_p = np.abs(p_new / np.maximum(p_old, 1e-300) - 1.0).max()
-            err = max(np.abs(dpsi).max(), rel_n, rel_p)
-            if opts.verbose:
-                print(f"    it {it:2d}  |F|={np.abs(F).max():.3e}  "
-                      f"|dpsi|={np.abs(dpsi).max():.3e}  "
-                      f"|dn/n|={rel_n:.3e}")
-            if err < opts.tol_update:
+                # M15 backtracking: 2-norm merit reduction test
+                if ii_enabled:
+                    base = 0.5 * float(np.dot(F, F))
+                    lam = 1.0
+                    for _ in range(40):
+                        Ft, *_ = self._residual_jacobian(
+                            psi + lam * dpsi,
+                            np.clip(n_old + lam * dn, 0.1 * n_old,
+                                    10.0 * n_old),
+                            np.clip(p_old + lam * dp, 0.1 * p_old,
+                                    10.0 * p_old), bc)
+                        ft = 0.5 * float(np.dot(Ft, Ft))
+                        if np.isfinite(ft) and \
+                                ft <= base * (1.0 - 1e-4 * lam):
+                            break
+                        lam *= 0.5
+                    else:
+                        lam = 0.0
+                    n_new = np.clip(n_old + lam * dn, 0.1 * n_old,
+                                    10.0 * n_old)
+                    p_new = np.clip(p_old + lam * dp, 0.1 * p_old,
+                                    10.0 * p_old)
+                    psi = psi + lam * dpsi
+                    n, p = n_new, p_new
+                else:
+                    psi = psi + dpsi
+                    n, p = n_new, p_new
+
+                rel_n = np.abs(n_new / np.maximum(n_old, 1e-300)
+                               - 1.0).max()
+                rel_p = np.abs(p_new / np.maximum(p_old, 1e-300)
+                               - 1.0).max()
+                err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                if opts.verbose:
+                    print(f"   it {it:2d}  |F|={np.abs(F).max():.3e}  "
+                          f"|dpsi|={np.abs(dpsi).max():.3e}  "
+                          f"|dn/n|={rel_n:.3e}")
+                if err < opts.tol_update:
+                    return True, err
+            return False, err
+
+        # Generation-strength continuation: ramp the LIVE, fully-coupled
+        # source from weak to full.  Each stage runs its own Newton
+        # solve to full convergence at that strength; the final state
+        # seeds the next stage (warm start).  Every stage is itself a
+        # fully self-consistent Newton solve of the coupled system, so
+        # there is no separate outer fixed-point loop or closure
+        # criterion left to run: Newton's own convergence tolerance IS
+        # the closure criterion now.  Getting PAST the avalanche fold
+        # itself (where plain voltage-controlled Newton basin-locks
+        # onto a weak branch -- see the constants block) is
+        # pytcad.continuation.arc_length_sweep's job, not this loop's;
+        # solve_bias stays a plain bias-controlled solver.
+        stages = _II_STAGES if ii_enabled else (1.0,)
+        err = float("inf")
+
+        for stage_factor in stages:
+            self._ii_strength = stage_factor
+            last_converged, err = _newton()
+            if not last_converged:
                 break
-        else:
+
+        if not last_converged:
             warnings.warn(f"Newton did not converge at V={V}; "
                           f"last update {err:.2e}")
 
@@ -1007,6 +1451,11 @@ class Device1D:
         _, _, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
         self.Jn = Jn * self.J0
         self.Jp = Jp * self.J0
+        # M22 phase 2: convergence status as an attribute, not just a
+        # warning -- a continuation driver needs to detect failure
+        # reliably (parsing warning text is not that).
+        self.last_converged = last_converged
+        self.last_newton_err = err
         return self
 
     # --- physical-unit accessors -------------------------------------

@@ -140,10 +140,16 @@ def test_hemt_band_step_at_interface():
                                          max_iter=300))
     chi = np.array([m.chi for m in core.mats]).reshape(core.Ny, core.Nx)
     Ec = -core.psi * core.VT - chi
-    # find the interface column: where chi changes along x in one row
-    dchi = np.abs(np.diff(chi, axis=1))
+    # The buffer/channel/barrier layers are stacked along y (each region
+    # spans the full x-width -- see _build_hemt in workbench/core/
+    # templates.py), so chi is constant along x and steps between rows
+    # along y. Find the interface ROW (axis=0), not column: diffing
+    # along axis=1 (the previous, buggy version of this test) compares
+    # chi within a single uniform row and is always exactly zero,
+    # regardless of whether the real band step exists.
+    dchi = np.abs(np.diff(chi, axis=0))
     j, i = np.unravel_index(int(np.argmax(dchi)), dchi.shape)
-    step = abs(Ec[j, i + 1] - Ec[j, i])
+    step = abs(Ec[j + 1, i] - Ec[j, i])
     assert step >= 0.15, \
         f"T5 FAIL: conduction-band step at interface {step:.4f} eV"
 

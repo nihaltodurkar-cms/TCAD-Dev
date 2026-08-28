@@ -24,8 +24,8 @@ tunnelling leakage through oxides below ~2 nm.
 
 import numpy as np
 from scipy.sparse import diags
-from scipy.sparse.linalg import spsolve
 
+from . import linsolve
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .device import fd_density, fd_ddensity_deta
 from .fermi import FERMI_ETA_MAX, FERMI_ETA_MIN, f_half
@@ -166,8 +166,13 @@ class MOSCapacitor:
             if self.fd:
                 # M13: physical-statistics densities (same construction
                 # and piecewise eta policy as Device1D)
-                en = e - self.ln_gn
-                ep = -e - self.ln_gp
+                # Clamp to FERMI_ETA_MAX before evaluating, matching the
+                # np.minimum(..., FERMI_ETA_MAX) guard used for the same
+                # quantity in the neutrality bisection above -- a
+                # transient Newton overshoot must not abort the whole
+                # solve when the converged answer would be valid.
+                en = np.minimum(e - self.ln_gn, FERMI_ETA_MAX)
+                ep = np.minimum(-e - self.ln_gp, FERMI_ETA_MAX)
                 n = fd_density(self.nc_s, en)
                 p = fd_density(self.nv_s, ep)
                 dnp = fd_ddensity_deta(self.nc_s, en) \
@@ -201,11 +206,32 @@ class MOSCapacitor:
             lo[-1] = 0.0
 
             A = diags([lo, main, up], [-1, 0, 1], format="csc")
-            d = spsolve(A, -F)
+            # linsolve.solve_linear(method="direct") no longer
+            # reformats A before calling spsolve, so this stays
+            # bit-identical to the raw spsolve(A, -F) call while adding
+            # the finiteness/singularity checks a raw call silently
+            # skips.
+            d, _ = linsolve.solve_linear(A, -F, method="direct")
             d = np.clip(d, -3.0, 3.0)
             psi = psi + d
             if np.abs(d).max() < tol:
                 break
+        if self.fd:
+            # The clamp above protects against a TRANSIENT overshoot
+            # during iteration; it must not also silently accept a
+            # CONVERGED psi genuinely outside the validated eta range --
+            # check the raw, unclamped eta on the value actually
+            # returned, matching fd_density's own "no silent
+            # extrapolation" contract (M13 G7).
+            e = np.clip(psi, -700, 700)
+            en_raw = e - self.ln_gn
+            ep_raw = -e - self.ln_gp
+            if np.any(en_raw > FERMI_ETA_MAX) or np.any(ep_raw > FERMI_ETA_MAX):
+                raise ValueError(
+                    f"FD MOS-C solve converged to eta_n={en_raw.max():.1f} / "
+                    f"eta_p={ep_raw.max():.1f}, beyond +{FERMI_ETA_MAX:.0f}: "
+                    "outside the validated Fermi-integral range (M13 G7 "
+                    "applicability).  Refusing to extrapolate.")
         return psi
 
     # ------------------------------------------------------------------

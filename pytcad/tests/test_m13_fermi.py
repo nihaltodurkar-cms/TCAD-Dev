@@ -223,3 +223,88 @@ def test_fermi_eta_range_refusal():
         f_half_inv(np.array([np.nan]))
     with pytest.raises(ValueError):
         f_half_inv(np.array([0.0]))
+
+
+# ----------------------------------------------- M13 tabulated fast path
+def test_tabulated_fast_path_matches_the_quadrature():
+    """The interpolated f_half/f_mhalf must agree with the QUADRATURE
+    they are built from, across the whole validated eta range.
+
+    This is the gate that licenses the fast path: it is the only thing
+    standing between a 1260x speedup and silently wrong carrier
+    statistics.  The bound is 1e-11 -- two orders tighter than the 1e-9
+    G1 gate, and the measured error is ~1e-13.
+    """
+    from pytcad import fermi as F
+
+    rng = np.random.default_rng(20260827)
+    eta = np.sort(np.r_[
+        rng.uniform(F.FERMI_ETA_MIN, F.FERMI_ETA_MAX, 3000),
+        np.linspace(F.FERMI_ETA_MIN, F.FERMI_ETA_MAX, 1001),
+        # table endpoints and the series/quadrature seam
+        F._SERIES_ETA, F._SERIES_ETA + 1e-12, F.FERMI_ETA_MAX,
+        F.FERMI_ETA_MIN])
+
+    fast_h, exact_h = F.f_half(eta), F.f_half_exact(eta)
+    fast_m, exact_m = F.f_mhalf(eta), F.f_mhalf_exact(eta)
+
+    rel_h = np.abs(fast_h / exact_h - 1.0).max()
+    rel_m = np.abs(fast_m / exact_m - 1.0).max()
+    assert rel_h <= 1e-11, f"f_half fast path off by {rel_h:.3e}"
+    assert rel_m <= 1e-11, f"f_mhalf fast path off by {rel_m:.3e}"
+
+    # Positivity and monotonicity survive interpolation: a table that
+    # dipped negative would poison every density it feeds.
+    assert np.all(fast_h > 0.0) and np.all(fast_m > 0.0)
+    dense = np.linspace(F.FERMI_ETA_MIN, F.FERMI_ETA_MAX, 20001)
+    assert np.all(np.diff(F.f_half(dense)) > 0.0), \
+        "f_half must stay strictly increasing through the fast path"
+
+
+def test_fast_path_preserves_scalar_and_shape_semantics():
+    """Interpolation must not change the calling contract."""
+    from pytcad import fermi as F
+
+    assert np.ndim(F.f_half(0.0)) == 0 and np.ndim(F.f_mhalf(0.0)) == 0
+    assert np.isscalar(float(F.f_half(1.5)))
+    for shape in ((5,), (3, 4), (2, 3, 2)):
+        eta = np.full(shape, -2.0)
+        assert F.f_half(eta).shape == shape
+        assert F.f_mhalf(eta).shape == shape
+    # out-of-range still refuses loudly, table or no table
+    with pytest.raises(ValueError, match="outside the validated range"):
+        F.f_half(F.FERMI_ETA_MAX + 1e-6)
+    with pytest.raises(ValueError, match="outside the validated range"):
+        F.f_mhalf(F.FERMI_ETA_MIN - 1e-6)
+
+
+def test_exact_only_env_switch_bypasses_the_table(monkeypatch):
+    """PYTCAD_FERMI_EXACT=1 must give the quadrature verbatim, so a
+    suspicious result can always be re-checked without the table."""
+    import importlib
+    from pytcad import fermi as F
+    monkeypatch.setenv("PYTCAD_FERMI_EXACT", "1")
+    F2 = importlib.reload(F)
+    try:
+        eta = np.linspace(-8.0, 30.0, 41)
+        assert np.array_equal(F2.f_half(eta), F2.f_half_exact(eta))
+        assert np.array_equal(F2.f_mhalf(eta), F2.f_mhalf_exact(eta))
+    finally:
+        monkeypatch.delenv("PYTCAD_FERMI_EXACT", raising=False)
+        importlib.reload(F)
+
+
+def test_non_finite_eta_is_refused_not_silently_propagated():
+    """NaN fails every comparison, so the range check used to pass it
+    through: f_half returned NaN silently, and the tabulated path also
+    warned from an undefined NaN->int cast while indexing the table
+    (breaking the suite's zero-warning invariant).  Both must raise.
+    """
+    from pytcad import fermi as F
+    for bad in (np.nan, np.inf, -np.inf):
+        with pytest.raises(ValueError):
+            F.f_half(np.array([0.0, bad]))
+        with pytest.raises(ValueError):
+            F.f_mhalf(np.array([0.0, bad]))
+        with pytest.raises(ValueError):
+            F.f_half_exact(np.array([0.0, bad]))

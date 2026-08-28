@@ -250,7 +250,7 @@ def test_channel_selection_falls_back_to_first_channel_when_no_vth_exists():
 # ----------------------------------------------------------------------
 #  controller reachability: rows appear in the Results tree node
 # ----------------------------------------------------------------------
-def test_results_node_shows_sweep_derived_rows(qapp=None, tmp_path=None):
+def test_results_node_shows_sweep_derived_rows(tmp_path, qapp=None):
     from PySide6.QtCore import QCoreApplication
     qapp = QCoreApplication.instance() or QCoreApplication([])
     from gui.controllers.app_controller import AppController
@@ -272,8 +272,7 @@ def test_results_node_shows_sweep_derived_rows(qapp=None, tmp_path=None):
              "step": 0.5, "dimensionality": 1})),
         "sweep__current__device": np.array([1e-12, 1e-9, 1e-6, 1e-3]),
     }
-    path = "/tmp/opencode/sweep_derived_test.npz"
-    os.makedirs("/tmp/opencode", exist_ok=True)
+    path = str(tmp_path / "sweep_derived_test.npz")
     np.savez(path + ".tmp.npz", **d)
     os.replace(path + ".tmp.npz", path)
 

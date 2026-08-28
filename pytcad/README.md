@@ -22,8 +22,9 @@ pytcad/ (this package)
                  assisted tunneling (M12)
   moscap.py      MOS capacitor, quasi-static C-V
   fermi.py       complete Fermi-Dirac integrals F_{1/2}/F_{-1/2},
-                 inverse, FD ni (M13 phase 1; solver integration
-                 is the active work item)
+                 inverse, FD ni, tabulated fast path (M13, COMPLETE:
+                 wired through device.py/device2d.py/device3d.py/
+                 moscap.py)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity
   mosfet.py      2D MOSFET builder + Id-Vg sweep
@@ -186,10 +187,14 @@ python examples/02_process_flow.py     # -> process_flow.png
 python examples/03_mos_cv.py           # -> mos_cv.png
 python examples/04_mosfet_idvg.py      # -> mosfet_idvg.png
 python examples/05_3d_reduces_to_2d.py # -> 3d_reduces_to_2d.png
-pytest tests/ ../gui/tests/            # 541 passed, zero warnings
+pytest tests/ gui/tests/               # full suite, serial
+pytest tests/ gui/tests/ -n 6 -m "not slow" -q   # fast dev loop (parallel)
 ```
 
-Requires `numpy`, `scipy`, `matplotlib` (examples only).
+Requires `numpy`, `scipy`, `matplotlib` (examples only); `pip install -r
+requirements-dev.txt` for `pytest`/`pytest-xdist` to run tests. Cap
+parallel workers at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see
+AGENTS.md's Commands section for why.
 
 ---
 

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import ".."
 
 ColumnLayout {
+    objectName: "contactEditor"
     property var controller
     property string contactId: ""
     property var contactData: null   // {name, edge, voltage}
@@ -15,6 +16,7 @@ ColumnLayout {
     RowLayout {
         Label { text: "V [V]"; color: Theme.textDim; Layout.preferredWidth: 60 }
         TextField {
+            objectName: "contactVoltageField"
             Layout.fillWidth: true
             text: contactData ? contactData.voltage.toString() : "0.0"
             onEditingFinished: if (contactId) controller.setContactVoltage(contactId, parseFloat(text))

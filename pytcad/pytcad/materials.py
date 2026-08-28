@@ -223,6 +223,129 @@ def mobility_field(mu0, E, mat: Semiconductor, carrier: str):
 
 
 # ----------------------------------------------------------------------
+#  M14: Surface / inversion-layer mobility (Lombardi CVT)
+# ----------------------------------------------------------------------
+# Matthiessen's rule combining bulk Caughey-Thomas with two surface
+# scattering mechanisms:
+#
+#   1/mu_eff = 1/mu_CT + 1/mu_phonon + 1/mu_SR
+#
+# mu_phonon = B / (T * E_eff^{1/3})   -- phonon-limited surface mobility
+# mu_SR     = delta / E_eff^2          -- surface roughness scattering
+#
+# E_eff is the effective transverse field [V/cm] at the silicon surface.
+#
+# BUG FIXED (2026-08-27, before any Device2D wiring existed to depend on
+# it): the surface-roughness term was coded as mu_SR = (delta/E_eff)^2
+# with delta in V/cm.  That is dimensionally wrong -- (V/cm / V/cm)^2 is
+# dimensionless, not cm^2/(V*s) -- and it is NOT what Lombardi's model
+# says.  COMSOL's "Lombardi Surface Mobility" application note (which
+# implements the equations from Lombardi, Manzini, Saporito & Vanzi,
+# IEEE Trans. CAD 7(11), 1164-1171, 1988) states explicitly, in plain
+# text: "note that delta_n and delta_p have units of V/s", and gives
+# the surface-roughness term as delta / E_perp^2 (E squared in the
+# denominator, not the whole ratio squared).  Verified independently
+# against the numeric delta_n/delta_p values on TWO separate COMSOL
+# documentation pages (the "Lombardi Surface Mobility Model" reference
+# page and the worked "Lombardi Surface Mobility" tutorial PDF), both
+# citing the same 1988 paper and agreeing to 3 significant figures.
+#
+# UNVERIFIED, FLAGGED RATHER THAN GUESSED: B_n/B_p, the acoustic-phonon
+# term's constants, come from the ORIGINAL (pre-fix) session that wrote
+# this function and could not be corroborated against a primary source
+# in this pass -- the full Lombardi acoustic-phonon term is a doping-
+# dependent two-parameter form (mu1, mu2, alpha per COMSOL's reference
+# page), and B/(T*E^{1/3}) here is a simplified single-term stand-in.
+# With the corrected delta and the ORIGINAL B_n=2.5e8, mu_eff at the
+# plan's own G-A check points comes out 3-8x ABOVE the stated Takagi/
+# Taur targets (1229 vs ~400 cm^2/Vs at E=1e5 V/cm; 388 vs ~50 at
+# E=1e6 V/cm) -- meaning B_n is very likely also wrong, in the OTHER
+# direction from delta's original error.  NOT recalibrated here: doing
+# so without a source would be fitting a constant to make a gate pass,
+# which is worse than leaving it visibly unverified.
+#
+# DELTA'S NUMERIC VALUE IS ALSO LESS CERTAIN THAN FIRST RECORDED HERE.
+# Two authoritative-looking sources give the FORM delta/E_eff^2 (both
+# corroborate the structural fix), but DISAGREE on the number by
+# 5-15x: COMSOL's documented reproduction of "Ref.1" (Lombardi et al.
+# 1988) gives delta_n=5.82e14, delta_p=2.05e14 V/s (asymmetric,
+# unnormalized field).  Synopsys's own Sentaurus Device User Guide
+# (N-2017.09), Table 61, "IALMob" parameter set -- which the manual
+# itself calls only "a slightly simplified Lombardi model" -- gives
+# delta=3.97e13 cm^2/(V*s) for BOTH carriers (symmetric), with the
+# field pre-normalized by 1 V/cm before squaring; expressed in the
+# COMSOL page's convention that is 3.97e13 V/s, 14.7x smaller for
+# electrons and 5.2x smaller for holes than the COMSOL numbers below.
+# Neither source is the original 1988 paper itself.  The values kept
+# here are the COMSOL ones (a direct citation of "Ref.1", not a
+# further-generalized model with additional doping-cluster terms like
+# IALMob), on the judgment that they are closer to the plain two-term
+# model this function actually implements -- but this is a judgment,
+# not a settled fact, and callers should treat the ABSOLUTE numeric
+# delta with the same caution as B_n/B_p until the primary 1988 paper
+# itself is read.  See tests/test_model_benchmarks.py::test_mobility_
+# cvt_* for what IS gated (the delta/E^2 FORM, dimensional consistency,
+# monotonicity, the low-field limit) versus what is NOT (the absolute
+# G-A mu_eff-vs-E_eff curve, and the exact delta magnitude).
+#
+# The model is applied LAGGED in the Newton loop (same convention as
+# field_mobility): edge diffusivities are recomputed from the current
+# potential but not differentiated in the Jacobian.
+
+# Lombardi CVT parameters (Si, 300 K)
+# Phonon: mu_ph = B / (T * E_eff^{1/3})  [cm^2/V/s] -- UNVERIFIED, see above
+_CVT_B_N = 2.5e8       # electrons [cm^2 K V^{-1/3} s^{-1} cm^{1/3}]
+_CVT_B_P = 5.0e7       # holes     [cm^2 K V^{-1/3} s^{-1} cm^{1/3}]
+# Surface roughness: mu_SR = delta / E_eff^2  [cm^2/V/s] -- delta in V/s.
+# Values from Lombardi et al. 1988 via COMSOL's documented reproduction.
+_CVT_DELTA_N = 5.82e14   # electrons [V/s]
+_CVT_DELTA_P = 2.05e14   # holes     [V/s]
+
+
+def mobility_cvt(E_eff, mu_ct, carrier, T):
+    """Lombardi CVT surface/inversion-layer mobility [cm^2/V/s].
+
+    Combines the bulk Caughey-Thomas mobility mu_ct with surface
+    scattering via Matthiessen's rule:
+
+        1/mu = 1/mu_ct + 1/mu_phonon + 1/mu_SR
+        mu_phonon = B / (T * E_eff^{1/3})
+        mu_SR     = delta / E_eff^2            (delta in V/s -- NOT
+                    (delta/E_eff)^2; see the module-level note above
+                    the parameter block for why this distinction is
+                    load-bearing, not stylistic)
+
+    E_eff   : effective transverse field [V/cm] (always >= 0)
+    mu_ct   : bulk doping-dependent mobility [cm^2/V/s]
+    carrier : 'n' or 'p'
+    T       : lattice temperature [K]
+
+    Returns the combined effective mobility.  Reduces to mu_ct when
+    E_eff is small (surface scattering negligible) and saturates at
+    the surface-limited value for large E_eff.
+
+    NOTE ON CONFIDENCE: delta_n/delta_p are corroborated against the
+    literature (see above); B_n/B_p are not, and this function's
+    absolute output is not yet validated against a published mu_eff-
+    vs-E_eff curve.  Callers must not treat this as a citation-grade
+    result until that is done -- see tests/test_model_benchmarks.py.
+    """
+    E_eff = np.maximum(np.asarray(E_eff, dtype=float), 1.0)  # floor to avoid 0/0
+    if carrier == "n":
+        B, delta = _CVT_B_N, _CVT_DELTA_N
+    else:
+        B, delta = _CVT_B_P, _CVT_DELTA_P
+
+    mu_ph = B / (T * E_eff ** (1.0 / 3.0))
+    mu_sr = delta / E_eff ** 2
+
+    inv_mu = (1.0 / np.maximum(mu_ct, 1.0)
+              + 1.0 / np.maximum(mu_ph, 1.0)
+              + 1.0 / np.maximum(mu_sr, 1.0))
+    return 1.0 / inv_mu
+
+
+# ----------------------------------------------------------------------
 #  Bandgap narrowing
 # ----------------------------------------------------------------------
 def bandgap_narrowing_slotboom(N, mat: Semiconductor):

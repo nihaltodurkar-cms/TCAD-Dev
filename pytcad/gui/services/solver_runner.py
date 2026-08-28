@@ -34,6 +34,7 @@ from pytcad.mesh3d import Mesh3D
 from pytcad.device import Device1D, Models, NewtonOptions
 from pytcad.device2d import Device2D
 from pytcad.device3d import Device3D
+from pytcad.linsolve import LinearSolveError
 
 from .device_spec import DeviceSpec
 from .solver_backend import (
@@ -115,6 +116,13 @@ def build_material_grid(spec):
                 "no mesh nodes -- box does not intersect the mesh axes "
                 "(boxes are mesh-aligned per the wire-format contract)")
         grid[mask] = mat          # later entries override earlier ones
+    # grid is (Nx,) | (Nx,Ny) | (Nx,Ny,Nz) here (built along `names` =
+    # x,y,z order, matching the mask/box logic above) -- but Device2D/
+    # Device3D consume the flat list as row-major (Ny,Nx) / (Nz,Ny,Nx),
+    # the same convention as MeshSpec.shape() and build_doping()'s
+    # reshape(shape). Reversing the axes before ravel() converts between
+    # the two conventions without touching the mask-building logic above.
+    grid = np.transpose(grid, axes=tuple(reversed(range(d))))
     return grid.ravel().tolist()
 
 
@@ -313,8 +321,18 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
         print(f"PYTCAD_STAGE=sweep point {i + 1}/{len(voltages)}", flush=True)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            apply_bias(device, spec, opts, override={sw.contact: V})
-        ok = not any("did not converge" in str(w.message) for w in caught)
+            try:
+                apply_bias(device, spec, opts, override={sw.contact: V})
+                ok = not any("did not converge" in str(w.message)
+                             for w in caught)
+            except LinearSolveError:
+                # linsolve.solve_linear() (opts.linsolve="gmres"/
+                # "bicgstab") signals non-convergence by raising rather
+                # than warning like the direct-solve path -- treat it as
+                # exactly the same kind of single-point failure instead
+                # of letting it abort the whole sweep and discard every
+                # already-converged point.
+                ok = False
         converged_flags.append(ok)
 
         if d == 1:

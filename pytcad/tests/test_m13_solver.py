@@ -366,8 +366,16 @@ HETERO_FW_DIGEST = ("3594c906ad475c858442c393526b6763"
 
 
 def _tat_reference_device():
-    x = graded_mesh(2.0e-4, [1.0e-4], h_min=1.0e-8, h_max=1.0e-6,
-                    ratio=1.12)
+    # FROZEN mesh, not a graded_mesh() call.  These digests pin SOLVER
+    # behaviour against the pre-core-edit tree; rebuilding the mesh here
+    # coupled them to the mesh GENERATOR, so a correction there failed
+    # this gate for a reason having nothing to do with the solver.
+    # (mesh.graded_mesh violated its own documented grading ratio at the
+    # final cell -- up to 11.06x against a stated 1.15 -- and was fixed;
+    # this is the same decoupling applied to the M13 npz goldens.)
+    x = np.load(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "goldens", "m13", "frozen_meshes.npz"))["diode1d_x"]
     dop = np.where(x < 1.0e-4, -1e17, 1e17)
     return Device1D(x, dop, T=T,
                     models=Models(bgn=False, srh=True, tat=True,

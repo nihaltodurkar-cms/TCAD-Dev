@@ -37,6 +37,7 @@ ColumnLayout {
             ToolTip.text: "Wafer depth simulated. The 1D process domain runs from the surface (0) to this depth."
         }
         TextField {
+            objectName: "substrateLengthField"
             Layout.fillWidth: true
             text: parameters && parameters.length_cm != null ? parameters.length_cm.toExponential(3) : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,
@@ -51,6 +52,7 @@ ColumnLayout {
             ToolTip.text: "Uniform background doping. Negative = p-type, positive = n-type [cm^-3]."
         }
         TextField {
+            objectName: "substrateDopingField"
             Layout.fillWidth: true
             text: parameters && parameters.background_doping_cm3 != null
                   ? parameters.background_doping_cm3.toExponential(3) : ""
@@ -66,6 +68,7 @@ ColumnLayout {
             ToolTip.text: "Finest spacing near junctions. Keep it around one Debye length (~10 nm at 1e17) or finer."
         }
         TextField {
+            objectName: "substrateHMinField"
             Layout.fillWidth: true
             text: parameters && parameters.mesh && parameters.mesh.h_min_cm != null
                   ? parameters.mesh.h_min_cm.toExponential(3) : ""

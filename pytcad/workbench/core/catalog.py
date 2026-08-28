@@ -126,6 +126,30 @@ _MODELS = {
                     "composition keeps its declared-untested status "
                     "until M15/M16.",
     ),
+    "impact": ModelInfo(
+        key="impact",
+        title="Impact ionization (van Overstraeten-de Man)",
+        equations=(
+            "G = [alpha_n(|E|)|Jn| + alpha_p(|E|)|Jp|] / q",
+            "alpha(E) = A exp(-B/E), piecewise at E_SWITCH = 5e5 V/cm",
+            "coupled via lagged-source outer iteration (frozen per bias "
+            "solve, updated between solves -- M12-TAT precedent)",
+        ),
+        parameters=(),
+        references=(
+            "van Overstraeten & de Man, Solid-State Electron. 13, 583 "
+            "(1970)",
+            "Sentaurus/Taurus device manual parameter tables",
+        ),
+        applicability="1D (device.py); local-field model; silicon "
+                      "coefficients; breakdown regime requires voltage "
+                      "continuation",
+        enabled_by_default=False,
+        limitations="No nonlocal or driving-force integral model; no "
+                    "carrier-temperature coupling; devsim backend not "
+                    "supported; near-BV convergence requires the "
+                    "staged-generation continuation.",
+    ),
     "incomplete_ion": ModelInfo(
         key="incomplete_ion",
         title="Incomplete dopant ionization (shallow B/P/As)",

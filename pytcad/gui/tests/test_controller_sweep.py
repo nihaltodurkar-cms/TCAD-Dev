@@ -149,11 +149,10 @@ def _write_npz(path, with_sweep=True):
     return str(path)
 
 
-def test_finished_swept_result_exposes_hasSweep_and_object(app):
+def test_finished_swept_result_exposes_hasSweep_and_object(app, tmp_path):
     fired = []
     app.resultChanged.connect(lambda: fired.append(1))
-    app._on_finished(_write_npz(__import__("tempfile").gettempdir()
-                                + "/ctrl_sweep_test.npz"))
+    app._on_finished(_write_npz(str(tmp_path / "ctrl_sweep_test.npz")))
     assert app.hasResult is True
     assert app.hasSweep is True
     sw = app.sweepResultForQml
@@ -163,8 +162,9 @@ def test_finished_swept_result_exposes_hasSweep_and_object(app):
     assert fired, "resultChanged must fire so QML bindings refresh"
 
 
-def test_finished_plain_result_has_no_sweep(app):
-    app._on_finished(_write_npz("/tmp/ctrl_plain_test.npz", with_sweep=False))
+def test_finished_plain_result_has_no_sweep(app, tmp_path):
+    app._on_finished(_write_npz(str(tmp_path / "ctrl_plain_test.npz"),
+                                 with_sweep=False))
     assert app.hasSweep is False
     assert app.sweepResultForQml is None
 

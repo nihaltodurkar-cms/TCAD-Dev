@@ -30,33 +30,86 @@ def uniform_mesh(L, n):
 def graded_mesh(L, x_focus, h_min, h_max, ratio=1.15):
     """Mesh on [0, L] refined around the positions in x_focus.
 
-    Grows geometrically from h_min at each focus point up to h_max, with
-    successive spacings limited by `ratio` (keep <= ~1.2; larger grading
-    ratios degrade the second-order accuracy of the box discretisation).
+    Cell size follows the gradient-limited target
+
+        s(x) = min(h_max, h_min + (ratio - 1) * dist(x, x_focus))
+
+    so spacing is h_min at a focus point and grows linearly away from it,
+    with adjacent cells never differing by more than `ratio` (keep <= ~1.2;
+    larger grading ratios degrade the second-order accuracy of the box
+    discretisation).
+
+    Nodes are placed at equal increments of the arc length
+    t(x) = integral dx / s(x), which honours s(x) everywhere WITHOUT
+    truncating any step.  The previous implementation walked forward and
+    clamped each step onto the next focus point and onto L; every clamp
+    left a stub cell whose neighbour could be many times larger, and the
+    worst jump of the whole mesh landed on the ohmic contact cell
+    (measured up to 11.06x against a stated ratio of 1.15).
 
     All lengths in cm.
     """
-    x_focus = np.atleast_1d(np.asarray(x_focus, dtype=float))
-    pts = {0.0, float(L)}
-    for xf in x_focus:
-        pts.add(float(np.clip(xf, 0.0, L)))
-
-    # Gradient-limited spacing: the allowed cell size grows linearly with
-    # distance from the nearest focus point, with slope (ratio - 1).  This
-    # guarantees adjacent cells never differ by more than `ratio`.
+    L = float(L)
+    x_focus = np.clip(np.atleast_1d(np.asarray(x_focus, dtype=float)),
+                      0.0, L)
+    h_min = float(h_min)
+    h_max = max(float(h_max), h_min)
     g = ratio - 1.0
-    nodes = [0.0]
-    x = 0.0
-    while x < L - 1e-14:
-        d = np.min(np.abs(x - x_focus))
-        h = min(h_max, h_min + g * d)
-        # do not step over a focus point
-        ahead = x_focus[x_focus > x + 1e-14]
-        if ahead.size:
-            h = min(h, max(ahead.min() - x, h_min))
-        x = min(x + h, L)
-        nodes.append(x)
-    nodes = np.array(nodes)
+
+    # Dense sampling must resolve h_min, or the arc-length integral
+    # under-counts the refined region.
+    m_uncapped = 50.0 * L / max(h_min, 1e-30)
+    m = int(min(2_000_001, max(2001, m_uncapped) + 1))
+    if m_uncapped > 2_000_000:
+        # The dense sampling this arc-length construction relies on is
+        # capped at 2,000,001 points; above this L/h_min ratio the grid
+        # near a focus point is coarser than h_min itself, so the
+        # trapezoidal arc-length integral under-counts the sharp peak in
+        # 1/s(x) there and the realised minimum spacing silently ends up
+        # a factor of ~2-2.4x above the requested h_min (measured).  Warn
+        # rather than let the "spacing is h_min at a focus point"
+        # guarantee documented above fail silently.
+        import warnings
+        warnings.warn(
+            f"graded_mesh: L/h_min = {L / max(h_min, 1e-30):.3g} exceeds "
+            "the dense-sampling cap; the realised minimum cell size near "
+            "a focus point may be coarser than the requested h_min "
+            f"({h_min:.3g} cm).")
+    xs = np.linspace(0.0, L, m)
+    d = np.min(np.abs(xs[:, None] - x_focus[None, :]), axis=1)
+    s = np.minimum(h_max, h_min + g * d)
+
+    inv = 1.0 / s
+    t = np.concatenate(([0.0], np.cumsum(0.5 * (inv[1:] + inv[:-1])
+                                         * np.diff(xs))))
+    n_cells = max(1, int(np.ceil(t[-1])))
+    t *= n_cells / t[-1]                 # land exactly on an integer
+    nodes = np.interp(np.arange(n_cells + 1), t, xs)
+    nodes[0], nodes[-1] = 0.0, L
+    if n_cells < 3 or g <= 0.0:
+        return nodes
+
+    # Gradient-limit the realised cell sizes.  A cell spans a stretch over
+    # which the target size is still growing, so the realised spacing
+    # slightly exceeds s(x) and the realised ratio slightly exceeds
+    # `ratio`.  Two sweeps clamp h[i+1] <= ratio*h[i] (and the mirror),
+    # done in log space so each is a cumulative minimum; the clamp only
+    # SHRINKS cells, and the uniform rescale that restores sum(h) = L
+    # cancels in every ratio.  The fixed point therefore satisfies the
+    # documented bound exactly while still spanning [0, L].
+    h = np.diff(nodes)
+    lr = np.log(ratio)
+    k = np.arange(h.size)
+    for _ in range(50):
+        lh = np.log(h)
+        lh = np.minimum.accumulate(lh - k * lr) + k * lr           # forward
+        lh = np.minimum.accumulate((lh + k * lr)[::-1])[::-1] - k * lr  # back
+        h = np.exp(lh)
+        h *= L / h.sum()                 # scale-invariant for grading
+        r = np.maximum(h[1:] / h[:-1], h[:-1] / h[1:]).max()
+        if r <= ratio * (1.0 + 1e-12):
+            break
+    nodes = np.concatenate(([0.0], np.cumsum(h)))
     nodes[-1] = L
     return nodes
 

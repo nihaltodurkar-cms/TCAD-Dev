@@ -81,6 +81,7 @@ ColumnLayout {
         Label { text: "Species"; Layout.preferredWidth: 90 }
         ComboBox {
             id: speciesBox
+            objectName: "implantSpeciesBox"
             model: ["B", "P", "As"]
             currentIndex: parameters && parameters.species != null ? model.indexOf(parameters.species) : 0
             onActivated: if (stepId) controller.setProcessStepParameters(stepId,
@@ -90,6 +91,7 @@ ColumnLayout {
     RowLayout {
         Label { text: "Energy [keV]"; Layout.preferredWidth: 90 }
         TextField {
+            objectName: "implantEnergyField"
             Layout.fillWidth: true
             text: parameters && parameters.energy_keV != null ? parameters.energy_keV.toString() : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,
@@ -99,6 +101,7 @@ ColumnLayout {
     RowLayout {
         Label { text: "Dose [cm⁻²]"; Layout.preferredWidth: 90 }
         TextField {
+            objectName: "implantDoseField"
             Layout.fillWidth: true
             text: parameters && parameters.dose_cm2 != null ? parameters.dose_cm2.toExponential(2) : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,

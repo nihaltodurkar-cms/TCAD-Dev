@@ -1,10 +1,11 @@
 # AGENTS.md — Guidance for AI agents working on PyTCAD
 
-Read this before doing anything. Then read `history.md` (current
-state + open items), `ARCHITECTURE.md` (roadmap + live queue),
+Read this before doing anything. Then read `session history/history.md`
+(current state + open items), `ARCHITECTURE.md` (roadmap + live queue),
 `SENTAURUS-PARITY-PLAN.md` (the governing future plan, M13-M30), and
-the active milestone spec (`M13-FERMI-DIRAC-PLAN.md` while M13 is in
-flight).
+the active milestone spec (currently `pytcad/M15-IONIZATION-PLAN.md`,
+`pytcad/M21-MESHING-PLAN.md`, and `pytcad/M22-LINSOLVE-PLAN.md` -- see
+"Milestone state & plans" below for what's actually open).
 
 ## What this is
 
@@ -35,17 +36,35 @@ gui/
 tests/             core validation (incl. test_model_benchmarks.py --
                    new physics MUST land here first)
 gui/tests/         GUI-level tests (headless QML pattern)
-HETEROSTRUCTURE-PLAN.md / TUNNELING-PLAN.md   M11/M12 plans w/ design notes
+SENTAURUS-PARITY-PLAN.md   governing roadmap M13-M30
+pytcad/M14-SURFACE-MOBILITY-PLAN.md / M15-IONIZATION-PLAN.md /
+  M21-MESHING-PLAN.md / M22-LINSOLVE-PLAN.md   active milestone plans
+session history/history.md   session-by-session state + handoff notes
 ```
 
 ## Commands (run from `pytcad/`)
 
 ```bash
-python3 -m pytest tests/ gui/tests/ -q     # full suite (~2 min)
+# fast dev loop (~70s): parallel, skips the multi-minute M15/M22 "slow" gates
+python3 -m pytest tests/ gui/tests/ -n 6 -m "not slow" -q
+# slow gate battery: must run before any milestone completion claim
+python3 -m pytest tests/ gui/tests/ -n 6 -m "slow" -q
+python3 -m pytest tests/ gui/tests/ -q     # full suite, serial (~4 min)
 python3 -m pytest tests/test_model_benchmarks.py -q   # physics gates
 QT_QPA_PLATFORM=offscreen python3 -m gui.app          # live app
 python3 examples/01_pn_diode.py            # examples 01..05
 ```
+
+Parallel runs need `pip install -r requirements-dev.txt` (pytest-xdist) once.
+Cap workers at `-n 6` on this machine (not `-n auto`) -- more workers
+oversubscribe available memory/cores.  Set `OPENBLAS_NUM_THREADS=1` (or
+export it in your shell) when running in parallel: numpy/scipy's BLAS
+otherwise spawns its own thread pool PER WORKER, oversubscribing the
+CPU across all `-n` workers simultaneously and making the run slower,
+not faster.  Running the two heavy M15 breakdown-ramp "slow" tests
+concurrently with everything else also slows the whole run down (CPU
+contention on the tests that need it least) -- run `not slow` and
+`slow` as two separate invocations, not one.
 
 Suite invariant: **N passed, zero warnings**. `pytest.ini` exempts one
 intentional warning; anything new must be fixed at source or asserted
@@ -73,7 +92,8 @@ with `pytest.warns` in the test that intends it.
 Plan -> user approves -> TDD (red first) -> implement -> hard debug
 (fuzz/probe adversarially, run live app/examples) -> commit.
 Working tree may be left dirty ONLY with openly-failing tests and a
-precise handoff note in history.md (see M12-S2 precedent).
+precise handoff note in `session history/history.md` (see M12-S2
+precedent).
 
 ## Gotchas learned the hard way (each cost a debugging session)
 
@@ -121,6 +141,20 @@ precise handoff note in history.md (see M12-S2 precedent).
   ("Curves"/"Bands") -- wrong names silently no-op or render the
   wrong view.
 - np.trapezoid is the modern name; scipy.sparse diags order (lo,main,up).
+- scipy's spsolve is NOT format-invariant: SuperLU solves CSR natively
+  via a format flag rather than converting to CSC first, so
+  spsolve(A_csr, b) and spsolve(A_csr.tocsc(), b) differ at ~1e-16
+  relative error, not bit-identical -- a linear-solve wrapper that
+  claims "exactly spsolve, bit-identical" must never reformat A for the
+  direct method, or it silently breaks bit-identity golden gates (see
+  pytcad/linsolve.py's solve_linear, M22 G2).
+- clamping an out-of-range value to survive a TRANSIENT Newton overshoot
+  (e.g. eta > FERMI_ETA_MAX during iteration) must not also clamp the
+  FINAL, converged answer -- that silently defeats whatever loud-refusal
+  check the clamp was protecting against, for the one case (a genuinely
+  invalid converged state) it exists to catch. Clamp only the trial
+  evaluation inside the loop; check the raw, unclamped value once more
+  after convergence.
 
 **Physics/model conventions (empirically established)**
 - MOSCapacitor rho balances Qg SAME-sign; inversion sits at POSITIVE
@@ -151,11 +185,40 @@ precise handoff note in history.md (see M12-S2 precedent).
 
 Governing roadmap: `SENTAURUS-PARITY-PLAN.md` (three parity tiers,
 M13-M30, gate-blocking rule 4b). Completed: M1-M10 (v0.5.0 tagged),
-M11-S1/S2/S3 (heterostructure materials/wire/1D core), M12-S1+S2
-(FN/WKB + Hurkx TAT, all gates green), M13 phase 1 (fermi.py +
-G1-G3 gates + G6a pre-edit goldens; 541 tests, zero warnings).
-ACTIVE: M13 phase 2 (1D core FD integration, gates G4-G8; amendment
-sign-off recorded in M13-FERMI-DIRAC-PLAN.md). BLOCKED until M13
-green: M15+ (parity-plan rule 4b). Open & independent: M11-S4 (2D
-heterojunctions), M11-S5 (HBT/HEMT templates). Live queue:
-ARCHITECTURE.md sections 5-7; session detail: history.md.
+M11-S1..S5 (heterostructure materials/wire/1D+2D core, HBT/HEMT
+templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13
+(Fermi-Dirac + incomplete ionization, G1-G8 all green -- unblocked
+M15+ per parity-plan rule 4b once green), M15 impact ionization
+(coupled Jacobian + continuation driver, all gates green -- see
+pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
+ACTIVE / OPEN:
+  M14 surface mobility -- PARTIAL: mobility_cvt() wired for
+    Device2D.models.surface_mobility (G-D/G-E green); G-A (absolute
+    curve vs Takagi/Taur) xfail'd, B_n/B_p phonon constants unverified
+    against a primary source; G-B/G-C/driving_force/catalog not
+    started. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+  M21 meshing -- phase 1 (1D adaptive h-refinement) shipped; geometry
+    foundation decided as gmsh (validated via conformality check, not
+    just chosen); phases 2-3 not started. See
+    pytcad/M21-MESHING-PLAN.md.
+  M22 linear solver -- phase 1 (Krylov+ILU+block-Jacobi preconditioner)
+    shipped; a hard-debug pass found and fixed a real bit-identity bug
+    in solve_linear(method="direct") reformatting the matrix before
+    calling spsolve (see the scipy spsolve gotcha above); 3D-scaling
+    gate green; phase 2 (continuation driver, strength-ladder-aware
+    corrector) LANDED 2026-08-28 and is what let M15 R1b close. See
+    pytcad/M22-LINSOLVE-PLAN.md.
+GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
+drives the real rendered QML tree (create_engine() + findChild +
+QMetaObject.invokeMethod -- never a controller call as a substitute for
+a UI action, except the couple of spots documented inline where Qt's
+offscreen platform cannot incubate ListView/Repeater delegates at all)
+across the 1D Process-Flow path and the 2D Structure/Device-Builder-
+template path. Confirmed there is no GUI entry point to a Device3D or
+the DEVSIM backend. Found and fixed: numeric QML fields silently
+letting NaN through to the solver (app_controller.py finite-number
+guard), and saved projects silently dropping the Physics Lab's model
+toggles (project_store SCHEMA_VERSION 4->5, "models" key; see
+gui/tests/test_persistence_v5.py).
+Live queue: ARCHITECTURE.md sections 5-7; session detail:
+`session history/history.md`.

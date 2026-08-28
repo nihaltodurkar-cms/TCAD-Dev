@@ -148,6 +148,38 @@ bias goldens exist for 2D/3D so bit-identity is unaffected; 1D left
 as-is where diode1d_fwd golden pins behavior).  Suite: 589 passed,
 zero warnings.
 
+## STATE ADDENDUM 4 -- M15 STARTED, TREE RED BY DESIGN (2026-08-26,
+UNCOMMITTED): impact-ionization solver coupling IMPLEMENTED but gates
+NOT green -- tests/test_m15_ionization.py has 3 OPENLY FAILING gate
+tests (G-B Jacobian probe unreachable, G-C/G-D physics unvalidated)
++ 1 passing (G-A bit-identity default off).  Suite status: everything
+EXCEPT those 3 passes (~587 green; zero warnings outside the red
+tests' own nan math).  READ pytcad/M15-IONIZATION-PLAN.md STATUS BLOCK
+before touching this work -- full findings list (contact-cell MV/cm
+spike -> frozen-field policy snapshot BEFORE contact stamping;
+backtracking damping gated to Models(impact=True); II-Jacobian
+operator-verified exactly at converged deep-reverse states; baseline
+-40 V marginal point pre-existing) and 4 concrete next-session entry
+points.  Do NOT commit this tree until the M15 gates are green or
+explicitly re-scoped by the user.  M11 COMPLETE through S5 (06d57a0).
+M13 COMPLETE through 2D/3D ports (user's 15500bc + 5dbdd3d).
+
+## STATE ADDENDUM 5 -- M15 BREAKTHROUGH, STILL RED (2026-08-26 late):
+root cause of the spurious avalanche-filament branch CONFIRMED: the
+analytic II Jacobian rows destabilize Newton itself (first du bit-
+identical on/off; fully-coupled iteration non-monotone through sign(J)
+kinks).  FIX IMPLEMENTED: lagged-source architecture (M12-TAT
+precedent) -- generation frozen per bias solve on the warm-start state
+(BEFORE contact stamping), no II Jacobian rows, outer fixed-point loop
+closes the feedback.  VERIFIED: physical low branch J~1e-9 through
+-30 V; beyond-BV runaway at fresh -52 V solve (J=2.5e6 A/cm2; integral
+BV=51.8 V).  REMAINING (see M15-IONIZATION-PLAN.md STATUS-2, items
+R1-R4): outer-loop closure criterion near onset (trips early at ~35 V),
+gate rewrites for the frozen-source architecture, catalog/wire
+registration, full-suite rerun.  Suite currently: tests/ has 3 openly
+failing M15 gate tests (kept red by design); everything else green.
+DO NOT COMMIT until R1-R3 land and gates are genuinely green.
+
 ## NEXT (priority order)
 1. Commit the working tree (user decides message/split: M13 phase 2 +
    M11-S4 are logically separate commits).
@@ -228,6 +260,38 @@ of 1e-10 scaled in the criterion (equilibrium paths untouched; no
 bias goldens exist for 2D/3D so bit-identity is unaffected; 1D left
 as-is where diode1d_fwd golden pins behavior).  Suite: 589 passed,
 zero warnings.
+
+## STATE ADDENDUM 4 -- M15 STARTED, TREE RED BY DESIGN (2026-08-26,
+UNCOMMITTED): impact-ionization solver coupling IMPLEMENTED but gates
+NOT green -- tests/test_m15_ionization.py has 3 OPENLY FAILING gate
+tests (G-B Jacobian probe unreachable, G-C/G-D physics unvalidated)
++ 1 passing (G-A bit-identity default off).  Suite status: everything
+EXCEPT those 3 passes (~587 green; zero warnings outside the red
+tests' own nan math).  READ pytcad/M15-IONIZATION-PLAN.md STATUS BLOCK
+before touching this work -- full findings list (contact-cell MV/cm
+spike -> frozen-field policy snapshot BEFORE contact stamping;
+backtracking damping gated to Models(impact=True); II-Jacobian
+operator-verified exactly at converged deep-reverse states; baseline
+-40 V marginal point pre-existing) and 4 concrete next-session entry
+points.  Do NOT commit this tree until the M15 gates are green or
+explicitly re-scoped by the user.  M11 COMPLETE through S5 (06d57a0).
+M13 COMPLETE through 2D/3D ports (user's 15500bc + 5dbdd3d).
+
+## STATE ADDENDUM 5 -- M15 BREAKTHROUGH, STILL RED (2026-08-26 late):
+root cause of the spurious avalanche-filament branch CONFIRMED: the
+analytic II Jacobian rows destabilize Newton itself (first du bit-
+identical on/off; fully-coupled iteration non-monotone through sign(J)
+kinks).  FIX IMPLEMENTED: lagged-source architecture (M12-TAT
+precedent) -- generation frozen per bias solve on the warm-start state
+(BEFORE contact stamping), no II Jacobian rows, outer fixed-point loop
+closes the feedback.  VERIFIED: physical low branch J~1e-9 through
+-30 V; beyond-BV runaway at fresh -52 V solve (J=2.5e6 A/cm2; integral
+BV=51.8 V).  REMAINING (see M15-IONIZATION-PLAN.md STATUS-2, items
+R1-R4): outer-loop closure criterion near onset (trips early at ~35 V),
+gate rewrites for the frozen-source architecture, catalog/wire
+registration, full-suite rerun.  Suite currently: tests/ has 3 openly
+failing M15 gate tests (kept red by design); everything else green.
+DO NOT COMMIT until R1-R3 land and gates are genuinely green.
 
 ## NEXT (priority order)
 1. M13 PHASE 2 (see OPEN ITEM above) — design spike for the FD-SG

@@ -29,10 +29,12 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+from . import linsolve
+
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .materials import (
-    SILICON, Semiconductor, mobility_caughey_thomas, nie_effective,
-    lifetime_scharfetter, recombination,
+    SILICON, Semiconductor, mobility_caughey_thomas, mobility_cvt,
+    nie_effective, lifetime_scharfetter, recombination,
 )
 from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
                      fd_ddensity_deta, fd_node_factors, fd_ohmic_values,
@@ -144,6 +146,21 @@ class Device2D:
                 "Canali field-dependent mobility is not implemented in "
                 "Device2D (see design spec, deferred items)."
             )
+        if getattr(self.models, "impact", False):
+            raise NotImplementedError(
+                "Impact ionization (Models(impact=True)) is implemented "
+                "in Device1D only (M15 scope; 2D/3D ports are a follow-"
+                "up slice).  Refusing rather than silently ignoring the "
+                "flag -- a silently dropped physics model is a hidden "
+                "failure."
+            )
+        if getattr(self.models, "incomplete_ion", False):
+            raise NotImplementedError(
+                "Incomplete dopant ionization "
+                "(Models(incomplete_ion=True)) is implemented in "
+                "Device1D only (M13 plan section 3.3).  Refusing rather "
+                "than silently ignoring the flag."
+            )
 
         self.fd = bool(getattr(self.models, "fd", False))
         if self.Ntot.max() > 1e19 and not self.fd:
@@ -243,9 +260,47 @@ class Device2D:
         self.dp_edge_x = hmean(self.mu_p0[:, :-1], self.mu_p0[:, 1:]) * self.VT / D0_REF
         self.dn_edge_y = hmean(self.mu_n0[:-1, :], self.mu_n0[1:, :]) * self.VT / D0_REF
         self.dp_edge_y = hmean(self.mu_p0[:-1, :], self.mu_p0[1:, :]) * self.VT / D0_REF
+        # M14: surface_mobility overwrites ONLY dn_edge_y[0,:]/dp_edge_y[0,:]
+        # (the edge between the surface row and the row beneath it) from
+        # solve_bias, per Newton iteration.  Constructed here, at the
+        # bulk value, so the array this method mutates in place already
+        # exists with the right shape/dtype before any bias solve runs.
 
         self.bcs = {}   # name -> DirichletBC | GateBC
         self.psi = self.n = self.p = None
+
+    # ------------------------------------------------------------------
+    def _update_surface_mobility(self, psi):
+        """M14: recompute the row-0/row-1 edge diffusivities from the
+        Lombardi CVT surface mobility (materials.mobility_cvt), using
+        the CURRENT psi.  LAGGED, same convention as Device1D's
+        field_mobility: recomputed every Newton iteration, no Jacobian
+        contribution (the edge value is treated as fixed within the
+        iteration it is used in).
+
+        SCOPE LIMITATION (recorded here, not silently assumed away):
+        this identifies "the surface" as mesh row 0 -- the row every
+        add_gate call in this codebase actually uses (see
+        pytcad/mosfet.py's build_mosfet: `j=np.zeros_like(i_gate)`,
+        the only place a 2D gate is placed in this tree).  A gate on
+        any other row, or a side-wall gate, is NOT handled; nothing
+        currently exercises that case, and this method does not detect
+        or guard against it -- it always treats row 0 as the channel
+        surface regardless of where (or whether) a GateBC actually is.
+        """
+        E_eff = (np.abs(psi[0, :] - psi[1, :]) * self.VT
+                / (self.hy[0] * self.LD))
+        mu_n_surf = mobility_cvt(E_eff, self.mu_n0[0, :], "n", self.T)
+        mu_p_surf = mobility_cvt(E_eff, self.mu_p0[0, :], "p", self.T)
+        # Same harmonic-mean-edge convention as every other edge in this
+        # class: combine the (now surface-scattering-limited) row-0
+        # mobility with the untouched bulk row-1 mobility.
+        self.dn_edge_y[0, :] = (2.0 * mu_n_surf * self.mu_n0[1, :]
+                               / (mu_n_surf + self.mu_n0[1, :])
+                               * self.VT / D0_REF)
+        self.dp_edge_y[0, :] = (2.0 * mu_p_surf * self.mu_p0[1, :]
+                               / (mu_p_surf + self.mu_p0[1, :])
+                               * self.VT / D0_REF)
 
     # ------------------------------------------------------------------
     def add_contact(self, name, i, j, V=0.0):
@@ -303,9 +358,14 @@ class Device2D:
 
     def _fd_slaved_densities(self, psi):
         """Equilibrium slaving under FD: n = Nc F(psi-ln(Nc/nie)),
-        p = Nv F(-psi-ln(Nv/nie)); returns n, p and d(n+p)/d(psi)."""
-        en = psi - self.ln_gn
-        ep = -psi - self.ln_gp
+        p = Nv F(-psi-ln(Nv/nie)); returns n, p and d(n+p)/d(psi).
+
+        eta is clamped to FERMI_ETA_MAX before evaluating (matching the
+        np.minimum(..., FERMI_ETA_MAX) guard used for the bulk-guess
+        bisection above) so a transient Newton overshoot cannot abort
+        the whole solve when the converged answer would be valid."""
+        en = np.minimum(psi - self.ln_gn, FERMI_ETA_MAX)
+        ep = np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX)
         n = fd_density(self.nc_s, en)
         p = fd_density(self.nv_s, ep)
         dnp = fd_ddensity_deta(self.nc_s, en)             + fd_ddensity_deta(self.nv_s, ep)
@@ -407,7 +467,13 @@ class Device2D:
         psi = self._bulk_psi_guess()
         for it in range(opts.max_iter):
             F, J = self._residual_jacobian_poisson(psi)
-            d = spsolve(J.tocsc(), -F.ravel()).reshape(Ny, Nx)
+            # linsolve.solve_linear(method="direct") no longer
+            # reformats A before calling spsolve, so passing the same
+            # J.tocsc() this always used keeps this bit-identical while
+            # adding the finiteness/singularity checks every other
+            # Newton loop in this file already goes through.
+            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(), method="direct")
+            d = d.reshape(Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
             if opts.verbose:
@@ -419,6 +485,20 @@ class Device2D:
 
         self.psi = psi
         if self.fd:
+            # _fd_slaved_densities clamps eta to FERMI_ETA_MAX to survive
+            # a TRANSIENT overshoot during iteration; it must not also
+            # silently accept a CONVERGED eta genuinely outside the
+            # validated range here -- check the raw, unclamped eta so a
+            # genuinely-invalid converged state still refuses loudly
+            # (M13 G7), matching fd_density's own contract.
+            en_raw = psi - self.ln_gn
+            ep_raw = -psi - self.ln_gp
+            if np.any(en_raw > FERMI_ETA_MAX) or np.any(ep_raw > FERMI_ETA_MAX):
+                raise ValueError(
+                    f"FD equilibrium converged to eta_n={en_raw.max():.1f} / "
+                    f"eta_p={ep_raw.max():.1f}, beyond +{FERMI_ETA_MAX:.0f}: "
+                    "outside the validated Fermi-integral range (M13 G7 "
+                    "applicability).  Refusing to extrapolate.")
             self.n, self.p, _ = self._fd_slaved_densities(psi)
         else:
             self.n = self.nie_s * np.exp(np.clip(psi, -700, 700))
@@ -691,8 +771,15 @@ class Device2D:
         cur_voltages = {name: bc.V for name, bc in self.bcs.items() if isinstance(bc, DirichletBC)}
 
         for it in range(opts.max_iter):
+            if self.models.surface_mobility:
+                self._update_surface_mobility(psi)
             F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
-            du = spsolve(J.tocsc(), -F)
+            if opts.linsolve == "direct":
+                du = spsolve(J.tocsc(), -F)
+            else:
+                du, _ = linsolve.solve_linear(
+                    J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
+                    block_size=3)
             dpsi = du[0::3].reshape(self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Ny, self.Nx)

@@ -29,9 +29,12 @@ singularity).
 
 No pytcad imports: this module is pure and independently testable.
 """
+import os
+
 import numpy as np
 
 __all__ = ["f_half", "f_half_ref", "f_mhalf", "df_half",
+           "f_half_exact", "f_mhalf_exact",
            "f_half_inv", "ni_fd", "FERMI_ETA_MIN", "FERMI_ETA_MAX"]
 
 # eta domain of the implementation; outside it we refuse loudly
@@ -96,6 +99,16 @@ def _inv_softplus(x):
 
 
 def _check_eta(eta):
+    # NaN fails EVERY comparison, so a bare range test lets it straight
+    # through: the exact path then returns NaN silently, and the
+    # tabulated path additionally warns from an undefined NaN->int cast
+    # while indexing the table.  Refuse it here instead.
+    if not np.all(np.isfinite(eta)):
+        raise ValueError(
+            f"Fermi integral argument eta must be finite; got {eta!r}. "
+            f"A non-finite eta means the caller's potential or density "
+            f"state already diverged -- refusing to return a number for "
+            f"it.")
     if np.any(eta < FERMI_ETA_MIN) or np.any(eta > FERMI_ETA_MAX):
         raise ValueError(
             f"Fermi integral argument eta outside the validated range "
@@ -160,8 +173,13 @@ def _gl_eval(eta, fn_s, fn_t):
     return total[0] if scalar else total
 
 
-def f_half(eta):
-    """Complete Fermi integral F_{1/2}(eta), normalized to exp(eta)."""
+def f_half_exact(eta):
+    """Complete Fermi integral F_{1/2}(eta), normalized to exp(eta).
+
+    The QUADRATURE evaluation: exact series below _SERIES_ETA, fixed-node
+    Gauss-Legendre above.  f_half() interpolates a table built from this
+    function; this is what the table is built from and gated against.
+    """
     arr = np.asarray(eta, dtype=float)
     scalar = (arr.ndim == 0)
     a1 = np.atleast_1d(arr)
@@ -179,8 +197,10 @@ def f_half(eta):
     return res[0] if scalar else res
 
 
-def f_mhalf(eta):
-    """F_{-1/2}(eta) = d F_{1/2} / d eta (same normalization family)."""
+def f_mhalf_exact(eta):
+    """F_{-1/2}(eta) = d F_{1/2} / d eta (same normalization family).
+
+    The QUADRATURE evaluation -- see f_half_exact."""
     arr = np.asarray(eta, dtype=float)
     scalar = (arr.ndim == 0)
     a1 = np.atleast_1d(arr)
@@ -196,6 +216,104 @@ def f_mhalf(eta):
                               lambda t, e: (1.0 / np.sqrt(np.pi))
                               * t ** -0.5 * _inv_softplus(t - e))
     return res[0] if scalar else res
+
+
+# ----------------------------------------------------------------------
+#  Tabulated fast path.
+#
+#  The quadrature above dominated every Fermi-Dirac solve: profiling a
+#  650-node fd equilibrium put 94% of a 3.7 s solve inside _gl_eval, and
+#  one fd solve_bias cost 11.4 s against 0.15 s for Boltzmann.  The
+#  integrand is a smooth function of a SINGLE scalar eta on a bounded
+#  interval, so it is tabulated once and interpolated.
+#
+#  Interpolation is done on log F, not F: F_{1/2} spans ~4e-18 upward
+#  across the validated eta range, so an absolute-error interpolant would
+#  be worthless in the tail.  Absolute error in log F is relative error
+#  in F, which is the quantity every gate is stated in.
+#
+#  Cubic Hermite, using the EXACT derivative where one exists:
+#      d/deta log F_{1/2} = F_{-1/2} / F_{1/2}
+#  F_{-3/2} is not available, so log F_{-1/2} uses an 8th-order central
+#  difference on the (uniform, fine) table instead -- its truncation
+#  error is ~1e-14, far below the interpolation error it feeds.
+#
+#  Measured against the quadrature over 4000 random eta (h = 0.005):
+#      f_half   7.3e-14 relative      f_mhalf  1.4e-13 relative
+#      4000 evaluations: 0.17 ms tabulated vs 214.7 ms exact (~1260x)
+#  Both are four orders below the 1e-9 G1 gate.  Set the environment
+#  variable PYTCAD_FERMI_EXACT=1 to bypass the table entirely.
+# ----------------------------------------------------------------------
+_TAB_H = 0.005
+_TAB = None
+_EXACT_ONLY = os.environ.get("PYTCAD_FERMI_EXACT") == "1"
+
+
+def _table():
+    """Build (once) the interpolation table over [_SERIES_ETA, ETA_MAX]."""
+    global _TAB
+    if _TAB is None:
+        lo, hi = _SERIES_ETA, FERMI_ETA_MAX
+        n = int(round((hi - lo) / _TAB_H)) + 1
+        e = np.linspace(lo, hi, n)
+        fh = f_half_exact(e)
+        fm = f_mhalf_exact(e)
+        g = np.log(fh)
+        gp = fm / fh                      # exact d(log F_{1/2})/d eta
+        q = np.log(fm)
+        qp = np.gradient(q, e, edge_order=2)
+        c = np.array([1 / 280, -4 / 105, 1 / 5, -4 / 5, 0.0,
+                      4 / 5, -1 / 5, 4 / 105, -1 / 280])
+        qp[4:-4] = sum(cc * q[4 + k: q.size - 4 + k]
+                       for cc, k in zip(c, range(-4, 5))) / _TAB_H
+        _TAB = (e, g, gp, q, qp)
+    return _TAB
+
+
+def _hermite(y, yp, eta):
+    """Cubic Hermite on the uniform table grid."""
+    e = _table()[0]
+    i = np.clip(((eta - e[0]) / _TAB_H).astype(int), 0, e.size - 2)
+    t = (eta - e[i]) / _TAB_H
+    t2 = t * t
+    t3 = t2 * t
+    return ((2 * t3 - 3 * t2 + 1) * y[i]
+            + (t3 - 2 * t2 + t) * _TAB_H * yp[i]
+            + (-2 * t3 + 3 * t2) * y[i + 1]
+            + (t3 - t2) * _TAB_H * yp[i + 1])
+
+
+def _tabulated(eta, which):
+    arr = np.asarray(eta, dtype=float)
+    scalar = (arr.ndim == 0)
+    a1 = np.atleast_1d(arr)
+    _check_eta(a1)
+    res = np.empty_like(a1)
+    deep = a1 <= _SERIES_ETA
+    if bool(deep.any()):
+        # Unchanged exact tail -- already cheap, and the table does not
+        # extend below _SERIES_ETA.
+        res[deep] = _fd_series(a1[deep], 1.5 if which == 0 else 0.5)
+    rest = ~deep
+    if bool(rest.any()):
+        _, g, gp, q, qp = _table()
+        y, yp = (g, gp) if which == 0 else (q, qp)
+        res[rest] = np.exp(_hermite(y, yp, a1[rest]))
+    return res[0] if scalar else res
+
+
+def f_half(eta):
+    """Complete Fermi integral F_{1/2}(eta), normalized to exp(eta)."""
+    if _EXACT_ONLY:
+        return f_half_exact(eta)
+    return _tabulated(eta, 0)
+
+
+def f_mhalf(eta):
+    """F_{-1/2}(eta) = d F_{1/2} / d eta (same normalization family)."""
+    if _EXACT_ONLY:
+        return f_mhalf_exact(eta)
+    return _tabulated(eta, 1)
 
 
 def df_half(eta):

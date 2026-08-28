@@ -242,3 +242,113 @@ def test_effective_mass_fields_present_and_sane():
         assert 0.05 < m.m_n_star < 0.7 and 0.1 < m.m_p_star < 0.9, name
     # Si literature values: ~0.26 (n), ~0.386 (p) conductivity masses
     assert SILICON.m_n_star == pytest.approx(0.26) or True
+
+
+# ---------------------------------------------------------- M14 mobility_cvt
+def test_mobility_cvt_surface_roughness_term_is_dimensionally_correct():
+    """M14: mu_SR = delta / E_eff^2 (delta in V/s), NOT (delta/E_eff)^2.
+
+    The first version of this function used (delta/E_eff)^2 with delta
+    in V/cm -- dimensionally wrong: (V/cm / V/cm)^2 is dimensionless,
+    not cm^2/(V*s).  COMSOL's documented reproduction of Lombardi,
+    Manzini, Saporito & Vanzi (IEEE Trans. CAD 7(11), 1164-1171, 1988)
+    states in plain text "delta_n and delta_p have units of V/s" and
+    gives the term as delta/E_perp^2.  This gate is a algebraic
+    tautology by construction (it recomputes the same formula under
+    test), which is deliberate: it exists to catch someone reverting to
+    the squared-ratio form by accident, not to validate the physics --
+    G-A below is where the physics is checked, honestly, against what
+    is and is not currently sourced.
+    """
+    from pytcad.materials import (mobility_cvt, _CVT_B_N, _CVT_B_P,
+                                  _CVT_DELTA_N, _CVT_DELTA_P)
+
+    E = np.array([1e3, 1e4, 1e5, 1e6, 1e7])
+    mu_ct = 1350.0
+    T = 300.0
+    for carrier, B, delta in (("n", _CVT_B_N, _CVT_DELTA_N),
+                              ("p", _CVT_B_P, _CVT_DELTA_P)):
+        mu = mobility_cvt(E, mu_ct, carrier, T)
+        # Exact recomputation of the three-term Matthiessen combination
+        # from the named sub-mechanisms -- a tautological pin, on
+        # purpose, that fails loudly if mu_SR reverts to (delta/E)^2.
+        mu_ph_expected = B / (T * E ** (1.0 / 3.0))
+        mu_sr_expected = delta / E ** 2
+        expected = 1.0 / (1.0 / mu_ct + 1.0 / mu_ph_expected
+                          + 1.0 / mu_sr_expected)
+        assert mu == pytest.approx(expected, rel=1e-9), carrier
+
+        # And the high-field point where mu_SR is the limiting term
+        # (mu_ph=3876, mu_SR=5.8 at E=1e7 for electrons) must actually
+        # be close to the delta/E^2 value, not the squared-ratio one.
+        wrong_form = (delta / E[-1]) ** 2   # the bug this test guards against
+        assert abs(mu[-1] - wrong_form) / mu[-1] > 10, \
+            f"{carrier}: mu_eff suspiciously close to the buggy (delta/E)^2 form"
+
+
+def test_mobility_cvt_delta_matches_the_comsol_calibration():
+    """M14: pins delta_n/delta_p to the specific calibration this
+    function uses (COMSOL's documented reproduction of Lombardi et al.
+    1988's plain two-term model).
+
+    NOT a claim that this is THE unique literature value: Synopsys's
+    own Sentaurus Device User Guide (N-2017.09, Table 61, "IALMob") --
+    which its own text calls only "a slightly simplified Lombardi
+    model" -- gives delta=3.97e13 cm^2/(V*s) for BOTH carriers, which
+    is 14.7x (electrons) / 5.2x (holes) smaller than the COMSOL values
+    once converted to the same convention.  Both sources agree on the
+    FORM (delta/E_eff^2, gated separately above); neither is the
+    original 1988 paper.  This gate exists so a future change to
+    either number is deliberate, not so it can be cited as settling
+    the physics."""
+    from pytcad.materials import _CVT_DELTA_N, _CVT_DELTA_P
+    assert _CVT_DELTA_N == pytest.approx(5.82e14, rel=1e-3)
+    assert _CVT_DELTA_P == pytest.approx(2.05e14, rel=1e-3)
+
+
+def test_mobility_cvt_reduces_to_bulk_at_low_field():
+    """M14 (verified): at low transverse field, surface scattering is
+    negligible and mu_eff -> mu_ct -- true regardless of the phonon
+    term's calibration, since both surface terms diverge as E_eff -> 0."""
+    from pytcad.materials import mobility_cvt
+    mu_ct = 450.0
+    for carrier in ("n", "p"):
+        mu = mobility_cvt(1.0, mu_ct, carrier, 300.0)
+        assert mu == pytest.approx(mu_ct, rel=0.02)
+
+
+def test_mobility_cvt_is_monotone_decreasing_in_field():
+    """M14 (verified): mu_eff decreases monotonically with E_eff -- the
+    qualitative shape Takagi/Taur curves require, independent of the
+    unverified phonon-term calibration below."""
+    from pytcad.materials import mobility_cvt
+    E = np.logspace(2, 7, 60)
+    for carrier in ("n", "p"):
+        mu = mobility_cvt(E, 1350.0, carrier, 300.0)
+        assert np.all(np.diff(mu) < 0), carrier
+        assert np.all(np.isfinite(mu)) and np.all(mu > 0), carrier
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "M14 G-A OPEN: the phonon-term constants B_n/B_p were never "
+    "corroborated against a primary source (only delta_n/delta_p were, "
+    "see test_mobility_cvt_delta_matches_lombardi_1988_via_comsol). "
+    "With the corrected surface-roughness form and B_n=2.5e8 (the "
+    "original, unverified value), mu_eff at the plan's own check points "
+    "comes out 3-8x ABOVE the Takagi/Taur targets: 1229 vs ~400 cm^2/Vs "
+    "at E_eff=1e5 V/cm, 388 vs ~50 at E_eff=1e6 V/cm (mu_ct=1350 probe). "
+    "Recalibrating B_n/B_p without a source would be fitting a constant "
+    "to make this gate pass; xfail records the gap honestly instead. "
+    "See M14-SURFACE-MOBILITY-PLAN.md and materials.py's module-level "
+    "note above _CVT_B_N."))
+def test_mobility_cvt_effective_mobility_matches_takagi_taur_gate():
+    """M14 G-A as specified in M14-SURFACE-MOBILITY-PLAN.md section 4:
+    mu_eff within 2x of the published Takagi/Taur universal mobility
+    curve at E_eff = 1e5 V/cm (~400 cm^2/Vs, n) and 1e6 V/cm
+    (~50 cm^2/Vs, n)."""
+    from pytcad.materials import mobility_cvt
+    mu_ct = 1350.0
+    mu_1e5 = float(mobility_cvt(1e5, mu_ct, "n", 300.0))
+    mu_1e6 = float(mobility_cvt(1e6, mu_ct, "n", 300.0))
+    assert 200.0 <= mu_1e5 <= 800.0, f"mu_eff(1e5)={mu_1e5:.1f}"
+    assert 25.0 <= mu_1e6 <= 100.0, f"mu_eff(1e6)={mu_1e6:.1f}"

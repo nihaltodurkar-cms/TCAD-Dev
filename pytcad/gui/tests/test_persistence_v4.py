@@ -43,8 +43,11 @@ SWEEP = SweepSpec(contact="drain", start=0.0, stop=0.8, step=0.1)
 # ----------------------------------------------------------------------
 #  version bump and file shape
 # ----------------------------------------------------------------------
-def test_schema_version_is_4():
-    assert SCHEMA_VERSION == 4
+def test_schema_version_is_at_least_4():
+    """This suite is about the v4 sweep key specifically, not the current
+    overall SCHEMA_VERSION (see test_persistence_v5.py for the v5 bump) --
+    it must keep passing across later version bumps."""
+    assert SCHEMA_VERSION >= 4
 
 
 def test_v4_file_contains_sweep_key(tmp_path):
@@ -52,7 +55,7 @@ def test_v4_file_contains_sweep_key(tmp_path):
     path = str(tmp_path / "p.json")
     save_project(path, "P", structure, mesh, ProcessFlow(), SWEEP)
     data = json.load(open(path))
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == SCHEMA_VERSION
     assert data["sweep"] == {"contact": "drain", "start": 0.0,
                              "stop": 0.8, "step": 0.1}
 
@@ -74,7 +77,7 @@ def test_v4_sweep_round_trips_exactly(tmp_path):
     path = str(tmp_path / "p.json")
     save_project(path, "P", structure, mesh, ProcessFlow(), SWEEP)
 
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert sweep == SWEEP
     assert sweep.contact == "drain"
     assert (sweep.start, sweep.stop, sweep.step) == (0.0, 0.8, 0.1)
@@ -87,7 +90,7 @@ def test_round_trip_still_covers_structure_mesh_process(tmp_path):
     structure, mesh = _sample()
     path = str(tmp_path / "p.json")
     save_project(path, "P", structure, mesh, flow, SWEEP)
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert s.to_dict() == structure.to_dict()
     assert m.to_dict() == mesh.to_dict()
     assert [step.id for step in f.steps] == ["st1"]
@@ -100,7 +103,7 @@ def test_process_only_project_with_sweep_round_trips(tmp_path):
         parameters={"length_cm": 1e-3, "background_doping_cm3": -1e16})])
     path = str(tmp_path / "p.json")
     save_project(path, "ProcOnly", None, None, flow, SWEEP)
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert s is None and m is None
     assert len(f.steps) == 1
     assert sweep == SWEEP
@@ -110,7 +113,7 @@ def test_structure_only_project_with_sweep_round_trips(tmp_path):
     structure, mesh = _sample()
     path = str(tmp_path / "p.json")
     save_project(path, "StructOnly", structure, mesh, ProcessFlow(), SWEEP)
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert s.to_dict() == structure.to_dict()
     assert f.steps == []
     assert sweep == SWEEP
@@ -136,7 +139,7 @@ def _write_v3(tmp_path, name="legacy"):
 
 def test_v3_project_loads_with_sweep_none(tmp_path):
     path = _write_v3(tmp_path)
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert name == "legacy"
     assert s is not None and m is not None
     assert sweep is None, "v3 files have no sweep; default must be safe None"
@@ -153,7 +156,7 @@ def test_v2_project_still_loads_with_sweep_none(tmp_path):
     path = str(tmp_path / "v2.json")
     with open(path, "w") as fh:
         json.dump(data, fh)
-    name, s, m, f, sweep = load_project(path)
+    name, s, m, f, sweep, _models = load_project(path)
     assert s is not None
     assert f.steps == []
     assert sweep is None
@@ -167,7 +170,7 @@ def test_v4_file_with_missing_sweep_key_defaults_to_none(tmp_path):
     del data["sweep"]                      # simulate a writer that omitted it
     with open(path, "w") as fh:
         json.dump(data, fh)
-    _, _, _, _, sweep = load_project(path)
+    _, _, _, _, sweep, _models = load_project(path)
     assert sweep is None
 
 
@@ -175,7 +178,7 @@ def test_v4_file_with_null_sweep_loads_none(tmp_path):
     structure, mesh = _sample()
     path = str(tmp_path / "p.json")
     save_project(path, "P", structure, mesh, ProcessFlow(), None)
-    _, _, _, _, sweep = load_project(path)
+    _, _, _, _, sweep, _models = load_project(path)
     assert sweep is None
 
 

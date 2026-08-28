@@ -2,11 +2,14 @@
 # Bringing PyTCAD to Sentaurus-grade capability
 
 Status: PLAN (not yet approved for implementation)
-Owner: session handoff via history.md
-Conventions: same discipline as HETEROSTRUCTURE-PLAN.md / TUNNELING-PLAN.md
--- red tests first, published-value benchmarks before features, FD-
-Jacobian-first for any core-physics change, bit-identity when a model
-is off, optional deps stay optional, suite green + zero warnings.
+Owner: session handoff via `session history/history.md`
+Conventions: same discipline the M11 heterostructure and M12 tunneling
+work used (those design docs are archived; ARCHITECTURE.md sections
+4b/5-7 and `session history/history.md` are now the live status
+record) -- red tests first, published-value benchmarks before
+features, FD-Jacobian-first for any core-physics change, bit-identity
+when a model is off, optional deps stay optional, suite green + zero
+warnings.
 
 ------------------------------------------------------------------------
 0. HONEST FRAMING -- what "same level" can mean
@@ -110,11 +113,12 @@ Sizes: S ~1 session, M ~1-2, L ~2-4, XL ~4+ (with tests, honest).
 === TIER 1: SDevice local-physics parity ===========================
 
 M13  FERMI-DIRAC STATISTICS + INCOMPLETE IONIZATION          [L]
-  IN IMPLEMENTATION: phase 1 landed (fermi.py, G1-G3 gates green,
-  G6a pre-edit goldens, sign-off recorded); phase 2 = 1D core
-  integration, gates G4-G8.  Full spec with
-  quantitative acceptance gates in M13-FERMI-DIRAC-PLAN.md
-  (G1 F_{1/2} vs independent quadrature reference + published
+  COMPLETE: all gates G1-G8 green, wired through the full 1D/2D/3D
+  solver core (see ARCHITECTURE.md's per-milestone status table and
+  `session history/history.md` for the implementation record; the
+  original milestone spec this section summarizes is archived).
+  Acceptance gates were (G1 F_{1/2} vs independent quadrature reference
+  + published
   spot values; G2 Boltzmann limit; G3 Sommerfeld degenerate
   limit; G4 charge-neutrality consistency vs independent root
   finds; G5 FD-Jacobian gates incl. degenerate heterointerface;
@@ -166,6 +170,25 @@ M16  BAND-TO-BAND TUNNELING                                  [M]
   behavior (exponential slope gate); BTBT-off bit-identity;
   FD-Jacobian gate.
   Depends: M15 (shares generation-term plumbing).
+  LITERATURE NOTE (2026-08-27, informs design before implementation
+  starts -- not yet acted on): plain Hurkx/Kane local models are known
+  to UNDERESTIMATE leakage at large bias relative to non-local
+  (line-integral) BTBT, because they assume a single average/maximum
+  field along the whole tunneling path.  A "Modified Hurkx" local model
+  (patented, published ~2020, still the reference point in 2025-era
+  TCAD literature) corrects this while staying ~6x faster than
+  non-local BTBT in 3D FinFET GIDL simulations -- i.e., it targets
+  exactly the accuracy gap a plain local model would have.  If M16 is
+  implemented as scoped ("optional Hurkx local dynamic BTBT"), use the
+  modified form rather than the original Hurkx paper's, and gate the
+  known failure mode explicitly: verify GIDL onset does NOT plateau
+  below the non-local reference at high reverse bias, not just that it
+  matches at low bias where plain Hurkx already agrees.  This also
+  argues for following the M15 hard-debug lesson from the start: write
+  the residual-ordering and frozen-field-snapshot-ordering gates BEFORE
+  the physics gates (M15's own coupling was silently inert for an
+  entire prior session because those orderings were wrong, and nothing
+  caught it until an adversarial pass).
 
 M17  TRANSIENT SIMULATION                                    [L]
   Scope: time-dependent DD in 1D/2D (backward-Euler / theta
@@ -203,14 +226,29 @@ M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   Depends: M17 (transient machinery for the coupled solve).
 
 M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
-  Scope: as designed in TUNNELING-PLAN.md section 5 (DG term in
-  Poisson, flag default off, bit-identical when off). Plus an
+  NOT STARTED. Scope (from the archived M12 tunneling design doc): a
+  DG term in Poisson, flag default off, bit-identical when off. Plus an
   analysis-layer Schrodinger-Poisson solve for the inversion
   centroid as the published-value gate.
   Acceptance: DG-off bit-identity; inversion centroid depth vs
   Schrodinger-Poisson result and vs the literature ~1 nm figure
   (retires the C_max overestimate caveat in README section 6).
   Depends: nothing hard; after M13 so FD composes.
+  LITERATURE NOTE (2026-08-27, informs design before implementation
+  starts -- not yet acted on): the density-gradient model's numerical
+  foundation is settled (2008-2021-era literature, nothing materially
+  new found for 2025-2026); the one detail worth carrying into this
+  milestone's design is boundary conditions at OHMIC CONTACTS.
+  Published 3D DG-drift-diffusion work found that NEUMANN boundary
+  conditions on the quantum potential at ohmic contacts give more
+  stable and physically correct results than the more naively obvious
+  Dirichlet choice.  Given this codebase's contact-cell sensitivity
+  already bit it once this session (M15's frozen-field snapshot picked
+  up a spurious MV/cm artifact from stamping a Dirichlet contact value
+  next to an un-relaxed neighbor -- see M15-IONIZATION-PLAN.md's debug-
+  pass record), the DG boundary condition at contacts should be
+  decided deliberately and gated explicitly, not defaulted to whatever
+  is easiest to code.
 
 TIER 1 EXIT CRITERIA: a user can, from the GUI or a deck, solve a
 Si MOSFET/diode/MOS-C with FD statistics + CVT mobility + II + BTBT
@@ -222,10 +260,23 @@ parity" for silicon 1D/2D.
 === TIER 2: process-lite + general geometry =======================
 
 M21  GENERAL 2D MESHING + FV ASSEMBLY                        [XL]
-  Scope: optional-dependency meshers (triangle / gmsh); box-
-  integration on general 2D meshes (Delaunay FV); solution-driven
-  adaptive refinement (Debye length, II rate, field); the
-  tensor-product assembly becomes a special case.
+  Scope: PHASE 1 (1D adaptive h-refinement) SHIPPED 2026-08-27, see
+  pytcad/adapt.py and M21-MESHING-PLAN.md.  PHASE 3's mesher choice is
+  DECIDED (2026-08-27, see ARCHITECTURE.md sec 4b and
+  M21-MESHING-PLAN.md sec 12): gmsh, not raw OpenCASCADE or FreeCAD --
+  it is the one open project bundling an OCC-based CAD kernel, boolean
+  ops, unstructured 2D/3D meshing, and Physical-Group region tagging in
+  one Python-importable package, and DEVSIM (already a backend here)
+  documents consuming its meshes directly.  Validated, not merely
+  decided: examples/debug_geometry_gmsh_conformality.py builds the same
+  p-n diode geometry as the pytcad Device2D goldens via gmsh's OCC
+  fragment() and confirms the mesh is CONFORMAL across the material
+  interface (shared node tags, each exactly at the junction x, not
+  merely close) -- the property box-integration FVM assembly requires
+  at every interior interface.  Scope: box-integration on the gmsh
+  mesh (Delaunay FV); solution-driven adaptive refinement (Debye
+  length, II rate, field) reusing M21-phase-1's indicators where they
+  generalize; the tensor-product assembly becomes a special case.
   Acceptance: GOLDEN -- unstructured mesh of a diode reduces to the
   tensor-product solution within discretization error (the M5
   3D-reduces-to-2D pattern); refinement converges monotonically;
@@ -360,10 +411,15 @@ M15 needs M22's continuation only for robustness, not correctness.
 2. Every new model lands in tests/test_model_benchmarks.py FIRST with
    published constants; the benchmark error is quoted in the commit.
 4b. GATE BLOCKING: a milestone whose spec defines quantitative
-   acceptance gates (currently M13, see M13-FERMI-DIRAC-PLAN.md
-   section 4) blocks all milestones it declares blocked until every
-   gate is green under the full-suite invariant.  "Mostly green" is
-   not green; a skipped or weakened gate is a hidden failure.
+   acceptance gates blocks all milestones it declares blocked until
+   every gate is green under the full-suite invariant.  "Mostly green"
+   is not green; a skipped or weakened gate is a hidden failure -- this
+   is not theoretical: M15 was once declared complete with "all gates
+   green" while two of its own gates were unreachable and its
+   generation term contributed nothing (see M15-IONIZATION-PLAN.md's
+   debug-pass record). M13 was the gate-bearing milestone that used to
+   block M15+ under this rule; it is now COMPLETE (all G1-G8 green),
+   so M15+ is unblocked.
 3. New meshes/linear solvers ship with golden parity tests against
    existing validated paths (tensor-product, spsolve) before anything
    uses them.
@@ -379,12 +435,23 @@ M15 needs M22's continuation only for robustness, not correctness.
 5. IMMEDIATE NEXT ACTIONS (on approval)
 ------------------------------------------------------------------------
 1. [DONE 29b9764] M12-S2 (TAT) -- all acceptance gates green.
-2. [DONE 58ca76c, 5c8a3ed] M13 PHASE 1 -- fermi.py + G1-G3 gates
-   green + G6a pre-edit goldens committed; amendment sign-off
-   recorded in M13-FERMI-DIRAC-PLAN.md.
-3. ACTIVE -- M13 PHASE 2: 1D core integration (density path,
-   generalized-SG design spike, incomplete ionization), gates G4-G8.
-   M15+ stay blocked until every gate is green (standing rule 4b).
-4. THEN: M11-S4 (2D heterojunctions, design exists) and M11-S5
-   (HBT/HEMT templates) -- independent of M13, may proceed in
-   parallel; then M15 (impact ionization coupling) unblocks.
+2. [DONE] M13 (Fermi-Dirac + incomplete ionization) -- ALL gates G1-G8
+   green, wired through the full solver core. M15+ unblocked (rule 4b).
+3. [DONE] M11-S4 (2D heterojunctions) and M11-S5 (HBT/HEMT templates).
+4. [DONE 2026-08-28] M15 (impact ionization) -- all gates green
+   (G-A through G-F); closed via M22 phase 2's strength-ladder-aware
+   continuation driver plus an explicit, evidence-backed scope decision
+   (G-C tolerance, G-D test doping -- see M15-IONIZATION-PLAN.md).
+5. [DONE, PARTIALLY OPEN] M14 (surface mobility) -- mobility_cvt wired
+   for Device2D.surface_mobility (G-D/G-E green); G-A xfail (B_n/B_p
+   phonon constants unverified against a primary source); G-B/G-C/
+   driving_force/catalog not started.
+6. [DONE, PARTIALLY OPEN] M21 (meshing) phase 1 shipped (1D adaptive
+   h-refinement); phase 3's mesher decided and its conformality claim
+   validated (gmsh); phases 2-3 not started.
+7. [DONE] M22 (linear solver) phase 1 shipped (Krylov+ILU+
+   node-block-Jacobi; 3D-scaling gate closed); phase 2 (continuation
+   driver) LANDED 2026-08-28, closing M15's remaining gates.
+See ARCHITECTURE.md's per-milestone status table and
+`session history/history.md` for the live, session-by-session record
+this section is a snapshot of.

@@ -4,6 +4,7 @@ Everything dimension-specific has already been normalized away by
 solver_runner.extract_result(), so nothing here branches on 1D/2D/3D --
 it just renders whatever fields and units the ResultStore reports.
 """
+import math
 import re
 import tempfile
 
@@ -47,6 +48,23 @@ class _ProcessFlowJob:
         import json
         with open(path, "w") as fh:
             json.dump(self._flow.to_dict(), fh)
+
+
+def _has_non_finite_leaf(value):
+    """True if `value` (or anything nested inside a dict it contains) is a
+    non-finite number -- e.g. QML's parseFloat("") / parseFloat("abc")
+    landing as NaN. GUI smoke-test finding: unlike SweepSpec.validate_values()
+    and ImplantEditor's window fields (both of which already guard against
+    exactly this), every plain numeric field wired through
+    setProcessStepParameters()/setContactVoltage()/setGateVoltage()/
+    setGateToxCm()/leftContactV/rightContactV accepted NaN silently and let
+    it reach the solver. This is the single choke point shared by all of
+    them."""
+    if isinstance(value, dict):
+        return any(_has_non_finite_leaf(v) for v in value.values())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return not math.isfinite(value)
+    return False
 
 
 class AppController(QObject):
@@ -386,7 +404,12 @@ class AppController(QObject):
 
     @leftContactV.setter
     def leftContactV(self, value):
-        self._left_contact_v = float(value)
+        value = float(value)
+        if not math.isfinite(value):
+            self.errorRaised.emit("Invalid contact voltage",
+                                  "Voltage must be a finite number.")
+            return
+        self._left_contact_v = value
 
     @Property(float, notify=processResultChanged)
     def rightContactV(self):
@@ -394,7 +417,12 @@ class AppController(QObject):
 
     @rightContactV.setter
     def rightContactV(self, value):
-        self._right_contact_v = float(value)
+        value = float(value)
+        if not math.isfinite(value):
+            self.errorRaised.emit("Invalid contact voltage",
+                                  "Voltage must be a finite number.")
+            return
+        self._right_contact_v = value
 
     @Property(bool, notify=undoStateChanged)
     def canUndo(self):
@@ -549,6 +577,10 @@ class AppController(QObject):
         region = self.structure.find_region(region_id)
         if region is None:
             return
+        if not math.isfinite(net_doping_cm3):
+            self.errorRaised.emit("Invalid doping value",
+                                  "Doping must be a finite number.")
+            return
         old = region.net_doping_cm3
         self._push(lambda: setattr(region, "net_doping_cm3", net_doping_cm3),
                   lambda: setattr(region, "net_doping_cm3", old),
@@ -602,6 +634,10 @@ class AppController(QObject):
         contact = self.structure.find_contact(contact_id)
         if contact is None:
             return
+        if not math.isfinite(V):
+            self.errorRaised.emit("Invalid contact voltage",
+                                  "Voltage must be a finite number.")
+            return
         old = contact.V
         self._push(lambda: setattr(contact, "V", V),
                   lambda: setattr(contact, "V", old), "set contact voltage")
@@ -611,6 +647,10 @@ class AppController(QObject):
         gate = self.structure.find_gate(gate_id)
         if gate is None:
             return
+        if not math.isfinite(V):
+            self.errorRaised.emit("Invalid gate voltage",
+                                  "Voltage must be a finite number.")
+            return
         old = gate.V
         self._push(lambda: setattr(gate, "V", V),
                   lambda: setattr(gate, "V", old), "set gate voltage")
@@ -619,6 +659,10 @@ class AppController(QObject):
     def setGateToxCm(self, gate_id, tox_cm):
         gate = self.structure.find_gate(gate_id)
         if gate is None:
+            return
+        if not math.isfinite(tox_cm):
+            self.errorRaised.emit("Invalid gate oxide thickness",
+                                  "Thickness must be a finite number.")
             return
         old = gate.tox_cm
         self._push(lambda: setattr(gate, "tox_cm", tox_cm),
@@ -637,6 +681,10 @@ class AppController(QObject):
     def setGateVfbMode(self, gate_id, mode, manual_value):
         gate = self.structure.find_gate(gate_id)
         if gate is None:
+            return
+        if mode == "manual" and not math.isfinite(manual_value):
+            self.errorRaised.emit("Invalid Vfb value",
+                                  "Manual flatband voltage must be a finite number.")
             return
         old = (gate.vfb_mode, gate.vfb_manual)
         new = (mode, manual_value if mode == "manual" else None)
@@ -758,6 +806,12 @@ class AppController(QObject):
     def setProcessStepParameters(self, step_id, parameters):
         step = self.process_flow.find_step(step_id)
         if step is None:
+            return
+        if _has_non_finite_leaf(parameters):
+            self.errorRaised.emit(
+                "Invalid step parameter",
+                "A parameter value is not a finite number (empty or "
+                "non-numeric text field?). The edit was discarded.")
             return
         old = dict(step.parameters)
         new = dict(parameters)
@@ -988,7 +1042,8 @@ class AppController(QObject):
                 "sweep configuration; reopening it will NOT restore this "
                 "device.")
         save_project(path, name, self.structure, self.mesh_model,
-                     self.process_flow, self._sweep_config)
+                     self.process_flow, self._sweep_config,
+                     self.lab.model_config)
         self._undo_stack.mark_clean()
         self.undoStateChanged.emit()
         self.consoleModel.append(f"Saved project to {path}.")
@@ -997,7 +1052,8 @@ class AppController(QObject):
     def loadProject(self, path):
         path = self._to_local_path(path)
         try:
-            name, structure, mesh_model, process_flow, sweep = load_project(path)
+            name, structure, mesh_model, process_flow, sweep, model_config = \
+                load_project(path)
         except Exception as exc:
             self.errorRaised.emit("Could not load project", str(exc))
             return
@@ -1021,6 +1077,14 @@ class AppController(QObject):
         else:
             self._sweep_config = sweep
         self.sweepChanged.emit()
+        # v5: restore the Physics Lab config the project was saved with.
+        # None means either a pre-v5 file (no "models" key at all) or a
+        # v5 file explicitly saved with no config -- either way, leave
+        # whatever the Physics Lab already has untouched, exactly the
+        # (only possible) pre-v5 behavior, so old projects keep loading
+        # byte-identically.
+        if model_config is not None:
+            self.lab.setModelConfig(model_config)
         # A project file never contains results: whatever was solved in
         # this session belongs to the PREVIOUS project and must not stay
         # on show as if it belonged to the one just loaded.

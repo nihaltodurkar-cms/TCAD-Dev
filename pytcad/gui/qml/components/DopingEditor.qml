@@ -69,6 +69,7 @@ ColumnLayout {
                color: Theme.textDim; Layout.preferredWidth: 90 }
         TextField {
             id: dopingField
+            objectName: "regionDopingField"
             Layout.fillWidth: true
             text: regionData ? regionData.doping.toExponential(3) : ""
             onEditingFinished: if (regionId) controller.setRegionDoping(regionId, parseFloat(text))
