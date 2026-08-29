@@ -61,6 +61,47 @@ def test_set_region_doping_marks_dirty_and_reraster_validates(qapp):
     assert app.isDirty is True
 
 
+def test_set_region_doping_profile_updates_shape_params_and_is_undoable(qapp):
+    app = AppController()
+    app.loadStructureExample("mosfet_2d_structure")
+    region_id = app.structure.regions[0].id
+    app.setRegionDopingProfile(region_id, "gaussian_erfc", 1e19, 5e-6,
+                               3e-6, 1e-5, "left")
+    region = app.structure.find_region(region_id)
+    assert region.doping_profile == "gaussian_erfc"
+    assert region.profile_peak_cm3 == 1e19
+    assert region.profile_sigma_y == 5e-6
+    assert region.profile_sigma_lat == 3e-6
+    assert region.profile_edge_x == 1e-5
+    assert region.profile_high_side == "left"
+    assert app.isDirty is True
+    app.undo()
+    assert app.structure.find_region(region_id).doping_profile == "uniform"
+
+
+def test_set_region_doping_profile_rejects_bad_kind_and_bad_shape(qapp):
+    app = AppController()
+    app.loadStructureExample("mosfet_2d_structure")
+    region_id = app.structure.regions[0].id
+    errors = []
+    app.errorRaised.connect(lambda title, detail: errors.append(title))
+
+    app.setRegionDopingProfile(region_id, "not_a_profile", 0, 0, 0, 0, "left")
+    assert errors, "unknown profile kind must raise an actionable error"
+    assert app.structure.find_region(region_id).doping_profile == "uniform"
+
+    errors.clear()
+    app.setRegionDopingProfile(region_id, "gaussian_erfc", 1e19, -1.0,
+                               3e-6, 1e-5, "left")
+    assert errors, "non-positive sigma_y must be rejected"
+    assert app.structure.find_region(region_id).doping_profile == "uniform"
+
+    errors.clear()
+    app.setRegionDopingProfile(region_id, "gaussian_erfc", 1e19, 5e-6,
+                               3e-6, 1e-5, "sideways")
+    assert errors, "invalid high_side must be rejected"
+
+
 def test_invalid_edit_surfaces_as_a_validation_error(qapp):
     app = AppController()
     app.loadStructureExample("mosfet_2d_structure")

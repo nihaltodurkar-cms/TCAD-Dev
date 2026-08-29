@@ -1038,3 +1038,150 @@ handful of distinct values (like a doping array with just -na/nd) get
 reshaped this way, the corruption is invisible under `print()` or
 `np.unique()` -- it only shows up as spatial nonsense, and only if you
 go looking for it node-by-node against the intended geometry.
+
+## STATE ADDENDUM 18 -- M20 DENSITY-GRADIENT LANDED, UNVERIFIED BY
+## EXECUTION (2026-08-29, user-directed: "Complete M20"):
+
+Implemented per M20-DENSITY-GRADIENT-PLAN.md (Ancona-Stafford DG,
+equilibrium-only, default-off bit-identical):
+- NEW pytcad/pytcad/dg.py: quantum_potential (3-point non-uniform
+  stencil, Lambda=0 boundary nodes = the Neumann choice the
+  ARCHITECTURE M20 literature note recommended, +-20*VT clamp),
+  airy_triangular_well (closed-form Airy reference), schrodinger_
+  poisson + schrodinger_poisson_mos (eigsh FD Hamiltonian + 2D-DOS
+  Boltzmann subband occupations; the published-value reference solver).
+- moscap.py: MOSCapacitor(dg, dg_gamma); solve_psi lagged-Lambda
+  Newton + outer fixed point (frozen-quantum-potential, M12-TAT
+  precedent); inversion_centroid(Vg); dg+fd refused.
+- device.py: Models.dg/dg_gamma; solve_equilibrium DG branch (same
+  lagged architecture, warm-restarted outer loop; dg+fd AND
+  dg+incomplete_ion refused -- the ionization chain is built on
+  classical densities and the DG dnp overwrite would silently discard
+  it); solve_bias raises on dg (equilibrium-only); returned densities
+  are DG-corrected.  device2d/3d: dg guards after the btbt guards.
+- workbench/core/catalog.py "dg" entry + gui/services/device_spec.py
+  wire default; three key-set pin tests updated: test_workbench_m1.py
+  (key set), gui/tests/test_physics_lab.py (rows + disabled set).
+  test_smoke_e2e.py's model-toggle parametrize deliberately does NOT
+  gain "dg": that test drives a 0.3 V forward-bias solve and dg is
+  equilibrium-only (same precedent as surface_mobility's absence);
+  gate-4's wire-path is pinned in test_m20_dg.py's G-F instead.
+- tests/test_m20_dg.py: gates G-A..G-F per the plan.  DG physics gates
+  run on a 2 nm oxide (PARAMS tox=2e-7): at the classical suite's
+  5 nm oxide the centroid term x_c/eps_s is only ~2% of 1/Cox and the
+  C_max drop is ungateable.
+- GATE-WRITING CROSS-CHECK caught THREE real defects in dg.py (all
+  fixed, all would have failed the gates at runtime):
+  1. double-kT bug: dos = m*kT/(pi*hbar^2) is ALREADY in m^-2; the
+     occupation multiplied by kT again -> sheet densities ~1e-7 cm^-2
+     and the N_total bisection bracket could never reach its target.
+  2. E_band sign inverted in schrodinger_poisson_mos: +(psi-psi_b)*VT
+     instead of -(psi-psi_b)*VT put the inversion well in the BULK.
+     Correct law: E_c - E_F = Eg/2 - (psi-psi_b)*VT.
+  3. far-boundary Hamiltonian diagonal never assigned
+     (`main[-1] = main[-1]` no-op on np.empty garbage) ->
+     nondeterministic eigsh.  Now an explicit Dirichlet far wall
+     (states decay long before the bulk end).
+- README section 6 caveat retired (DG available, equilibrium-only,
+  gamma=1 uncalibrated); ARCHITECTURE M20 status updated.
+- STATUS: LANDED-PENDING-VERIFICATION, same standing as M16/M22-Schur.
+  Bash remained classifier-blocked all session, so NOTHING is
+  syntax-checked or executed: the next session MUST run, in order,
+  `python -m py_compile` over the touched files (cheap), then
+  tests/test_m20_dg.py, the M16 gates, tests/test_m22_linsolve.py, and
+  the full suite (which pins the G-A bit-identity and the pin-test
+  corrections) before treating M16/M20/M22 as complete.  If a DG
+  physics gate fails (G-C factor-2 or G-D's 3-25% C_max band are the
+  loosest physics bounds), fix the physics deliberately and record it
+  -- never widen a gate silently.
+
+## STATE ADDENDUM 17 -- M22 SCHUR PRECONDITIONER LANDED, UNVERIFIED BY
+## EXECUTION (2026-08-29, user-directed: "implement M22 and complete it,
+## dont run tests, just cross check again"):
+
+User asked to complete M22.  Phases 1-2 were already complete; the
+remaining in-plan item was section 7's flagged "NOT YET DONE" Schur-
+complement variant (phase 3, MPI distribution, is explicitly deferred
+to its own scoping session per the plan and was NOT started).
+IMPLEMENTED, additive, default-unchanged:
+- pytcad/linsolve.py: `_build_schur_preconditioner` + `solve_linear(
+  precond=...)`.  Permutes the interleaved (psi,n,p) unknowns to
+  equation-major order, builds the block-lower-triangular model
+  M = [[A_pp,0,0],[A_np,D_nn,0],[A_qp,0,D_qq]]: Poisson block A_pp via
+  spilu on the permuted Poisson block alone, density diagonals exact;
+  (n,p) cross-couplings dropped (outer Krylov absorbs them).  precond
+  defaults "auto" == exact prior node-block-Jacobi behavior; "schur" is
+  opt-in per call; invalid precond raises ValueError; structural
+  failure returns None and falls through the chain.  NOT wired into
+  NewtonOptions/cores (amendment-rule territory for an unmeasured
+  performance option; a future session can add the wiring once
+  iteration counts are actually compared).
+- tests/test_m22_linsolve.py: 5 new gates (exact-apply vs dense M
+  assembly with diagonal A_pp so ILU is exact; parity vs direct on a
+  real Device1D Jacobian; convergence on the 27783-unknown coupled 3D
+  Jacobian within 150 iterations; default-unchanged operator identity;
+  structural refusal at block_size != 3).
+- Cross-check pass (read-only, no execution -- Bash classifier was
+  intermittently blocked, so even py_compile could not run) caught and
+  fixed THREE defects in the initial edit: (1) the first Edit
+  accidentally consumed the `def _build_preconditioner(...)` line,
+  orphaning its docstring -- restored with the new signature; (2) the
+  exact-apply gate's back-permutation was INVERTED (scatter `y_ref[perm]
+  = y_major` instead of gather `y_ref = y_major[perm]`) -- the gate
+  would have failed against a CORRECT implementation, the worst kind of
+  red; (3) sparse sub-block extraction used np.ix_ (2-D index arrays,
+  unsupported by scipy sparse __getitem__) -- fixed to row-slice-then-
+  column-slice; density diagonals now read via Ap.diagonal() rather
+  than fragile paired fancy indexing.  Also removed the off-diagonal
+  psi-psi coupling from the exactness gate's synthetic matrix (spilu
+  would not be exact on it, breaking the closed-form claim in the
+  gate's own docstring).
+- STATUS: LANDED-PENDING-VERIFICATION, same standing M16 had at
+  Addendum 16.  The next session MUST run
+  `pytest tests/test_m22_linsolve.py tests/test_m22_continuation.py`
+  and the full suite (plus the still-pending M16 gates from Addendum
+  16) before treating this as complete.  M22-LINSOLVE-PLAN.md section 7
+  updated with the full record.
+
+## STATE ADDENDUM 16 -- M16 BAND-TO-BAND TUNNELING (LOCAL KANE) LANDED
+(2026-08-29, UNCOMMITTED, SUITE RUN PENDING -- the session's shell
+access was intermittently classifier-blocked, so the gate battery was
+written and the implementation landed but NOT yet executed.  The next
+session MUST run tests/test_m16_btbt.py + the two new
+test_model_benchmarks.py pins + the full suite before treating M16 as
+complete; ARCHITECTURE.md's M16 status line says "suite confirmation
+pending" for exactly this reason.)
+
+What landed (follows M15 R1b exactly -- see pytcad/M16-BTBT-PLAN.md):
+- pytcad/btbt.py: pure module, Kane F^2 form G=A F^2 exp(-B/F),
+  Si constants A=3.5e21 cm^-3 s^-1, B=1.03e8 V/cm (Hurkx, Klaassen &
+  Knuvers, IEEE TED 39, 331 (1992) Table I; pinned exactly in
+  test_model_benchmarks.py).  PROVENANCE CAVEAT: the web literature
+  search could NOT be run this session (classifier outages), so the
+  A/B pin is from model knowledge, not a fetched primary source.  If
+  the pin fails review, fix the constants deliberately -- never
+  silently.
+- Models(btbt=False) default OFF (bit-identity gate G-A).
+- device.py: live-coupled generation block in _residual_jacobian,
+  placed AFTER both continuity `=` assignments, BEFORE Dirichlet
+  stamping (the M15 D1 invariant), interior nodes only.  dG/dpsi
+  chain-ruled through the node field only (BTBT has no carrier-density
+  dependence -- simpler than II).  Shares _II_STAGES strength ladder
+  and backtracking (stiff_gen = impact or btbt).
+  _btbt_gs_cache mirrors _ii_gs_cache (stale-source protection gated).
+- Device2D/Device3D raise NotImplementedError on btbt=True.
+- Catalog "btbt" entry + wire default; the three key-set pin tests
+  (test_workbench_m1, test_physics_lab, test_smoke_e2e parametrize)
+  updated per the M14/M15 precedent (corrected, not weakened).
+
+ORDERING GATES WRITTEN FIRST (the explicit ARCHITECTURE.md M16
+lesson): residual-ordering invariant (BTBT-on minus off is zero in
+Poisson rows and contact rows, antisymmetric electron/hole, non-zero
+somewhere), live-state invariant (source tracks the residual's psi
+argument), stale-source regression, ladder-completeness spy.  Then the
+physics gates: FD-Jacobian (no kink windows -- Kane is smooth),
+junction-peaked profile read from the solver's own cache, current
+enhancement, Kane-slope onset regression, and the M16
+LITERATURE-NOTE gate: high-bias non-plateau (strictly monotone J(V),
+late-ramp log-slope within 25x of onset) -- the known local-model
+failure mode is gated explicitly, not hidden.

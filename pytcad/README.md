@@ -19,14 +19,23 @@ pytcad/ (this package)
   process.py     implantation, diffusion, Deal-Grove oxidation
   device.py      drift-diffusion: Poisson + both continuity equations;
                  per-node heterojunction materials (M11); Hurkx trap-
-                 assisted tunneling (M12)
-  moscap.py      MOS capacitor, quasi-static C-V
+                 assisted tunneling (M12); impact ionization (M15);
+                 local Kane/Hurkx BTBT (M16); density-gradient quantum
+                 correction in equilibrium (M20)
+  btbt.py        BTBT coefficients A, B (Hurkx Table I silicon), pure module
+  moscap.py      MOS capacitor, quasi-static C-V, interface traps (M14);
+                 density-gradient quantum correction (M20)
+  dg.py          M20 analysis layer: DG quantum potential, Airy triangular-
+                 well reference, Schrödinger-Poisson inversion-layer solver
+  linsolve.py    direct/GMRES/BiCGStAB + ILU, node-block-Jacobi and Schur
+                 preconditioners (M22)
   fermi.py       complete Fermi-Dirac integrals F_{1/2}/F_{-1/2},
                  inverse, FD ni, tabulated fast path (M13, COMPLETE:
                  wired through device.py/device2d.py/device3d.py/
                  moscap.py)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
-  device2d.py    2D drift-diffusion: box-integration Poisson + continuity
+  device2d.py    2D drift-diffusion: box-integration Poisson + continuity;
+                 Lombardi CVT surface mobility (M14)
   mosfet.py      2D MOSFET builder + Id-Vg sweep
   mesh3d.py      tensor-product 3D mesh + Debye-length adequacy check
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
@@ -70,9 +79,9 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 |---|---|
 | Boltzmann statistics (default; `Models(fd=True)` available) | doping ≳ 10¹⁹ cm⁻³ (degeneracy) — the code warns you unless FD is enabled |
 | Full dopant ionisation | cryogenic temperature; deep dopants |
-| Classical (no quantisation) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
+| Classical (no quantisation; `MOSCapacitor(dg=True)` / `Models(dg=True)` available, equilibrium) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
-| No impact ionisation / tunnelling | avalanche breakdown, band-to-band tunnelling (GIDL), direct gate leakage below ~2 nm oxide |
+| Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
 | Isothermal, steady state | self-heating, transient / AC analysis |
 
 ---
@@ -109,6 +118,10 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | Bandgap narrowing | Slotboom: $\Delta E_g = E_0[\ln(N/N_0)+\sqrt{\ln^2(N/N_0)+\tfrac12}]$ | **empirical fit** to BJT data |
 | Deal–Grove | $x^2 + Ax = B(t+\tau)$ | theory; $A,B$ Arrhenius **fits** |
 | Fermi-Dirac statistics | $n = N_c F_{1/2}(\eta)$ with nu-factor generalized SG (`Models(fd=True)`); incomplete ionization (`Models(incomplete_ion=True)`) | theory; gated vs independent roots and published freeze-out curves |
+| Impact ionization | $G = [\alpha_n(E)\lvert J_n\rvert + \alpha_p(E)\lvert J_p\rvert]/q$, van Overstraeten–de Man (`Models(impact=True)`, 1D) | measured coefficients; lagged-source coupling |
+| Band-to-band tunneling | $G = AF^2e^{-B/F}$ local Kane/Hurkx (`Models(btbt=True)`, 1D) | Hurkx Table I Si coefficients |
+| Surface mobility | Lombardi CVT $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D) | Lombardi 1988; simplified phonon term |
+| Density gradient | $\Lambda = -\frac{\gamma\hbar^2}{2m^\ast q}\frac{(\sqrt n)''}{\sqrt n}$, $n \to n\,e^{-\Lambda/V_T}$ (`Models(dg=True)` / `MOSCapacitor(dg=True)`, equilibrium) | Ancona–Stafford 1999; gated vs own S–P solve + Airy analytics |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.
 
@@ -204,7 +217,7 @@ AGENTS.md's Commands section for why.
 - **Implant tables are approximate** LSS moments for *amorphous* Si, good to ~5–10%. They contain **no channelling**, which in crystalline Si can put a tail 1–2 decades deeper. Pass `Rp`/`dRp` from SRIM for anything real.
 - **Diffusion is intrinsic and constant-$D$.** No extrinsic (charged-defect) enhancement above $n_i(T)$, no transient enhanced diffusion from implant damage, no oxidation-enhanced diffusion, no dopant–defect pair kinetics. These dominate real junction formation below ~1000 °C.
 - **Deal–Grove under-predicts thin dry oxides.** The $x_i \approx 25$ nm initial thickness is a fudge factor, not physics.
-- **No quantum corrections, no poly depletion, no $D_{it}$** in the MOS module.
+- **Quantum corrections: density-gradient only, equilibrium-only.** `MOSCapacitor(dg=True)` and `Device1D(Models(dg=True))` add the Ancona–Stafford density-gradient correction (inversion centroid off the interface, $C_{max}$ lowered), gated against the code's own Schrödinger–Poisson solve (`pytcad/dg.py`) and the literature ~1 nm centroid. DG transport in `solve_bias`, 2D/3D, and dg+FD/dg+incomplete-ion compositions are refused (M20 scope). $\gamma=1$ is the uncalibrated Bohm value. No poly depletion beyond the $D_{it}$ (M14) and DG (M20) terms in the MOS module.
 - **Quasi-static C-V only.** A 1 MHz measurement gives the high-frequency curve, where $C$ stays near $C_{min}$ in inversion because minority carriers cannot follow.
 
 ### 2D MOSFET (new)

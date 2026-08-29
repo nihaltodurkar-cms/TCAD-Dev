@@ -19,3 +19,12 @@ M0 = 9.1093837015e-31      # free electron mass [kg]
 def thermal_voltage(T: float) -> float:
     """V_T = kT/q [V].  25.852 mV at T = 300 K."""
     return KB * T / Q
+
+
+# np.trapz was renamed np.trapezoid in NumPy 2.0 and removed outright in
+# later 2.x releases; requirements.txt pins numpy>=1.24 with no upper
+# bound, so either name may be the only one available.  Single place to
+# resolve it so every caller (dg.py, moscap.py, ...) stays compatible
+# with both sides of the rename.
+import numpy as _np
+trapz = getattr(_np, "trapezoid", None) or _np.trapz

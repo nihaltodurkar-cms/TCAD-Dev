@@ -3,8 +3,9 @@
 Read this before doing anything. Then read `history.md`
 (current state + open items), `ARCHITECTURE.md` (roadmap + live queue,
 including the governing future plan in section 4b, M13-M30), and
-the active milestone spec (currently `pytcad/M15-IONIZATION-PLAN.md`,
-`pytcad/M21-MESHING-PLAN.md`, and `pytcad/M22-LINSOLVE-PLAN.md` -- see
+the active milestone spec (currently `pytcad/M16-BTBT-PLAN.md`,
+`pytcad/M20-DENSITY-GRADIENT-PLAN.md`, and
+`pytcad/M22-LINSOLVE-PLAN.md` -- see
 "Milestone state & plans" below for what's actually open).
 
 ## What this is
@@ -37,8 +38,9 @@ tests/             core validation (incl. test_model_benchmarks.py --
                    new physics MUST land here first)
 gui/tests/         GUI-level tests (headless QML pattern)
 ARCHITECTURE.md sec 4b   governing roadmap M13-M30
-pytcad/M14-SURFACE-MOBILITY-PLAN.md / M15-IONIZATION-PLAN.md /
-  M21-MESHING-PLAN.md / M22-LINSOLVE-PLAN.md   active milestone plans
+pytcad/M14-SURFACE-MOBILITY-PLAN.md / M16-BTBT-PLAN.md /
+  M20-DENSITY-GRADIENT-PLAN.md / M21-MESHING-PLAN.md /
+  M22-LINSOLVE-PLAN.md   active milestone plans
 history.md   session-by-session state + handoff notes
 ```
 
@@ -210,8 +212,27 @@ ACTIVE / OPEN:
     in solve_linear(method="direct") reformatting the matrix before
     calling spsolve (see the scipy spsolve gotcha above); 3D-scaling
     gate green; phase 2 (continuation driver, strength-ladder-aware
-    corrector) LANDED 2026-08-28 and is what let M15 R1b close. See
+    corrector) LANDED 2026-08-28 and is what let M15 R1b close; the
+    section-7 Schur-complement preconditioner (solve_linear(precond=
+    "schur")) LANDED-PENDING-VERIFICATION 2026-08-29 (additive, default
+    unchanged, NOT wired into NewtonOptions yet).  See
     pytcad/M22-LINSOLVE-PLAN.md.
+  M16 BTBT -- local Kane/Hurkx generation, live Jacobian coupling,
+    LANDED-PENDING-VERIFICATION 2026-08-29: code + gates written, NEVER
+    EXECUTED (history.md Addendum 16).  The next session MUST run
+    tests/test_m16_btbt.py before treating it as complete.
+  M20 density gradient -- Ancona-Stafford DG quantum correction
+    (equilibrium-only, MOSCapacitor dg flag + Device1D Models.dg,
+    lagged-Lambda outer fixed point), plus the pytcad/dg.py analysis
+    layer (quantum_potential, Airy reference, Schroedinger-Poisson
+    solver).  LANDED-PENDING-VERIFICATION 2026-08-29: code + gates
+    (tests/test_m20_dg.py, G-A..G-F) written, NEVER EXECUTED; three
+    real defects self-caught during the gate-writing cross-check
+    (double-kT occupation bug, inverted E_band sign, np.empty garbage
+    far-boundary diagonal -- history.md Addendum 18).  Catalog "dg"
+    + wire default landed; three key-set pin tests updated
+    (test_smoke_e2e's toggle parametrize deliberately does NOT include
+    dg -- equilibrium-only, same precedent as surface_mobility).
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

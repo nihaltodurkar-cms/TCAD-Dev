@@ -285,6 +285,36 @@ NOT YET DONE, flagged for a future session: a Schur-complement variant
 block-Jacobi and may reduce iteration counts further at larger scale;
 not attempted here since block-Jacobi alone already met the G6 target.
 
+--> LANDED 2026-08-29 (session noted "implement M22 and complete it"):
+pytcad/linsolve.py gained `_build_schur_preconditioner` +
+`solve_linear(precond="schur")`.  Design: permute the interleaved
+(psi,n,p) unknowns to equation-major order, factor the block-LOWER-
+TRIANGULAR approximation M = [[A_pp,0,0],[A_np,D_nn,0],[A_qp,0,D_qq]]
+-- A_pp (Poisson, the stiffest equation) applied via spilu on the
+permuted Poisson block alone (far better conditioned than the coupled
+matrix), D_nn/D_qq the per-node density diagonals; the (n,p) cross-
+couplings are dropped (the outer Krylov absorbs them), which is the
+standard price of an approximate block factorization.  `precond`
+defaults to "auto" = the exact M22 phase-1 node block-Jacobi behavior,
+unchanged -- every existing call site and the G6 gate are untouched;
+"schur" is strictly opt-in per call.  Invalid `precond` raises
+ValueError (a typo must not silently fall through to ILU).  Gates
+appended to tests/test_m22_linsolve.py: exact-apply check against a
+dense assembly of M itself (diagonal A_pp so the ILU is exact and the
+comparison closed-form), parity vs direct on a real Device1D Jacobian,
+convergence on the 27783-unknown coupled 3D Jacobian (budget 150
+iterations vs block-Jacobi's 100), default-is-unchanged operator
+identity (auto == block_jacobi, and both differ from schur), and
+structural refusal (block_size != 3 returns None, caller falls through
+the chain).  NOT wired into NewtonOptions/the device cores: that would
+be a core-touching change under the amendment rule for a performance
+option whose benefit over block-Jacobi is not yet measured on this
+codebase -- a future session can add `NewtonOptions.linsolve_precond`
+once the iteration-count comparison is actually run.  SUITE NOT RUN
+THIS SESSION (user explicitly deferred test execution); the gates are
+written but UNVERIFIED -- treat M22-Schur as landed-pending-verification,
+same standing M16 had in Addendum 16.
+
 ------------------------------------------------------------------------
 8. G2 BUG: "direct" WAS NOT ACTUALLY BIT-IDENTICAL (2026-08-27)
 ------------------------------------------------------------------------

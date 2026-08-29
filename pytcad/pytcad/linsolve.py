@@ -30,6 +30,9 @@ __all__ = ["solve_linear", "LinearSolveError"]
 
 _METHODS = ("direct", "gmres", "bicgstab")
 
+# Preconditioner flavor selector values (solve_linear `precond=`).
+_PRECOND = ("auto", "block_jacobi", "schur")
+
 
 class LinearSolveError(RuntimeError):
     """Raised on singular/non-finite input or iterative non-convergence.
@@ -107,23 +110,120 @@ def _build_block_jacobi_preconditioner(A, block_size):
     return LinearOperator(A.shape, apply)
 
 
-def _build_preconditioner(A, block_size=None):
-    """Node-block-Jacobi first (when `block_size` is given and the
-    blocks are well-conditioned), then ILU, then algebraic multigrid
-    when pyamg is installed (optional dep stays optional -- absence
-    changes nothing about the result, only the iteration count).
+def _build_schur_preconditioner(A, block_size=3):
+    """Physics-structured block-triangular (Schur-style) preconditioner.
 
-    Returns None on total failure rather than raising: a missing
-    preconditioner is a PERFORMANCE degradation (GMRES/BiCGStab still
-    converge, just in more iterations), not a correctness one -- the
-    convergence-honesty gate (G4) is what catches an actual failure to
-    solve.  Device Jacobians here mix psi/n/p unknowns spanning many
-    orders of magnitude (scaled units), which measurably makes an
-    aggressive drop tolerance produce an exactly-singular ILU factor;
-    the two fallback tolerances below were chosen to cover that case
-    before giving up on scalar ILU.
+    M22-LINSOLVE-PLAN.md section 7's flagged next step beyond plain node
+    block-Jacobi: respect the EQUATION structure, not just the node
+    grouping.  With the unknowns interleaved per node as (psi, n, p),
+    permute to equation-major order (all-psi | all-n | all-p):
+
+        J = [[A_pp, A_pn, A_pq],      (row: Poisson)
+             [A_np, A_nn, A_nq],      (row: electron continuity)
+             [A_qp, A_qn, A_qq]]      (row: hole continuity)
+
+    The Poisson block A_pp is the stiffest, best-conditioned equation
+    (symmetric-positive-definite-like Laplacian + reaction); the
+    literature's approximate-block-factorization lesson (plan sec 7,
+    Sandia-line AMG-for-DD work) is to eliminate it FIRST.  We build the
+    block-LOWER-TRIANGULAR approximation
+
+        M = [[A_pp,      0,      0   ],
+             [A_np,  D_nn,        0   ],
+             [A_qp,      0,   D_qq]],
+
+    where A_pp is applied via ILU (spilu on the permuted Poisson block
+    alone -- far better conditioned than the coupled matrix, so the
+    3-tier tolerance chain is not needed) and D_nn/D_qq are the per-node
+    density-block diagonal approximations solved exactly (node-block
+    Jacobi restricted to the density rows -- the density equations are
+    dominated by their diagonal SG/recombination terms, the same
+    observation that made full node-block-Jacobi work).  Applying M^-1
+    is three triangular solves: psi via ILU, then each density block
+    minus its coupling to the psi solve.  This is an approximate
+    Schur/Lower-block factorization: the (n,p)-coupling blocks A_nq/
+    A_qn are dropped (they enter only through the outer Krylov
+    iteration), which is the standard price of a preconditioner.
+
+    Returns None on any structural failure (shape mismatch, singular
+    block, ILU failure) -- callers fall through to the next candidate.
     """
-    if block_size is not None:
+    n = A.shape[0]
+    if block_size != 3 or n % block_size != 0:
+        return None
+    nnode = n // block_size
+    Ac = A.tocsr()
+
+    # --- permutation to equation-major order: [all psi | all n | all p]
+    # interleaved index of unknown k: node = k//3, var = k%3 (0=psi,1=n,2=p)
+    k = np.arange(n)
+    node, var = k // block_size, k % block_size
+    perm = var * nnode + node          # equation-major position
+    P = sp.csr_matrix((np.ones(n), (perm, k)), shape=(n, n))
+    Ap = (P @ Ac @ P.T).tocsr()        # permuted Jacobian
+
+    # --- extract the diagonal blocks (row-slice then column-slice;
+    # scipy sparse fancy indexing takes 1-D index arrays, not np.ix_)
+    def _block(rows, cols):
+        return Ap[rows][:, cols].tocsc()
+
+    psi_idx = np.arange(nnode)
+    n_idx = np.arange(nnode, 2 * nnode)
+    p_idx = np.arange(2 * nnode, n)
+
+    A_pp = _block(psi_idx, psi_idx)
+    A_np = _block(n_idx, psi_idx)
+    A_qp = _block(p_idx, psi_idx)
+    # Density diagonal approximations: the per-node diagonal entries of
+    # the permuted density blocks, via the matrix diagonal (paired
+    # fancy-indexing on sparse rows is fragile across scipy versions).
+    diag_all = Ap.diagonal()
+    Ann_d = diag_all[nnode:2 * nnode]
+    Aqq_d = diag_all[2 * nnode:]
+
+    if np.any(~np.isfinite(Ann_d)) or np.any(~np.isfinite(Aqq_d)):
+        return None
+    if np.any(np.abs(Ann_d) < 1e-300) or np.any(np.abs(Aqq_d) < 1e-300):
+        return None
+
+    try:
+        ilu_pp = spilu(A_pp, drop_tol=1e-6, fill_factor=20)
+    except (RuntimeError, ValueError):
+        return None
+
+    def apply(x):
+        # x, y in EQUATION-MAJOR order internally; caller passes
+        # interleaved order, so permute on entry and exit.
+        xe = P @ x
+        # 1. psi solve: A_pp dpsi = xe[:nnode]
+        dpsi = ilu_pp.solve(xe[:nnode])
+        # 2. density solves minus the psi coupling
+        dn = (xe[nnode:2 * nnode] - A_np @ dpsi) / Ann_d
+        dp = (xe[2 * nnode:] - A_qp @ dpsi) / Aqq_d
+        ye = np.concatenate([dpsi, dn, dp])
+        return P.T @ ye
+
+    return LinearOperator(A.shape, apply)
+
+
+def _build_preconditioner(A, block_size=None, precond="auto"):
+    """Physics-structured first (when requested and structurally
+    possible), then node block-Jacobi, then ILU, then algebraic
+    multigrid when pyamg is installed (optional dep stays optional --
+    absence changes nothing about the result, only the iteration count).
+
+    `precond` selects the flavor: "auto" (the default -- UNCHANGED M22
+    phase-1 behavior: node block-Jacobi when `block_size` is given,
+    else the ILU chain), "block_jacobi" (force the node-block path),
+    or "schur" (the equation-structured Schur-style factorization of
+    plan section 7; falls through the chain on structural failure).
+
+    """
+    if precond == "schur" and block_size is not None:
+        M = _build_schur_preconditioner(A, block_size)
+        if M is not None:
+            return M
+    if block_size is not None and precond in ("auto", "block_jacobi"):
         M = _build_block_jacobi_preconditioner(A, block_size)
         if M is not None:
             return M
@@ -143,7 +243,8 @@ def _build_preconditioner(A, block_size=None):
 
 
 def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
-                 maxiter=500, x0=None, restart=None, block_size=None):
+                 maxiter=500, x0=None, restart=None, block_size=None,
+                 precond="auto"):
     """Solve A x = b.  Returns (x, info).
 
     method="direct" is EXACTLY scipy.sparse.linalg.spsolve -- bit-
@@ -155,6 +256,15 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
     `rtol` relative to ||b||.  `block_size=None` (the default) skips
     straight to ILU, unchanged from M22 phase 1's original behavior.
 
+    `precond` picks the structured flavor when `block_size` is given:
+    "auto" (default, node block-Jacobi -- the exact M22 phase-1 G6
+    behavior, unchanged), "block_jacobi" (same, explicit), or "schur"
+    (the equation-structured Schur-style factorization of plan
+    section 7: exact-ish ILU solve of the permuted Poisson block,
+    then diagonal density solves carrying the psi coupling).  A
+    structurally impossible "schur" request falls through the normal
+    chain rather than raising.
+
     info = {"method", "iterations", "converged", "residual"}.  An
     iterative method that does not reach `rtol` within `maxiter` RAISES
     LinearSolveError rather than returning the unconverged iterate.
@@ -162,6 +272,9 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
     if method not in _METHODS:
         raise ValueError(
             f"unknown method {method!r}; choose from {_METHODS}")
+    if precond not in _PRECOND:
+        raise ValueError(
+            f"unknown precond {precond!r}; choose from {_PRECOND}")
 
     b = np.asarray(b, dtype=float)
     if method == "direct":
@@ -205,7 +318,7 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
     # which would raise AttributeError for a dense A.)
     A = sp.csr_matrix(A) if not sp.issparse(A) else A.tocsr()
     _check_finite(A, b, method)
-    M = _build_preconditioner(A, block_size=block_size)
+    M = _build_preconditioner(A, block_size=block_size, precond=precond)
     solver = gmres if method == "gmres" else bicgstab
     iters = [0]
 

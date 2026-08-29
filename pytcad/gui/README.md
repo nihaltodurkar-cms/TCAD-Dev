@@ -155,9 +155,21 @@ independent and must keep passing unchanged.
   that fired whenever a gate's flatband voltage was left in "computed"
   mode (Python `None` crosses to QML as `undefined`, not `null`).
 
+**Done since the item below was written:**
+- Per-region doping *profiles* beyond uniform: a region's
+  `doping_profile` is `"uniform"` (the original flat `net_doping_cm3`
+  fill, unchanged) or `"gaussian_erfc"`, reusing `mosfet_doping()`'s own
+  Gaussian-in-depth x erfc-lateral-rolloff shape (`pytcad.mosfet.
+  _sd_profile`) directly rather than a second formula. Depth is
+  measured from the region's own `y_min`; `profile_peak_cm3`/
+  `profile_sigma_y`/`profile_sigma_lat`/`profile_edge_x`/
+  `profile_high_side` are validated (`structure_model.
+  rasterize_doping`) only when the profile isn't `"uniform"`. Wired
+  through `RegionListModel`'s new roles, `AppController.
+  setRegionDopingProfile` (undoable, same pattern as
+  `setRegionDoping`), and a profile section in `DopingEditor.qml`.
+
 **Planned (not yet implemented):**
-- Per-region doping *profiles* beyond uniform (e.g. exposing
-  `mosfet_doping()`'s own Gaussian/erfc shape as a region option).
 - A second real semiconductor material, once the backend has one.
 
 **Not supported, by design:**
@@ -382,20 +394,18 @@ v0.2 2D `StructureModel` without inventing 2D process physics — see
   one-way precedence switch, not an undo-tracked edit — there is
   currently no way to get a cleared 2D structure back via Ctrl+Z.
 
+**Done since the items below were written:**
+- `ProcessFlow.to_json()`/`from_json()` now live directly on the
+  dataclass (`gui/services/process_model.py`), mirroring `DeviceSpec`'s
+  own pattern (`gui/services/device_spec.py`). `AppController`'s
+  internal `_ProcessFlowJob` bridge adapter is gone; a `ProcessFlow` is
+  handed to `JobRunner.start()` directly.
+- `ProcessResultStore` already exposes a public `selected_step_id`
+  property (`gui/services/process_result_store.py`), and
+  `gui/visualization/mpl_canvas_item.py` reads it at both call sites —
+  it does not reach into the private `_selected` attribute.
+
 **Planned (not yet implemented):**
-- `ProcessFlow.to_json()`/`from_json()` directly on the dataclass
-  (`gui/services/process_model.py`), mirroring `DeviceSpec`'s own
-  pattern (`gui/services/device_spec.py`). Today `AppController` bridges
-  the gap with a small internal `_ProcessFlowJob` adapter so `ProcessFlow`
-  can be handed to `JobRunner`; adding the methods directly would let
-  that adapter be deleted.
-- A public `current_step_id` property on `ProcessResultStore`
-  (`gui/services/process_result_store.py`). Today
-  `gui/visualization/mpl_canvas_item.py` reaches into the store's
-  private `_selected` attribute at its two call sites — a documented,
-  brief-sanctioned workaround for v0.3 (see the plan's Task 10 review
-  notes), not a defect, but a public accessor would be the more
-  consistent long-term shape.
 - Wiring `implant_pearson4_skewed()` (`pytcad/process.py`) into the
   Implant step as an alternate skewed-profile implant model, once it
   gains species/energy-shaped parameters — it currently takes
@@ -860,7 +870,10 @@ traps-off bit-identity; WKB factor-law gate over 1e7–5e10 V/m).
 construction paths the interactive GUI actually has: the Process Flow
 (substrate/implant/anneal/oxidize, always 1D) and the Structure/Device-
 Builder templates (region boxes, always 2D). It exercises every
-physics-model toggle, contact/gate/mesh editors, IV and CV sweeps,
+runnable physics-model toggle (the equilibrium-only `dg` and 2D-only
+`surface_mobility` are excluded from the bias-solve parametrize by
+design, the same documented precedent), contact/gate/mesh editors, IV
+and CV sweeps,
 invalid-input handling, and save/reload — cross-checked against the
 same analytic built-in-potential and C–V-landmark formulas
 `tests/test_validation.py` and `test_cv_mode.py` already use. It also
@@ -912,6 +925,14 @@ the identical wall.
   into the homegrown 1D solver's Newton assembly (M15, all gates green
   — see ARCHITECTURE.md section 5); the DEVSIM backend does not support
   it.
+- Density gradient (`dg`) is selectable in the Physics Lab (M20) but
+  **equilibrium-only in the solver**: a biased 1D Run with `dg` on is
+  refused by `Device1D.solve_bias` with an actionable error, and 2D/3D
+  builds refuse at construction. The GUI has no equilibrium-only Run
+  mode, so in practice `dg` must be exercised through the Python API
+  (`MOSCapacitor(dg=True)`, `Models(dg=True)`) until a GUI path lands.
+  The underlying M20 code and gates are LANDED-PENDING-VERIFICATION
+  (history.md Addendum 18).
 - Neither device dimensionality nor solver backend has a GUI selector:
   the Process Flow always builds 1D, Structure/Device-Builder templates
   always build 2D, there is no GUI path to a `Device3D`, and DEVSIM can

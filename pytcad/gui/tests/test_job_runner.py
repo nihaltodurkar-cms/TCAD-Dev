@@ -119,18 +119,6 @@ def test_job_runner_default_module_is_unchanged(qapp, tmp_path):
     assert runner._module == "gui.services.solver_runner"
 
 
-class _ProcessFlowJson:
-    """Minimal to_json(path) adapter, mirroring app_controller.py's own
-    _ProcessFlowJob -- JobRunner.start() just needs `spec.to_json(path)`
-    to write the flow.json a process run reads."""
-    def __init__(self, flow):
-        self._flow = flow
-
-    def to_json(self, path):
-        with open(path, "w") as fh:
-            json.dump(self._flow.to_dict(), fh)
-
-
 def _small_process_flow():
     from gui.services.process_model import ProcessFlow, ProcessStep
     return ProcessFlow(steps=[
@@ -149,7 +137,7 @@ def test_process_run_success_keeps_its_state_dir(qapp, tmp_path):
     run's own state_dir is the ProcessResultStore's actual backing data
     and must survive -- confirm the happy path is unaffected."""
     runner = JobRunner(work_dir=str(tmp_path), module="gui.services.process_runner")
-    outcome = _run_to_completion(runner, _ProcessFlowJson(_small_process_flow()))
+    outcome = _run_to_completion(runner, _small_process_flow())
     assert outcome.get("kind") == "finished", outcome
 
     manifest_path = outcome["path"]
@@ -192,7 +180,7 @@ def test_process_run_cancel_removes_the_state_dir_and_tmp_files(qapp, tmp_path):
     runner.finished.connect(lambda p: (outcome.update(kind="finished", path=p), loop.quit()))
     runner.failed.connect(lambda s, d: (outcome.update(kind="failed"), loop.quit()))
     runner.canceled.connect(lambda: (outcome.update(kind="canceled"), loop.quit()))
-    runner.start(_ProcessFlowJson(flow))
+    runner.start(flow)
     result_path = runner.result_path
     QTimer.singleShot(500, runner.cancel)
     QTimer.singleShot(60000, loop.quit)

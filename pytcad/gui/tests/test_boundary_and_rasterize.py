@@ -5,6 +5,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import numpy as np
+import pytest
 
 from gui.services.device_spec import MeshSpec
 from gui.services.structure_model import (
@@ -103,3 +104,72 @@ def test_rasterize_later_region_overwrites_earlier():
     doping = rasterize_doping(structure, mesh)
     assert doping[0, 2] == 1e19       # inside "hot", which came second
     assert doping[2, 0] == -1e17      # only "background" covers this cell
+
+
+def test_rasterize_gaussian_erfc_profile_decays_with_depth_and_distance():
+    """A non-uniform region reuses mosfet_doping()'s own Gaussian-in-
+    depth x erfc-lateral-rolloff shape (pytcad.mosfet._sd_profile):
+    peak strength right at the region's own top edge (y_min) and at/
+    past the full-strength side of the mask edge, decaying with depth
+    and with lateral distance past the edge."""
+    x = np.linspace(0.0, 4.0, 41)
+    y = np.linspace(0.0, 2.0, 21)
+    mesh = MeshSpec(dimensionality=2, axes={"x": x.tolist(), "y": y.tolist()})
+    structure = StructureModel(width_cm=4.0, height_cm=2.0, regions=[
+        RegionSpec("sd", "source", x_min=0.0, x_max=4.0, y_min=0.0, y_max=2.0,
+                  net_doping_cm3=0.0, doping_profile="gaussian_erfc",
+                  profile_peak_cm3=1e19, profile_sigma_y=0.5,
+                  profile_sigma_lat=0.3, profile_edge_x=2.0,
+                  profile_high_side="left"),
+    ])
+    doping = rasterize_doping(structure, mesh)
+    assert doping.shape == (21, 41)
+    ix = {v: k for k, v in enumerate(x)}
+    iy = {v: k for k, v in enumerate(y)}
+    # full strength: surface (y=0), well inside the "left" full side (x=0)
+    surface_left = doping[iy[0.0], ix[0.0]]
+    assert surface_left == pytest.approx(1e19, rel=1e-6)
+    # decays with depth at the same lateral position
+    deeper = doping[iy[1.0], ix[0.0]]
+    assert 0 < deeper < surface_left
+    # decays past the mask edge, into the "right" (low) side
+    far_side = doping[iy[0.0], ix[4.0]]
+    assert 0 <= far_side < surface_left
+    # sign follows profile_peak_cm3, not the ignored net_doping_cm3
+    assert np.all(doping >= 0.0)
+
+
+def test_rasterize_gaussian_erfc_negative_peak_gives_negative_doping():
+    x = np.linspace(0.0, 2.0, 21)
+    y = np.linspace(0.0, 1.0, 11)
+    mesh = MeshSpec(dimensionality=2, axes={"x": x.tolist(), "y": y.tolist()})
+    structure = StructureModel(width_cm=2.0, height_cm=1.0, regions=[
+        RegionSpec("p", "p-well", x_min=0.0, x_max=2.0, y_min=0.0, y_max=1.0,
+                  net_doping_cm3=0.0, doping_profile="gaussian_erfc",
+                  profile_peak_cm3=-1e17, profile_sigma_y=0.3,
+                  profile_sigma_lat=0.2, profile_edge_x=1.0,
+                  profile_high_side="right"),
+    ])
+    doping = rasterize_doping(structure, mesh)
+    assert np.all(doping <= 0.0)
+    assert doping.min() == pytest.approx(-1e17, rel=1e-6)
+
+
+def test_rasterize_gaussian_erfc_missing_parameters_raises():
+    mesh = _mesh_5x3()
+    structure = StructureModel(width_cm=4.0, height_cm=2.0, regions=[
+        RegionSpec("sd", "source", 0.0, 4.0, 0.0, 2.0, 0.0,
+                  doping_profile="gaussian_erfc"),
+    ])
+    with pytest.raises(ValueError, match="profile_peak_cm3"):
+        rasterize_doping(structure, mesh)
+
+
+def test_rasterize_unknown_doping_profile_raises():
+    mesh = _mesh_5x3()
+    structure = StructureModel(width_cm=4.0, height_cm=2.0, regions=[
+        RegionSpec("sd", "source", 0.0, 4.0, 0.0, 2.0, 0.0,
+                  doping_profile="not_a_real_profile"),
+    ])
+    with pytest.raises(ValueError, match="unknown doping_profile"):
+        rasterize_doping(structure, mesh)

@@ -12,6 +12,12 @@ class RegionListModel(QAbstractListModel):
     DopingRole = Qt.UserRole + 4
     PriorityRole = Qt.UserRole + 5
     MaterialRole = Qt.UserRole + 6
+    DopingProfileRole = Qt.UserRole + 7
+    ProfilePeakRole = Qt.UserRole + 8
+    ProfileSigmaYRole = Qt.UserRole + 9
+    ProfileSigmaLatRole = Qt.UserRole + 10
+    ProfileEdgeXRole = Qt.UserRole + 11
+    ProfileHighSideRole = Qt.UserRole + 12
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +40,18 @@ class RegionListModel(QAbstractListModel):
             return r.net_doping_cm3
         if role == self.MaterialRole:
             return r.material
+        if role == self.DopingProfileRole:
+            return r.doping_profile
+        if role == self.ProfilePeakRole:
+            return r.profile_peak_cm3
+        if role == self.ProfileSigmaYRole:
+            return r.profile_sigma_y
+        if role == self.ProfileSigmaLatRole:
+            return r.profile_sigma_lat
+        if role == self.ProfileEdgeXRole:
+            return r.profile_edge_x
+        if role == self.ProfileHighSideRole:
+            return r.profile_high_side
         if role == self.PriorityRole:
             # compositing priority IS list position: regions.py's
             # rasterize_doping applies regions in list order, later
@@ -46,7 +64,13 @@ class RegionListModel(QAbstractListModel):
         return {self.IdRole: b"regionId", self.NameRole: b"name",
                 self.BoundsRole: b"bounds", self.DopingRole: b"doping",
                 self.PriorityRole: b"priority",
-                self.MaterialRole: b"material"}
+                self.MaterialRole: b"material",
+                self.DopingProfileRole: b"dopingProfile",
+                self.ProfilePeakRole: b"profilePeak",
+                self.ProfileSigmaYRole: b"profileSigmaY",
+                self.ProfileSigmaLatRole: b"profileSigmaLat",
+                self.ProfileEdgeXRole: b"profileEdgeX",
+                self.ProfileHighSideRole: b"profileHighSide"}
 
     def refresh(self, regions):
         self.beginResetModel()

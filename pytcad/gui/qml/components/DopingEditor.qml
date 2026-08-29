@@ -71,8 +71,121 @@ ColumnLayout {
             id: dopingField
             objectName: "regionDopingField"
             Layout.fillWidth: true
+            enabled: !regionData || regionData.dopingProfile === "uniform"
             text: regionData ? regionData.doping.toExponential(3) : ""
             onEditingFinished: if (regionId) controller.setRegionDoping(regionId, parseFloat(text))
+        }
+    }
+
+    // Per-region doping PROFILE, beyond uniform: "uniform" (the flat
+    // ND/NA field above, unaffected) or "gaussian_erfc" -- reuses
+    // mosfet_doping()'s own Gaussian-in-depth x erfc-lateral-rolloff
+    // shape (pytcad/mosfet.py _sd_profile) as a region option, straggle
+    // measured from THIS region's own y_min (see rasterize_doping).
+    RowLayout {
+        Label { text: "Profile"; color: Theme.textDim; Layout.preferredWidth: 90 }
+        ComboBox {
+            id: profileBox
+            objectName: "regionProfileBox"
+            Layout.fillWidth: true
+            model: ["uniform", "gaussian_erfc"]
+            currentIndex: regionData && regionData.dopingProfile === "gaussian_erfc" ? 1 : 0
+            onActivated: if (regionId) controller.setRegionDopingProfile(
+                regionId, model[currentIndex],
+                peakField.text ? parseFloat(peakField.text) : 0.0,
+                sigmaYField.text ? parseFloat(sigmaYField.text) : 0.0,
+                sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
+                edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
+                highSideBox.currentText)
+        }
+    }
+
+    ColumnLayout {
+        visible: profileBox.currentIndex === 1
+        Layout.fillWidth: true
+
+        RowLayout {
+            Label { text: "Peak [cm^-3]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+            TextField {
+                id: peakField
+                objectName: "regionProfilePeakField"
+                Layout.fillWidth: true
+                text: regionData && regionData.profilePeak !== null && regionData.profilePeak !== undefined
+                      ? regionData.profilePeak.toExponential(3) : ""
+                onEditingFinished: if (regionId) controller.setRegionDopingProfile(
+                    regionId, "gaussian_erfc", parseFloat(text),
+                    sigmaYField.text ? parseFloat(sigmaYField.text) : 0.0,
+                    sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
+                    edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
+                    highSideBox.currentText)
+            }
+        }
+        RowLayout {
+            Label { text: "sigma_y [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+            TextField {
+                id: sigmaYField
+                objectName: "regionProfileSigmaYField"
+                Layout.fillWidth: true
+                text: regionData && regionData.profileSigmaY !== null && regionData.profileSigmaY !== undefined
+                      ? regionData.profileSigmaY.toExponential(3) : ""
+                onEditingFinished: if (regionId) controller.setRegionDopingProfile(
+                    regionId, "gaussian_erfc",
+                    peakField.text ? parseFloat(peakField.text) : 0.0,
+                    parseFloat(text),
+                    sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
+                    edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
+                    highSideBox.currentText)
+            }
+        }
+        RowLayout {
+            Label { text: "sigma_lat [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+            TextField {
+                id: sigmaLatField
+                objectName: "regionProfileSigmaLatField"
+                Layout.fillWidth: true
+                text: regionData && regionData.profileSigmaLat !== null && regionData.profileSigmaLat !== undefined
+                      ? regionData.profileSigmaLat.toExponential(3) : ""
+                onEditingFinished: if (regionId) controller.setRegionDopingProfile(
+                    regionId, "gaussian_erfc",
+                    peakField.text ? parseFloat(peakField.text) : 0.0,
+                    sigmaYField.text ? parseFloat(sigmaYField.text) : 0.0,
+                    parseFloat(text),
+                    edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
+                    highSideBox.currentText)
+            }
+        }
+        RowLayout {
+            Label { text: "edge_x [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+            TextField {
+                id: edgeXField
+                objectName: "regionProfileEdgeXField"
+                Layout.fillWidth: true
+                text: regionData && regionData.profileEdgeX !== null && regionData.profileEdgeX !== undefined
+                      ? regionData.profileEdgeX.toExponential(3) : ""
+                onEditingFinished: if (regionId) controller.setRegionDopingProfile(
+                    regionId, "gaussian_erfc",
+                    peakField.text ? parseFloat(peakField.text) : 0.0,
+                    sigmaYField.text ? parseFloat(sigmaYField.text) : 0.0,
+                    sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
+                    parseFloat(text), highSideBox.currentText)
+            }
+        }
+        RowLayout {
+            Label { text: "Full-strength side"; color: Theme.textDim; Layout.preferredWidth: 90 }
+            ComboBox {
+                id: highSideBox
+                objectName: "regionProfileHighSideBox"
+                Layout.fillWidth: true
+                model: ["left", "right"]
+                currentIndex: regionData && regionData.profileHighSide === "right" ? 1 : 0
+                onActivated: if (regionId) controller.setRegionDopingProfile(
+                    regionId, "gaussian_erfc",
+                    peakField.text ? parseFloat(peakField.text) : 0.0,
+                    sigmaYField.text ? parseFloat(sigmaYField.text) : 0.0,
+                    sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
+                    edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
+                    model[currentIndex])
+            }
         }
     }
 }

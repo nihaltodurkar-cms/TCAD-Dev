@@ -224,7 +224,11 @@ def test_1d_built_in_potential_matches_analytic_mass_action_law(gapp):
 
 @pytest.mark.parametrize("model_key", [
     "doping_mobility", "field_mobility", "srh", "auger", "bgn", "fd",
-    "incomplete_ion", "impact"])
+    "incomplete_ion", "impact", "btbt"])
+    # "dg" is deliberately NOT here: like surface_mobility (also absent),
+    # it is scope-restricted -- equilibrium-only, refused by solve_bias --
+    # and this test drives a 0.3 V forward-bias solve.  Its wire-path is
+    # pinned in tests/test_m20_dg.py instead.
 def test_1d_physics_toggle_propagates_through_real_checkbox(gapp, model_key):
     """Every one of the 8 catalog models must reach the executed run's
     RunRecord -- the same end-to-end contract test_physics_lab.py already

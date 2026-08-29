@@ -373,9 +373,16 @@ def _tat_reference_device():
     # (mesh.graded_mesh violated its own documented grading ratio at the
     # final cell -- up to 11.06x against a stated 1.15 -- and was fixed;
     # this is the same decoupling applied to the M13 npz goldens.)
-    x = np.load(os.path.join(
+    # Same convention as test_m13_goldens.py's _frozen_mesh: this is a
+    # captured artifact this test cannot regenerate itself, so skip
+    # gracefully if the checkout doesn't carry it rather than crashing
+    # with an uncaught FileNotFoundError.
+    meshes_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "goldens", "m13", "frozen_meshes.npz"))["diode1d_x"]
+        "goldens", "m13", "frozen_meshes.npz")
+    if not os.path.exists(meshes_path):
+        pytest.skip("frozen_meshes.npz missing -- see test_m13_goldens.py")
+    x = np.load(meshes_path)["diode1d_x"]
     dop = np.where(x < 1.0e-4, -1e17, 1e17)
     return Device1D(x, dop, T=T,
                     models=Models(bgn=False, srh=True, tat=True,

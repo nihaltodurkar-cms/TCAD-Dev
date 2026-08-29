@@ -146,18 +146,33 @@ def test_default_linsolve_is_bit_identical_to_pre_m22():
 
     GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "goldens", "m13")
-    meshes = np.load(os.path.join(GOLDEN_DIR, "frozen_meshes.npz"))
+    # Same convention as test_m13_goldens.py's _frozen_mesh/_load: these
+    # golden .npz files are captured artifacts, not something this test
+    # can regenerate itself (that would just re-pin CURRENT behavior as
+    # "golden" without proving it matches the actual pre-M22 baseline)
+    # -- skip gracefully if the checkout doesn't carry them, rather than
+    # crashing with an uncaught FileNotFoundError.
+    meshes_path = os.path.join(GOLDEN_DIR, "frozen_meshes.npz")
+    if not os.path.exists(meshes_path):
+        pytest.skip("frozen_meshes.npz missing -- see test_m13_goldens.py")
+    meshes = np.load(meshes_path)
     x = meshes["diode1d_x"]
     dop = np.where(x < 1.0e-4, -1e17, 1e17)
     dev = Device1D(x, dop, T=300.0, models=Models(bgn=True, auger=True))
     dev.solve_equilibrium()
-    gold = np.load(os.path.join(GOLDEN_DIR, "diode1d_eq.npz"))
+    eq_path = os.path.join(GOLDEN_DIR, "diode1d_eq.npz")
+    if not os.path.exists(eq_path):
+        pytest.skip("diode1d_eq.npz missing -- see test_m13_goldens.py")
+    gold = np.load(eq_path)
     assert np.array_equal(dev.psi, gold["psi"])
     assert np.array_equal(dev.n, gold["n"])
     assert np.array_equal(dev.p, gold["p"])
 
     dev.solve_bias([0.6, 0.0], NewtonOptions())
-    goldf = np.load(os.path.join(GOLDEN_DIR, "diode1d_fwd.npz"))
+    fwd_path = os.path.join(GOLDEN_DIR, "diode1d_fwd.npz")
+    if not os.path.exists(fwd_path):
+        pytest.skip("diode1d_fwd.npz missing -- see test_m13_goldens.py")
+    goldf = np.load(fwd_path)
     assert np.array_equal(dev.psi, goldf["psi"])
     assert np.array_equal(dev.n, goldf["n"])
     assert np.array_equal(dev.p, goldf["p"])
@@ -293,3 +308,181 @@ def test_block_jacobi_unsticks_the_coupled_3d_jacobian():
     assert info["converged"]
     assert info["iterations"] < 100, \
         f"G6 regression: took {info['iterations']} iterations"
+
+
+# ================================================== SCHUR PRECONDITIONER
+# (Plan section 7's flagged next step beyond node block-Jacobi: an
+# equation-structured approximate block factorization that eliminates
+# the Poisson block first.  Gates mirror the block-Jacobi ones.)
+# ==================================================
+def test_schur_preconditioner_matches_exact_factorization():
+    """The Schur-style preconditioner's apply must equal the EXACT solve
+    of its own block-lower-triangular model M (ILU-free check): on a
+    synthetic matrix built to have the psi/n/p interleaved structure,
+    apply(x) must equal solving M x = b where M is assembled explicitly
+    from the same blocks the builder extracted.
+
+    The builder applies A_pp via spilu (approximate); this gate uses a
+    DIAGONAL A_pp so ILU is exact and the comparison is closed-form.
+    """
+    rng = np.random.default_rng(7)
+    n_nodes, bs = 150, 3
+    n = n_nodes * bs
+    # Interleaved (psi,n,p) per node.  A_pp is deliberately DIAGONAL
+    # (no psi-psi mesh coupling) so the builder's spilu of A_pp is an
+    # exact solve and the reference comparison below is closed-form.
+    main = rng.standard_normal(n) + 5.0
+    A = sp.diags([main], [0], shape=(n, n)).tocsr()
+    # psi->n and psi->p coupling entries (var 0 -> var 1/2 within node)
+    k = np.arange(n_nodes)
+    rows = 3 * k + 1
+    cols = 3 * k
+    A = A + sp.csr_matrix((rng.standard_normal(n_nodes), (rows, cols)),
+                          shape=(n, n))
+    A = A + sp.csr_matrix((rng.standard_normal(n_nodes), (rows + 1, cols)),
+                          shape=(n, n))
+
+    M_op = linsolve._build_schur_preconditioner(A, bs)
+    assert M_op is not None, "schur builder returned None on a valid system"
+
+    x = rng.standard_normal(n)
+    y = M_op.matvec(x)
+
+    # Exact reference: assemble the same block-lower-triangular M
+    # explicitly and solve it densely.
+    perm_k = np.arange(n)
+    node, var = perm_k // bs, perm_k % bs
+    perm = var * n_nodes + node
+    # Similarity transform to equation-major order needs the INVERSE
+    # permutation: Apd[a, b] = A[inv_perm[a], inv_perm[b]] (matches
+    # P @ A @ P.T's actual action in the builder, P[perm[i], i] = 1).
+    # perm itself is not self-inverse, so using it directly here mixed
+    # up rows/cols and made A_pp look non-diagonal even for this test's
+    # deliberately-diagonal-A_pp matrix -- a bug in this reference
+    # construction, not in linsolve._build_schur_preconditioner (which
+    # gets the same relationship right via matrix multiplication).
+    inv_perm = np.empty(n, dtype=int)
+    inv_perm[perm] = perm_k
+    Adense = A.toarray()
+    Apd = Adense[np.ix_(inv_perm, inv_perm)]   # equation-major
+    psi_idx = np.arange(n_nodes)
+    n_idx = np.arange(n_nodes, 2 * n_nodes)
+    p_idx = np.arange(2 * n_nodes, n)
+    Md = np.zeros((n, n))
+    Md[np.ix_(psi_idx, psi_idx)] = Apd[np.ix_(psi_idx, psi_idx)]
+    Md[np.ix_(n_idx, psi_idx)] = Apd[np.ix_(n_idx, psi_idx)]
+    Md[np.ix_(p_idx, psi_idx)] = Apd[np.ix_(p_idx, psi_idx)]
+    Md[n_idx, n_idx] = Apd[n_idx, n_idx]      # diagonal-only density blocks
+    Md[p_idx, p_idx] = Apd[p_idx, p_idx]
+    # perm maps interleaved index i -> equation-major index perm[i],
+    # so the equation-major copy of x is x_major with
+    # x_major[perm[i]] = x[i] (scatter).
+    x_major = np.empty(n)
+    x_major[perm] = x
+    y_major = np.linalg.solve(Md, x_major)
+    # Back to interleaved order: y_ref[i] = y_major[perm[i]] (gather).
+    y_ref = y_major[perm]
+
+    assert np.abs(y - y_ref).max() < 1e-8, \
+        f"schur apply mismatch: {np.abs(y - y_ref).max():.3e}"
+
+
+def test_schur_preconditioner_converges_on_device_jacobian():
+    """The Schur flavor must converge on a REAL device Jacobian (the
+    same Device1D probe G3 uses) and land within rtol of the direct
+    solution -- the same parity contract as every other flavor."""
+    from pytcad import Device1D, Models
+    from pytcad.mesh import uniform_mesh
+
+    x = uniform_mesh(6.0e-4, 200)
+    dop = np.where(x < 3.0e-4, -1e16, 1e17)
+    dev = Device1D(x, dop, T=300.0, models=Models(srh=True))
+    dev.solve_equilibrium()
+    bc = dev._contact_values([0.3, 0.0])
+    psi, n, p = dev.psi.copy(), dev.n.copy(), dev.p.copy()
+    psi[0], n[0], p[0] = bc[0]
+    psi[-1], n[-1], p[-1] = bc[1]
+    F, J, _, _ = dev._residual_jacobian(psi, n, p, bc)
+
+    ref = spsolve(J.tocsc(), -F)
+    x_it, info = linsolve.solve_linear(J, -F, method="gmres", rtol=1e-10,
+                                       block_size=3, precond="schur")
+    assert info["converged"], "schur flavor failed to converge"
+    rel = np.linalg.norm(x_it - ref) / max(np.linalg.norm(ref), 1e-300)
+    assert rel <= 1e-6, f"schur parity FAIL: rel={rel:.3e}"
+
+
+def test_schur_preconditioner_on_coupled_3d_jacobian():
+    """The motivating scale case: the 27783-unknown 3D coupled Jacobian
+    that stalled scalar ILU.  The Schur flavor must converge on it too,
+    in a sane iteration count (same budget as the block-Jacobi gate)."""
+    import warnings as _w
+    from pytcad import Device3D, Models
+    from pytcad.mesh import uniform_mesh
+    from pytcad.mesh3d import Mesh3D
+
+    n = 20
+    mx = my = mz = uniform_mesh(2.0e-4, n)
+    mesh = Mesh3D(mx, my, mz)
+    dop = np.full((mz.size, my.size, mx.size), 1e16)
+    dev = Device3D(mesh, dop, models=Models(srh=False))
+    jj, kk = np.meshgrid(np.arange(my.size), np.arange(mz.size))
+    jj, kk = jj.ravel(), kk.ravel()
+    dev.add_contact("l", i=np.zeros_like(jj), j=jj, k=kk, V=0.0)
+    dev.add_contact("r", i=np.full_like(jj, mx.size - 1), j=jj, k=kk, V=0.1)
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        dev.solve_equilibrium()
+    F, J, *_ = dev._residual_jacobian(dev.psi, dev.n, dev.p, {"r": 0.1})
+
+    x, info = linsolve.solve_linear(J, -F, method="gmres", rtol=1e-8,
+                                    maxiter=500, block_size=3,
+                                    precond="schur")
+    assert info["converged"]
+    assert info["iterations"] < 150, \
+        f"schur flavor took {info['iterations']} iterations on the " \
+        "coupled 3D Jacobian"
+
+
+def test_schur_flavor_default_is_unchanged():
+    """precond='auto' (the default) must build the NODE BLOCK-JACOBI
+    operator, not Schur -- every existing call site's iteration counts
+    and the G6 gate's behavior are pinned to block-Jacobi.  Probed by
+    identity of the resulting solutions AND by the builder actually
+    reached: solve with precond=None-default vs an explicit
+    'block_jacobi' must match, and both must differ from nothing."""
+    from pytcad import Device1D, Models
+    from pytcad.mesh import uniform_mesh
+
+    x = uniform_mesh(6.0e-4, 200)
+    dop = np.where(x < 3.0e-4, -1e16, 1e17)
+    dev = Device1D(x, dop, T=300.0, models=Models(srh=True))
+    dev.solve_equilibrium()
+    bc = dev._contact_values([0.3, 0.0])
+    psi, n, p = dev.psi.copy(), dev.n.copy(), dev.p.copy()
+    psi[0], n[0], p[0] = bc[0]
+    psi[-1], n[-1], p[-1] = bc[1]
+    F, J, _, _ = dev._residual_jacobian(psi, n, p, bc)
+
+    M_auto = linsolve._build_preconditioner(J, block_size=3)
+    M_bj = linsolve._build_preconditioner(J, block_size=3,
+                                          precond="block_jacobi")
+    M_schur = linsolve._build_preconditioner(J, block_size=3,
+                                             precond="schur")
+    assert M_auto is not None and M_bj is not None and M_schur is not None
+    # auto == block_jacobi exactly (same operator object class + same
+    # apply result); schur is a genuinely different operator.
+    v = np.ones(J.shape[0])
+    assert np.array_equal(M_auto.matvec(v), M_bj.matvec(v))
+    assert not np.array_equal(M_auto.matvec(v), M_schur.matvec(v))
+
+
+def test_schur_builder_refuses_mismatched_structure():
+    """Structural refusal: block_size != 3 (the builder assumes the
+    psi/n/p interleave) returns None instead of producing a nonsense
+    operator; the caller then falls through the chain."""
+    rng = np.random.default_rng(11)
+    A = sp.random(60, 60, density=0.1, random_state=rng,
+                 data_rvs=lambda k: rng.standard_normal(k)).tocsr()
+    A = A + sp.diags(np.arange(60) + 10.0)
+    assert linsolve._build_schur_preconditioner(A, 2) is None

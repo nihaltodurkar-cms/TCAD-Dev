@@ -58,7 +58,13 @@ normalize to CSR, where exact format doesn't matter). Continuation
 driver (phase 2) LANDED 2026-08-28 (pytcad/continuation.py:
 adaptive_bias_sweep, arc_length_sweep with a strength-ladder-aware
 corrector) -- this is what let M15 R1b's avalanche-fold gates close;
-see the M15 paragraph above and section 5 below.
+see the M15 paragraph above and section 5 below.  A Schur-complement
+preconditioner variant (plan section 7's flagged next step: permute to
+equation-major order, spilu the Poisson block, exact density diagonals,
+drop the (n,p) cross-couplings; `solve_linear(precond="schur")`, opt-in
+per call, default "auto" == unchanged node-block-Jacobi) landed
+2026-08-29 LANDED-PENDING-VERIFICATION -- gates written, not yet
+executed (same session standing as M16 above).
 FUTURE: capability growth is governed by section 4b below (M13
 Fermi-Dirac statistics through M30 system-level; three parity tiers).
 The M1-M10 roadmap below is retained as the shipped architecture
@@ -370,7 +376,9 @@ DEVICE PHYSICS
             as analysis layer; NOT coupled to any Newton assembly
             (devsim edge_volume_model unit anomaly documented)
   [partial] TAT (Hurkx, frozen field, 1D); no Schenk variant
-  [missing] Band-to-band tunneling (local Kane; nonlocal path)
+  [partial] Band-to-band tunneling: local Kane (Hurkx 1992 Si
+            coefficients) coupled live into Device1D's Newton core
+            (M16, 2026-08-29); nonlocal path still missing (Tier 3)
   [missing] Surface recombination velocity; D_it in MOS module
   [missing] Transient simulation (steady-state only everywhere)
   [missing] Small-signal AC analysis
@@ -532,13 +540,31 @@ M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   Depends: M17 (transient machinery for the coupled solve).
 
 M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
-  NOT STARTED. Scope (from the archived M12 tunneling design doc): a
-  DG term in Poisson, flag default off, bit-identical when off. Plus an
-  analysis-layer Schrodinger-Poisson solve for the inversion
-  centroid as the published-value gate.
-  Acceptance: DG-off bit-identity; inversion centroid depth vs
-  Schrodinger-Poisson result and vs the literature ~1 nm figure
-  (retires the C_max overestimate caveat in README section 6).
+  LANDED-PENDING-VERIFICATION (2026-08-29; same session standing as
+  M16/M22-Schur: implemented and gate-written, tests NOT executed).
+  Implementation per M20-DENSITY-GRADIENT-PLAN.md:
+  - pytcad/dg.py: quantum_potential (Ancona-Stafford Lambda, 3-point
+    non-uniform stencil, Lambda=0 at boundary nodes per the Neumann
+    literature note below), airy_triangular_well (closed-form Airy
+    reference), schrodinger_poisson + schrodinger_poisson_mos (the
+    self-consistent published-value reference solver, eigsh + 2D-DOS
+    Boltzmann occupations).
+  - MOSCapacitor(dg=False, dg_gamma=1.0): lagged-Lambda Newton with an
+    outer fixed point; inversion_centroid(Vg) accessor; dg+fd refused.
+  - Device1D Models(dg/dg_gamma): solve_equilibrium DG branch (Boltzmann
+    only; dg+fd and dg+incomplete_ion refused); solve_bias + Device2D/3D
+    raise NotImplementedError. Default off is bit-identical (G-A gate,
+    M13 goldens).
+  - Catalog "dg" + wire default; the three key-set pin tests updated.
+  Acceptance gates G-A..G-F in tests/test_m20_dg.py (NOT YET RUN):
+  bit-identity off; S-P vs Airy <=5%; S-P centroid 0.5-4 nm and DG
+  within factor 2 of S-P; DG-on direction gates (centroid >0.2 nm,
+  surface suppression, Lambda interior peak, C_max drop 3-25%);
+  refusals; catalog invariants.
+  Self-caught defects during the gate-writing cross-check: a double-kT
+  bug in the 2D-DOS occupation (sheet densities ~1e-7 cm^-2), an
+  inverted E_band sign in the S-P driver (well in the bulk), and an
+  np.empty garbage diagonal at the Hamiltonian's far boundary.
   Depends: nothing hard; after M13 so FD composes.
   LITERATURE NOTE (2026-08-27, informs design before implementation
   starts -- not yet acted on): the density-gradient model's numerical
@@ -766,7 +792,16 @@ for what has actually landed)
                                                   PLAN.md)
   M15 impact ionization coupling                 COMPLETE (all gates
                                                   green, 2026-08-28)
-  M16 band-to-band tunneling                     not started
+  M16 band-to-band tunneling                     IMPLEMENTED 2026-08-29
+                                                  (local Kane in
+                                                  Device1D, M15-R1b
+                                                  live coupling,
+                                                  ordering gates
+                                                  written first; see
+                                                  pytcad/M16-BTBT-
+                                                  PLAN.md; suite
+                                                  confirmation
+                                                  pending)
   M17 transient simulation                       not started
   M18 small-signal AC                            not started
   M19 self-heating                               not started
@@ -920,11 +955,17 @@ Independent candidates for the next milestone (any order):
    phase 3). A hard-debug pass found six real bugs before the 25-test
    gate battery went green -- see the M21 status line above and
    M21-MESHING-PLAN.md section 13.
-3. M16 BAND-TO-BAND TUNNELING -- follows the M15 pattern (frozen-field
-   approximation, lagged-source architecture) MORE carefully this time:
-   write the residual-ordering and snapshot-ordering invariants as
-   gates BEFORE the physics gates, since M15's own hard-debug pass
-   shows both are easy to get backwards silently.
+3. M16 BAND-TO-BAND TUNNELING -- LANDED-PENDING-VERIFICATION 2026-08-29
+   following the M15 R1b pattern (live-coupled generation, shared
+   strength ladder), and this time with the residual-ordering and
+   live-state invariants written as gates BEFORE the physics gates,
+   exactly as this file's M16 note required (see
+   pytcad/M16-BTBT-PLAN.md).  The literature-note failure mode
+   (local-model plateau at high reverse bias) is gated explicitly by
+   the high-bias non-plateau gate.  LANDED-PENDING-VERIFICATION means
+   the gates were never executed (the session's shell was blocked);
+   the next session MUST run tests/test_m16_btbt.py first (history.md
+   Addendum 16).
 4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists and
    is validated; catalog wiring only).
 5. M14 remainder -- LANDED 2026-08-28: G-B (D_it C-V stretch-out), G-C
@@ -938,8 +979,14 @@ Independent candidates for the next milestone (any order):
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Band-to-band tunneling (M16); transient (M17); AC (M18);
-  self-heating (M19); density gradient / quantum corrections (M20).
+- Transient (M17); AC (M18);
+  self-heating (M19).  (M15 impact ionization, M22 phase 2's
+  continuation driver, and M16 local Kane BTBT are COMPLETE/LANDED --
+  see sections 3 and 5 and pytcad/M16-BTBT-PLAN.md; the nonlocal BTBT
+  variant remains Tier 3.  M20 density gradient is
+  LANDED-PENDING-VERIFICATION -- equilibrium-only DG exists behind
+  Models(dg=True)/MOSCapacitor(dg=True), gates unexecuted; DG
+  TRANSPORT and 2D/3D DG remain not implemented.)
 - Unstructured meshing (M21 phase 3); 2D process geometry engine
   (M23); pair diffusion/TED/segregation (M24); Monte-Carlo implantation
   (M25); general 3D (M26). (M15 impact ionization and M22 phase 2's
@@ -1005,12 +1052,25 @@ recorded here so they are tracked rather than silently absent):
    Jacobi preconditioning; see section 4b).
 3. [DONE 2026-08-28] M21 phase 2 -- 2D/3D separable adaptive
    refinement LANDED (25 gates); see section 5 item 2.
-4. M16 BAND-TO-BAND TUNNELING, with residual-ordering and snapshot-
-   ordering gates written FIRST this time (see section 5 item 4).
+4. [DONE 2026-08-29] M16 BAND-TO-BAND TUNNELING -- local Kane BTBT
+   LANDED in Device1D, residual-ordering and live-state gates written
+   first (see section 5 item 3 and pytcad/M16-BTBT-PLAN.md).
 5. [DONE 2026-08-28] M14 remainder -- G-B/G-C(1D)/catalog LANDED;
    driving_force descoped, G-C(2D) and G-A remain open (see section 5
    item 5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT --
    small, independent, low-risk, still open.
+7. [DONE 2026-08-29, LANDED-PENDING-VERIFICATION] M20 DENSITY-GRADIENT
+   -- Ancona-Stafford DG quantum correction (equilibrium-only:
+   MOSCapacitor dg flag + Device1D Models.dg) plus the pytcad/dg.py
+   analysis layer with the Schrodinger-Poisson reference solver; gates
+   G-A..G-F in tests/test_m20_dg.py written but NOT executed (same
+   session standing as M16 and the M22 Schur preconditioner; see
+   section 4b's M20 entry and history.md Addendum 18).  Verification
+   backlog for the next session: py_compile the touched files, then
+   test_m16_btbt.py, test_m20_dg.py, test_m22_linsolve.py, and the
+   full suite.
+8. NEXT on the spine: M17 TRANSIENT (unlocks M18 small-signal/AC and
+   M27 self-heating's coupled solve).
 6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native
    `__cxa_deleted_virtual` abort inside `QQuickPaintedItem::
    updatePaintNode`, ~1-in-3 to 1-in-5 full-suite runs). Root cause:

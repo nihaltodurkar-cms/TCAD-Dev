@@ -11,12 +11,23 @@ pytcad/
                  Si, Ge, GaAs (heterostructure parameter sets)
   mesh.py        non-uniform meshing + Debye-length adequacy check
   process.py     implantation, diffusion, Deal-Grove oxidation
+  fermi.py       complete Fermi-Dirac integrals F_{1/2}, F_{-1/2},
+                 inverse, FD intrinsic density, tabulated fast path
+                 (M13, COMPLETE: wired through the full solver core)
   device.py      drift-diffusion: Poisson + both continuity equations;
                  per-node heterojunction materials (M11); Hurkx trap-
-                 assisted tunneling (M12)
-  moscap.py      MOS capacitor, quasi-static C-V
+                 assisted tunneling (M12); impact ionization (M15);
+                 local Kane/Hurkx BTBT (M16)
+  btbt.py        BTBT coefficients A, B (Hurkx Table I silicon), pure module
+  moscap.py      MOS capacitor, quasi-static C-V, interface traps (M14);
+                 density-gradient quantum correction (M20)
+  dg.py          M20 analysis layer: DG quantum potential, Airy triangular-
+                 well reference, Schrödinger-Poisson inversion-layer solver
+  linsolve.py    direct/GMRES/BiCGStAB + ILU, node-block-Jacobi and Schur
+                 preconditioners (M22)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
-  device2d.py    2D drift-diffusion: box-integration Poisson + continuity
+  device2d.py    2D drift-diffusion: box-integration Poisson + continuity;
+                 Lombardi CVT surface mobility (M14)
   mosfet.py      2D MOSFET builder + Id-Vg sweep
   mesh3d.py      tensor-product 3D mesh + Debye-length adequacy check
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
@@ -25,9 +36,6 @@ examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
 tests/           541 tests: analytic-limit validation, published-value
                  physics benchmarks, headless GUI tests — all green,
                  zero warnings
-  fermi.py       complete Fermi-Dirac integrals F_{1/2}, F_{-1/2},
-                 inverse, FD intrinsic density, tabulated fast path
-                 (M13, COMPLETE: wired through the full solver core)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -70,7 +78,7 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 | Full dopant ionisation | cryogenic temperature; deep dopants |
 | Classical (no quantisation) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
-| No impact ionisation / tunnelling | avalanche breakdown, band-to-band tunnelling (GIDL), direct gate leakage below ~2 nm oxide |
+| Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
 | Isothermal, steady state | self-heating, transient / AC analysis |
 
 ---
@@ -109,6 +117,10 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | Trap-assisted tunneling | Hurkx: SRH denominator with WKB-enhanced densities, $\tau_p(n + n_{ie}(1{+}P_p)) + \tau_n(p + n_{ie}(1{+}P_n))$ | theory (Hurkx et al. 1992); WKB factors SI-calibrated |
 | Fermi-Dirac statistics | $n = N_c F_{1/2}(\eta)$ with nu-factor generalized Scharfetter-Gummel (`Models(fd=True)`); incomplete ionization for shallow B/P/As behind `Models(incomplete_ion=True)` | theory (parabolic-band FD; Bessemoulin-Christensen modified SG); gated vs independent roots and published freeze-out curves |
 | Deal–Grove | $x^2 + Ax = B(t+\tau)$ | theory; $A,B$ Arrhenius **fits** |
+| Impact ionization | $G = [\alpha_n(E)\lvert J_n\rvert + \alpha_p(E)\lvert J_p\rvert]/q$, van Overstraeten–de Man (`Models(impact=True)`, 1D) | measured coefficients; lagged-source coupling |
+| Band-to-band tunneling | $G = AF^2e^{-B/F}$ local Kane/Hurkx (`Models(btbt=True)`, 1D) | Hx Table I Si coefficients (M16) |
+| Surface mobility | Lombardi CVT: $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D MOS channel) | Lombardi 1988; simplified phonon term (M14) |
+| Density gradient | $\Lambda = -\frac{\gamma\hbar^2}{2m^\ast q}\frac{(\sqrt n)''}{\sqrt n}$, $n \to n\,e^{-\Lambda/V_T}$ (`Models(dg=True)` / `MOSCapacitor(dg=True)`, equilibrium) | Ancona–Stafford 1999; gated vs the code's own Schrödinger–Poisson solve + Airy analytics (M20) |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.
 
@@ -231,7 +243,7 @@ AGENTS.md's Commands section for why.
 - **Implant tables are approximate** LSS moments for *amorphous* Si, good to ~5–10%. They contain **no channelling**, which in crystalline Si can put a tail 1–2 decades deeper. Pass `Rp`/`dRp` from SRIM for anything real.
 - **Diffusion is intrinsic and constant-$D$.** No extrinsic (charged-defect) enhancement above $n_i(T)$, no transient enhanced diffusion from implant damage, no oxidation-enhanced diffusion, no dopant–defect pair kinetics. These dominate real junction formation below ~1000 °C.
 - **Deal–Grove under-predicts thin dry oxides.** The $x_i \approx 25$ nm initial thickness is a fudge factor, not physics.
-- **No quantum corrections, no poly depletion, no $D_{it}$** in the MOS module.
+- **Quantum corrections: density-gradient only, equilibrium-only.** `MOSCapacitor(dg=True)` and `Device1D(Models(dg=True))` add the Ancona–Stafford density-gradient correction (inversion centroid ~1 nm off the interface, $C_{max}$ lowered), gated against the code's own Schrödinger–Poisson solve (`pytcad/dg.py`) and the literature ~1 nm centroid. DG transport in `solve_bias`, 2D/3D, and dg+FD/dg+incomplete-ion compositions are refused (M20 scope); $\gamma=1$ is the uncalibrated Bohm value. No poly depletion; $D_{it}$ is available (M14).
 - **Quasi-static C-V only.** A 1 MHz measurement gives the high-frequency curve, where $C$ stays near $C_{min}$ in inversion because minority carriers cannot follow.
 
 ### 2D MOSFET (new)
@@ -244,7 +256,7 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Validation.** The primary correctness gate is dimensional reduction: a z-invariant 3D structure must reproduce the already-validated 2D solver exactly. `tests/test_validation_3d.py` checks this at equilibrium and forward bias, and `examples/05_3d_reduces_to_2d.py` makes it visual — extruding a p-n junction in z, solving both 2D and 3D, and plotting the difference. Measured on this repo: max $|\psi_{3D}-\psi_{2D}|$ = 1.11e-16 V, max $|J_{3D}-J_{2D}|$ = 3.98e-10 A/cm² — both at floating-point noise level, not just within the tests' (looser) 1e-6 V / 1e-3 relative tolerances. The analytic Newton Jacobian is independently checked against finite differences (worst relative error < 1e-3 across 30 random sampled columns via sparse column-slice extraction — never `J.toarray()` on the full matrix), and terminal-current extraction (residual-based, not edge-walking) conserves charge to <1e-6 relative error on a two-terminal 3D resistor.
 
-**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). Direct sparse solve only (`scipy.sparse.linalg.spsolve`), no iterative/preconditioned solver, no GPU. This has a real, measured cost: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; do not attempt 40³+ meshes without an iterative solver.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
+**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). The default path is a direct sparse solve (`scipy.sparse.linalg.spsolve`); `pytcad/linsolve.py` provides GMRES with node-block-Jacobi and Schur-complement preconditioners (M22, `precond="schur"`) for the large coupled systems, but the direct path remains the default until iteration counts are measured across the suite. The direct-solve scaling cost is real and measured: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware without the iterative path; do not attempt 40³+ meshes without it.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
 
 ### Desktop GUI (new)
 
@@ -406,10 +418,13 @@ than device currents.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
 **Project roadmap.** `ARCHITECTURE.md` section 4b governs all future
 capability growth (three parity tiers, milestones M13–M30 with
-published-value acceptance gates). M13 (Fermi-Dirac statistics) is
-COMPLETE; the active milestone specs are `pytcad/M14-SURFACE-
-MOBILITY-PLAN.md`, `pytcad/M15-IONIZATION-PLAN.md`,
-`pytcad/M21-MESHING-PLAN.md`, and `pytcad/M22-LINSOLVE-PLAN.md`.
+published-value acceptance gates). M13 (Fermi-Dirac statistics), M14
+(surface mobility), M15 (impact ionization), and M21 (meshing) are
+COMPLETE. M16 (BTBT), M20 (density-gradient quantum correction), and
+the M22 Schur preconditioner are LANDED-PENDING-VERIFICATION — code and
+gates written but not executed this session; see `history.md`
+Addenda 16–18. The milestone specs live in `pytcad/M14-…` through
+`pytcad/M22-…` plan files.
 
 - **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 

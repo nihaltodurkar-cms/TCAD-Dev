@@ -125,15 +125,19 @@ def test_family_curves_reach_the_canvas(gapp, tmp_path):
     fam.setBaseSpec(_diode_base_spec())
     fam.configureFamily(stepped="right", start=0.0, stop=0.5, step=0.5)
     fam.runFamily(swept="left", start=0.0, stop=0.3, step=0.1)
-    assert _pump_until(gapp, lambda: bool(fam.curves))
+    # Wait for BOTH curves, not just the first: bool(fam.curves) goes
+    # true after curve 1/2 lands, so a fixed settle-wait after that
+    # races the second curve's solve under CPU contention (e.g. -n 4
+    # parallel runs) -- self-caught as a flake, not a wiring bug (the
+    # canvas update itself is a same-tick signal, no delay needed once
+    # both curves exist).
+    assert _pump_until(gapp, lambda: len(fam.curves) == 2), \
+        "family did not finish both curves"
 
     # ViewportPanel's Connections pushes the curves into the canvas;
     # give the queued signal delivery a few loop turns to land
-    for _ in range(10):
-        gapp.processEvents()
-        gapp.thread().msleep(50)
     canvas = root.findChild(object, "mplCanvas")
-    assert canvas.familyCurveCount() == 2, \
+    assert _pump_until(gapp, lambda: canvas.familyCurveCount() == 2), \
         "canvas did not receive the family curves"
 
 

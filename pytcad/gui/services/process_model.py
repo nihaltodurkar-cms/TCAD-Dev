@@ -10,6 +10,7 @@ this, never a second hand-written formula (design section 21's audit).
 """
 from dataclasses import dataclass, field, asdict
 import copy
+import json
 import uuid
 
 import math
@@ -93,6 +94,21 @@ class ProcessFlow:
     @classmethod
     def from_dict(cls, d):
         return cls(steps=[ProcessStep.from_dict(s) for s in d.get("steps", [])])
+
+    def to_json(self, path):
+        """Mirrors DeviceSpec.to_json's exact contract (gui/services/
+        device_spec.py) -- this is what lets AppController hand a
+        ProcessFlow straight to JobRunner.start() (it calls
+        `spec.to_json(job_path)` generically on whatever it is given),
+        retiring the _ProcessFlowJob adapter that used to bridge the gap
+        because this method didn't exist yet."""
+        with open(path, "w") as fh:
+            json.dump(self.to_dict(), fh)
+
+    @classmethod
+    def from_json(cls, path):
+        with open(path) as fh:
+            return cls.from_dict(json.load(fh))
 
 
 # Validation

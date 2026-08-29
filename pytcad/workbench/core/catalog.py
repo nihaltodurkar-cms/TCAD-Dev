@@ -150,6 +150,32 @@ _MODELS = {
                     "supported; near-BV convergence requires the "
                     "staged-generation continuation.",
     ),
+    "btbt": ModelInfo(
+        key="btbt",
+        title="Band-to-band tunneling (local Kane/Hurkx)",
+        equations=(
+            "G = A * F^2 * exp(-B / F)  [cm^-3 s^-1], F = |E| [V/cm]",
+            "coupled live into the Newton residual/Jacobian (M15 R1b "
+            "pattern) with dG/dpsi chain-ruled through the node field",
+        ),
+        parameters=(),
+        references=(
+            "Hurkx, Klaassen & Knuvers, IEEE Trans. Electron Devices 39, "
+            "331 (1992), Table I (silicon direct BTBT)",
+            "Kane, J. Phys. Chem. Solids 12, 181 (1960) -- the "
+            "F^2 exp(-B/F) local form's origin",
+        ),
+        applicability="1D (device.py); local-field model; silicon "
+                      "coefficients; Zener/GIDL regime",
+        enabled_by_default=False,
+        limitations="No nonlocal (line-integral) BTBT -- the plain "
+                    "local Kane/Hurkx form is known to UNDERESTIMATE "
+                    "leakage at large reverse bias relative to nonlocal "
+                    "BTBT (single average field stands in for the whole "
+                    "tunneling path); gated on its known failure mode "
+                    "(the M16 high-bias non-plateau gate). Not ported "
+                    "to 2D/3D; no Modified-Hurkx dynamic correction.",
+    ),
     "surface_mobility": ModelInfo(
         key="surface_mobility",
         title="Surface/inversion-layer mobility (Lombardi CVT)",
@@ -173,6 +199,32 @@ _MODELS = {
                     "form (M14 G-A, open -- see M14-SURFACE-MOBILITY-"
                     "PLAN.md); applied lagged in the Newton loop, scoped "
                     "to mesh row 0 (the gate-adjacent surface).",
+    ),
+    "dg": ModelInfo(
+        key="dg",
+        title="Density-gradient quantum correction (Ancona-Stafford)",
+        equations=(
+            "n = n_classical * exp(-Lambda_n / V_T),  "
+            "p = p_classical * exp(-Lambda_p / V_T)",
+            "Lambda = -(gamma * hbar^2 / (2 m* q)) * (sqrt(n))''/sqrt(n) "
+            "[V]",
+        ),
+        parameters=(),
+        references=(
+            "Ancona & Stafford, IEEE Trans. Electron Devices 46, 1799 "
+            "(1999)",
+            "Ancona, Superlattices & Microstructures 27, 457 (2000)",
+        ),
+        applicability="1D equilibrium (device.py) and MOSCapacitor C-V "
+                      "(moscap.py); Boltzmann statistics only (dg+fd "
+                      "refused)",
+        enabled_by_default=False,
+        limitations="Equilibrium-only: Device1D.solve_bias and Device2D/3D "
+                    "refuse (DG transport is out of M20 scope); gamma=1.0 "
+                    "default is the uncalibrated Bohm value; Lambda "
+                    "lagged inside Newton with an outer fixed point "
+                    "(frozen-quantum-potential, the M12-TAT precedent); "
+                    "|Lambda| clamped at 20*V_T (deep-bulk guard).",
     ),
     "incomplete_ion": ModelInfo(
         key="incomplete_ion",

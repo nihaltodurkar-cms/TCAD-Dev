@@ -184,6 +184,22 @@ class Device3D:
                 "flag -- a silently dropped physics model is a hidden "
                 "failure."
             )
+        if getattr(self.models, "btbt", False):
+            raise NotImplementedError(
+                "Band-to-band tunneling (Models(btbt=True)) is implemented "
+                "in Device1D only (M16 scope; 2D/3D ports are a follow-"
+                "up slice).  Refusing rather than silently ignoring the "
+                "flag -- a silently dropped physics model is a hidden "
+                "failure."
+            )
+        if getattr(self.models, "dg", False):
+            raise NotImplementedError(
+                "Density-gradient quantum correction (Models(dg=True)) is "
+                "implemented in Device1D equilibrium and MOSCapacitor only "
+                "(M20 scope; DG transport/3D is a follow-up slice).  "
+                "Refusing rather than silently ignoring the flag -- a "
+                "silently dropped physics model is a hidden failure."
+            )
         if getattr(self.models, "incomplete_ion", False):
             raise NotImplementedError(
                 "Incomplete dopant ionization "

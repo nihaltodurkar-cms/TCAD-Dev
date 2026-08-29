@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, asdict
 import numpy as np
 
 from .device_spec import MeshSpec, DopingSpec, ContactSpec, DeviceSpec
+from pytcad.mosfet import _sd_profile
 
 
 @dataclass
@@ -31,6 +32,21 @@ class RegionSpec:
     # Emitted as DeviceSpec.region_materials for every non-silicon
     # region by to_device_spec().  Resolution is case-insensitive.
     material: str = "SILICON"
+
+    # Per-region doping PROFILE, beyond uniform (GUI README "Planned"
+    # item): "uniform" (default, exactly today's behavior -- the flat
+    # net_doping_cm3 fill) or "gaussian_erfc", reusing mosfet_doping()'s
+    # own Gaussian-in-depth x erfc-lateral-rolloff shape (pytcad/mosfet.py
+    # _sd_profile) as a region option instead of a separate formula.
+    # The four profile_* fields are required (and validated, in
+    # rasterize_doping) only when doping_profile != "uniform"; net_doping_cm3
+    # is ignored in that case (profile_peak_cm3's sign takes over).
+    doping_profile: str = "uniform"
+    profile_peak_cm3: float = None       # signed peak, like net_doping_cm3
+    profile_sigma_y: float = None        # depth straggle [cm], from y_min
+    profile_sigma_lat: float = None      # lateral straggle [cm]
+    profile_edge_x: float = None         # mask-edge x position [cm]
+    profile_high_side: str = "left"      # "left" | "right" -- see _sd_profile
 
     def to_dict(self):
         return asdict(self)
@@ -362,16 +378,58 @@ def resolve_boundary_indices(boundary, mesh_spec):
     return i, j
 
 
+def _validate_profile_region(region):
+    """Fail loud, not silent: a non-uniform region missing its shape
+    parameters is a configuration error, never a 0/NaN doping value."""
+    for name in ("profile_peak_cm3", "profile_sigma_y",
+                 "profile_sigma_lat", "profile_edge_x"):
+        v = getattr(region, name)
+        if v is None or not np.isfinite(v):
+            raise ValueError(
+                f"region '{region.name}': doping_profile="
+                f"'{region.doping_profile}' requires a finite {name}")
+    if region.profile_sigma_y <= 0.0 or region.profile_sigma_lat <= 0.0:
+        raise ValueError(
+            f"region '{region.name}': profile_sigma_y/profile_sigma_lat "
+            "must be > 0")
+    if region.profile_high_side not in ("left", "right"):
+        raise ValueError(
+            f"region '{region.name}': profile_high_side must be "
+            f"'left' or 'right', got {region.profile_high_side!r}")
+
+
 def rasterize_doping(structure, mesh_spec):
     """Net doping [cm^-3], shape (Ny, Nx).  Regions apply in list order,
     later overwrites earlier, over a 0 cm^-3 background -- the same rule
     mosfet_doping() uses implicitly (background then source/drain
-    painted over it), made explicit here."""
+    painted over it), made explicit here.
+
+    Each region is either "uniform" (the flat net_doping_cm3 fill) or
+    "gaussian_erfc" (mosfet_doping()'s own Gaussian-in-depth x
+    erfc-lateral-rolloff shape, straggle measured from THIS region's
+    y_min -- i.e. the region's own top edge stands in for the mask/
+    surface _sd_profile normally measures depth from)."""
     x = np.asarray(mesh_spec.axes["x"], dtype=float)
     y = np.asarray(mesh_spec.axes["y"], dtype=float)
     doping = np.zeros((y.size, x.size))
     for region in structure.regions:
         xi = (x >= region.x_min) & (x <= region.x_max)
         yi = (y >= region.y_min) & (y <= region.y_max)
-        doping[np.outer(yi, xi)] = region.net_doping_cm3
+        mask = np.outer(yi, xi)
+        if region.doping_profile == "uniform":
+            doping[mask] = region.net_doping_cm3
+        elif region.doping_profile == "gaussian_erfc":
+            _validate_profile_region(region)
+            depth = np.maximum(y - region.y_min, 0.0)
+            shaped = _sd_profile(
+                x, depth, region.profile_edge_x, region.profile_sigma_y,
+                region.profile_sigma_lat, abs(region.profile_peak_cm3),
+                region.profile_high_side)
+            sign = 1.0 if region.profile_peak_cm3 >= 0.0 else -1.0
+            doping[mask] = (sign * shaped)[mask]
+        else:
+            raise ValueError(
+                f"region '{region.name}': unknown doping_profile "
+                f"{region.doping_profile!r} (expected 'uniform' or "
+                "'gaussian_erfc')")
     return doping

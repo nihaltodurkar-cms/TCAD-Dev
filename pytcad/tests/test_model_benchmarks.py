@@ -329,6 +329,32 @@ def test_mobility_cvt_is_monotone_decreasing_in_field():
         assert np.all(np.isfinite(mu)) and np.all(mu > 0), carrier
 
 
+# ---------------------------------------------------------- M16 BTBT (Kane)
+def test_btbt_coefficients_match_published_table():
+    """Direct coefficient check against the published table (Hurkx,
+    Klaassen & Knuvers, IEEE Trans. Electron Devices 39, 331 (1992),
+    Table I -- silicon direct BTBT, Kane F^2 form; the same values
+    shipped as the default local-BTBT silicon parameters in the major
+    TCAD manuals):
+        A = 3.5e21 cm^-3 s^-1 ,  B = 1.03e8 V/cm
+    """
+    from pytcad.btbt import KANE_A_SI, KANE_B_SI
+    assert KANE_A_SI == 3.5e21
+    assert KANE_B_SI == 1.03e8
+
+
+def test_btbt_generation_has_kane_signature():
+    """The defining Kane signature: ln(G/F^2) vs 1/F is a straight line
+    with slope -B.  Regression over the Zener-relevant field range."""
+    from pytcad.btbt import btbt_generation, KANE_B_SI
+    F = np.logspace(5.5, 7.0, 60)                # V/cm
+    y = np.log(btbt_generation(F) / F**2)
+    slope, intercept = np.polyfit(1.0 / F, y, 1)
+    assert slope == pytest.approx(-KANE_B_SI, rel=0.01), \
+        f"recovered slope {slope:.4g} vs {-KANE_B_SI:.4g}"
+    assert btbt_generation(0.0) == 0.0           # low-field limit exact
+
+
 @pytest.mark.xfail(strict=True, reason=(
     "M14 G-A OPEN: the phonon-term constants B_n/B_p were never "
     "corroborated against a primary source (only delta_n/delta_p were, "

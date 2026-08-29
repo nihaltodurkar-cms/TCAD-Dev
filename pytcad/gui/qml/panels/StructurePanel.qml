@@ -22,6 +22,12 @@ Rectangle {
                     bounds: controller.regionListModel.data(idx, Qt.UserRole + 3),
                     doping: controller.regionListModel.data(idx, Qt.UserRole + 4),
                     material: controller.regionListModel.data(idx, Qt.UserRole + 6),
+                    dopingProfile: controller.regionListModel.data(idx, Qt.UserRole + 7),
+                    profilePeak: controller.regionListModel.data(idx, Qt.UserRole + 8),
+                    profileSigmaY: controller.regionListModel.data(idx, Qt.UserRole + 9),
+                    profileSigmaLat: controller.regionListModel.data(idx, Qt.UserRole + 10),
+                    profileEdgeX: controller.regionListModel.data(idx, Qt.UserRole + 11),
+                    profileHighSide: controller.regionListModel.data(idx, Qt.UserRole + 12),
                 }
             }
         }

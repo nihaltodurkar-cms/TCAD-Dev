@@ -32,24 +32,6 @@ from .properties_model import PropertiesModel
 from .region_list_model import RegionListModel
 
 
-class _ProcessFlowJob:
-    """Adapts a ProcessFlow to the `to_json(path)` contract JobRunner.start()
-    expects on whatever it is handed (it calls `spec.to_json(job_path)`
-    generically -- see job_runner.py). ProcessFlow (Task 3/7) only exposes
-    to_dict()/from_dict(), matching process_runner.py's own CLI contract
-    (gui/tests/test_process_runner.py writes `flow.to_dict()` by hand), so
-    this tiny wrapper is added here rather than growing process_model.py,
-    which this task must not touch.
-    """
-    def __init__(self, flow):
-        self._flow = flow
-
-    def to_json(self, path):
-        import json
-        with open(path, "w") as fh:
-            json.dump(self._flow.to_dict(), fh)
-
-
 def _has_non_finite_leaf(value):
     """True if `value` (or anything nested inside a dict it contains) is a
     non-finite number -- e.g. QML's parseFloat("") / parseFloat("abc")
@@ -586,6 +568,54 @@ class AppController(QObject):
                   lambda: setattr(region, "net_doping_cm3", old),
                   "set region doping")
 
+    @Slot(str, str, float, float, float, float, str)
+    def setRegionDopingProfile(self, region_id, kind, peak_cm3, sigma_y,
+                              sigma_lat, edge_x, high_side):
+        """GUI README "per-region doping profiles" item: "uniform" (the
+        existing net_doping_cm3 fill, untouched) or "gaussian_erfc"
+        (mosfet_doping()'s own Gaussian-in-depth x erfc-lateral-rolloff
+        shape, see structure_model.rasterize_doping). QML always passes
+        all five profile fields (0.0/"left" when kind == "uniform" and
+        they don't apply) -- same positional-args convention as
+        setRegionBounds, validated here rather than only inside
+        rasterize_doping so a bad edit is rejected at entry, not at the
+        next solve."""
+        region = self.structure.find_region(region_id)
+        if region is None:
+            return
+        if kind not in ("uniform", "gaussian_erfc"):
+            self.errorRaised.emit("Invalid doping profile",
+                                  f"Unknown profile kind '{kind}'.")
+            return
+        if kind == "gaussian_erfc":
+            if not all(math.isfinite(v) for v in
+                      (peak_cm3, sigma_y, sigma_lat, edge_x)):
+                self.errorRaised.emit(
+                    "Invalid doping profile",
+                    "Peak, sigma_y, sigma_lat and edge_x must be finite.")
+                return
+            if sigma_y <= 0.0 or sigma_lat <= 0.0:
+                self.errorRaised.emit(
+                    "Invalid doping profile",
+                    "sigma_y and sigma_lat must be positive.")
+                return
+            if high_side not in ("left", "right"):
+                self.errorRaised.emit(
+                    "Invalid doping profile",
+                    "high_side must be 'left' or 'right'.")
+                return
+        old = (region.doping_profile, region.profile_peak_cm3,
+              region.profile_sigma_y, region.profile_sigma_lat,
+              region.profile_edge_x, region.profile_high_side)
+        new = (kind, peak_cm3, sigma_y, sigma_lat, edge_x, high_side)
+
+        def apply(vals):
+            (region.doping_profile, region.profile_peak_cm3,
+             region.profile_sigma_y, region.profile_sigma_lat,
+             region.profile_edge_x, region.profile_high_side) = vals
+        self._push(lambda: apply(new), lambda: apply(old),
+                  "set region doping profile")
+
     @Slot(str, str)
     def setRegionMaterial(self, region_id, material):
         """M11-S5: per-region material editing (MaterialLibrary key,
@@ -902,7 +932,7 @@ class AppController(QObject):
         self._set_status("Running process flow...")
         self._set_busy(True)
         try:
-            self._process_runner.start(_ProcessFlowJob(self.process_flow))
+            self._process_runner.start(self.process_flow)
         except Exception as exc:
             self._set_busy(False)
             self._set_status("Failed to start")

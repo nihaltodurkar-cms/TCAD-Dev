@@ -16,10 +16,14 @@ capacitance returns to C_ox in strong inversion.  Measuring at 1 MHz on a
 real substrate gives the high-frequency curve instead, where C saturates near
 C_min, because minority carriers cannot be generated fast enough.
 
-Not included: quantum confinement of the inversion layer (shifts the charge
-centroid ~1 nm off the interface and lowers C_max by 10-20% in thin-oxide
-devices), poly-gate depletion, and tunnelling leakage through oxides below
-~2 nm.
+M20 (2026-08-29): density-gradient quantum correction.  dg=True adds
+the Ancona-Stafford DG correction n -> n*exp(-Lambda/V_T) (charge
+centroid ~1 nm off the interface, C_max lowered by up to ~20% on thin
+oxides) via a lagged-Lambda outer fixed point -- see pytcad/dg.py and
+M20-DENSITY-GRADIENT-PLAN.md.  Default OFF is bit-identical.
+
+Still not included: poly-gate depletion, and tunnelling leakage
+through oxides below ~2 nm.
 
 M14 (2026-08-28): interface trap capacitance D_it. C_it = q * D_it
 [F/cm^2], matching M14-SURFACE-MOBILITY-PLAN.md's spec text exactly.
@@ -39,12 +43,15 @@ there), so phi_s_0 does not appear separately. Default D_it=0.0 is
 bit-identical to the pre-M14 solve.
 """
 
+import warnings
+
 import numpy as np
 from scipy.sparse import diags
 
 from . import linsolve
-from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .constants import KB_EV, Q, EPS0, thermal_voltage, trapz
 from .device import fd_density, fd_ddensity_deta
+from .dg import quantum_potential
 from .fermi import FERMI_ETA_MAX, FERMI_ETA_MIN, f_half
 from .materials import SILICON, Semiconductor, nie_effective
 
@@ -97,7 +104,7 @@ class MOSCapacitor:
 
     def __init__(self, Nsub, tox_cm, gate="n+poly", Qf=0.0, T=300.0,
                  material: Semiconductor = SILICON, L_cm=2e-4, nx=1200,
-                 fd=False, D_it=0.0):
+                 fd=False, D_it=0.0, dg=False, dg_gamma=1.0):
         self.mat = material
         self.T = T
         self.VT = thermal_voltage(T)
@@ -107,6 +114,21 @@ class MOSCapacitor:
         self.Cox = self.eps_ox / tox_cm            # [F/cm^2]
         self.Nsub = float(Nsub)
         self.Qf = Qf
+        # M20: density-gradient quantum correction.  Default OFF is
+        # bit-identical to the pre-M20 solve (the DG branch sits behind
+        # `if self.dg:` only).  dg+fd is REFUSED: composing the DG
+        # exponential correction with FD statistics needs a joint
+        # derivation nobody has validated here (see
+        # M20-DENSITY-GRADIENT-PLAN.md section 5).
+        self.dg = bool(dg)
+        self.dg_gamma = float(dg_gamma)
+        if self.dg and self.dg_gamma <= 0.0:
+            raise ValueError("dg_gamma must be > 0")
+        if self.dg and fd:
+            raise NotImplementedError(
+                "dg=True with fd=True is refused: the DG correction and "
+                "FD statistics compose through a joint density law that "
+                "has not been derived/validated here (M20 plan sec 5).")
 
         self.ni = material.ni(T)
         self.nie = float(nie_effective(abs(Nsub), material, T, True))
@@ -178,7 +200,17 @@ class MOSCapacitor:
 
     # ------------------------------------------------------------------
     def solve_psi(self, Vg, psi0=None, max_iter=200, tol=1e-10):
-        """Nonlinear Poisson solve at gate bias Vg.  Returns scaled psi."""
+        """Nonlinear Poisson solve at gate bias Vg.  Returns scaled psi.
+
+        M20: with dg=True the electron/hole densities gain the
+        density-gradient quantum correction n*exp(-Lambda_n/V_T) (see
+        pytcad/dg.py).  Lambda is LAGGED inside the Newton loop (the
+        frozen-quantum-potential analogue of the frozen-field TAT
+        precedent: with Lambda frozen, dn/dpsi == n exactly, so the
+        Jacobian is the classical one) and an OUTER fixed-point loop
+        re-solves until Lambda closes -- the standard Gummel-style
+        treatment of a nonlocal density correction.
+        """
         h = np.diff(self.xs)
         n_nodes = self.x.size
         dV = np.empty(n_nodes)
@@ -191,63 +223,102 @@ class MOSCapacitor:
         Vg_s = Vg / self.VT
         Vfb_s = self.Vfb / self.VT
 
-        for _ in range(max_iter):
-            e = np.clip(psi, -700, 700)
-            if self.fd:
-                # M13: physical-statistics densities (same construction
-                # and piecewise eta policy as Device1D)
-                # Clamp to FERMI_ETA_MAX before evaluating, matching the
-                # np.minimum(..., FERMI_ETA_MAX) guard used for the same
-                # quantity in the neutrality bisection above -- a
-                # transient Newton overshoot must not abort the whole
-                # solve when the converged answer would be valid.
-                en = np.minimum(e - self.ln_gn, FERMI_ETA_MAX)
-                ep = np.minimum(-e - self.ln_gp, FERMI_ETA_MAX)
-                n = fd_density(self.nc_s, en)
-                p = fd_density(self.nv_s, ep)
-                dnp = fd_ddensity_deta(self.nc_s, en) \
-                    + fd_ddensity_deta(self.nv_s, ep)
-            else:
-                n = self.nie_s * np.exp(e)
-                p = self.nie_s * np.exp(-e)
-                dnp = n + p
-            rho = n - p - self.C
+        # M20: lagged quantum potentials [V]; zero = no correction.
+        Lam_n = np.zeros(n_nodes)
+        Lam_p = np.zeros(n_nodes)
+        n_outer = 60 if self.dg else 1
 
-            F = np.zeros(n_nodes)
-            F[1:-1] = ((psi[2:] - psi[1:-1]) / h[1:]
-                       - (psi[1:-1] - psi[:-2]) / h[:-1]
-                       - dV[1:-1] * rho[1:-1])
-            # surface node: half box with the gate flux entering, minus
-            # the M14 interface-trap charge (0.0 at the default D_it=0)
-            F[0] = ((psi[1] - psi[0]) / h[0]
-                    + self.kappa * (Vg_s - Vfb_s - (psi[0] - self.psi_b))
-                    - self.dit_coeff * (psi[0] - self.psi_b)
-                    - dV[0] * rho[0])
-            F[-1] = psi[-1] - self.psi_b
+        for _outer in range(n_outer):
+            for _ in range(max_iter):
+                e = np.clip(psi, -700, 700)
+                if self.fd:
+                    # M13: physical-statistics densities (same construction
+                    # and piecewise eta policy as Device1D)
+                    # Clamp to FERMI_ETA_MAX before evaluating, matching the
+                    # np.minimum(..., FERMI_ETA_MAX) guard used for the same
+                    # quantity in the neutrality bisection above -- a
+                    # transient Newton overshoot must not abort the whole
+                    # solve when the converged answer would be valid.
+                    en = np.minimum(e - self.ln_gn, FERMI_ETA_MAX)
+                    ep = np.minimum(-e - self.ln_gp, FERMI_ETA_MAX)
+                    n = fd_density(self.nc_s, en)
+                    p = fd_density(self.nv_s, ep)
+                    dnp = fd_ddensity_deta(self.nc_s, en) \
+                        + fd_ddensity_deta(self.nv_s, ep)
+                else:
+                    n = self.nie_s * np.exp(e)
+                    p = self.nie_s * np.exp(-e)
+                    dnp = n + p
+                if self.dg:
+                    # M20: with Lambda frozen, n = nie_s*exp(psi)*
+                    # exp(-Lam/VT) has dn/dpsi == n exactly -- dnp keeps
+                    # its classical form in terms of the CORRECTED n, p.
+                    n = n * np.exp(-Lam_n / self.VT)
+                    p = p * np.exp(-Lam_p / self.VT)
+                    dnp = n + p
+                rho = n - p - self.C
 
-            main = np.zeros(n_nodes)
-            up = np.zeros(n_nodes - 1)
-            lo = np.zeros(n_nodes - 1)
-            main[1:-1] = (-1.0 / h[1:] - 1.0 / h[:-1]
-                          - dV[1:-1] * dnp[1:-1])
-            up[1:] = 1.0 / h[1:]
-            lo[:-1] = 1.0 / h[:-1]
-            main[0] = -1.0 / h[0] - self.kappa - self.dit_coeff - dV[0] * dnp[0]
-            up[0] = 1.0 / h[0]
-            main[-1] = 1.0
-            lo[-1] = 0.0
+                F = np.zeros(n_nodes)
+                F[1:-1] = ((psi[2:] - psi[1:-1]) / h[1:]
+                           - (psi[1:-1] - psi[:-2]) / h[:-1]
+                           - dV[1:-1] * rho[1:-1])
+                # surface node: half box with the gate flux entering, minus
+                # the M14 interface-trap charge (0.0 at the default D_it=0)
+                F[0] = ((psi[1] - psi[0]) / h[0]
+                        + self.kappa * (Vg_s - Vfb_s - (psi[0] - self.psi_b))
+                        - self.dit_coeff * (psi[0] - self.psi_b)
+                        - dV[0] * rho[0])
+                F[-1] = psi[-1] - self.psi_b
 
-            A = diags([lo, main, up], [-1, 0, 1], format="csc")
-            # linsolve.solve_linear(method="direct") no longer
-            # reformats A before calling spsolve, so this stays
-            # bit-identical to the raw spsolve(A, -F) call while adding
-            # the finiteness/singularity checks a raw call silently
-            # skips.
-            d, _ = linsolve.solve_linear(A, -F, method="direct")
-            d = np.clip(d, -3.0, 3.0)
-            psi = psi + d
-            if np.abs(d).max() < tol:
+                main = np.zeros(n_nodes)
+                up = np.zeros(n_nodes - 1)
+                lo = np.zeros(n_nodes - 1)
+                main[1:-1] = (-1.0 / h[1:] - 1.0 / h[:-1]
+                              - dV[1:-1] * dnp[1:-1])
+                up[1:] = 1.0 / h[1:]
+                lo[:-1] = 1.0 / h[:-1]
+                main[0] = (-1.0 / h[0] - self.kappa - self.dit_coeff
+                           - dV[0] * dnp[0])
+                up[0] = 1.0 / h[0]
+                main[-1] = 1.0
+                lo[-1] = 0.0
+
+                A = diags([lo, main, up], [-1, 0, 1], format="csc")
+                # linsolve.solve_linear(method="direct") no longer
+                # reformats A before calling spsolve, so this stays
+                # bit-identical to the raw spsolve(A, -F) call while adding
+                # the finiteness/singularity checks a raw call silently
+                # skips.
+                d, _ = linsolve.solve_linear(A, -F, method="direct")
+                d = np.clip(d, -3.0, 3.0)
+                psi = psi + d
+                if np.abs(d).max() < tol:
+                    break
+            if not self.dg:
                 break
+            # M20 outer fixed point: refresh the quantum potentials from
+            # the DG-CORRECTED densities of the state just converged.
+            e = np.clip(psi, -700, 700)
+            n_corr = self.nie_s * np.exp(e) * np.exp(-Lam_n / self.VT)
+            p_corr = self.nie_s * np.exp(-e) * np.exp(-Lam_p / self.VT)
+            Lam_n_new = quantum_potential(
+                self.x, n_corr, self.mat.m_n_star,
+                gamma=self.dg_gamma, T=self.T)
+            Lam_p_new = quantum_potential(
+                self.x, p_corr, self.mat.m_p_star,
+                gamma=self.dg_gamma, T=self.T)
+            delta = max(np.abs(Lam_n_new - Lam_n).max(),
+                        np.abs(Lam_p_new - Lam_p).max())
+            Lam_n, Lam_p = Lam_n_new, Lam_p_new
+            if delta < 1e-8:
+                break
+        else:
+            if self.dg:
+                warnings.warn(
+                    "M20 DG outer fixed point did not converge "
+                    "(Lambda still moving at the iteration cap).")
+        self._dg_Lam_n = Lam_n if self.dg else None
+        self._dg_Lam_p = Lam_p if self.dg else None
         if self.fd:
             # The clamp above protects against a TRANSIENT overshoot
             # during iteration; it must not also silently accept a
@@ -284,6 +355,32 @@ class MOSCapacitor:
         phis, Qg = np.array(phis), np.array(Qg)
         C = np.gradient(Qg, Vg_list)
         return phis, Qg, C
+
+    # ------------------------------------------------------------------
+    def inversion_centroid(self, Vg):
+        """M20: charge centroid of the inversion layer at gate bias Vg.
+
+        x_c = integral(x * (n - n_bulk)) dx / integral((n - n_bulk)) dx
+        with the DG-corrected electron density when dg=True and the
+        classical one otherwise.  This is the quantity the README
+        section-6 caveat is about: classically x_c = 0 (charge ON the
+        interface); quantum mechanically it sits ~1 nm deep, lowering
+        C_max by 10-20% in thin-oxide devices.
+
+        Requires dg=True to return anything but ~0; returns the
+        CLASSICAL centroid (essentially the first mesh cell) otherwise,
+        so the on/off comparison is directly gateable.
+        """
+        psi = self.solve_psi(Vg)
+        Lam = self._dg_Lam_n if self.dg else np.zeros_like(psi)
+        e = np.clip(psi, -700, 700)
+        n = self.nie_s * np.exp(e) * np.exp(-Lam / self.VT)
+        n_bulk = self.nie_s * np.exp(self.psi_b)
+        dn = np.maximum(n - n_bulk, 0.0)
+        sheet = trapz(dn, self.x)
+        if sheet <= 0.0:
+            return 0.0
+        return float(trapz(self.x * dn, self.x) / sheet)
 
     # ------------------------------------------------------------------
     def analytic_landmarks(self):

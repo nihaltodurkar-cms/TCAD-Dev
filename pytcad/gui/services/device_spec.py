@@ -188,7 +188,8 @@ def _default_models():
     return {"doping_mobility": True, "field_mobility": False,
             "srh": True, "auger": True, "bgn": True,
             "fd": False, "incomplete_ion": False,
-            "impact": False, "surface_mobility": False}
+            "impact": False, "btbt": False,
+            "surface_mobility": False, "dg": False}
 
 
 @dataclass

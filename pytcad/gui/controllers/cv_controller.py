@@ -15,7 +15,10 @@ from ..services.result_store import NpzResultStore
 
 class _CVJob:
     """Adapts plain C-V parameters to the `to_json(path)` contract
-    JobRunner.start() expects (mirrors AppController._ProcessFlowJob)."""
+    JobRunner.start() expects (the same generic contract ProcessFlow
+    now satisfies directly via its own to_json/from_json -- see
+    gui/services/process_model.py -- but a bare dict of C-V params has
+    no dataclass of its own to grow that method on)."""
 
     def __init__(self, params):
         self.params = dict(params)
