@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QApplication
 
 
 def _pump(rounds=10):
@@ -51,6 +52,20 @@ def _close_all_top_level_windows():
         return
     for window in list(app.topLevelWindows()):
         window.destroy()
+    # QWindow.destroy() (above) only tears down QQuickWindow-style native
+    # windows -- a real QWidget top-level (e.g. Viewer3DWindow's
+    # QMainWindow, 3D-VISUALIZATION-PLAN.md) is not in topLevelWindows()
+    # the same way and is left dangling by the sweep above (confirmed
+    # directly: destroy()'ing a shown QMainWindow's windowHandle() does
+    # not remove it from topLevelWindows()). Close and schedule deletion
+    # for every top-level QWidget too, so a future test that shows a real
+    # Viewer3DWindow doesn't reintroduce the same incomplete-teardown
+    # crash class this fixture was built to prevent for QQuickWindow.
+    widget_app = QApplication.instance()
+    if widget_app is not None:
+        for widget in list(widget_app.topLevelWidgets()):
+            widget.close()
+            widget.deleteLater()
     _pump()
 
 
@@ -59,12 +74,20 @@ def _close_all_top_level_windows():
 # QCoreApplication built first (e.g. by a Qt-object-only test) can never be
 # upgraded to a screen-capable QGuiApplication afterward, so any later
 # QQuickWindow creation fails with "Cannot create window: no screens
-# available". Forcing QGuiApplication here, ahead of collection-order or
-# -k-selection accidents, makes every later `X.instance() or X([])` call
-# receive this same capable instance regardless of which file runs first.
+# available". Forcing QApplication here (a strict superset of
+# QGuiApplication -- QML still works identically under it, confirmed
+# directly), ahead of collection-order or -k-selection accidents, makes
+# every later `X.instance() or X([])` call receive this same capable
+# instance regardless of which file runs first. QApplication specifically
+# (not QGuiApplication) because gui/app.py's real bootstrap now
+# constructs one too, for the 3D viewer's QtWidgets window
+# (3D-VISUALIZATION-PLAN.md) -- a bare QGuiApplication singleton built
+# first here would make any test that constructs a REAL Viewer3DWindow
+# abort the whole worker process ("QWidget: Cannot create a QWidget
+# without QApplication"), not just fail one test.
 @pytest.fixture(scope="session", autouse=True)
 def _qt_application():
-    app = QGuiApplication.instance() or QGuiApplication([])
+    app = QApplication.instance() or QApplication([])
     yield app
     # Session teardown: a hard-debug pass found the crash below firing
     # AFTER the very last test's own teardown had already run (between

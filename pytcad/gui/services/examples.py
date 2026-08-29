@@ -121,9 +121,58 @@ def resistor_2d_example_spec():
     return spec_from_domain(dev)
 
 
+def _x_face_node_indices(i, ny, nz):
+    """Every (i, j, k) node on the x=const face at index `i`, as the
+    flat {"i", "j", "k"} lists ContactSpec.nodes expects for a 3D
+    device. Local to this module: the same construction is hand-rolled
+    several times over in pytcad's own 3D benchmarks/tests/examples
+    with no shared helper there, and pytcad/*.py is frozen core (see
+    AGENTS.md) -- not something this GUI-side module can refactor into.
+    This at least stops gui/services/examples.py from growing its own
+    second copy as more 3D examples are added here."""
+    jj, kk = np.meshgrid(np.arange(ny), np.arange(nz))
+    jj, kk = jj.ravel().tolist(), kk.ravel().tolist()
+    return {"i": [i] * len(jj), "j": jj, "k": kk}
+
+
+def resistor_3d_example_spec():
+    """A uniform 3D n-type resistor bar: two ohmic contacts on the
+    opposite x-faces, no junction and no gate -- the 3D analogue of
+    resistor_2d_example_spec(). 3D-VISUALIZATION-PLAN.md Phase 1's
+    foundation example: the first (and, as of this writing, only) GUI
+    path to a Device3D.
+
+    Built directly against MeshSpec/ContactSpec rather than through
+    workbench.adapters.spec.spec_from_domain(): that adapter's AUTHORED
+    (Region/ContactDef) path only builds 2D StructureModels today (see
+    structure_from_domain(), hardcoded dimensionality=2) -- there is no
+    DomainDevice->DeviceSpec path for 3D yet, so contact-face node
+    indices are resolved here by hand instead of reusing that machinery.
+
+    Small mesh (12x8x8 = 768 nodes) so it solves in well under a second
+    -- a demo, not a stress test.
+    """
+    nx, ny, nz = 12, 8, 8
+    x = np.linspace(0.0, 4e-4, nx)
+    y = np.linspace(0.0, 1e-4, ny)
+    z = np.linspace(0.0, 1e-4, nz)
+    doping = np.full((nz, ny, nx), 1e17)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                     axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[ContactSpec(name="left", kind="ohmic",
+                              nodes=_x_face_node_indices(0, ny, nz), V=0.0),
+                  ContactSpec(name="right", kind="ohmic",
+                              nodes=_x_face_node_indices(nx - 1, ny, nz), V=0.1)],
+        bias={"left": 0.0, "right": 0.1})
+
+
 EXAMPLES = {"mosfet_2d": mosfet_example_spec,
            "diode_1d": diode_1d_example_spec,
-           "resistor_2d": resistor_2d_example_spec}
+           "resistor_2d": resistor_2d_example_spec,
+           "resistor_3d": resistor_3d_example_spec}
 
 
 from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel

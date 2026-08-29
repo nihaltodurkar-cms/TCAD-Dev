@@ -13,8 +13,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtCore import QCoreApplication, QEvent, QUrl
-from PySide6.QtGui import QGuiApplication, QWindow
+from PySide6.QtGui import QWindow
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
+from PySide6.QtWidgets import QApplication
 
 from gui.controllers.app_controller import AppController
 from gui.visualization.mpl_canvas_item import MplCanvasItem
@@ -82,7 +83,16 @@ def close_engine(engine):
 
 
 def main():
-    app = QGuiApplication(sys.argv)
+    # QApplication, not QGuiApplication: the 3D viewer
+    # (gui/services/viewer3d.py, 3D-VISUALIZATION-PLAN.md) opens a
+    # QtWidgets window (QMainWindow/pyvistaqt.QtInteractor) as a
+    # separate top-level window -- QWidget construction hard-requires a
+    # QApplication instance and aborts the whole process otherwise
+    # ("QWidget: Cannot create a QWidget without QApplication", confirmed
+    # directly). QApplication is a strict superset of QGuiApplication
+    # (same QML/QQmlApplicationEngine compatibility, confirmed directly),
+    # so this has no effect on the existing QML-only app.
+    app = QApplication(sys.argv)
     app.setApplicationName("PyTCAD")
     engine, controller = create_engine(app)
     if not engine.rootObjects():

@@ -89,11 +89,15 @@ independent and must keep passing unchanged.
 - Single bias point per run — no I-V, C-V, or Id-Vg sweeps.
   *(Superseded in v0.4 for single-contact voltage sweeps; see v0.4 below.
   C–V and multi-contact/multi-parameter sweeps are still future work.)*
-- 3D results are shown as a central z-slice; there is no 3D renderer.
-  VTK/PyVista are intentionally not dependencies yet. **A real PyVista/
-  VTK 3D viewer is planned** (a separate top-level window, not embedded
-  in the QML scene graph) — see `../3D-VISUALIZATION-PLAN.md`; approved
-  by the user 2026-08-29, deferred, not started.
+- 3D results are shown as a central z-slice in the 2D field modes; a
+  separate real 3D renderer now exists as of v0.6 Phase 1 (see
+  `../3D-VISUALIZATION-PLAN.md`) — a "View in 3D" button (enabled only
+  for a solved 3D result) opens a standalone PyVista/VTK window (mesh
+  outline + a translucent device surface). Isosurfaces, volumetric
+  rendering, animated sweep playback, and an exploded structural view
+  are later phases of that plan, not yet started. There is still no GUI
+  path to AUTHOR a 3D device — only one hand-built quick-load example
+  (File > "Load 3D resistor example") exists to feed the new viewer.
 - The device spec is embedded in the job file as JSON, so very large
   meshes make large job files. Fine at v0.1 scale; a binary sidecar is
   the obvious later fix.
@@ -1059,17 +1063,20 @@ Full non-slow suite: 793 passed, 1 xfailed, 0 regressions.
 
 ## v0.6 Phase 4 — Runtime Validation & State Indicators (2026-08-29)
 
-- **GuiStateValidator.** A new runtime validation layer
-  (`gui/services/gui_state_validator.py`) that monitors solver state,
-  QML component health, and result integrity. Runs on a timer, reports
-  status via signals. Validates that result data matches the loaded
-  device spec, that QML components are in expected states, and that
-  solver outputs are finite and well-formed.
-- **StatusIndicator.** A new QML component (`StatusIndicator.qml`)
-  showing live validation status in the app footer. Displays green
-  (all checks pass), amber (warnings), or red (errors) with a
-  tooltip describing the current status. Uses hardcoded dark-theme
-  colors to avoid `Theme` singleton context issues.
+- **GuiStateValidator.** A runtime validation layer
+  (`gui/services/gui_state_validator.py`) reporting problems via
+  signals: a stale-result check (a result exists and the project has
+  since been dirtied) and an input-value check (NaN/Inf/empty required
+  fields). *(Corrected 2026-08-30 after a /code-review pass: this is
+  event-driven, not timer-polled — the original 500ms QTimer called two
+  placeholder methods that never actually checked anything, which has
+  since been removed along with them; see the "code-reviewed and fixed"
+  note in `GUI-IMPROVEMENT-PLAN.md`'s status line for the full list of
+  8 fixes.)*
+- **StatusIndicator.** A QML component (`StatusIndicator.qml`) showing
+  live validation status in the app footer. *(Corrected 2026-08-30: now
+  binds the real `Theme` singleton's colors rather than hardcoding hex
+  values, so it follows the app's live dark/light toggle.)*
 - **ValidationBanner.** A reusable validation banner component
   (`ValidationBanner.qml`) with severity levels (info, warning, error)
   for inline validation feedback in forms and panels.
@@ -1089,3 +1096,55 @@ Full non-slow suite: 793 passed, 1 xfailed, 0 regressions.
 
 Full GUI suite: 530 passed, 0 regressions. Core suite: 301 passed, 1
 xfailed (M14 G-A), 5 failed (M16 BTBT 1 gate, M20 DG 4 gates, user-decided open).
+
+## v0.6.1 3D Visualization Phases 1-2 — Foundation & Isosurfaces (2026-08-29/30)
+
+Full plan: `../3D-VISUALIZATION-PLAN.md` (PyVista/VTK; a separate
+top-level window, not embedded in the QML scene graph — VTK's Qt
+integration is a QWidget, not a QML item).
+
+- **`resistor_3d_example_spec()`** (`gui/services/examples.py`): the
+  first GUI-reachable path to a `Device3D` — a small (768-node) uniform
+  n-type bar, two ohmic contacts, no gate. Built by hand against
+  `MeshSpec`/`ContactSpec` directly (there is no `DomainDevice`/
+  `spec_from_domain` path for 3D yet — that adapter's authored path is
+  hardcoded 2D). "Load 3D resistor example" in the File menu.
+- **`gui/services/viewer3d.py`**: `build_rectilinear_grid`/
+  `attach_scalar_field` build a real `pyvista.RectilinearGrid` from a
+  solved 3D result's mesh axes, with EVERY available scalar field
+  attached as point data (field node ordering numerically verified, not
+  assumed, against pytcad's own `(Nz, Ny, Nx)` C-order array layout).
+  `extract_isosurface(grid, field_name, level)` wraps VTK's own contour
+  filter — confirmed directly that an out-of-range level returns an
+  empty surface, never a crash. `Viewer3DWindow` opens a `QMainWindow`
+  with a `pyvistaqt.QtInteractor` (mesh outline + translucent device
+  surface, always visible) plus a sidebar (field/level/colormap
+  `QComboBox`/`QDoubleSpinBox` controls) that recomputes the isosurface
+  live. Volumetric rendering/animation/exploded views are later phases.
+- **`AppController.openViewer3d()`**: the "View in 3D" button's
+  handler, gated on `meshStats.dimensionality == 3`, refusing loudly
+  (not silently) for "no result" and "not a 3D result" — the same
+  house rule as every other dimensionality guard in this codebase.
+- **A real crash-on-first-use bug, found and fixed in Phase 2**:
+  `gui/app.py` bootstrapped with `QGuiApplication`, which hard-aborts
+  the whole process the instant anything constructs a real `QWidget`
+  (confirmed directly: `Viewer3DWindow`'s `QMainWindow` would have
+  crashed the ENTIRE app, not just failed to render, the first time a
+  real user clicked "View in 3D"). Phase 1's own tests never caught
+  this because they monkeypatched `Viewer3DWindow` out before it could
+  ever be constructed for real. Fixed by switching `gui/app.py` and
+  `gui/tests/conftest.py`'s session Qt fixture to `QApplication` — a
+  confirmed strict superset of `QGuiApplication` (QML behavior
+  unchanged), so this has zero effect on the rest of the app.
+- **Known gap, narrowed in Phase 2**: no automated test opens a real,
+  live VTK render surface — this sandbox has no X server/Xvfb, and
+  confirmed directly that VTK's render window makes its own
+  windowing-system calls independent of Qt's headless platform plugin
+  (a live `QtInteractor` raises an X11 `BadWindow` error under
+  `QT_QPA_PLATFORM=offscreen`). The `QApplication` fix above DID unlock
+  testing everything else about `Viewer3DWindow` for real — its actual
+  `QMainWindow`/`QComboBox`/`QDoubleSpinBox` widget tree and all signal
+  wiring are now exercised by headless tests (`gui/tests/test_viewer3d.py`,
+  via a `FakeInteractor` standing in for just the GL surface); only the
+  live rendered pixels themselves still need a manual check on a real
+  desktop.

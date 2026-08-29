@@ -41,6 +41,8 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("diode_1d") }
             MenuItem { text: "Load 2D resistor example"
                        onTriggered: appController.loadExample("resistor_2d") }
+            MenuItem { text: "Load 3D resistor example"
+                       onTriggered: appController.loadExample("resistor_3d") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }

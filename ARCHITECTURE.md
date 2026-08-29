@@ -1051,9 +1051,12 @@ Independent candidates for the next milestone (any order):
   did add a solver BACKEND selector -- pytcad/devsim, gated on 1D
   devices -- so that half of this gap is closed; see
   `pytcad/gui/README.md`). A PyVista/VTK 3D VISUALIZATION viewer (for
-  an already-solved 3D result, not authoring one) is planned as a
-  separate window -- see `pytcad/3D-VISUALIZATION-PLAN.md`; approved by
-  the user 2026-08-29, deferred, not started.
+  an already-solved 3D result, not authoring one) now exists as of
+  2026-08-29/30 -- see `pytcad/3D-VISUALIZATION-PLAN.md` (Phases 1-2
+  shipped: a real 3D example device, a viewer window with mesh outline
+  and interactive isosurface controls; Phases 3-5 -- volumetric
+  rendering, animated sweep playback, exploded structural view -- not
+  started). 3D device AUTHORING remains entirely absent from the GUI.
 - Mixed-mode circuit coupling (M27); Schottky/tunnel contacts (M28);
   hydrodynamic/energy balance (M29); experiments/calibration/interop
   (M30).

@@ -1,11 +1,25 @@
 # AGENTS.md — Guidance for AI agents working on PyTCAD
 
+This file is the complete briefing for working on this repo -- it does
+not assume you have seen any prior conversation, and it does not assume
+any particular model. Read it in full before touching any file, and
+follow it literally: where it says a file is frozen, do not edit it;
+where it says run the tests, actually run them and read the real
+output rather than assuming the change worked; where it gives a
+concrete gotcha below, that gotcha has already cost a real debugging
+session once and will cost another if repeated. If anything here
+conflicts with what a user asks for in a specific conversation, say so
+and ask, rather than silently picking one.
+
 Read this before doing anything. Then read `history.md`
-(current state + open items), `ARCHITECTURE.md` (roadmap + live queue,
+(current state + open items -- read at least its LAST few entries,
+not just this file, since state changes faster than this file is
+updated), `ARCHITECTURE.md` (roadmap + live queue,
 including the governing future plan in section 4b, M13-M30), and
 the active milestone spec (currently `pytcad/M16-BTBT-PLAN.md`,
-`pytcad/M20-DENSITY-GRADIENT-PLAN.md`, and
-`pytcad/M22-LINSOLVE-PLAN.md` -- see
+`pytcad/M20-DENSITY-GRADIENT-PLAN.md`,
+`pytcad/M22-LINSOLVE-PLAN.md`, `pytcad/GUI-IMPROVEMENT-PLAN.md`, and
+`pytcad/3D-VISUALIZATION-PLAN.md` -- see
 "Milestone state & plans" below for what's actually open).
 
 ## What this is
@@ -31,7 +45,10 @@ workbench/
   workflow.py      deck front end (TEMPLATE/BIAS/SWEEP statements)
 gui/
   services/        DeviceSpec (wire format), JobRunner (subprocess),
-                   ResultStore, solver_runner/moscap_runner/process_runner
+                   ResultStore, solver_runner/moscap_runner/process_runner,
+                   examples.py (File-menu quick-load DeviceSpecs, 1D/2D/3D),
+                   viewer3d.py (PyVista/VTK 3D viewer, a separate QWidget
+                   window -- see 3D-VISUALIZATION-PLAN.md)
   controllers/     AppController + small per-domain controllers
   qml/             Main.qml, panels/, components/, Theme.qml
 tests/             core validation (incl. test_model_benchmarks.py --
@@ -40,7 +57,10 @@ gui/tests/         GUI-level tests (headless QML pattern)
 ARCHITECTURE.md sec 4b   governing roadmap M13-M30
 pytcad/M14-SURFACE-MOBILITY-PLAN.md / M16-BTBT-PLAN.md /
   M20-DENSITY-GRADIENT-PLAN.md / M21-MESHING-PLAN.md /
-  M22-LINSOLVE-PLAN.md   active milestone plans
+  M22-LINSOLVE-PLAN.md   active milestone plans (numerical core)
+pytcad/GUI-IMPROVEMENT-PLAN.md   GUI feature roadmap (Phases 1-4 shipped)
+pytcad/3D-VISUALIZATION-PLAN.md   PyVista/VTK 3D viewer roadmap
+  (Phases 1-2 shipped: 3D example + isosurface viewer; 3-5 not started)
 history.md   session-by-session state + handoff notes
 ```
 
@@ -83,11 +103,28 @@ with `pytest.warns` in the test that intends it.
 - `DeviceSpec` stays the wire format. Subprocess isolation per run.
 - New physics model = published-value benchmark in
   `tests/test_model_benchmarks.py` FIRST + catalog metadata.
-- Optional deps stay optional (devsim auto-detected).
+- Optional deps stay optional (devsim auto-detected). EXCEPTION,
+  deliberate: pyvista/pyvistaqt (gui/requirements.txt) are a HARD
+  dependency of gui/ -- the 3D viewer (gui/services/viewer3d.py,
+  3D-VISUALIZATION-PLAN.md) imports them unconditionally at module
+  level, discussed and approved with the user, not an oversight.
+  Do not silently make it optional/guarded to match the devsim
+  pattern without asking first.
 - Every slice: suite green with pre-existing tests unchanged, an
   adversarial probe pass BEFORE commit, honesty over polish (report
   blockers, don't hide failures, don't ship fudge factors).
 - Do not commit automatically unless told; user pushes.
+- Never claim a change works, a bug is fixed, or the suite is green
+  without ACTUALLY RUNNING the command and reading its real output --
+  not "this should work," not inferring pass/fail from reading the
+  diff. If a run is still in progress, say so; don't guess the result.
+- Never write a doc/history entry naming a file, function, or class
+  you have not confirmed exists (grep or Read it first). A prior
+  session's history.md entry claimed new files
+  (`provenance_model.py`, `continuation_data.py`) that were never
+  actually created -- the real logic landed in `lab_controller.py`
+  and `solver_backend.py` instead. Do not repeat that mistake, and do
+  not trust that specific entry's file list.
 
 ## Workflow
 
@@ -121,6 +158,38 @@ precedent).
   ancestors (StackLayout/tabs): headless tests must activate the
   right tab before asserting child visibility.
 - Guard new bindings against null during teardown (`canvas ? ...`).
+- A binding built from `&&`/ternary can hand QML a raw `null`/
+  `undefined` instead of a real `false` (e.g. `a && a.b && a.b.c`
+  evaluates to `null` when `a.b` is null, not `false`) -- assigning
+  that to a `bool` property (`enabled:`, `visible:`) logs "Unable to
+  assign [undefined] to bool" every time. Wrap the whole expression
+  in `!!(...)` so it always resolves to a real boolean.
+- `gui/app.py` MUST construct `QApplication` (QtWidgets), not
+  `QGuiApplication` -- the 3D viewer (`gui/services/viewer3d.py`)
+  opens a real `QMainWindow`, and `QWidget` construction hard-ABORTS
+  THE WHOLE PROCESS if only a `QGuiApplication` exists ("QWidget:
+  Cannot create a QWidget without QApplication" -- confirmed by
+  reproducing it, not by reading docs). `QApplication` is a strict
+  superset of `QGuiApplication` (QML behaves identically under it),
+  so there is never a reason to use the narrower class once any
+  QtWidgets code exists anywhere in the app. Qt's application
+  singleton is fixed by whichever subclass constructs it FIRST in a
+  process and can never be upgraded afterward -- this is why
+  `gui/tests/conftest.py`'s session-scoped `_qt_application` fixture
+  must also construct `QApplication`, ahead of every test file's own
+  `gapp` fixture, not just the app's own bootstrap.
+- `pyvistaqt.QtInteractor` (VTK's live render window) does its OWN
+  windowing-system calls independent of Qt's platform plugin --
+  `QT_QPA_PLATFORM=offscreen` does not make it headless, and building
+  one under it raises an X11 `BadWindow` error, not a clean no-op
+  (confirmed directly). `pyvista.Plotter(off_screen=True)` DOES work
+  offscreen (VTK's own separate off-screen path) -- that asymmetry is
+  real, not a configuration mistake to try to fix. To test code that
+  builds a `Viewer3DWindow`, monkeypatch `viewer3d.QtInteractor` to a
+  small fake recording `add_mesh`/`remove_actor` calls (see
+  `gui/tests/test_viewer3d.py`'s `FakeInteractor`) -- this still
+  exercises the REAL `QMainWindow`/`QComboBox`/`QDoubleSpinBox` widget
+  tree and signal wiring, just not the actual GL surface.
 
 **Python/testing**
 - pytest warning filters are REGEX: `cm^-3` never matches (caret =
@@ -239,11 +308,37 @@ QMetaObject.invokeMethod -- never a controller call as a substitute for
 a UI action, except the couple of spots documented inline where Qt's
 offscreen platform cannot incubate ListView/Repeater delegates at all)
 across the 1D Process-Flow path and the 2D Structure/Device-Builder-
-template path. Confirmed there is no GUI entry point to a Device3D or
-the DEVSIM backend. Found and fixed: numeric QML fields silently
-letting NaN through to the solver (app_controller.py finite-number
-guard), and saved projects silently dropping the Physics Lab's model
-toggles (project_store SCHEMA_VERSION 4->5, "models" key; see
-gui/tests/test_persistence_v5.py).
+template path. AT THE TIME (2026-08-28) there was no GUI entry point
+to a Device3D or the DEVSIM backend -- BOTH GAPS ARE NOW PARTLY CLOSED,
+see the GUI-IMPROVEMENT-PLAN.md and 3D-VISUALIZATION-PLAN.md bullets
+below; do not trust this sentence's claim in isolation, it describes a
+point in time, not current state. Found and fixed: numeric QML fields
+silently letting NaN through to the solver (app_controller.py
+finite-number guard), and saved projects silently dropping the
+Physics Lab's model toggles (project_store SCHEMA_VERSION 4->5,
+"models" key; see gui/tests/test_persistence_v5.py).
+GUI-IMPROVEMENT-PLAN.md (2026-08-29): Phases 1-4 SHIPPED -- C-V mode,
+family-sweep staleness, equilibrium-only Run, contour overlays,
+line-cut mode, a devsim/pytcad BACKEND SELECTOR (v0.6 Phase 2c, gated
+on compatible 1D devices -- closes half of the "no DEVSIM entry
+point" gap above), backend comparison, lab controller/provenance/
+continuation records, and a runtime state validator. A medium-effort
+/code-review pass on Phase 3/4 found and fixed 8 real bugs (a QML
+id/objectName typo causing a runtime crash, dead validator logic,
+non-notifying ListView bindings, a consumer with no real data
+producer, faked placeholder checks, duplicated logic, hardcoded theme
+colors) -- see history.md Addendum 22 for the full list. Do not
+assume Phase 3/4 code is correct just because it exists; that
+addendum is the record of what was actually verified, not the
+original (less careful) landing.
+3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-2 SHIPPED -- a
+hand-built `resistor_3d` example (the first GUI entry point to a
+Device3D, closing the other half of the gap above) and a PyVista/VTK
+viewer window (separate top-level QWidget, NOT embedded in QML) with
+interactive isosurface controls. Phases 3-5 (volumetric rendering,
+animated sweep playback, exploded structural view) not started --
+start only on an explicit "Start on Phase N" instruction against
+that document. Landing this ALSO fixed a real bug from Phase 1: see
+the QApplication/QGuiApplication gotcha above.
 Live queue: ARCHITECTURE.md sections 5-7; session detail:
 `history.md`.

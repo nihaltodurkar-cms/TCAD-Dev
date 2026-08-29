@@ -154,6 +154,10 @@ class AppController(QObject):
         self.family = FamilySweepController(self, parent=self)
         from .cv_controller import CVController
         self.cv = CVController(self, parent=self)
+        # 3D-VISUALIZATION-PLAN.md Phase 1: the currently-open 3D viewer
+        # window, if any (a plain Python attribute, not Qt-parented --
+        # it's a separate top-level window, not a QML-owned object).
+        self._viewer3d_window = None
         # GUI-IMPROVEMENT-PLAN Phase 4: runtime validation layer to catch
         # hard-to-detect bugs (state inconsistencies, invalid inputs, etc.)
         from ..services.gui_state_validator import GuiStateValidator
@@ -231,6 +235,42 @@ class AppController(QObject):
                     "axes": axis_info}
         except Exception:
             return None
+
+    @Slot()
+    def openViewer3d(self):
+        """3D-VISUALIZATION-PLAN.md Phase 1/2: open the PyVista/VTK 3D
+        window for the current result. Refuses (loudly, via
+        errorRaised) rather than silently no-op'ing for anything that
+        isn't a solved 3D result -- same house rule as every other
+        dimensionality guard in this codebase."""
+        stats = self.meshStats
+        if stats is None or not self.hasResult:
+            self.errorRaised.emit("Nothing to view in 3D",
+                                  "Run a solve first.")
+            return
+        if stats["dimensionality"] != 3:
+            self.errorRaised.emit(
+                "Not a 3D result",
+                f"The current result is {stats['dimensionality']}D. "
+                "The 3D viewer only applies to a solved 3D device.")
+            return
+        from ..services.viewer3d import Viewer3DWindow
+        # Held on self so the window (and its VTK render context) isn't
+        # garbage-collected the instant this method returns; closing an
+        # old one before opening a new one avoids piling up live VTK
+        # windows across repeated clicks. Viewer3DWindow takes the
+        # store directly (Phase 2): it attaches EVERY available scalar
+        # field to one grid up front, so its sidebar can switch fields
+        # without this method rebuilding anything.
+        try:
+            window = Viewer3DWindow(self._store)
+        except Exception as exc:
+            self.errorRaised.emit("Could not open the 3D viewer", str(exc))
+            return
+        if self._viewer3d_window is not None:
+            self._viewer3d_window.close()
+        self._viewer3d_window = window
+        self._viewer3d_window.show()
 
     def lastRunSpec(self):
         """The spec of the last executed Run -- the base device for

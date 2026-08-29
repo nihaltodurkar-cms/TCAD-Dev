@@ -17,8 +17,14 @@ gate — pre-existing on the unmodified base commit, confirmed by stashing
 all changes and rerunning, spun off as its own task; 3 M20 DG gates,
 user-decided open — see M20-DENSITY-GRADIENT-PLAN.md).
 
-Next planned work (approved, not started): 3D visualization --
-see `3D-VISUALIZATION-PLAN.md`.
+Follow-on work: 3D visualization -- see `3D-VISUALIZATION-PLAN.md`
+(Phases 1-2 shipped 2026-08-29/30: a real 3D example device, a
+PyVista/VTK viewer window with isosurface controls; Phases 3-5 not
+started). That work also fixed a real bug in THIS plan's own Phase 1-4
+landing: `gui/app.py` bootstrapped with `QGuiApplication`, which
+hard-crashes the whole process on the first `QWidget` construction --
+switched to `QApplication` (a confirmed strict superset; zero effect on
+the QML-only behavior everything in this plan actually uses).
 
 Scope decided with the user (2026-08-29): all four candidate areas below,
 phased by dependency and effort rather than picked one at a time --
@@ -395,10 +401,12 @@ are NOT pure-GUI tasks -- the underlying data does not exist yet:
   `3D-VISUALIZATION-PLAN.md` (PyVista/VTK, a separate top-level window
   launched from the QML app rather than embedded in it; phased as
   foundation -> isosurfaces -> volumetric rendering -> animated sweep
-  playback -> exploded structural view). Approved by the user, deferred
-  to a later session -- not part of THIS plan's phases; do not start
-  without an explicit "Start on Phase N" instruction against that
-  document specifically. 3D structure/process AUTHORING (as opposed to
+  playback -> exploded structural view). Phases 1-2 SHIPPED 2026-08-29/
+  30 (a real 3D example device, a working isosurface viewer); Phases
+  3-5 not started. Tracked entirely under that separate document, not
+  as phases of THIS plan; do not start its remaining phases without an
+  explicit "Start on Phase N" instruction against that document
+  specifically. 3D structure/process AUTHORING (as opposed to
   visualizing an already-solved 3D result) remains unscoped even there
   (see that plan's Phase 5 and "Explicitly out of scope" section).
 

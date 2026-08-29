@@ -292,11 +292,19 @@ carrying structure, mesh, sweep, process state, and the Physics Lab's
 model config. v0.6 added a **runtime state validation** system (`GuiStateValidator`) that monitors solver state, QML component health, and result integrity, with a live `StatusIndicator` in the app footer showing validation status, plus a `ValidationBanner` component and `ValidatedTextField` for inline input validation. See `gui/README.md` for install/run instructions and the full version-by-version detail. A real-QML end-to-end smoke test
 (`gui/tests/test_smoke_e2e.py`) drives every exposed parameter across
 the GUI's two device-construction paths (Process Flow, always 1D;
-Structure/Device-Builder templates, always 2D) and confirmed there is
-no GUI path to a 3D device or the DEVSIM backend.
-Still not a complete TCAD workbench: no 3D visualization or GUI-level
-3D device construction; the DEVSIM backend solves 1D two-terminal
-silicon devices only and has no GUI selector of its own (a devsim
+Structure/Device-Builder templates, always 2D). v0.6 Phase 2c added a
+solver backend selector (pytcad/devsim, gated on compatible 1D devices),
+and v0.6.1 (`3D-VISUALIZATION-PLAN.md`) added the first GUI path to a
+`Device3D` -- one hand-built quick-load example plus a separate
+PyVista/VTK viewer window with interactive isosurface controls for an
+already-solved 3D result.
+Still not a complete TCAD workbench: no GUI-level 3D device
+CONSTRUCTION (only that one fixed example feeds the 3D viewer; there is
+no Structure/Process-workbench equivalent for 3D), and 3D visualization
+itself covers isosurfaces only so far -- no volumetric rendering,
+animated sweep playback, or exploded structural view yet; the DEVSIM
+backend solves 1D two-terminal
+silicon devices only (a devsim
 `edge_volume_model` unit anomaly is documented in `benchmarks/`); impact
 ionization is solver-coupled and Physics-Lab-selectable for the
 homegrown 1D backend only, not DEVSIM; and the C–V result surfaces

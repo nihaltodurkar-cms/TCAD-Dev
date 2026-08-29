@@ -1,1 +1,5 @@
 PySide6>=6.10.1
+# 3D visualization (3D-VISUALIZATION-PLAN.md Phase 1): a separate
+# top-level QWidget window, not embedded in the QML scene graph.
+pyvista>=0.44
+pyvistaqt>=0.11

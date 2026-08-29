@@ -137,6 +137,17 @@ Rectangle {
                     parseFloat(cutPositionField.text) || 0.0)
             }
             Item { Layout.fillWidth: true }
+            Button {
+                objectName: "viewIn3dButton"
+                text: "View in 3D"
+                // 3D-VISUALIZATION-PLAN.md Phase 1: only meaningful for
+                // an actual solved 3D result -- disabled rather than
+                // hidden, so its presence still tells the user the
+                // feature exists.
+                enabled: !!(controller && controller.hasResult && controller.meshStats) &&
+                        controller.meshStats.dimensionality === 3
+                onClicked: controller.openViewer3d()
+            }
             Button { text: "Zoom in";  onClicked: canvas.zoom(0.8) }
             Button { text: "Zoom out"; onClicked: canvas.zoom(1.25) }
             Button { text: "Fit";      onClicked: canvas.fit() }

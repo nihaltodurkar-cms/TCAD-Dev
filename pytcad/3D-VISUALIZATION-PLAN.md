@@ -1,9 +1,17 @@
 # 3D TCAD Visualization Plan
 
-STATUS: PLANNED, NOT STARTED -- approved by the user 2026-08-29, deferred
-to a later session ("will do it later"). Start only on an explicit
-"Start on Phase N" instruction, matching how every GUI-IMPROVEMENT-PLAN
-phase in this repo has been kicked off.
+STATUS: **PHASES 1-2 SHIPPED (2026-08-30).** Phases 3-5 not started;
+start only on an explicit "Start on Phase N" instruction, matching how
+every GUI-IMPROVEMENT-PLAN phase in this repo has been kicked off.
+Phase 2 also fixed a real bug FROM Phase 1: `gui/app.py` bootstrapped
+with `QGuiApplication`, which hard-crashes the whole process the
+instant any code tries to construct a `QWidget` (`Viewer3DWindow`'s
+`QMainWindow`) -- confirmed directly ("QWidget: Cannot create a QWidget
+without QApplication"). Phase 1's own tests never caught this because
+they all monkeypatched `Viewer3DWindow` out before it could be
+constructed for real. Fixed by switching both `gui/app.py` and the test
+suite's session-scoped Qt fixture to `QApplication` (a strict superset
+of `QGuiApplication` -- QML behavior is unchanged, confirmed directly).
 
 ## Decisions made with the user (confirmed, not tentative)
 
@@ -90,6 +98,76 @@ any fancy rendering:
    `pyvista.Plotter(off_screen=True)` renders without a display, which
    is what CI/headless test runs need).
 
+#### Phase 1 implementation record (2026-08-29)
+
+Landed close to the plan above, with one naming/placement change: the
+window-owning logic lives in `gui/services/viewer3d.py` (a plain
+`build_rectilinear_grid()` function plus a `Viewer3DWindow` class), not
+a `viewer3d_controller.py` QObject controller -- there is no controller
+STATE to own (no properties, no signals other than the ones
+AppController already has), so a services-module function pair is the
+smaller, honest fit; `AppController.openViewer3d()` is the only Qt-
+facing entry point, exactly as planned.
+
+- `gui/services/examples.py`: `resistor_3d_example_spec()` -- a
+  12x8x8 (768-node) uniform n-type bar, two ohmic contacts on the
+  x-faces. Built by hand (`MeshSpec`/`ContactSpec`/`DopingSpec`
+  directly), confirmed via grep that `workbench/adapters/spec.py`'s
+  AUTHORED path (`structure_from_domain`) hardcodes `dimensionality=2`
+  -- there genuinely is no `DomainDevice`-based shortcut for 3D yet, so
+  contact-face node indices (`np.meshgrid` over the two non-swept axes)
+  are resolved directly rather than invented as a false abstraction.
+  Verified solving end-to-end (equilibrium + bias) before writing any
+  test.
+- `gui/qml/Main.qml`: "Load 3D resistor example" File-menu item.
+- `gui/requirements.txt`: `pyvista>=0.44`, `pyvistaqt>=0.11`. Installed
+  and confirmed: `pyvista.Plotter(off_screen=True)` renders correctly
+  under `QT_QPA_PLATFORM=offscreen` (VTK's own offscreen path, unrelated
+  to Qt's), but a live `pyvistaqt.QtInteractor` does NOT -- it raises an
+  X11 `BadWindow` error, because VTK's render window makes its own
+  windowing-system calls independent of Qt's platform plugin. This is
+  why `Viewer3DWindow` itself is excluded from headless tests (see its
+  docstring) while `build_rectilinear_grid()` -- the actual mesh-
+  construction logic -- is fully covered.
+- `gui/services/viewer3d.py`: `build_rectilinear_grid(mesh_axes, field)`
+  builds a `pyvista.RectilinearGrid` from real mesh axes, attaching one
+  scalar field as point data. The field's node ordering was VERIFIED,
+  not assumed: pytcad's own field arrays are `(Nz, Ny, Nx)` C-order
+  (x fastest, matching `mesh3d.py`'s node-index formula), and a direct
+  numerical check (`test_build_rectilinear_grid_field_ordering_matches_pytcad_node_order`)
+  confirms a plain `.flatten(order="C")` lines up exactly with VTK's
+  point order for a `RectilinearGrid` built from the same axis order --
+  a transposed/scrambled field on the very first render would have been
+  a silent, hard-to-notice correctness bug otherwise.
+- `gui/controllers/app_controller.py`: `openViewer3d()` Slot, gated on
+  `meshStats.dimensionality == 3`, refusing loudly via `errorRaised`
+  for "no result" and "not 3D" (same house rule as every other
+  dimensionality guard in this codebase, e.g. `Device3D`'s own
+  `NotImplementedError`s for unsupported models). Keeps at most one
+  live window (`self._viewer3d_window`), closing the previous one
+  before opening a new one.
+- `gui/qml/panels/ViewportPanel.qml`: "View in 3D" button, `enabled`
+  bound to the real `meshStats` Property (not a non-notifying Slot --
+  see the code-review fixes earlier this session for why that
+  distinction matters).
+- Tests: `gui/tests/test_viewer3d.py` (grid construction, ordering,
+  rejection of non-3D input and shape mismatches, the two refusal
+  paths, an `openViewer3d()` success path with `Viewer3DWindow`
+  monkeypatched out so no test touches VTK's windowing calls, and two
+  QML `findChild`-based button-gating tests); `resistor_3d` example
+  tests added to `gui/tests/test_structure_examples.py`.
+- NOT verified in this pass: an actual live VTK window rendering on a
+  real display -- this sandbox has no X server/Xvfb available, and
+  VTK's windowing calls are (as above) independent of Qt's headless
+  platform plugin. The mesh-construction and gating logic are fully
+  tested; opening the actual window is untested beyond "the class
+  constructs a `QMainWindow` and calls `.show()`" as exercised by
+  `test_open_viewer3d_accepts_a_real_3d_result`'s mock. Worth a manual
+  check ("File > Load 3D resistor example" -> Run -> "View in 3D") the
+  next time this runs on a real desktop.
+- Full suite after this phase: see the status line at the top of this
+  file for the latest verified numbers.
+
 ### Phase 2 -- Doping/field isosurfaces
 
 - `viewer3d_controller.py` grows an "isosurface" mode: pick a scalar
@@ -104,6 +182,73 @@ any fancy rendering:
 - Test: isosurface point count/bounds are deterministic and change
   correctly when the level changes (a level outside the field's range
   yields an empty surface -- must not crash).
+
+#### Phase 2 implementation record (2026-08-30)
+
+Landed close to the plan, with the UI controls living as plain
+QtWidgets IN the separate `Viewer3DWindow` (a `QDockWidget` sidebar),
+not QML -- consistent with Phase 1's confirmed architecture decision
+(the whole viewer is already a QWidget world, not QML; there is no
+`fieldBox` QML pattern to reuse inside a window QML never touches).
+
+- `gui/services/viewer3d.py`: `attach_scalar_field(grid, mesh_axes,
+  field)` (extracted from `build_rectilinear_grid`'s single-field case,
+  now shared) attaches EVERY available scalar field to one grid up
+  front, so switching the active field in the sidebar needs no rebuild.
+  `extract_isosurface(grid, field_name, level)` wraps
+  `grid.contour(isosurfaces=[level], scalars=field_name)` -- verified
+  directly (not assumed) that an out-of-range level returns an empty
+  `PolyData` (`n_points == 0`), never a crash or exception, and that an
+  unknown field name raises `KeyError` rather than silently doing
+  nothing.
+- `Viewer3DWindow` grew a sidebar: field `QComboBox`, level
+  `QDoubleSpinBox` (range auto-set to the selected field's real
+  [min, max] on every field change), colormap `QComboBox` (a small
+  curated set -- viridis/plasma/coolwarm -- not a fake
+  "every matplotlib colormap" list). Changing any of the three tears
+  down the previous isosurface actor (if any) and redraws.
+- **A real bug found and fixed along the way, not by inspection but by
+  actually trying to build the thing**: `gui/app.py` bootstrapped the
+  whole app with `QGuiApplication`. `QWidget` construction (which
+  `Viewer3DWindow`'s `QMainWindow` needs) hard-requires an actual
+  `QApplication` and aborts the process otherwise -- confirmed directly
+  by reproducing the crash, not inferred. This means Phase 1, as
+  originally landed, would have crashed the ENTIRE application (not
+  just failed to render) the first time a real user clicked "View in
+  3D" -- far worse than the "no live-window test" gap that phase's own
+  docs already flagged. Root cause: Phase 1's tests all monkeypatched
+  `Viewer3DWindow` out at the `AppController.openViewer3d()` boundary
+  before it could ever be constructed for real, so nothing ever
+  actually built a `QMainWindow` under test. Fixed by switching both
+  `gui/app.py`'s bootstrap and `gui/tests/conftest.py`'s session-scoped
+  `_qt_application` fixture from `QGuiApplication` to `QApplication` --
+  confirmed directly that `QApplication` is a strict superset (QML
+  loads and behaves identically under it) so this has zero effect on
+  the existing QML-only app or its test suite.
+- This fix also unlocked something Phase 1 explicitly said it couldn't
+  do: `Viewer3DWindow`'s WIDGET CONSTRUCTION AND SIGNAL WIRING (field/
+  level/colormap sidebar) are now exercised by real headless tests,
+  with a real `QMainWindow`/`QComboBox`/`QDoubleSpinBox` tree -- only
+  `pyvistaqt.QtInteractor` itself (the live VTK render surface) is
+  still mocked out, via a `FakeInteractor` that records `add_mesh`/
+  `remove_actor` calls (confirmed: a real `QtInteractor` still can't be
+  built under `QT_QPA_PLATFORM=offscreen`, same X11 `BadWindow` error
+  as Phase 1 found -- that specific gap is unchanged and still needs a
+  manual check on a real desktop).
+- A real, non-synthetic edge case the tests caught rather than invented:
+  the shipped `resistor_3d` example device is UNIFORMLY doped (a
+  resistor bar, by design), so doping's min == max and its isosurface
+  level range collapses to one value -- `extract_isosurface` correctly
+  returns an empty surface for it (no crash), confirmed by an actual
+  test against the actual demo device, not a synthetic degenerate-input
+  test invented separately.
+- Tests: `gui/tests/test_viewer3d.py` grew `extract_isosurface`/
+  `attach_scalar_field` pure-function tests plus four `Viewer3DWindow`
+  tests (default field, the degenerate-doping case above, field-switch
+  updates the level range and redraws, colormap change redraws) built
+  on the newly-testable real widget tree.
+- Full suite after this phase: see the status line at the top of this
+  file for the latest verified numbers.
 
 ### Phase 3 -- Volumetric rendering
 

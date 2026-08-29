@@ -81,6 +81,27 @@ def test_resistor_2d_example_is_registered_and_gateless():
     assert spec.region_materials is None
 
 
+def test_resistor_3d_example_is_registered_and_3d():
+    assert "resistor_3d" in examples.EXAMPLES
+    spec = examples.resistor_3d_example_spec()
+    assert spec.mesh.dimensionality == 3
+    assert len(spec.contacts) == 2
+    assert all(c.kind == "ohmic" for c in spec.contacts)
+    assert set(spec.mesh.axes.keys()) == {"x", "y", "z"}
+
+
+def test_resistor_3d_example_solves():
+    from gui.services.solver_runner import run_job
+    import tempfile, os, json
+    spec = examples.resistor_3d_example_spec()
+    d = tempfile.mkdtemp()
+    job_path, out_path = os.path.join(d, "job.json"), os.path.join(d, "out.npz")
+    with open(job_path, "w") as fh:
+        json.dump(spec.to_dict(), fh)
+    run_job(job_path, out_path)
+    assert os.path.exists(out_path)
+
+
 def test_resistor_2d_example_solves():
     from gui.services.solver_runner import run_job
     import tempfile, os, json

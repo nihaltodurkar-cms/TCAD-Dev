@@ -1461,3 +1461,154 @@ Found 20 issues, 9 critical/high. Plan revised:
 ### Files updated:
 - `M21-PHASE3-MESHING-PLAN.md` — fully revised
 - `tests/test_m21_phase3.py` — 19 tests, all collect and skip properly
+
+## STATE ADDENDUM 22 -- GUI PHASE 3/4 CODE-REVIEW FIXES + 3D VISUALIZATION
+## PHASES 1-2 (2026-08-29/30)
+
+### GUI Phase 3/4 code review (2026-08-29)
+
+A medium-effort `/code-review` pass on the GUI Phase 3/4 diagnostics
+work found 8 real bugs (not style nits) and all 8 were fixed the same
+day:
+1. `PhysicsLabPanel.qml`'s two new `ListView`s used `objectName`
+   instead of `id` for the name their own delegates referenced --
+   `ReferenceError` at runtime the first time either list had data.
+   Fixed: added the missing `id:`.
+2. `GuiStateValidator.onStateChange`'s stale-result/inconsistent-state
+   checks were unreachable dead code: `AppController.hasResult` already
+   guarantees `has_result implies has_store`, so a condition requiring
+   `has_result and not has_store` can never be true. Fixed: simplified
+   to the one achievable condition (`has_result and is_dirty`); the
+   `inconsistent_state` check (impossible by construction) was removed
+   rather than patched into something meaningless.
+3. The Phase 3b "continuation stages" table read an npz key
+   (`continuation__records`) that no real solve path ever wrote --
+   only its own unit test fabricated it via `np.savez`. Fixed:
+   `solver_runner.py`'s `run_job()` now stamps that key from the real
+   per-point voltage/converged data `run_sweep()` already computes, for
+   every real sweep.
+4. The same two `ListView`s bound `model:`/`visible:`/height to plain
+   `Slot()` calls with no NOTIFY signal -- QML evaluates that once and
+   freezes it, so the tables never refreshed across repeated Runs.
+   Fixed: rebound off the `ListView`'s own notifying `model` property,
+   kept current by a `Connections { onResultChanged }` block (the same
+   pattern `ViewportPanel.qml` already used elsewhere).
+5. `GuiStateValidator._check_input_values`/`_check_result_consistency`
+   were bare `pass` bodies that the class's own docstring claimed did
+   real NaN/Inf/consistency checking -- a faked implementation, which
+   this codebase's own conventions explicitly rule out. Fixed: removed
+   both placeholders and the 500ms `QTimer` that called them (nothing
+   else needed it); validation is genuinely event-driven via
+   `onStateChange()`/`checkValue()`.
+6. `onStateChange` was only ever called from `_set_busy` (Run start/
+   stop), never from `undoStateChanged` (the 8 structure/doping/contact
+   edit sites that actually make a result stale) -- so even with fix #2
+   in place, the "stale result" indicator lagged a full Run cycle
+   behind the edit that caused it. Fixed: wired `undoStateChanged` to
+   the same notifier.
+7. `AppController.meshStats()` and `PhysicsLabController.provenanceRows()`
+   independently reimplemented the identical mesh-node-count loop.
+   Fixed: `provenanceRows()` now reads `self._app.meshStats["node_count"]`.
+8. `StatusIndicator.qml` hardcoded 4 colors as local constants with a
+   comment claiming they "mirror Theme.qml" -- it never actually bound
+   `Theme`, so it didn't follow the app's live dark/light toggle. Fixed:
+   bound the real `Theme.running/ok/textFaint/error` tokens.
+
+Verified after all 8 fixes: 833 passed, 19 skipped, 1 xfailed, 4 failed
+(3 M20 DG gates, user-decided open -- see M20-DENSITY-GRADIENT-PLAN.md;
+1 M16 BTBT failure confirmed PRE-EXISTING on the unmodified base commit
+by stashing all session changes and rerunning -- not a regression, spun
+off as a separate task). Zero new regressions from any of the 8 fixes.
+
+### 3D Visualization Phases 1-2 (2026-08-29/30)
+
+New plan: `3D-VISUALIZATION-PLAN.md` -- PyVista/VTK, confirmed with the
+user as a SEPARATE top-level window (not embedded in the QML scene
+graph; VTK's Qt integration is a QWidget, not a QML item).
+
+**Phase 1 (foundation):**
+- `gui/services/examples.py`: `resistor_3d_example_spec()` -- a small
+  (768-node) uniform n-type bar, two ohmic contacts, no gate. The first
+  GUI-reachable path to a `Device3D`. Built by hand against
+  `MeshSpec`/`ContactSpec` (confirmed via grep that
+  `workbench/adapters/spec.py`'s authored `DomainDevice` path is
+  hardcoded 2D -- no shortcut exists for 3D). "Load 3D resistor
+  example" added to the File menu.
+- `gui/services/viewer3d.py` (new): `build_rectilinear_grid()` builds a
+  real `pyvista.RectilinearGrid` from a solved 3D result's mesh axes;
+  field node ordering (pytcad's own `(Nz, Ny, Nx)` C-order) verified
+  NUMERICALLY against VTK's point order, not assumed. `Viewer3DWindow`
+  opens a `QMainWindow` with a `pyvistaqt.QtInteractor` -- mesh outline
+  + translucent device surface, deliberately minimal for this phase.
+- `AppController.openViewer3d()`: "View in 3D" button handler, gated on
+  `meshStats.dimensionality == 3`, refusing loudly for "no result" and
+  "not 3D" -- same house rule as every other dimensionality guard.
+
+**Phase 2 (isosurfaces) + a real bug found along the way:**
+- `viewer3d.py` grew `attach_scalar_field()` (every available scalar
+  attached to one grid up front, no rebuild on field switch) and
+  `extract_isosurface(grid, field_name, level)` wrapping VTK's contour
+  filter -- verified directly that an out-of-range level returns an
+  EMPTY surface, never a crash, and that the shipped `resistor_3d`
+  example's uniformly-doped bar (doping min == max by design) hits
+  exactly that path for real, not just in a synthetic test.
+  `Viewer3DWindow` grew a `QDockWidget` sidebar (field/level/colormap
+  `QComboBox`/`QDoubleSpinBox` controls, a small curated 3-colormap set)
+  that recomputes the isosurface live.
+- **Real bug, found by actually trying to build the thing, not by
+  inspection**: `gui/app.py` bootstrapped the whole app with
+  `QGuiApplication`. `QWidget` construction (`Viewer3DWindow`'s
+  `QMainWindow`) hard-requires an actual `QApplication` and ABORTS THE
+  WHOLE PROCESS otherwise (confirmed directly: "QWidget: Cannot create
+  a QWidget without QApplication", not caught by Phase 1's own tests
+  because they all monkeypatched `Viewer3DWindow` out before it could
+  ever be constructed for real). This means Phase 1 as originally
+  landed would have crashed the entire running application -- not just
+  failed to render -- the first time any real user clicked "View in
+  3D". Fixed by switching both `gui/app.py`'s bootstrap and
+  `gui/tests/conftest.py`'s session-scoped `_qt_application` fixture
+  from `QGuiApplication` to `QApplication` -- confirmed directly this
+  is a strict superset (QML loads and behaves identically under it),
+  zero effect on the rest of the app or its test suite. This fix also
+  retroactively unlocked real (non-mocked) headless testing of
+  `Viewer3DWindow`'s widget tree and signal wiring -- only the actual
+  live VTK render surface (`pyvistaqt.QtInteractor` itself) remains
+  untestable here (no X server/Xvfb in this sandbox; confirmed directly
+  that VTK's render window makes its own windowing calls independent
+  of Qt's headless platform plugin).
+
+Verified after Phase 2: 851 passed, 19 skipped, 1 xfailed, 5 failed
+(same known set as above, plus the flaky `test_gc_sp_centroid_in_
+literature_band` M20 variant this particular run happened to also
+catch). Zero new regressions.
+
+### Files changed (this addendum)
+- `pytcad/gui/qml/panels/PhysicsLabPanel.qml`: id fix, notifying-model
+  rebind for the two ListViews
+- `pytcad/gui/services/gui_state_validator.py`: removed dead checks,
+  fake placeholders, and the QTimer; simplified onStateChange
+- `pytcad/gui/controllers/app_controller.py`: `_notify_state_validator`
+  wired to `undoStateChanged`; `openViewer3d()` added, then updated to
+  pass the store (not a pre-built grid) to `Viewer3DWindow`
+- `pytcad/gui/services/solver_runner.py`: `continuation__records` now
+  stamped for real from `run_sweep()`'s own data
+- `pytcad/gui/controllers/lab_controller.py`: `provenanceRows()` reuses
+  `meshStats` instead of recomputing node count
+- `pytcad/gui/qml/components/StatusIndicator.qml`: real `Theme` binding
+- `pytcad/gui/tests/test_gui_state_machine.py`,
+  `test_gui_memory_leaks.py`: updated for the above (reachable state
+  combinations; no more `_check_timer` to assert on)
+- `pytcad/gui/tests/test_phase3b_continuation.py`: added a real-sweep
+  end-to-end test alongside the existing fabricated-npz unit test
+- `pytcad/gui/services/examples.py`: `diode_1d_example_spec()`,
+  `resistor_2d_example_spec()`, `resistor_3d_example_spec()` (new)
+- `pytcad/gui/services/viewer3d.py` (new): grid/isosurface construction
+  + `Viewer3DWindow`
+- `pytcad/gui/app.py`: `QGuiApplication` -> `QApplication`
+- `pytcad/gui/tests/conftest.py`: session Qt fixture, same change
+- `pytcad/gui/tests/test_viewer3d.py` (new): pure-function + real
+  widget-tree tests
+- `pytcad/gui/qml/panels/ViewportPanel.qml`: "View in 3D" button
+- `pytcad/GUI-IMPROVEMENT-PLAN.md`, `pytcad/gui/README.md`,
+  `pytcad/3D-VISUALIZATION-PLAN.md`, `ARCHITECTURE.md`: status/records
+  updated to match all of the above
