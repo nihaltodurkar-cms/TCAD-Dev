@@ -4,7 +4,7 @@ Date: 2026-08-28 (updated). Status: M1-M10 SHIPPED (v0.5.0 tagged).
 M11 heterostructures COMPLETE through S5 (S1 materials, S2
 region_materials wire format, S3 1D heterojunction core: eps(x)
 flux-form Poisson, Anderson band offsets via carrier-specific ln(nie)
-SG deltas, per-material recombination; S4 2D box-integration
+deltas, per-material recombination; S4 2D box-integration
 heterojunction core with the full gate battery incl. dimensional
 reduction to 1D; S5 structure-model materials lossless end-to-end,
 HBT/HEMT parametric templates solve through the pipeline -- COMPLETE
@@ -64,11 +64,38 @@ equation-major order, spilu the Poisson block, exact density diagonals,
 drop the (n,p) cross-couplings; `solve_linear(precond="schur")`, opt-in
 per call, default "auto" == unchanged node-block-Jacobi) landed
 2026-08-29 LANDED-PENDING-VERIFICATION -- gates written, not yet
-executed (same session standing as M16 above).
+executed (same session standing as M16/M20 above).
+M16 BTBT (local Kane/Hurkx generation, live Jacobian coupling): LANDED-
+PENDING-VERIFICATION 2026-08-29. Code + gates written, not executed this
+session. Next session MUST run tests/test_m16_btbt.py before treating
+as complete. One gate fails: test_g_e_zener_onset_has_kane_slope (current
+grew only 4.4x over ramp, expected >1000x).
+M20 density gradient (Ancona-Stafford DG quantum correction, equilibrium-
+only): LANDED-PENDING-VERIFICATION 2026-08-29. Code + gates written, not
+executed this session. Three key-set pin tests updated (test_smoke_e2e's
+toggle param deliberately does NOT include dg -- equilibrium-only, same
+precedent as surface_mobility). Four gates fail: test_gc_sp_centroid_in_
+literature_band (flaky eigensolver variance), test_gc_dg_centroid_within_
+factor2_of_sp, test_gc_classical_centroid_is_the_sub_debye_tail,
+test_gd_dg_changes_the_physics_in_every_required_direction. Gamma-
+calibration gap requires either coupled-Newton reformulation or published
+gamma calibration (separate, larger pieces of work).
+M14 surface mobility: PARTIAL. mobility_cvt() wired for Device2D.models.
+surface_mobility (G-D/G-E green); G-A (absolute curve vs Takagi/Taur)
+xfail'd -- 2026-08-28 research confirmed the real Lombardi phonon term
+is two-part and doping-dependent (this code has a one-term stand-in),
+but the numeric constants are blocked on the 1988 primary source, which
+is paywalled with zero open-access copies (verified via Unpaywall);
+G-B/G-C/driving_force/catalog not started.
 FUTURE: capability growth is governed by section 4b below (M13
 Fermi-Dirac statistics through M30 system-level; three parity tiers).
 The M1-M10 roadmap below is retained as the shipped architecture
 record; sections 5-7 track the live queue.
+
+GUI: PHASES 1-3 SHIPPED, PHASE 4 LANDED (2026-08-29). All 530 GUI tests
+pass, zero regressions. Runtime validation (GuiStateValidator,
+StatusIndicator, ValidationBanner, ValidatedTextField) verified. See
+gui/README.md and GUI-IMPROVEMENT-PLAN.md for full detail.
 
 Long-term ambition: a learning + research TCAD environment combining the
 capabilities and educational value of DEVSIM / Silvaco / Sentaurus while
@@ -1017,10 +1044,16 @@ Independent candidates for the next milestone (any order):
   continuation driver are both COMPLETE/LANDED -- see sections 3 and 5
   above; the 3D iterative-solve scaling gate, M22 G6, is likewise
   CLOSED via node-block-Jacobi preconditioning.)
-- The interactive GUI itself has no dimensionality or backend selector:
-  every Process-Flow-built device is 1D and every Structure/Device-
+- The interactive GUI itself has no dimensionality selector: every
+  Process-Flow-built device is 1D and every Structure/Device-
   Builder-template device is 2D (see the GUI smoke-test entry, section
-  5 above); there is no GUI path to a Device3D or the DEVSIM backend.
+  5 above); there is no GUI path to AUTHORING a Device3D (v0.6 Phase 2c
+  did add a solver BACKEND selector -- pytcad/devsim, gated on 1D
+  devices -- so that half of this gap is closed; see
+  `pytcad/gui/README.md`). A PyVista/VTK 3D VISUALIZATION viewer (for
+  an already-solved 3D result, not authoring one) is planned as a
+  separate window -- see `pytcad/3D-VISUALIZATION-PLAN.md`; approved by
+  the user 2026-08-29, deferred, not started.
 - Mixed-mode circuit coupling (M27); Schottky/tunnel contacts (M28);
   hydrodynamic/energy balance (M29); experiments/calibration/interop
   (M30).

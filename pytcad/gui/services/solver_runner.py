@@ -540,6 +540,19 @@ def run_job(job_path, out_path, capture_trace=True):
     sweep_meta = None
     if spec.sweep is not None:
         sweep_meta = json.loads(str(result["sweep__meta"]))
+        # Phase 3b: the per-stage continuation-record table needs a
+        # real producer, not just a consumer -- run_sweep() already
+        # computes exactly this (voltage + converged) per warm-started
+        # point, so stamp it here rather than inventing separate
+        # tracking. No per-stage node count: this pipeline's sweep
+        # reuses one fixed mesh across every point, so there is no real
+        # per-point value to report (the QML table already renders
+        # that column blank when absent).
+        voltages = np.asarray(result["sweep__voltage"], dtype=float)
+        converged = np.asarray(result["sweep__converged"], dtype=bool)
+        result["continuation__records"] = np.array(json.dumps([
+            {"index": i, "parameter": float(v), "accepted": bool(c)}
+            for i, (v, c) in enumerate(zip(voltages, converged))]))
     result["record__meta"] = np.array(json.dumps({
         "schema_version": SOLVER_RESULT_SCHEMA_VERSION,
         "backend": "pytcad",

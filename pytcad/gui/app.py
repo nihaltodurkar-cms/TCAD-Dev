@@ -45,6 +45,9 @@ def create_engine(app):
     engine.rootContext().setContextProperty("physicsLab", controller.lab)
     engine.rootContext().setContextProperty("deviceBuilder",
                                             controller.builder)
+    # GUI-IMPROVEMENT-PLAN Phase 4: expose runtime validator to QML
+    engine.rootContext().setContextProperty(
+        "stateValidator", controller.stateValidator)
     engine.load(QUrl.fromLocalFile(os.path.join(QML_DIR, "Main.qml")))
 
     # hold references on the engine so they outlive this function

@@ -90,7 +90,10 @@ independent and must keep passing unchanged.
   *(Superseded in v0.4 for single-contact voltage sweeps; see v0.4 below.
   C–V and multi-contact/multi-parameter sweeps are still future work.)*
 - 3D results are shown as a central z-slice; there is no 3D renderer.
-  VTK/PyVista are intentionally not dependencies yet.
+  VTK/PyVista are intentionally not dependencies yet. **A real PyVista/
+  VTK 3D viewer is planned** (a separate top-level window, not embedded
+  in the QML scene graph) — see `../3D-VISUALIZATION-PLAN.md`; approved
+  by the user 2026-08-29, deferred, not started.
 - The device spec is embedded in the job file as JSON, so very large
   meshes make large job files. Fine at v0.1 scale; a binary sidecar is
   the obvious later fix.
@@ -936,7 +939,10 @@ the identical wall.
   is tracked separately in `M20-DENSITY-GRADIENT-PLAN.md`.
 - Device dimensionality still has no GUI selector: the Process Flow
   always builds 1D, Structure/Device-Builder templates always build
-  2D, and there is no GUI path to a `Device3D`. **Solver backend
+  2D, and there is no GUI path to AUTHORING a `Device3D` (a File-menu
+  quick-load example is the closest thing planned — see the 3D plan
+  referenced above; a real 3D authoring workbench is a separate, larger,
+  unscoped undertaking). **Solver backend
   selection is fixed in v0.6 Phase 2c**: a toolbar dropdown (visible
   for 1D devices only, since DEVSIM is 1D-two-terminal-only) lets pytcad
   or devsim be chosen per Run, greying out devsim with an actionable
@@ -1027,3 +1033,59 @@ record, including a self-caught test bug along the way.
 Full non-slow suite: 793 passed, 1 xfailed, 0 regressions. See
 `GUI-IMPROVEMENT-PLAN.md` section 2e for the full implementation
 record.
+
+## v0.6 Phase 3 — Lab Controller, Provenance & Continuation (2026-08-29)
+
+- **Lab controller.** `LabController` exposes the Physics Lab's model
+  config, provenance rows, and continuation data to QML as a
+  `QObject`-derived controller with `@Property` accessors, wired into
+  `AppController` and exposed to the QML context in `app.py`.
+- **Provenance panel.** `PhysicsLabPanel.qml` gains a provenance
+  section showing the mesh, physics models, materials, and backend that
+  produced the current result, aggregated from data that already exists
+  across separate controllers (mesh stats, model config, region
+  materials, backend tag) rather than a new data source.
+- **Continuation trace viewer.** The Physics Lab's convergence view now
+  shows per-stage continuation history (stage index, parameter value,
+  node count if adaptive meshing was used, accepted/rejected) as a
+  small table alongside the convergence plot, sourced from the M15/M22
+  continuation drivers' own returned history.
+- **Rejected-point overlay.** The convergence view marks rejected
+  backtracked points distinctly (different marker/colour) on the same
+  axes, sourced from the continuation driver's rejected-point data
+  already returned by M15/M22.
+
+Full non-slow suite: 793 passed, 1 xfailed, 0 regressions.
+
+## v0.6 Phase 4 — Runtime Validation & State Indicators (2026-08-29)
+
+- **GuiStateValidator.** A new runtime validation layer
+  (`gui/services/gui_state_validator.py`) that monitors solver state,
+  QML component health, and result integrity. Runs on a timer, reports
+  status via signals. Validates that result data matches the loaded
+  device spec, that QML components are in expected states, and that
+  solver outputs are finite and well-formed.
+- **StatusIndicator.** A new QML component (`StatusIndicator.qml`)
+  showing live validation status in the app footer. Displays green
+  (all checks pass), amber (warnings), or red (errors) with a
+  tooltip describing the current status. Uses hardcoded dark-theme
+  colors to avoid `Theme` singleton context issues.
+- **ValidationBanner.** A reusable validation banner component
+  (`ValidationBanner.qml`) with severity levels (info, warning, error)
+  for inline validation feedback in forms and panels.
+- **ValidatedTextField.** An input field component
+  (`ValidatedTextField.qml`) with inline validation that rejects NaN
+  and infinity values before they reach the solver. Fixed a real
+  defect where numeric QML fields (contact/gate voltage, gate tox,
+  region doping, every process-step parameter) silently let
+  `parseFloat("")`/`parseFloat("abc")` (NaN) through to the solver.
+- **Main.qml footer.** Integrated `StatusIndicator` into the app
+  footer. Reverted a problematic header `ColumnLayout` change that
+  caused viewport layout regression; footer addition retained.
+- **PhysicsLabPanel.qml null-safety.** Fixed null-safety for
+  `lab.provenanceRows()` and `lab.continuationData()` using JavaScript
+  blocks returning proper booleans, preventing QML binding errors
+  when the lab controller is not yet initialized.
+
+Full GUI suite: 530 passed, 0 regressions. Core suite: 301 passed, 1
+xfailed (M14 G-A), 5 failed (M16 BTBT 1 gate, M20 DG 4 gates, user-decided open).

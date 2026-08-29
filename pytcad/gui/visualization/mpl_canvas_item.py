@@ -306,6 +306,7 @@ class MplCanvasItem(QQuickPaintedItem):
         stage_colours = {"equilibrium": "#61bd6d", "bias": "#d9a441"}
         seen = {}
         offset = 0
+        has_rejected = any(not step.converged for step in steps)
         for step in steps:
             residuals = [np.nan if v is None else float(v)
                          for v in next(iter(step.metrics.values()), [])]
@@ -316,6 +317,13 @@ class MplCanvasItem(QQuickPaintedItem):
             xs = list(range(offset, offset + len(residuals)))
             ax.semilogy(xs, residuals, marker=".", color=colour,
                         label=legend_label, linewidth=1.0, markersize=3)
+            if not step.converged and residuals:
+                last_x = xs[-1]
+                last_y = residuals[-1]
+                ax.plot(last_x, last_y, marker="x", color="#e74c3c",
+                        markersize=8, markeredgewidth=2,
+                        label="rejected" if has_rejected else None)
+                has_rejected = False  # only label once
             offset += len(residuals)
         ax.set_xlabel("cumulative Newton iteration")
         ax.set_ylabel("residual (first metric)")

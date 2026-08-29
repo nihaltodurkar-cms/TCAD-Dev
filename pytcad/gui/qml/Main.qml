@@ -444,6 +444,13 @@ ApplicationWindow {
                 color: Theme.textFaint
                 font.pixelSize: Theme.fsTiny
             }
+            // GUI-IMPROVEMENT-PLAN Phase 4: visual state indicators
+            StatusIndicator {
+                busy: appController.busy
+                hasResult: appController.hasResult
+                isDirty: appController.isDirty
+                hasError: stateValidator && stateValidator.problemCount > 0
+            }
         }
     }
 

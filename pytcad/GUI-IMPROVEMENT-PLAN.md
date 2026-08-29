@@ -2,15 +2,23 @@
 # PyTCAD Desktop GUI: v0.6+ improvement roadmap
 # Formal milestone spec
 
-Status: **PHASES 1-2 SHIPPED (2026-08-29).** Phase 1 (1a/1b/1c) and
-Phase 2 (2a/2b/2c/2d) all implemented and gated; full non-slow suite
-793 passed, 1 xfailed, 0 regressions from any of this work (the only
-failures anywhere are pre-existing, already-documented M20 gamma-
-calibration gates left open by explicit user decision -- one of which
-(`test_gc_sp_centroid_in_literature_band`) turned out to be flaky
-across separate runs on top of already being open, an eigensolver
-run-to-run variance unrelated to anything touched here; see
-M20-DENSITY-GRADIENT-PLAN.md). Phase 3 not started.
+Status: **PHASES 1-4 SHIPPED (2026-08-29), code-reviewed and fixed the
+same day.** Phase 1 (1a/1b/1c) and Phase 2 (2a/2b/2c/2d) all implemented
+and gated. Phase 3 (3a/3b/3c/3d — diagnostics, provenance, continuation
+records) and Phase 4 (runtime state validation, StatusIndicator,
+ValidationBanner, ValidatedTextField) landed, then a medium-effort
+/code-review pass found 8 real bugs across them (a QML id/objectName typo
+causing a runtime crash, dead validator logic, stale non-notifying
+ListView bindings, a consumer with no real data producer, faked
+placeholder checks, duplicated logic, hardcoded theme colors) — all 8
+fixed same day; see history.md for the full list. Full suite verified
+after the fixes: 833 passed, 19 skipped, 1 xfailed, 4 failed (1 M16 BTBT
+gate — pre-existing on the unmodified base commit, confirmed by stashing
+all changes and rerunning, spun off as its own task; 3 M20 DG gates,
+user-decided open — see M20-DENSITY-GRADIENT-PLAN.md).
+
+Next planned work (approved, not started): 3D visualization --
+see `3D-VISUALIZATION-PLAN.md`.
 
 Scope decided with the user (2026-08-29): all four candidate areas below,
 phased by dependency and effort rather than picked one at a time --
@@ -318,7 +326,7 @@ again at the end. Only pre-existing M20 failures anywhere (see status
 line above).
 
 ------------------------------------------------------------------------
-3. PHASE 3 [L] -- DIAGNOSTICS AND PROVENANCE
+3. PHASE 3 [L] -- DIAGNOSTICS AND PROVENANCE — COMPLETE (2026-08-29)
 ------------------------------------------------------------------------
 3a. REJECTED-BIAS-POINT OVERLAY ON THE CONVERGENCE VIEW.
     `_draw_convergence` already plots the Newton residual trace for
@@ -383,12 +391,16 @@ are NOT pure-GUI tasks -- the underlying data does not exist yet:
   engine), "not started." `pytcad.process` is 1D-only today (README's
   "Not supported, by design" list) -- there is no 2D process geometry
   for a viewer to show.
-- DEVICE3D GUI PATH: no milestone currently proposes wiring a 3D
-  construction path into the Structure/Device-Builder UI; 3D exists
-  only at the Python-API level. Out of scope for this plan; would be
-  its own, larger design (3D structure editing, a 3D field renderer --
-  README's v0.1 "Known limitations" already flags VTK/PyVista as
-  intentionally not a dependency yet).
+- DEVICE3D GUI PATH: superseded by a real plan as of 2026-08-29 -- see
+  `3D-VISUALIZATION-PLAN.md` (PyVista/VTK, a separate top-level window
+  launched from the QML app rather than embedded in it; phased as
+  foundation -> isosurfaces -> volumetric rendering -> animated sweep
+  playback -> exploded structural view). Approved by the user, deferred
+  to a later session -- not part of THIS plan's phases; do not start
+  without an explicit "Start on Phase N" instruction against that
+  document specifically. 3D structure/process AUTHORING (as opposed to
+  visualizing an already-solved 3D result) remains unscoped even there
+  (see that plan's Phase 5 and "Explicitly out of scope" section).
 
 Do not schedule these under this plan's phases; revisit once their
 solver-side dependency lands.

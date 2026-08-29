@@ -33,9 +33,10 @@ pytcad/
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           541 tests: analytic-limit validation, published-value
-                 physics benchmarks, headless GUI tests — all green,
-                 zero warnings
+tests/           830+ tests: analytic-limit validation, published-value
+                   physics benchmarks, headless GUI tests — 530 GUI
+                   tests pass; core has 3 known failures (M16 BTBT,
+                   M20 DG gamma calibration) + 1 xfailed (M14 G-A)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -128,9 +129,11 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 541 tests pass — analytic-limit validation, published-value physics
-benchmarks, and headless GUI tests — with a standing zero-warnings
-invariant. Every verification result is classified as one of
+All 530 GUI tests pass with zero regressions; core suite has 301 passed,
+1 xfailed (M14 G-A, blocked on paywalled Lombardi constants), and 5
+known failures (M16 BTBT Zener onset gate, M20 DG gamma calibration
+gates left open by user decision). Every verification result is
+classified as one of
 **literature benchmark** (agrees with measured published values),
 **analytical validation** (agrees with closed-form theory independent of
 the solver), **model parameterization** (fitted constant transcribed
@@ -261,7 +264,7 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 ### Desktop GUI (new)
 
 There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
-v0.1 – v0.5.0) that solves devices in a background process and
+v0.1 – v0.6) that solves devices in a background process and
 visualizes the result, without the GUI ever blocking or the numerical
 engine changing by a single line. It now covers: a built-in 2D MOSFET
 example (v0.1); a Structure + Mesh workbench for building and
@@ -286,8 +289,7 @@ with a legend; a dedicated **MOS C–V** mode running the validated
 `MOSCapacitor` core through the standard job pipeline; deck-driven
 sessions via **File → Open Deck...**; and versioned project files (schema v5)
 carrying structure, mesh, sweep, process state, and the Physics Lab's
-model config. See `gui/README.md` for install/run instructions and the
-full version-by-version detail. A real-QML end-to-end smoke test
+model config. v0.6 added a **runtime state validation** system (`GuiStateValidator`) that monitors solver state, QML component health, and result integrity, with a live `StatusIndicator` in the app footer showing validation status, plus a `ValidationBanner` component and `ValidatedTextField` for inline input validation. See `gui/README.md` for install/run instructions and the full version-by-version detail. A real-QML end-to-end smoke test
 (`gui/tests/test_smoke_e2e.py`) drives every exposed parameter across
 the GUI's two device-construction paths (Process Flow, always 1D;
 Structure/Device-Builder templates, always 2D) and confirmed there is

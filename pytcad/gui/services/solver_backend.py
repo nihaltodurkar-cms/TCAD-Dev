@@ -109,13 +109,15 @@ class RunRecord:
     numerics: dict
     sweep: dict = None
     trace: tuple = ()                  # ConvergenceStep tuples
+    continuation_records: tuple = ()   # Per-stage continuation history
     schema_version: int = SOLVER_RESULT_SCHEMA_VERSION
 
     @classmethod
     def from_npz_keys(cls, d):
-        """Parse record__meta (+ optional converge__trace) from an open
-        npz mapping.  Returns None when the file carries no record --
-        pre-v2 files simply have provenance 'unknown'."""
+        """Parse record__meta (+ optional converge__trace,
+        continuation__records) from an open npz mapping.  Returns None
+        when the file carries no record -- pre-v2 files simply have
+        provenance 'unknown'."""
         if "record__meta" not in getattr(d, "files", ()):
             return None
         meta = json.loads(str(np.asarray(d["record__meta"]).reshape(())))
@@ -123,6 +125,10 @@ class RunRecord:
         if "converge__trace" in getattr(d, "files", ()):
             raw = json.loads(str(np.asarray(d["converge__trace"]).reshape(())))
             trace = tuple(ConvergenceStep.from_dict(s) for s in raw)
+        continuation_records = ()
+        if "continuation__records" in getattr(d, "files", ()):
+            raw = json.loads(str(np.asarray(d["continuation__records"]).reshape(())))
+            continuation_records = tuple(raw)
         # report the version the FILE is stamped with, falling back to
         # the record's own claim for legacy unstamped writers
         stamped = meta.get("schema_version", 2)
@@ -135,6 +141,7 @@ class RunRecord:
             models=dict(meta.get("models", {})),
             numerics=dict(meta.get("numerics", {})),
             sweep=meta.get("sweep"), trace=trace,
+            continuation_records=continuation_records,
             schema_version=int(stamped))
 
 

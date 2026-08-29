@@ -200,7 +200,8 @@ class PhysicsLabController(QObject):
     @Slot(result="QVariant")
     def provenanceRows(self):
         """"What produced this quantity": the last run's record as
-        label/value rows for the Properties-style display."""
+        label/value rows for the Properties-style display. Extended in
+        Phase 3d to include mesh node count from the store."""
         record = self._record()
         if record is None:
             return None
@@ -210,6 +211,12 @@ class PhysicsLabController(QObject):
                 ("Material", record.material),
                 ("Temperature", f"{record.T:g} K"),
                 ("Schema version", str(record.schema_version))]
+        # Phase 3d: include mesh node count -- reuse AppController's own
+        # meshStats() (Phase 3c) rather than re-deriving node_count from
+        # the store's axes a second time.
+        stats = self._app.meshStats
+        if stats is not None:
+            rows.append(("Mesh nodes", str(stats["node_count"])))
         rows += [(f"model: {k}", "on" if v else "off")
                  for k, v in sorted(record.models.items())]
         return [list(map(str, r)) for r in rows]
@@ -231,4 +238,23 @@ class PhysicsLabController(QObject):
             out.append({"stage": step.stage,
                         "iterations": list(step.iterations),
                         "residuals": residuals})
+        return out
+
+    @Slot(result="QVariant")
+    def continuationData(self):
+        """Per-stage continuation history for the stage table: [{index,
+        parameter, nodes, accepted}].  Read-only, no new computation.
+        Sourced from RunRecord.continuation_records when available;
+        falls back to an empty list."""
+        record = self._record()
+        if record is None or not record.continuation_records:
+            return []
+        out = []
+        for i, rec in enumerate(record.continuation_records):
+            out.append({
+                "index": i,
+                "parameter": rec.get("parameter", rec.get("V", "")),
+                "nodes": rec.get("nodes", ""),
+                "accepted": bool(rec.get("accepted", True)),
+            })
         return out

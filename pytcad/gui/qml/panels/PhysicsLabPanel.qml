@@ -25,7 +25,7 @@ Rectangle {
         }
 
         Label {
-            text: lab.selectedDetail() ? lab.selectedDetail().title : ""
+            text: lab && lab.selectedDetail() ? lab.selectedDetail().title : ""
             color: Theme.accent
             font.bold: true
             Layout.fillWidth: true
@@ -165,6 +165,108 @@ Rectangle {
             Layout.fillWidth: true
             enabled: lab.hasRunRecord()
             onClicked: root.plotConvergenceRequested()
+        }
+
+        // Phase 3b: per-stage continuation record table
+        Label {
+            text: "Continuation stages"
+            color: Theme.textDim
+            font.pixelSize: 10
+            font.bold: true
+        }
+        ListView {
+            id: continuationStageTable
+            objectName: "continuationStageTable"
+            Layout.fillWidth: true
+            // Bound off the ListView's own `model` (a real notifying
+            // property), not a fresh lab.continuationData() call -- a
+            // plain Slot() has no NOTIFY signal, so a binding that calls
+            // it directly is evaluated once and frozen. The Connections
+            // below is what keeps `model` itself current across runs.
+            Layout.preferredHeight: model && model.length ? Math.min(120, model.length * 20 + 10) : 0
+            clip: true
+            visible: !!model && model.length > 0
+            model: lab ? lab.continuationData() : []
+            Connections {
+                target: appController
+                function onResultChanged() {
+                    continuationStageTable.model = lab ? lab.continuationData() : []
+                }
+            }
+            delegate: RowLayout {
+                width: continuationStageTable.width
+                spacing: 4
+                Label {
+                    text: " #" + (model.index + 1)
+                    color: Theme.text
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                }
+                Label {
+                    text: "V=" + String(model.parameter).slice(0, 6) + " V"
+                    color: Theme.text
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                }
+                Label {
+                    text: model.nodes ? "N=" + model.nodes : ""
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                }
+                Label {
+                    text: model.accepted ? "✓" : "✗"
+                    color: model.accepted ? Theme.success : Theme.running
+                    font.pixelSize: 10
+                    font.bold: true
+                }
+            }
+        }
+
+        // Phase 3d: provenance trace view
+        Label {
+            text: "Provenance trace"
+            color: Theme.textDim
+            font.pixelSize: 10
+            font.bold: true
+        }
+        ListView {
+            id: provenanceTraceView
+            objectName: "provenanceTraceView"
+            Layout.fillWidth: true
+            // See the continuationStageTable comment above: bound off
+            // the ListView's own notifying `model` property, kept
+            // current by the Connections below, rather than calling
+            // the non-notifying lab.provenanceRows() Slot() directly.
+            Layout.preferredHeight: model && model.length ? Math.min(150, model.length * 18 + 10) : 0
+            clip: true
+            visible: !!model && model.length > 0
+            model: lab ? lab.provenanceRows() : []
+            Connections {
+                target: appController
+                function onResultChanged() {
+                    provenanceTraceView.model = lab ? lab.provenanceRows() : []
+                }
+            }
+            delegate: RowLayout {
+                width: provenanceTraceView.width
+                spacing: 4
+                Label {
+                    text: modelData[0] + ":"
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                    Layout.preferredWidth: 100
+                }
+                Label {
+                    text: modelData[1]
+                    color: Theme.text
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                    elide: Text.ElideMiddle
+                    Layout.fillWidth: true
+                }
+            }
         }
     }
 }

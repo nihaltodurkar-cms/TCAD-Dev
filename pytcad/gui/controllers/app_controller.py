@@ -154,6 +154,15 @@ class AppController(QObject):
         self.family = FamilySweepController(self, parent=self)
         from .cv_controller import CVController
         self.cv = CVController(self, parent=self)
+        # GUI-IMPROVEMENT-PLAN Phase 4: runtime validation layer to catch
+        # hard-to-detect bugs (state inconsistencies, invalid inputs, etc.)
+        from ..services.gui_state_validator import GuiStateValidator
+        self.stateValidator = GuiStateValidator(parent=self)
+        # A result goes stale the moment an edit dirties the project, not
+        # just at the next Run start/stop -- undoStateChanged already
+        # fires at every structure/doping/contact edit site, so hook it
+        # directly rather than waiting for _set_busy to catch up.
+        self.undoStateChanged.connect(self._notify_state_validator)
 
     # -- properties ---------------------------------------------------
     @Property(str, notify=statusChanged)
@@ -171,6 +180,16 @@ class AppController(QObject):
     def _set_busy(self, value):
         self._busy = value
         self.busyChanged.emit()
+        self._notify_state_validator()
+
+    def _notify_state_validator(self):
+        """GUI-IMPROVEMENT-PLAN Phase 4: push current state to the
+        validator. Called on every busy-flag flip (Run start/stop) AND
+        on every undoStateChanged (structure/doping/contact edits) --
+        the latter is what actually makes a result stale, so the
+        validator must not wait for the next Run to notice."""
+        self.stateValidator.onStateChange(
+            self.hasResult, self._store is not None, self.isDirty)
 
     @Property(bool, notify=resultChanged)
     def hasResult(self):
@@ -188,6 +207,30 @@ class AppController(QObject):
 
     def currentStore(self):
         return self._store
+
+    @Property("QVariant", notify=resultChanged)
+    def meshStats(self):
+        """Mesh statistics for the 3c panel: {dimensionality, node_count,
+        axes}. Read-only, sourced from the current ResultStore."""
+        store = self._store
+        if store is None:
+            return None
+        try:
+            axes = store.mesh_axes()
+            dim = axes.dimensionality
+            node_count = 1
+            axis_info = {}
+            for name in ("x", "y", "z")[:dim]:
+                arr = np.asarray(axes.axes[name])
+                node_count *= arr.size
+                axis_info[name] = {"size": int(arr.size),
+                                   "min": float(arr.min()),
+                                   "max": float(arr.max())}
+            return {"dimensionality": dim,
+                    "node_count": node_count,
+                    "axes": axis_info}
+        except Exception:
+            return None
 
     def lastRunSpec(self):
         """The spec of the last executed Run -- the base device for
