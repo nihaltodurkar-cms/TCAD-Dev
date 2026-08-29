@@ -158,6 +158,36 @@ def test_bad_direction_config_is_rejected_with_error(gapp):
     assert any("Nothing to sweep" in e for e in errs) or not fam.curves
 
 
+def test_family_goes_stale_after_a_structure_edit(gapp, tmp_path):
+    """GUI-IMPROVEMENT-PLAN.md Phase 1b: a family re-solves the exact
+    last-solved device (README's own honest-limits caveat) -- editing
+    the structure afterward must not leave the curves looking current."""
+    engine, controller = gui_app.create_engine(gapp)
+    fam = controller.family
+    fam.setBaseSpec(_diode_base_spec())
+    fam.configureFamily(stepped="right", start=0.0, stop=0.5, step=0.25)
+    fam.runFamily(swept="left", start=0.0, stop=0.3, step=0.1)
+    # Wait for ALL 3 curves, not just the first -- runFamily() no-ops
+    # while a previous family's JobRunner is still busy (see
+    # test_family_curves_reach_the_canvas's own comment on this same
+    # trap), so a later runFamily() call in this test would silently
+    # do nothing if curves 2/3 were still in flight.
+    assert _pump_until(gapp, lambda: len(fam.curves) == 3)
+    assert not fam.isStale, "must not be stale immediately after a run"
+
+    controller.loadStructureExample("mosfet_2d_structure")
+    assert fam.isStale, "editing the structure must mark the family stale"
+    assert fam.curves, "stale curves must stay visible, not disappear"
+
+    # Re-running (base spec re-injected explicitly, since the loaded
+    # example's own device is unrelated to this test's contact names)
+    # clears the flag again.
+    fam.setBaseSpec(_diode_base_spec())
+    fam.configureFamily(stepped="right", start=0.0, stop=0.5, step=0.25)
+    fam.runFamily(swept="left", start=0.0, stop=0.3, step=0.1)
+    assert _pump_until(gapp, lambda: not fam.isStale and len(fam.curves) == 3)
+
+
 def test_family_stepper_contact_list_follows_structure_changes(gapp):
     engine, controller = gui_app.create_engine(gapp)
     root = engine.rootObjects()[0]

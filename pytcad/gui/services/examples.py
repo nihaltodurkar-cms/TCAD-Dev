@@ -64,7 +64,66 @@ def mosfet_example_spec():
                                           "source": 0.0, "body": 0.0})
 
 
-EXAMPLES = {"mosfet_2d": mosfet_example_spec}
+def diode_1d_example_spec():
+    """A 1D forward-biased p-n diode at a single bias point.
+
+    Deliberately Device1D's own shape (mesh dimensionality=1, two ohmic
+    contacts at the end nodes, no gate -- Device1D has no gate/contact
+    registry at all, see solver_runner.py's build_bcs()). An asymmetric
+    one-sided junction (light p-side sets the depletion width, matching
+    the pattern tests/test_m15_ionization.py's _one_sided() already
+    uses) so the exported doping profile is a realistic, non-trivial
+    step rather than a toy symmetric one.
+    """
+    x = np.linspace(0.0, 6e-4, 240)
+    doping = np.where(x < 3e-4, -1e16, 1e19)
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=1, axes={"x": x.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[ContactSpec(name="anode", kind="ohmic",
+                              nodes={"i": [0]}, V=0.0),
+                  ContactSpec(name="cathode", kind="ohmic",
+                              nodes={"i": [x.size - 1]}, V=0.6)],
+        bias={"anode": 0.0, "cathode": 0.6})
+
+
+def resistor_2d_example_spec():
+    """A uniform 2D n-type resistor bar: two ohmic contacts on opposite
+    edges, no junction and no gate -- the simplest possible 2D device,
+    useful as a fast/cheap counterpart to the MOSFET example and as a
+    minimal case for exercising the devsim backend (which refuses gates
+    and non-default region_materials but accepts exactly this shape).
+
+    Built via the same DomainDevice + spec_from_domain() path the
+    Device Builder templates use (workbench/core/templates.py's
+    _build_pn_diode is the closest sibling), rather than constructing a
+    DeviceSpec by hand -- so mesh/doping-array construction and
+    boundary-node resolution are never reimplemented here.
+    """
+    from workbench.adapters.spec import spec_from_domain
+    from workbench.core.device import Boundary, ContactDef, DomainDevice
+    from workbench.core.region import Region
+
+    w, h = 4e-4, 1e-4
+    dev = DomainDevice(
+        id="resistor_2d", name="2D resistor", dimensionality=2,
+        width_cm=w, height_cm=h, mesh_nx=80, mesh_ny=20,
+        regions=[Region("bar", "N-type bar", 0.0, w, 0.0, h, 1e17)],
+        contacts=[
+            ContactDef(id="left_c", name="left", kind="ohmic", V=0.0,
+                      boundary=Boundary(edge="left")),
+            ContactDef(id="right_c", name="right", kind="ohmic", V=0.1,
+                      boundary=Boundary(edge="right")),
+        ],
+    )
+    # bias is derived from each ContactDef's V by to_device_spec() on
+    # this authored path -- no need to set DomainDevice.bias separately.
+    return spec_from_domain(dev)
+
+
+EXAMPLES = {"mosfet_2d": mosfet_example_spec,
+           "diode_1d": diode_1d_example_spec,
+           "resistor_2d": resistor_2d_example_spec}
 
 
 from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel

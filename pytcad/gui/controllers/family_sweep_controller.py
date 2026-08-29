@@ -39,6 +39,19 @@ class FamilySweepController(QObject):
         self._queue = []             # pending (value, spec) pairs
         self._curves = []            # finished curve dicts
         self._error = ""
+        # v0.6 Phase 1b: a family re-solves the exact last-solved device
+        # (README's own "Honest limits" caveat) -- editing the structure
+        # after a family run silently invalidates it today. Track that
+        # explicitly instead of leaving it silent.
+        self._stale = False
+        self._app.structureChanged.connect(self._on_structure_changed)
+
+    def _on_structure_changed(self):
+        # Only a family that already has curves can go stale; a bare
+        # structure edit before any family has run is not a regression.
+        if self._curves and not self._stale:
+            self._stale = True
+            self.familyChanged.emit()
 
     # -- configuration --------------------------------------------------
     @Slot(str, float, float, float)
@@ -107,6 +120,7 @@ class FamilySweepController(QObject):
 
         self._queue = []
         self._curves = []
+        self._stale = False
         for v in self._values:
             spec = copy.deepcopy(base)
             spec.sweep = SweepSpec(contact=swept, start=start, stop=stop,
@@ -171,3 +185,10 @@ class FamilySweepController(QObject):
     @Property(bool, notify=familyChanged)
     def hasCurves(self):
         return bool(self._curves)
+
+    @Property(bool, notify=familyChanged)
+    def isStale(self):
+        """True once the structure has been edited since these curves
+        were solved -- they still show, but no longer describe the
+        current device (GUI-IMPROVEMENT-PLAN.md Phase 1b)."""
+        return self._stale

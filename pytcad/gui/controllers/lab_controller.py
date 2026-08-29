@@ -86,11 +86,25 @@ class PhysicsLabController(QObject):
         self._catalog = CatalogModel(lambda: self._config, self)
         keys = ModelCatalog.list()
         self._selected = keys[0] if keys else None
+        # GUI-IMPROVEMENT-PLAN.md Phase 1c: dg is equilibrium-only in the
+        # solver (Device1D.solve_bias refuses it unconditionally), but
+        # every Run path always attaches a bias dict, so a job with dg=True
+        # always crashed on Run -- there was no way to exercise the
+        # already-landed M20 physics from the GUI at all. This flag, read
+        # by AppController.run(), sets spec.bias = None instead of the
+        # usual contact-voltage dict; _solve_all() (solver_runner.py)
+        # already skips solve_bias entirely whenever spec.bias is None,
+        # so nothing on the solver side needed to change.
+        self._equilibrium_only = False
 
     # -- python-side convenience (tests / future services) ---------------
     @property
     def model_config(self):
         return self._config
+
+    @property
+    def equilibrium_only(self):
+        return self._equilibrium_only
 
     # -- QML surface ------------------------------------------------------
     @Property(QObject, constant=True)
@@ -100,6 +114,15 @@ class PhysicsLabController(QObject):
     @Property(dict, notify=configChanged)
     def modelConfig(self):
         return dict(self._config)
+
+    @Property(bool, notify=configChanged)
+    def equilibriumOnly(self):
+        return self._equilibrium_only
+
+    @Slot(bool)
+    def setEquilibriumOnly(self, value):
+        self._equilibrium_only = bool(value)
+        self.configChanged.emit()
 
     @Slot(str, bool)
     def setModelEnabled(self, key, value):

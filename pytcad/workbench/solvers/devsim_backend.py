@@ -44,6 +44,50 @@ def _require_devsim():
             f"(pip install devsim): {exc}") from exc
 
 
+def check_devsim_compatible(spec):
+    """Raise ValueError with an actionable message if `spec` is not
+    something this backend can honestly solve; return None if it is.
+
+    A SINGLE source of truth for "can devsim run this job", called by
+    run() below AND by the GUI's backend selector (v0.6 Phase 2c) --
+    the selector greys out "devsim" using this SAME function, wrapped
+    in a try/except, rather than a separately-maintained guess that
+    could silently drift from what run() actually enforces.
+
+    The last two checks are NEW (2026-08-29): this backend never reads
+    spec.models or spec.region_materials at all -- it always runs its
+    own fixed canonical physics (Scharfetter-Gummel, Boltzmann, SRH)
+    regardless of what either says, so a job asking for anything else
+    (a non-default model config, a heterostructure) was previously
+    solved SILENTLY WRONG rather than refused -- the exact "hidden
+    failure" this codebase's house rule (see e.g. Device1D/2D/3D's own
+    dg/impact/incomplete_ion guards) exists to catch elsewhere."""
+    if spec.mesh.dimensionality != 1:
+        raise ValueError(
+            "the devsim backend currently solves 1D devices only")
+    ohmic = [c for c in spec.contacts if c.kind == "ohmic"]
+    if len(ohmic) != 2:
+        raise ValueError(
+            "the devsim backend needs exactly two ohmic contacts")
+    if any(c.kind == "gate" for c in spec.contacts):
+        raise ValueError(
+            "the devsim backend does not support gate contacts")
+    if spec.region_materials is not None:
+        raise ValueError(
+            "the devsim backend does not accept region_materials "
+            "(heterostructure jobs must use the pytcad backend)")
+    from gui.services.device_spec import _default_models
+    if spec.models != _default_models():
+        raise ValueError(
+            "the devsim backend always runs its own fixed canonical "
+            "physics (Scharfetter-Gummel, Boltzmann statistics, SRH) "
+            "and ignores the Physics Lab's model config entirely -- "
+            "a non-default model selection would be silently solved "
+            "without the requested physics, so this is refused rather "
+            "than doing that quietly (use the pytcad backend for any "
+            "custom model configuration)")
+
+
 class DevsimBackend:
     id = "devsim"
 
@@ -68,16 +112,8 @@ class DevsimBackend:
         from gui.services.device_spec import DeviceSpec
 
         spec = DeviceSpec.from_json(request.job_json_path)
-        if spec.mesh.dimensionality != 1:
-            raise ValueError(
-                "the devsim backend currently solves 1D devices only")
+        check_devsim_compatible(spec)
         ohmic = [c for c in spec.contacts if c.kind == "ohmic"]
-        if len(ohmic) != 2:
-            raise ValueError(
-                "the devsim backend needs exactly two ohmic contacts")
-        if any(c.kind == "gate" for c in spec.contacts):
-            raise ValueError(
-                "the devsim backend does not support gate contacts")
         bias = {c.name: float((spec.bias or {}).get(c.name, c.V))
                 for c in ohmic}
         if spec.sweep is not None:

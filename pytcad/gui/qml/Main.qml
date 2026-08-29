@@ -37,6 +37,10 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("mosfet_2d") }
             MenuItem { text: "Load 2D MOSFET (Structure)"
                        onTriggered: appController.loadStructureExample("mosfet_2d_structure") }
+            MenuItem { text: "Load 1D diode example"
+                       onTriggered: appController.loadExample("diode_1d") }
+            MenuItem { text: "Load 2D resistor example"
+                       onTriggered: appController.loadExample("resistor_2d") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }
@@ -96,6 +100,35 @@ ApplicationWindow {
                 ToolTip.text: "Cancel the running solve"
                 onClicked: appController.cancel()
             }
+            ComboBox {
+                id: backendBox
+                objectName: "backendSelector"
+                // v0.6 Phase 2c: DEVSIM is 1D-two-terminal-only, so this
+                // must not even appear for the Structure/Device-Builder
+                // (2D) path -- not merely show devsim disabled there.
+                visible: appController.canSelectBackend
+                Layout.preferredWidth: 110
+                textRole: "label"
+                valueRole: "id"
+                model: appController.canSelectBackend
+                       ? appController.backendOptionsForQml() : []
+                delegate: ItemDelegate {
+                    width: backendBox.width
+                    text: modelData.label
+                    enabled: modelData.enabled
+                    ToolTip.visible: hovered && !modelData.enabled
+                    ToolTip.text: modelData.reason
+                }
+                onActivated: appController.setBackend(
+                    model[currentIndex].id)
+                Connections {
+                    target: appController
+                    function onStructureChanged() {
+                        if (appController.canSelectBackend)
+                            backendBox.model = appController.backendOptionsForQml()
+                    }
+                }
+            }
             ToolSeparator {}
             Button {
                 display: AbstractButton.IconOnly
@@ -121,14 +154,17 @@ ApplicationWindow {
                 objectName: "viewModeSelector"
                 implicitContentWidthPolicy: ComboBox.WidestText
                 model: ["Structure", "Doping", "Mesh", "Process", "Curves",
-                        "Bands", "Recombination", "Convergence", "Results"]
+                        "C-V", "Line Cut", "Bands", "Recombination",
+                        "Convergence", "Results"]
                 ToolTip.visible: hovered
                 ToolTip.delay: 600
                 ToolTip.text: "What the viewport shows"
                 onActivated: {
                     var m = {"Structure": "structure", "Doping": "doping",
                             "Mesh": "mesh", "Process": "process",
-                            "Curves": "series", "Bands": "bands",
+                            "Curves": "series", "C-V": "cv",
+                            "Line Cut": "cut",
+                            "Bands": "bands",
                             "Recombination": "recombination",
                             "Convergence": "convergence",
                             "Results": "doping"}[currentText]

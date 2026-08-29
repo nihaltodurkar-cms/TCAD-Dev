@@ -43,3 +43,51 @@ def test_structure_example_converts_and_solves():
     spec = structure.to_device_spec(mesh)
     assert spec.mesh.dimensionality == 2
     assert len(spec.contacts) == 4
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2f: 1D diode + 2D resistor examples,
+# rounding out the File-menu quick-load set beyond the single MOSFET.
+# ----------------------------------------------------------------------
+def test_diode_1d_example_is_registered_and_1d():
+    assert "diode_1d" in examples.EXAMPLES
+    spec = examples.diode_1d_example_spec()
+    assert spec.mesh.dimensionality == 1
+    assert len(spec.contacts) == 2
+    assert all(c.kind == "ohmic" for c in spec.contacts)
+    # asymmetric one-sided junction: doping actually changes sign
+    values = spec.doping.values
+    assert min(values) < 0 < max(values)
+
+
+def test_diode_1d_example_solves():
+    from gui.services.solver_runner import run_job
+    import tempfile, os, json
+    spec = examples.diode_1d_example_spec()
+    d = tempfile.mkdtemp()
+    job_path, out_path = os.path.join(d, "job.json"), os.path.join(d, "out.npz")
+    with open(job_path, "w") as fh:
+        json.dump(spec.to_dict(), fh)
+    run_job(job_path, out_path)
+    assert os.path.exists(out_path)
+
+
+def test_resistor_2d_example_is_registered_and_gateless():
+    assert "resistor_2d" in examples.EXAMPLES
+    spec = examples.resistor_2d_example_spec()
+    assert spec.mesh.dimensionality == 2
+    assert len(spec.contacts) == 2
+    assert all(c.kind == "ohmic" for c in spec.contacts)
+    assert spec.region_materials is None
+
+
+def test_resistor_2d_example_solves():
+    from gui.services.solver_runner import run_job
+    import tempfile, os, json
+    spec = examples.resistor_2d_example_spec()
+    d = tempfile.mkdtemp()
+    job_path, out_path = os.path.join(d, "job.json"), os.path.join(d, "out.npz")
+    with open(job_path, "w") as fh:
+        json.dump(spec.to_dict(), fh)
+    run_job(job_path, out_path)
+    assert os.path.exists(out_path)

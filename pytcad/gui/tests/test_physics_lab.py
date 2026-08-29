@@ -190,3 +190,88 @@ def test_provenance_rows_after_real_run(gapp):
     rows = dict(lab.provenanceRows())
     assert rows["Backend"] == "pytcad"
     assert any(k.startswith("model:") for k in rows)
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 1c: equilibrium-only Run mode for dg
+# ----------------------------------------------------------------------
+def _diode_1d_spec():
+    """A minimal 1D diode DeviceSpec -- same shape as
+    test_family_sweep.py's _diode_base_spec(), reused here rather than
+    imported across test files (no shared test-fixture module exists
+    yet for this small a spec)."""
+    from gui.services.device_spec import (
+        ContactSpec, DeviceSpec, DopingSpec, MeshSpec,
+    )
+    x = np.linspace(0.0, 2e-4, 40)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=1, axes={"x": x.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[ContactSpec(name="left", kind="ohmic", nodes={"i": [0]}, V=0.0),
+                  ContactSpec(name="right", kind="ohmic",
+                              nodes={"i": [x.size - 1]}, V=0.0)],
+        bias={"left": 0.0, "right": 0.3})
+
+
+def test_dg_with_equilibrium_only_runs_without_the_solve_bias_refusal(gapp):
+    """Before this mode existed, dg=True + Run always crashed: every
+    Run path attaches a bias dict, and Device1D.solve_bias refuses
+    dg=True unconditionally (M20 is equilibrium-only). This is the
+    first GUI-reachable path to the already-landed M20 physics."""
+    engine, root, ctl = _fresh(gapp)
+    lab = ctl.lab
+    ctl.spec = _diode_1d_spec()
+    lab.setModelEnabled("dg", True)
+    lab.setEquilibriumOnly(True)
+    assert lab.equilibriumOnly is True
+
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    _wait_run(ctl, gapp)
+
+    assert not errors, f"equilibrium-only dg run raised: {errors}"
+    assert ctl.hasResult, ctl.status
+    store = ctl.currentStore()
+    assert bool(store._d["solved_bias"]) is False, \
+        "equilibrium-only must not have run a bias solve"
+    rec = store.run_record()
+    assert rec.models["dg"] is True
+
+
+def test_dg_without_equilibrium_only_still_refuses_on_bias(gapp):
+    """Regression: the new mode must not accidentally make dg=True
+    silently safe for an ordinary biased Run -- the M20 scope limit
+    (equilibrium-only) must still be enforced when the toggle is off."""
+    engine, root, ctl = _fresh(gapp)
+    lab = ctl.lab
+    ctl.spec = _diode_1d_spec()
+    lab.setModelEnabled("dg", True)
+    assert lab.equilibriumOnly is False
+
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    _wait_run(ctl, gapp)
+
+    assert not ctl.hasResult
+    assert errors, "a biased dg=True run must still fail"
+    assert any("solve_bias" in d or "equilibrium-only" in d
+               for _s, d in errors), errors
+
+
+def test_equilibrium_only_refuses_to_combine_with_an_armed_sweep(gapp):
+    """A sweep always overrides the bias branch regardless of spec.bias
+    (_solve_all checks spec.sweep first) -- equilibrium-only would be
+    silently ineffective, not safely inert, if combined with a sweep.
+    Caught before the subprocess starts, with an actionable message."""
+    engine, root, ctl = _fresh(gapp)
+    lab = ctl.lab
+    ctl.spec = _diode_1d_spec()
+    lab.setEquilibriumOnly(True)
+    ctl.setSweepConfig("left", 0.0, 0.3, 0.1)
+
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append(s))
+    ctl.run()
+    assert errors and "sweep" in errors[0].lower()
+    assert not ctl.busy

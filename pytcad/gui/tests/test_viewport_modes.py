@@ -5,6 +5,7 @@ import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import numpy as np
 import pytest
 from PySide6.QtGui import QGuiApplication
 
@@ -234,3 +235,111 @@ def test_doping_mode_prefers_resultstore_once_a_solve_exists(gapp):
     assert item._store is not None
     img = item.renderToImage()
     assert not img.isNull()
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2a: contour overlays on 2D field modes
+# ----------------------------------------------------------------------
+def _2d_field_canvas(gapp):
+    from gui.services.result_store import SpecResultStore
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    structure, mesh = examples.mosfet_example_structure()
+    item.setMode("doping")
+    item.setStructureSource(structure, mesh)
+    item.setStore(SpecResultStore(examples.mosfet_example_spec()), "doping")
+    return item
+
+
+def test_contours_off_by_default_is_a_pure_pcolormesh(gapp):
+    """Regression pin: with contours off (the default), a 2D field mode
+    must render EXACTLY the one pcolormesh collection it always did --
+    this proves adding the contour overlay didn't change the un-toggled
+    render path at all."""
+    item = _2d_field_canvas(gapp)
+    assert item.contours is False
+    fig = item._build_figure(480, 320)
+    assert len(fig.axes[0].collections) == 1, \
+        "contours=False must not add any extra artist"
+
+
+def test_contours_on_adds_a_contour_artist(gapp):
+    item = _2d_field_canvas(gapp)
+    item.contours = True
+    assert item.contours is True
+    fig = item._build_figure(480, 320)
+    assert len(fig.axes[0].collections) >= 2, \
+        "contours=True must add a contour artist on top of the pcolormesh"
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2b: line-cut mode
+# ----------------------------------------------------------------------
+def test_cut_mode_without_a_store_shows_placeholder(gapp):
+    item = MplCanvasItem()
+    item.setWidth(320); item.setHeight(240)
+    item.setMode("cut")
+    fig = item._build_figure(320, 240)
+    texts = " ".join(t.get_text() for t in fig.axes[0].texts)
+    assert "No project loaded" in texts
+
+
+def test_cut_mode_plots_exactly_what_extract_line_cut_returns(gapp):
+    """Cross-checks the RENDERED curve against the pure extraction
+    function directly -- the gate that matters is the data, not just
+    that something non-blank appeared."""
+    from gui.services.result_store import SpecResultStore, extract_line_cut
+    item = _2d_field_canvas(gapp)
+    item.setMode("cut")
+    item.setCutOrientation("horizontal")
+    store = SpecResultStore(examples.mosfet_example_spec())
+    axes = store.mesh_axes()
+    y = np.asarray(axes.axes["y"], dtype=float)
+    target_um = float(y[2]) * 1e4
+    item.setCutPositionUm(target_um)
+
+    fig = item._build_figure(480, 320)
+    ax = fig.axes[0]
+    assert ax.lines, "no curve drawn in cut mode"
+    xdata = np.asarray(ax.lines[0].get_xdata(), dtype=float)
+    ydata = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+
+    field = store.scalar_field("doping")
+    exp_coord, exp_values, exp_actual = extract_line_cut(
+        axes, field, "horizontal", target_um * 1e-4)
+    assert np.allclose(xdata, exp_coord * 1e4)
+    assert np.allclose(ydata, exp_values)
+    assert f"{exp_actual * 1e4:.4g}" in ax.get_title()
+
+
+def test_cut_mode_vertical_orientation_switches_the_slice_axis(gapp):
+    from gui.services.result_store import SpecResultStore, extract_line_cut
+    item = _2d_field_canvas(gapp)
+    item.setMode("cut")
+    item.setCutOrientation("vertical")
+    store = SpecResultStore(examples.mosfet_example_spec())
+    axes = store.mesh_axes()
+    x = np.asarray(axes.axes["x"], dtype=float)
+    target_um = float(x[4]) * 1e4
+    item.setCutPositionUm(target_um)
+
+    fig = item._build_figure(480, 320)
+    ax = fig.axes[0]
+    ydata = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    field = store.scalar_field("doping")
+    _coord, exp_values, _actual = extract_line_cut(
+        axes, field, "vertical", target_um * 1e-4)
+    assert np.allclose(ydata, exp_values)
+    assert ax.get_xlabel() == "y [um]"
+
+
+def test_view_mode_selector_offers_line_cut(gapp):
+    from gui import app as gui_app
+    from PySide6.QtGui import QGuiApplication
+    engine, controller = gui_app.create_engine(
+        QGuiApplication.instance() or QGuiApplication([]))
+    root = engine.rootObjects()[0]
+    selector = root.findChild(object, "viewModeSelector")
+    assert "Line Cut" in list(selector.property("model"))
+    for name in ("cutOrientationSelector", "cutPositionField", "applyCutButton"):
+        assert root.findChild(object, name) is not None, f"missing {name}"

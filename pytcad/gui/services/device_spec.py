@@ -209,6 +209,11 @@ class DeviceSpec:
     # silicon materials are carried LOSSLESSLY; both solver backends
     # refuse to solve them until the M11-S3 heterojunction core exists.
     region_materials: list = None
+    # v0.6 Phase 2c: which SolverBackend id (workbench/solvers/base.py)
+    # runs this job.  Additive, like every other DeviceSpec field: an
+    # old job file simply lacks the key and defaults to "pytcad" here
+    # too, so nothing about pre-2c behavior changes.
+    backend: str = "pytcad"
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -233,6 +238,7 @@ class DeviceSpec:
             # and load-time validation project_store uses, not a bare
             # SweepSpec(**dict).
             sweep=SweepSpec.from_dict(sweep) if sweep else None,
+            backend=d.get("backend", "pytcad"),
         )
 
     def to_json(self, path):

@@ -105,6 +105,58 @@ Rectangle {
             }
         }
 
+        CheckBox {
+            id: equilibriumOnlyBox
+            objectName: "equilibriumOnlyCheckBox"
+            text: "Equilibrium only (no bias solve)"
+            checked: lab.equilibriumOnly
+            onToggled: lab.setEquilibriumOnly(checked)
+            ToolTip.visible: hovered
+            ToolTip.delay: 500
+            ToolTip.text: "Required for Density Gradient (dg): Device1D." +
+                          "solve_bias refuses dg=True unconditionally " +
+                          "(M20 is equilibrium-only). Runs solve_equilibrium() " +
+                          "only, skipping the bias solve regardless of the " +
+                          "contact voltages set elsewhere."
+        }
+
+        Button {
+            objectName: "compareModelsButton"
+            text: "Compare: all models off"
+            Layout.fillWidth: true
+            enabled: appController.hasResult && !appController.busy
+            onClicked: appController.runModelComparison()
+            ToolTip.visible: hovered
+            ToolTip.delay: 500
+            ToolTip.text: "Re-solve the last-run device with every " +
+                          "catalog model disabled; overlays dashed in " +
+                          "Curves mode."
+        }
+
+        Button {
+            objectName: "compareBackendsButton"
+            text: "Compare: other backend"
+            Layout.fillWidth: true
+            enabled: appController.hasResult && !appController.busy
+                     && appController.canSelectBackend
+            onClicked: appController.runBackendComparison()
+            ToolTip.visible: hovered
+            ToolTip.delay: 500
+            ToolTip.text: "Re-solve the last-run device with the OTHER " +
+                          "solver backend (pytcad<->devsim), same " +
+                          "physics; overlays dashed in Curves mode. " +
+                          "Only available for devsim-compatible 1D devices."
+        }
+
+        Label {
+            objectName: "comparisonStatusLabel"
+            visible: appController.hasComparison
+            color: Theme.textDim
+            font.pixelSize: Theme.fsSmall
+            text: appController.hasComparison
+                  ? "overlay: " + appController.comparisonLabelForQml : ""
+        }
+
         Item { Layout.fillHeight: true }
 
         Button {

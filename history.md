@@ -1185,3 +1185,120 @@ enhancement, Kane-slope onset regression, and the M16
 LITERATURE-NOTE gate: high-bias non-plateau (strictly monotone J(V),
 late-ramp log-slope within 25x of onset) -- the known local-model
 failure mode is gated explicitly, not hidden.
+
+## STATE ADDENDUM 19 -- M20 DENSITY-GRADIENT: OUTER FIXED-POINT
+NON-CONVERGENCE BUG FOUND AND FIXED; SEPARATE GAMMA-CALIBRATION GAP
+SURFACED AND LEFT OPEN BY USER DECISION, 2026-08-29:
+
+User asked to run the suite and check where it stood (Addendum 18 had
+landed M20 uncommitted, gates written but never executed). Fast suite
+(tests/ gui/tests/, -n 6, not slow): 758 passed, 1 xfailed, 2 failed --
+both in tests/test_m20_dg.py, the ONLY failures anywhere in the tree.
+Everything else (including M21 phase 2's 25-test battery, carried over
+from the TCAD-Ollama/TCAD-Dev checkout's earlier hard-debug session)
+was already green.
+
+BUG 1, FOUND AND FIXED: the M20 outer fixed-point loop (both
+MOSCapacitor.solve_psi and Device1D.solve_equilibrium, dg=True)
+computed each pass's target Lambda from the DG-CORRECTED density
+(n_classical * exp(-Lambda_old/VT)) instead of the classical density.
+This closes a 1-node self-reference at the node next to the Lambda=0
+boundary: Lambda[1] enters n[1] via the exponential, and
+quantum_potential's 3-point curvature stencil at node 1 reads n[1]
+straight back out. Instrumenting the loop by hand showed a RIGID
+period-2 oscillation -- Lambda[1] flipping between exactly
++LAMBDA_MAX*VT and -LAMBDA_MAX*VT every outer pass, forever, immune to
+under-relaxation at every damping factor from 1.0 down to 0.02 over up
+to 400 passes, and immune to ramping gamma via continuation (the
+instability just relocated to a different node as gamma grew). This
+produced the 188 nm centroid vs a ~4 nm Schrodinger-Poisson reference
+that failed test_gc_dg_centroid_within_factor2_of_sp -- a 48x error
+from an oscillation artifact, not a calibration gap.
+
+FIX: source the outer loop's target Lambda from the CLASSICAL (psi-
+only) density instead. Converges in as few as 4 outer passes with NO
+damping at all, and to the SAME converged Lambda across every damping
+factor from 1.0 down to 0.3 -- the signature of a genuine fixed point,
+unlike the old scheme which never had one. Three regression tests
+added to tests/test_m20_dg.py
+(test_gr_moscap_outer_fixed_point_converges_without_warning,
+test_gr_device1d_dg_outer_fixed_point_converges_without_warning,
+test_gr_outer_fixed_point_is_deterministic). Also corrected dg.py's
+LAMBDA_MAX_VT comment and the plan's own "Honest Limits" section, both
+of which claimed the clamp "engages only in the deep-bulk minority
+tail" -- measured false: it engages hard at the strong-inversion
+surface node (the classical density alone gives ~81 VT raw curvature
+there at gamma=1, before any outer-loop feedback) and is load-bearing
+(removing it makes the fixed point diverge, not settle on a bigger
+answer).
+
+BUG 2, FOUND BUT NOT FIXED (separate from bug 1, and only visible once
+bug 1 was fixed): with the oscillation gone, the converged answer at
+gamma=1 lands exactly at the LAMBDA_MAX=20*VT clamp and gives a
+centroid of 0.168 nm -- SMALLER than the classical (dg=False) centroid
+of 0.631 nm, inverting the milestone's required "DG pushes charge OFF
+the interface" direction. This broke a THIRD test
+(test_gc_classical_centroid_is_the_sub_debye_tail) that had been
+PASSING before the fix, purely by accident -- the old 188 nm garbage
+value happened to exceed the classical centroid, so the comparison
+looked right for the wrong reason. A gamma sweep (0.001 to 3.0) showed
+a hard BIFURCATION, not a smooth calibration curve: negligible effect
+below gamma~0.01, clamp-saturated above gamma~0.03, nothing in between
+and nothing near the ~2-8 nm band the factor-2-of-S-P gate needs.
+
+Three further hypotheses tested and RULED OUT before concluding this
+needs a design decision, not another patch:
+1. Boundary-condition mismatch: schrodinger_poisson (the reference
+   solver) treats the Si/SiO2 interface as a hard wall (psi(0)=0);
+   quantum_potential treats every boundary as Neumann (Lambda=0) -- a
+   real inconsistency, but a hard-wall variant of quantum_potential
+   left the pathology completely unchanged (Lambda[0] itself moves;
+   the interior node-1 curvature, where the problem lives, doesn't).
+2. Sub-physical mesh resolution: MOSCapacitor's classical-Poisson mesh
+   reaches h[0] ~ 0.025 nm, two orders of magnitude finer than the
+   ~1 nm scale the Bohm gradient expansion is valid on. Coarsening the
+   curvature stencil to 0.1-3 nm neighbour spacing helped mildly (0.168
+   -> 0.23 nm at 1 nm) then got WORSE again at 2-3 nm -- still an
+   order of magnitude short, not the fix.
+3. Formula/units bug: ruled out earlier -- a smooth Gaussian test
+   density gives quantum_potential ~90 meV (~3.5 VT), the correct
+   scale for a real inversion-layer confinement energy.
+
+DIAGNOSIS: raising the clamp (to let the "true" unclamped value
+through) makes the now-non-oscillating fixed point DIVERGE outright
+rather than settle on a larger physical answer (measured: clamp=200*VT
+overflows). Combined with the hard bifurcation in gamma, this is the
+signature of a LAGGED (Gummel-style) fixed point that does not
+reliably find self-consistent DG-Poisson solutions for this device --
+a documented weakness of exactly this scheme in the DG literature, and
+the reason production TCAD tools solve the quantum potential COUPLED
+into the same Newton system as psi rather than lagging it. The real
+fix is either that coupled-Newton reformulation (a core-physics
+amendment on the scale of M11-S3/M13, needing the same sign-off + FD-
+Jacobian process) or sourcing a published, pre-calibrated gamma --
+both explicitly larger, separate pieces of work.
+
+USER DECISION: leave M20 flagged open. Three gates
+(test_gc_dg_centroid_within_factor2_of_sp,
+test_gc_classical_centroid_is_the_sub_debye_tail,
+test_gd_dg_changes_the_physics_in_every_required_direction) stay red,
+openly, with the investigation record in M20-DENSITY-GRADIENT-PLAN.md
+sections 6-7 so a future session does not have to re-derive any of
+this before deciding which of the two real fixes to pursue.
+
+Full suite after the fix: 757 passed, 1 xfailed, 3 failed (the three
+G-C/G-D gates above), 34 warnings, in tests/ gui/tests/ (-n 6, not
+slow) -- zero regressions anywhere outside tests/test_m20_dg.py.
+
+GOTCHA ADDED TO THE RUNNING LIST: a lagged fixed-point loop that
+sources its next iterate from a quantity the CURRENT iterate already
+modified (Lambda feeding into n feeding back into the SAME Lambda's
+own curvature stencil) can produce a RIGID, non-damping oscillation
+rather than divergence or slow convergence -- and the returned "result"
+on hitting the iteration cap looks like ordinary data (finite,
+plausible-looking arrays), not an obvious crash, so it only surfaces
+as a downstream physics gate failing by a large, "unphysical" margin.
+When a warm-started outer loop won't converge under any damping
+factor, check whether the loop's OWN just-updated state is looping
+back into computing its next update, before assuming the tolerance or
+damping is the tuning problem.

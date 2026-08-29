@@ -38,6 +38,40 @@ class VectorField:
     unit: str
 
 
+def extract_line_cut(axes: MeshAxes, field: ScalarField, orientation: str,
+                     position_cm: float):
+    """A 1D slice through a 2D scalar field, at the mesh row/column
+    NEAREST to `position_cm` -- nearest-node, not interpolated, and
+    honestly labeled that way (the mesh may be non-uniform, so "the
+    row closest to y=1.2e-4 cm" and "the row at exactly y=1.2e-4 cm"
+    are genuinely different claims; only the former is made here).
+
+    orientation="horizontal": cut at the nearest y, values vary along x.
+    orientation="vertical":   cut at the nearest x, values vary along y.
+
+    Returns (coord_cm, value, actual_position_cm): `actual_position_cm`
+    is the coordinate of the node actually used, so a caller can report
+    "cut at y=1.234e-4 cm (nearest to the requested 1.2e-4 cm)" rather
+    than silently pretending the requested position was hit exactly.
+    """
+    if axes.dimensionality != 2:
+        raise ValueError(
+            f"line cuts require a 2D field, got dimensionality="
+            f"{axes.dimensionality}")
+    x = np.asarray(axes.axes["x"], dtype=float)
+    y = np.asarray(axes.axes["y"], dtype=float)
+    values = np.asarray(field.values, dtype=float)
+    if orientation == "horizontal":
+        j = int(np.argmin(np.abs(y - position_cm)))
+        return x, values[j, :], float(y[j])
+    if orientation == "vertical":
+        i = int(np.argmin(np.abs(x - position_cm)))
+        return y, values[:, i], float(x[i])
+    raise ValueError(
+        f"orientation must be 'horizontal' or 'vertical', got "
+        f"{orientation!r}")
+
+
 @dataclass(frozen=True)
 class TerminalCurrent:
     name: str

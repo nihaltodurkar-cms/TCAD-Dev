@@ -49,6 +49,14 @@ Rectangle {
                 sweepChannelBox.currentIndex =
                     Math.max(0, sweepChannelBox.model.indexOf(canvas._sweep_channel))
         }
+        if (mode === "cv") {
+            // v0.6 Phase 1a: hand the finished C-V sweep (or null before
+            // any C-V run) to the canvas -- same opaque-handoff contract
+            // as "series" above, through CVController's own Property
+            // rather than AppController's, since CV is a separate
+            // controller (see cv_controller.py's own ownership note).
+            canvas.setCvSource(controller ? controller.cvSweep.cvResultForQml : null)
+        }
     }
 
     // Called from Main.qml on ProcessPanel.stepSelected -- lets clicking a
@@ -88,6 +96,15 @@ Rectangle {
                 text: "log scale"
                 onToggled: canvas.logScale = checked
             }
+            CheckBox {
+                objectName: "contoursCheckBox"
+                text: "contours"
+                onToggled: canvas.contours = checked
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: "Overlay contour lines on 2D field/doping/" +
+                              "bands/recombination maps"
+            }
             ComboBox {
                 id: sweepChannelBox
                 objectName: "sweepChannelSelector"
@@ -95,6 +112,29 @@ Rectangle {
                 Layout.preferredWidth: 150
                 model: []
                 onActivated: canvas.setSweepChannel(currentText)
+            }
+            ComboBox {
+                id: cutOrientationBox
+                objectName: "cutOrientationSelector"
+                visible: root.currentMode === "cut"
+                Layout.preferredWidth: 110
+                model: ["horizontal", "vertical"]
+                onActivated: canvas.setCutOrientation(currentText)
+            }
+            TextField {
+                id: cutPositionField
+                objectName: "cutPositionField"
+                visible: root.currentMode === "cut"
+                Layout.preferredWidth: 90
+                placeholderText: "position [um]"
+                validator: DoubleValidator {}
+            }
+            Button {
+                objectName: "applyCutButton"
+                visible: root.currentMode === "cut"
+                text: "Cut"
+                onClicked: canvas.setCutPositionUm(
+                    parseFloat(cutPositionField.text) || 0.0)
             }
             Item { Layout.fillWidth: true }
             Button { text: "Zoom in";  onClicked: canvas.zoom(0.8) }
@@ -187,6 +227,18 @@ Rectangle {
         }
     }
 
+    // A finished C-V run emits cvSweep.cvFinished, not resultChanged --
+    // without this, running a C-V sweep while "C-V" mode was already
+    // selected left the viewport showing its "No C-V sweep yet"
+    // placeholder until the mode selector was re-touched by hand.
+    // Mirrors the two Connections blocks above.
+    Connections {
+        target: controller ? controller.cvSweep : null
+        function onCvFinished() {
+            if (controller && root.currentMode === "cv") root.setViewMode(root.currentMode)
+        }
+    }
+
     // v0.4: same trap, sweep edition -- a finished swept run emits
     // resultChanged only; without this, "Curves" mode kept showing the
     // previous state until the mode selector was re-touched by hand.
@@ -198,11 +250,17 @@ Rectangle {
     }
 
     // M9: the models-off comparison finishing must refresh the series
-    // overlay the same way.
+    // overlay the same way. v0.6 Phase 2d reuses this SAME signal/slot
+    // pair for the backend comparison -- comparisonLabelForQml says
+    // which one produced the current overlay ("all models off" or a
+    // backend id).
     Connections {
         target: controller
         function onComparisonChanged() {
-            if (controller) canvas.setComparisonSource(controller.comparisonSweepForQml)
+            if (controller) {
+                canvas.setComparisonSource(controller.comparisonSweepForQml)
+                canvas.setComparisonLabel(controller.comparisonLabelForQml)
+            }
         }
     }
 

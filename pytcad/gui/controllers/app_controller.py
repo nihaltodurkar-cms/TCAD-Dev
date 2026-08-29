@@ -119,12 +119,17 @@ class AppController(QObject):
         self._comparison_runner.finished.connect(self._on_comparison_finished)
         self._comparison_runner.failed.connect(self._on_comparison_failed)
         self._comparison_store = None
+        self._comparison_label = "all models off"
         self._last_run_spec = None
         self._left_contact_v = 0.0
         self._right_contact_v = 0.0
         # v0.4 voltage sweep applied to the next Run (not undoable: it is
         # run configuration, like field selection -- not device geometry)
         self._sweep_config = None
+        # v0.6 Phase 2c: which SolverBackend id the next Run uses. Run
+        # configuration, like the sweep config above -- not undoable,
+        # not device geometry.
+        self._backend = "pytcad"
         # v0.5.0 M4: the Physics Lab owns the model-flag configuration.
         # Its defaults equal the wire-format defaults, so this is
         # invisible until a student toggles something.
@@ -379,6 +384,65 @@ class AppController(QObject):
             return None
         return {"contact": s.contact, "start": s.start,
                 "stop": s.stop, "step": s.step}
+
+    # -- v0.6 Phase 2c: solver backend selection --------------------------
+    @Property(bool, notify=structureChanged)
+    def canSelectBackend(self):
+        """DEVSIM is 1D-two-terminal-only (check_devsim_compatible), and
+        the Structure/Device-Builder path always builds 2D -- so the
+        selector must not even APPEAR there, not just be disabled. Gate
+        on the built spec's own dimensionality rather than "is
+        self.structure set", which would go stale the moment a 2D
+        structure is cleared by a process handoff without a fresh spec
+        yet built (buildDeviceFromProcess's own one-way precedence
+        switch, documented above)."""
+        return self.spec is not None and self.spec.mesh.dimensionality == 1
+
+    @Slot(result="QVariant")
+    def backendOptionsForQml(self):
+        """[{"id","label","enabled","reason"}, ...] for the backend
+        selector. "pytcad" is always enabled; "devsim" is enabled only
+        if installed AND check_devsim_compatible(...) passes -- the SAME
+        function DevsimBackend.run() itself enforces, so this can never
+        promise a run that would then be refused.
+
+        Checked against the Lab's CURRENT model_config, not
+        self.spec.models directly: run() only copies model_config onto
+        the spec at Run time (see run()'s own comment on this), so
+        self.spec.models can be stale/default here even though toggling
+        a model in the Physics Lab should immediately be reflected in
+        whether devsim looks selectable."""
+        from workbench.solvers.base import backend_ids
+        opts = [{"id": "pytcad", "label": "pytcad", "enabled": True, "reason": ""}]
+        if "devsim" not in backend_ids():
+            opts.append({"id": "devsim", "label": "devsim", "enabled": False,
+                        "reason": "optional devsim dependency not installed"})
+            return opts
+        reason = ""
+        try:
+            from workbench.solvers.devsim_backend import check_devsim_compatible
+            if self.spec is not None:
+                import copy
+                trial = copy.copy(self.spec)
+                trial.models = dict(self.lab.model_config)
+                check_devsim_compatible(trial)
+        except ValueError as exc:
+            reason = str(exc)
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+        opts.append({"id": "devsim", "label": "devsim",
+                    "enabled": self.spec is not None and not reason,
+                    "reason": reason})
+        return opts
+
+    @Property(str, notify=structureChanged)
+    def selectedBackend(self):
+        return self._backend
+
+    @Slot(str)
+    def setBackend(self, backend_id):
+        self._backend = str(backend_id)
+        self.structureChanged.emit()
 
     @Property(float, notify=processResultChanged)
     def leftContactV(self):
@@ -1198,10 +1262,43 @@ class AppController(QObject):
                 self.errorRaised.emit(
                     "Sweep cannot run on this device", str(exc))
                 return
+        # GUI-IMPROVEMENT-PLAN.md Phase 1c: "Equilibrium only" sets
+        # spec.bias = None instead of the usual contact-voltage dict --
+        # solver_runner.py's _solve_all() already skips solve_bias
+        # entirely whenever spec.bias is None (test_solver_runner.py's
+        # test_equilibrium_only_when_bias_is_none exercises exactly this
+        # path). A sweep always overrides the bias branch regardless of
+        # spec.bias (_solve_all checks spec.sweep FIRST), so the two are
+        # mutually exclusive -- catch that here with an actionable error
+        # rather than letting it reach solve_bias inside the sweep ramp.
+        if self.lab.equilibrium_only and self._sweep_config is not None:
+            self.errorRaised.emit(
+                "Cannot run equilibrium-only with a sweep armed",
+                "Clear the voltage sweep configuration first, or turn "
+                "off 'Equilibrium only' in the Physics Lab.")
+            return
         self.spec.sweep = self._sweep_config
+        if self.lab.equilibrium_only:
+            self.spec.bias = None
         # The Lab's validated catalog config is what executes; the M2
         # RunRecord stamps it, so every run proves which physics ran.
         self.spec.models = dict(self.lab.model_config)
+        # v0.6 Phase 2c: apply the selected backend. Defense in depth --
+        # the QML selector should already prevent choosing an
+        # incompatible backend (backendOptionsForQml uses this SAME
+        # check), but re-check here too in case the spec changed after
+        # the backend was picked (e.g. picked "devsim" on a 1D device,
+        # then a process re-run or structure edit changed dimensionality
+        # without the selector being touched again).
+        if self._backend != "pytcad":
+            try:
+                from workbench.solvers.devsim_backend import check_devsim_compatible
+                check_devsim_compatible(self.spec)
+            except Exception as exc:
+                self.errorRaised.emit(
+                    f"Cannot run with backend '{self._backend}'", str(exc))
+                return
+        self.spec.backend = self._backend
         # Final review I-3: a fresh run invalidates whatever is on show.
         # Mirrors runProcess()'s clear-on-start: during a long sweep, the
         # previous run's curves must not sit there looking current.
@@ -1244,6 +1341,13 @@ class AppController(QObject):
         except Exception:
             return None
 
+    @Property(str, notify=comparisonChanged)
+    def comparisonLabelForQml(self):
+        """v0.6 Phase 2d: which comparison produced the current overlay
+        -- "all models off" (M9) or a backend id -- for the dashed
+        curve's legend label."""
+        return self._comparison_label
+
     @Slot()
     def runModelComparison(self):
         """Re-solve the last-run device with EVERY catalog model
@@ -1268,8 +1372,49 @@ class AppController(QObject):
             if self._last_run_spec.bias else None
         self.consoleModel.append(
             "Starting comparison solve (all models OFF)...")
+        self._comparison_label = "all models off"
         try:
             self._comparison_runner.start(spec_off)
+        except Exception as exc:
+            self.errorRaised.emit("Could not start the comparison", str(exc))
+
+    @Slot()
+    def runBackendComparison(self):
+        """v0.6 Phase 2d: re-solve the last-run device with the OTHER
+        backend, into the SAME comparison overlay runModelComparison()
+        above uses (one dashed overlay at a time; whichever comparison
+        ran most recently). Unlike the models-off comparison, `models`
+        is left UNCHANGED -- this compares engines on the SAME physics
+        request, not a different one.
+
+        Reuses check_devsim_compatible (the same function
+        backendOptionsForQml/run() already check) rather than a
+        separate guess at what devsim can solve."""
+        if self._last_run_spec is None:
+            self.errorRaised.emit(
+                "Nothing to compare",
+                "Run the device once; the comparison re-solves that "
+                "exact device on the other backend.")
+            return
+        if self._busy or self._comparison_runner.running:
+            return
+        other = "devsim" if self._last_run_spec.backend == "pytcad" else "pytcad"
+        if other == "devsim":
+            try:
+                from workbench.solvers.devsim_backend import check_devsim_compatible
+                check_devsim_compatible(self._last_run_spec)
+            except Exception as exc:
+                self.errorRaised.emit(
+                    "Cannot compare against devsim", str(exc))
+                return
+        import copy
+        spec_other = copy.deepcopy(self._last_run_spec)
+        spec_other.backend = other
+        self.consoleModel.append(
+            f"Starting comparison solve (backend={other})...")
+        self._comparison_label = other
+        try:
+            self._comparison_runner.start(spec_other)
         except Exception as exc:
             self.errorRaised.emit("Could not start the comparison", str(exc))
 

@@ -95,3 +95,70 @@ def test_spec_store_serves_doping_before_any_solve():
     assert store.available_terminals() == []
     with pytest.raises(KeyError):
         store.scalar_field("potential")
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2b: line-cut extraction
+# ----------------------------------------------------------------------
+def test_line_cut_horizontal_matches_the_nearest_row_directly():
+    from gui.services.result_store import extract_line_cut
+    store = SpecResultStore(_spec_2d())
+    axes = store.mesh_axes()
+    field = store.scalar_field("doping")
+    y = np.asarray(axes.axes["y"], dtype=float)
+    j = 3
+    coord, values, actual_y = extract_line_cut(
+        axes, field, "horizontal", position_cm=float(y[j]))
+    assert actual_y == pytest.approx(y[j])
+    assert np.array_equal(coord, np.asarray(axes.axes["x"], dtype=float))
+    assert np.array_equal(values, np.asarray(field.values)[j, :])
+
+
+def test_line_cut_vertical_matches_the_nearest_column_directly():
+    from gui.services.result_store import extract_line_cut
+    store = SpecResultStore(_spec_2d())
+    axes = store.mesh_axes()
+    field = store.scalar_field("doping")
+    x = np.asarray(axes.axes["x"], dtype=float)
+    i = 5
+    coord, values, actual_x = extract_line_cut(
+        axes, field, "vertical", position_cm=float(x[i]))
+    assert actual_x == pytest.approx(x[i])
+    assert np.array_equal(coord, np.asarray(axes.axes["y"], dtype=float))
+    assert np.array_equal(values, np.asarray(field.values)[:, i])
+
+
+def test_line_cut_snaps_to_the_nearest_node_on_a_nonuniform_mesh():
+    """The honesty claim ("nearest node, not interpolated") only means
+    something on a mesh where nodes are NOT evenly spaced -- gate it
+    there, not on the uniform test mesh above."""
+    from gui.services.result_store import extract_line_cut, MeshAxes, ScalarField
+    x = np.array([0.0, 1.0e-4, 1.3e-4, 3.0e-4])   # non-uniform
+    y = np.array([0.0, 2.0e-4, 5.0e-4])
+    axes = MeshAxes(axes={"x": x, "y": y}, dimensionality=2)
+    values = np.arange(x.size * y.size, dtype=float).reshape(y.size, x.size)
+    field = ScalarField(name="v", values=values, unit="")
+
+    # requested 1.1e-4 sits between nodes 1.0e-4 and 1.3e-4, closer to
+    # 1.0e-4 -- must snap there, not to whichever index is numerically
+    # adjacent or interpolate between them.
+    coord, vals, actual_x = extract_line_cut(axes, field, "vertical",
+                                             position_cm=1.1e-4)
+    assert actual_x == pytest.approx(1.0e-4)
+    assert np.array_equal(vals, values[:, 1])
+
+
+def test_line_cut_rejects_non_2d_fields():
+    from gui.services.result_store import extract_line_cut, MeshAxes, ScalarField
+    axes = MeshAxes(axes={"x": np.linspace(0, 1e-4, 5)}, dimensionality=1)
+    field = ScalarField(name="v", values=np.zeros(5), unit="")
+    with pytest.raises(ValueError, match="2D"):
+        extract_line_cut(axes, field, "horizontal", position_cm=0.0)
+
+
+def test_line_cut_rejects_bad_orientation():
+    from gui.services.result_store import extract_line_cut
+    store = SpecResultStore(_spec_2d())
+    with pytest.raises(ValueError, match="orientation"):
+        extract_line_cut(store.mesh_axes(), store.scalar_field("doping"),
+                         "diagonal", position_cm=0.0)

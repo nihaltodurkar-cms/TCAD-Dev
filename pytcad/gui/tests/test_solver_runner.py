@@ -110,6 +110,35 @@ def test_equilibrium_only_when_bias_is_none(tmp_path):
     assert "vector__current_density__x" not in d
 
 
+def test_backend_field_defaults_to_pytcad_for_old_jobs(tmp_path):
+    """Additive wire-format field: a job JSON written before "backend"
+    existed simply lacks the key and must still dispatch to pytcad."""
+    job = str(tmp_path / "old.json")
+    out = str(tmp_path / "old.npz")
+    d = _diode_1d_spec().to_dict()
+    assert "backend" in d      # sanity: the field exists on a fresh spec
+    del d["backend"]           # simulate a pre-2c job file
+    import json
+    json.dump(d, open(job, "w"))
+    proc = subprocess.run(
+        [sys.executable, "-m", "gui.services.solver_runner", job, out],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(str(np.load(out)["record__meta"]))["backend"] == "pytcad"
+
+
+def test_backend_field_dispatches_to_devsim(tmp_path):
+    pytest_importorskip = __import__("pytest").importorskip
+    pytest_importorskip("devsim", reason="optional devsim dependency not installed")
+    spec = _diode_1d_spec()
+    spec.bias = {"left": 0.0, "right": 0.0}    # devsim needs both contacts named
+    spec.backend = "devsim"
+    proc, out = _run_cli(spec, tmp_path, "devsim_dispatch")
+    assert proc.returncode == 0, proc.stderr
+    import json
+    assert json.loads(str(np.load(out)["record__meta"]))["backend"] == "devsim"
+
+
 def test_bad_spec_exits_nonzero_with_message(tmp_path):
     spec = _resistor_2d_spec()
     spec.models["field_mobility"] = True      # NotImplementedError in Device2D

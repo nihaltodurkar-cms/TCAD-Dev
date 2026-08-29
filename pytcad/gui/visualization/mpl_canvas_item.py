@@ -20,6 +20,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickPaintedItem
 
 from ..services.structure_model import rasterize_doping
+from ..services.result_store import extract_line_cut
 
 _MIN_POSITIVE = 1e-30
 
@@ -42,6 +43,11 @@ class MplCanvasItem(QQuickPaintedItem):
         self._process_store = None
         self._sweep = None             # result_store.SweepResult (v0.4)
         self._sweep_channel = ""
+        self._cv = None                # result_store.SweepResult (v0.6 C-V mode)
+        self._contours = False         # v0.6 Phase 2a: contour overlay toggle
+        self._cut_orientation = "horizontal"   # v0.6 Phase 2b: line-cut mode
+        self._cut_position_cm = 0.0
+        self._comparison_label = "all models off"   # v0.6 Phase 2d default
         self._mode = "doping"
         self._dark = True
         # last rendered state, for the hover readout
@@ -209,6 +215,17 @@ class MplCanvasItem(QQuickPaintedItem):
     def hasComparisonSource(self):
         return getattr(self, "_comparison_sweep", None) is not None
 
+    @Slot(str)
+    def setComparisonLabel(self, label):
+        """v0.6 Phase 2d: the SAME overlay slot above is reused for the
+        backend comparison (AppController.runBackendComparison) -- one
+        dashed overlay at a time, whichever ran most recently, rather
+        than a second rendering path. Defaults to "all models off" so
+        the M9 model-comparison call sites (which never call this) are
+        unaffected."""
+        self._comparison_label = str(label)
+        self.update()
+
     # -- batch family overlay ------------------------------------------
     @Slot("QVariant")
     def setFamilySource(self, curves):
@@ -225,6 +242,48 @@ class MplCanvasItem(QQuickPaintedItem):
     @Slot(result=list)
     def availableSweepChannels(self):
         return list(self._sweep.channels) if self._sweep is not None else []
+
+    # -- C-V sweep (v0.6 Phase 1a) ----------------------------------------
+    @Slot(object)
+    def setCvSource(self, sweep):
+        """Data source for "cv" mode: a result_store.SweepResult from
+        CVController.cvResultForQml (or None before the first C-V run).
+        Does NOT touch self._mode, like every other source setter --
+        ViewportPanel.setViewMode() drives the mode."""
+        self._cv = sweep
+        self.fit()
+
+    def _draw_cv(self, ax):
+        """Gate-voltage vs. small-signal capacitance -- a dedicated mode
+        rather than reusing "series"/Curves: an I-V SweepResult and a C-V
+        SweepResult share the same dataclass shape by construction (both
+        go through the standard job -> subprocess -> schema-v2 pipeline),
+        but "series" mode's axis labels and title are written in terms of
+        a swept CONTACT's CURRENT ("gate bias [V]" / "device [A/cm^2]"-
+        style wording) -- technically not wrong for C-V's data (contact=
+        "gate", channel="device"), but not honestly labeled as
+        capacitance either. This keeps C-V's own labels unambiguous."""
+        sweep = self._cv
+        if sweep is None or not sweep.channels:
+            ax.text(0.5, 0.5, "No C-V sweep yet\n"
+                    "(run one in the Voltage sweep panel's C-V section)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        Vg = np.asarray(sweep.voltages, dtype=float)
+        channel = next(iter(sweep.channels))
+        C = np.asarray(sweep.channels[channel], dtype=float)
+        marker = "-o" if Vg.size <= 40 else "-"
+        ax.plot(Vg, C, marker, lw=1.5, ms=3, color=self._series_color(0))
+        self._remember_series(ax, [(Vg, C, "C")], unit=sweep.unit)
+        n_bad = int((~np.asarray(sweep.converged, dtype=bool)).sum())
+        note = f"  ({n_bad} point(s) did not converge)" if n_bad else ""
+        ax.set_xlabel("Vg [V]")
+        ax.set_ylabel(f"C [{sweep.unit}]")
+        ax.set_title(f"C-V sweep{note}", fontsize=9)
+        ax.grid(True, alpha=0.3)
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
 
     # -- convergence history (v0.5.0 M4) ---------------------------------
     @Slot(object)
@@ -272,6 +331,78 @@ class MplCanvasItem(QQuickPaintedItem):
         self._log = bool(value)
         self.update()
 
+    @Property(bool, notify=viewChanged)
+    def contours(self):
+        return self._contours
+
+    @contours.setter
+    def contours(self, value):
+        self._contours = bool(value)
+        self.update()
+
+    def _maybe_contour(self, ax, x, y, values):
+        """Overlay a handful of contour lines on the SAME (x, y, values)
+        triple a 2D field mode's pcolormesh just rendered -- purely
+        additive: `values` may already be log-transformed by the caller
+        (self._maybe_log), matching what the colour map actually shows,
+        rather than re-deriving a second transform here. A degenerate
+        (constant) field draws no lines -- matplotlib's own behavior,
+        not something this wraps or hides."""
+        if not self._contours:
+            return
+        ax.contour(x, y, values, levels=8, colors="white",
+                  linewidths=0.6, alpha=0.7)
+
+    # -- line cut (v0.6 Phase 2b) -----------------------------------------
+    @Slot(str)
+    def setCutOrientation(self, orientation):
+        self._cut_orientation = str(orientation)
+        self.update()
+
+    @Slot(float)
+    def setCutPositionUm(self, value_um):
+        self._cut_position_cm = float(value_um) * 1e-4
+        self.update()
+
+    def _draw_cut(self, ax):
+        """A 1D slice through the CURRENT field mode's 2D data, extracted
+        by extract_line_cut() (gui/services/result_store.py -- gated
+        there directly, not just via this render) and plotted through
+        the same ax.plot/_remember_series primitives "series"/Curves
+        mode uses, rather than a second line-plot renderer. A dedicated
+        mode (not literally SweepResult + _draw_series) because a
+        spatial cut's axes -- a coordinate in um, not a swept contact's
+        voltage -- would be dishonestly labeled through that path (the
+        same reasoning "cv" mode used over reusing "series" verbatim)."""
+        if self._store is None:
+            ax.text(0.5, 0.5, "No project loaded", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        try:
+            field = self._store.scalar_field(self._field)
+            axes = self._store.mesh_axes()
+            coord, values, actual_cm = extract_line_cut(
+                axes, field, self._cut_orientation, self._cut_position_cm)
+        except (KeyError, ValueError) as exc:
+            ax.text(0.5, 0.5, f"Cannot cut this field:\n{exc}",
+                    ha="center", va="center", wrap=True)
+            ax.set_axis_off()
+            return
+        coord_um = np.asarray(coord, dtype=float) * 1e4
+        values = np.asarray(values, dtype=float)
+        y = self._maybe_log(values) if self._log else values
+        ax.plot(coord_um, y, "-o" if coord_um.size <= 40 else "-",
+                lw=1.5, ms=3, color=self._series_color(0))
+        along_axis = "x" if self._cut_orientation == "horizontal" else "y"
+        cut_axis = "y" if self._cut_orientation == "horizontal" else "x"
+        ax.set_xlabel(f"{along_axis} [um]")
+        ax.set_ylabel(f"{field.name} [{field.unit}]")
+        ax.set_title(f"cut at {cut_axis}={actual_cm * 1e4:.4g} um "
+                     f"(nearest node)", fontsize=9)
+        ax.grid(True, alpha=0.3)
+        self._remember_series(ax, [(coord_um, values, field.name)],
+                              unit=field.unit)
+
     # -- view control -------------------------------------------------
     @Slot()
     def fit(self):
@@ -294,6 +425,17 @@ class MplCanvasItem(QQuickPaintedItem):
         if self._mode == "series" and self._sweep is not None:
             V = np.asarray(self._sweep.voltages, dtype=float)
             lo, hi = (float(V.min()), float(V.max())) if V.size else (0.0, 1.0)
+            if hi == lo:
+                hi = lo + 1.0
+            self._xlim = (lo, hi)
+            self._ylim = None
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
+        if self._mode == "cv" and self._cv is not None:
+            Vg = np.asarray(self._cv.voltages, dtype=float)
+            lo, hi = (float(Vg.min()), float(Vg.max())) if Vg.size else (0.0, 1.0)
             if hi == lo:
                 hi = lo + 1.0
             self._xlim = (lo, hi)
@@ -404,6 +546,14 @@ class MplCanvasItem(QQuickPaintedItem):
             self._draw_convergence(ax)
             fig.tight_layout()
             return fig
+        if self._mode == "cv":
+            self._draw_cv(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "cut":
+            self._draw_cut(ax)
+            fig.tight_layout()
+            return fig
         if self._mode == "series":
             if self._sweep is not None:
                 self._draw_series(ax)
@@ -458,7 +608,9 @@ class MplCanvasItem(QQuickPaintedItem):
                 # v0.1 shows the central z-plane; a real 3D viewer is a
                 # later version's job.
                 values = values[values.shape[0] // 2]
-            mesh = ax.pcolormesh(x, y, self._maybe_log(values), shading="nearest")
+            plotted = self._maybe_log(values)
+            mesh = ax.pcolormesh(x, y, plotted, shading="nearest")
+            self._maybe_contour(ax, x, y, plotted)
             cbar = fig.colorbar(mesh, ax=ax)
             label = f"{field.name} [{field.unit}]"
             cbar.set_label(f"log10 |{label}|" if self._log else label)
@@ -570,7 +722,9 @@ class MplCanvasItem(QQuickPaintedItem):
         doping = rasterize_doping(self._structure, mesh_spec)
         x = np.asarray(mesh_spec.axes["x"], dtype=float) * 1e4
         y = np.asarray(mesh_spec.axes["y"], dtype=float) * 1e4
-        mesh = ax.pcolormesh(x, y, self._maybe_log(doping), shading="nearest", cmap="RdBu_r")
+        plotted = self._maybe_log(doping)
+        mesh = ax.pcolormesh(x, y, plotted, shading="nearest", cmap="RdBu_r")
+        self._maybe_contour(ax, x, y, plotted)
         cbar = ax.figure.colorbar(mesh, ax=ax)
         label = "Net doping [cm^-3]"
         cbar.set_label(f"log10 |{label}|" if self._log else label)
@@ -678,6 +832,7 @@ class MplCanvasItem(QQuickPaintedItem):
             Ec = -psi - mat.chi
             mesh = ax.pcolormesh(x, y, Ec, shading="nearest",
                                  cmap="viridis")
+            self._maybe_contour(ax, x, y, Ec)
             fig_cbar = ax.figure.colorbar(mesh, ax=ax)
             fig_cbar.set_label("Ec [eV]")
             ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
@@ -724,9 +879,9 @@ class MplCanvasItem(QQuickPaintedItem):
             from workbench.analysis.observables import recombination_rate
             R = recombination_rate(n, p, doping, material, T)
             y = np.asarray(axes.axes["y"], dtype=float) * 1e4
-            mesh = ax.pcolormesh(x, y,
-                                 np.log10(np.maximum(np.abs(R), 1e-30)),
-                                 shading="nearest", cmap="inferno")
+            logR = np.log10(np.maximum(np.abs(R), 1e-30))
+            mesh = ax.pcolormesh(x, y, logR, shading="nearest", cmap="inferno")
+            self._maybe_contour(ax, x, y, logR)
             cbar = ax.figure.colorbar(mesh, ax=ax)
             cbar.set_label("log10 |R| [cm^-3 s^-1]")
             ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
@@ -790,18 +945,22 @@ class MplCanvasItem(QQuickPaintedItem):
                     alpha=0.9, label=curve.get("label", ""))
         if family:
             ax.legend(fontsize=7, frameon=False)
-        # M9: overlay the all-models-OFF comparison sweep, dashed, when
-        # present and covering the same contact/channel.
+        # M9: overlay the comparison sweep, dashed, when present and
+        # covering the same contact/channel -- "all models off" (M9) or
+        # "other backend" (v0.6 Phase 2d), whichever set the source
+        # most recently (self._comparison_label defaults to the M9
+        # wording, so that call site's behavior is unchanged).
         comp = getattr(self, "_comparison_sweep", None)
         if comp is not None and self._sweep_channel in comp.channels:
             Ic = np.asarray(comp.channels[self._sweep_channel], dtype=float)
             style = "--" if len(V) > 40 else "--o"
+            label = self._comparison_label
             if self._log:
                 ax.semilogy(V, np.abs(Ic), style, lw=1.2, ms=3,
-                            color="#9b59b6", label="all models off")
+                            color="#9b59b6", label=label)
             else:
                 ax.plot(V, Ic, style, lw=1.2, ms=3,
-                        color="#9b59b6", label="all models off")
+                        color="#9b59b6", label=label)
             ax.legend(fontsize=8)
         ax.set_title(f"{sw.contact} sweep{note}", fontsize=9)
         if self._xlim:

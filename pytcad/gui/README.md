@@ -925,21 +925,105 @@ the identical wall.
   into the homegrown 1D solver's Newton assembly (M15, all gates green
   — see ARCHITECTURE.md section 5); the DEVSIM backend does not support
   it.
-- Density gradient (`dg`) is selectable in the Physics Lab (M20) but
+- Density gradient (`dg`) is selectable in the Physics Lab (M20) and
   **equilibrium-only in the solver**: a biased 1D Run with `dg` on is
   refused by `Device1D.solve_bias` with an actionable error, and 2D/3D
-  builds refuse at construction. The GUI has no equilibrium-only Run
-  mode, so in practice `dg` must be exercised through the Python API
-  (`MOSCapacitor(dg=True)`, `Models(dg=True)`) until a GUI path lands.
-  The underlying M20 code and gates are LANDED-PENDING-VERIFICATION
-  (history.md Addendum 18).
-- Neither device dimensionality nor solver backend has a GUI selector:
-  the Process Flow always builds 1D, Structure/Device-Builder templates
-  always build 2D, there is no GUI path to a `Device3D`, and DEVSIM can
-  only be selected from a job's JSON, not from any panel.
+  builds refuse at construction. **Fixed in v0.6 Phase 1c**: an
+  "Equilibrium only" checkbox in the Physics Lab now reaches this path
+  from the GUI directly (previously Python-API-only,
+  `MOSCapacitor(dg=True)`/`Models(dg=True)`). The M20 core's own
+  gamma-calibration gap (3 open gates, unrelated to this GUI wiring)
+  is tracked separately in `M20-DENSITY-GRADIENT-PLAN.md`.
+- Device dimensionality still has no GUI selector: the Process Flow
+  always builds 1D, Structure/Device-Builder templates always build
+  2D, and there is no GUI path to a `Device3D`. **Solver backend
+  selection is fixed in v0.6 Phase 2c**: a toolbar dropdown (visible
+  for 1D devices only, since DEVSIM is 1D-two-terminal-only) lets pytcad
+  or devsim be chosen per Run, greying out devsim with an actionable
+  reason whenever the current device/model config isn't solvable there.
 - The DEVSIM backend does not yet accept `region_materials`:
   heterostructure jobs must use the homegrown 1D backend.
 - The MOS C–V result surfaces through `cvSweep.cvStore()` (and the
-  validated test gates); there is no dedicated C–V plot mode yet.
+  validated test gates); **fixed in v0.6 Phase 1a**, a dedicated "C-V"
+  viewport mode now renders it.
 - Family sweeps re-solve the *last solved* device; editing the
   structure after a solve invalidates the batch until the next Run.
+  **Fixed in v0.6 Phase 1b**: the family status label now says
+  "STALE" once this happens, instead of silently looking current.
+
+## v0.6 Phase 1 — Quick GUI Wins (2026-08-29)
+
+Three low-effort, high-value items from `GUI-IMPROVEMENT-PLAN.md`,
+each wiring UI onto data the backend already computed and stored —
+none touched the solver.
+
+- **Dedicated C-V viewport mode.** `cvSweep.cvResultForQml` (mirrors
+  `AppController.sweepResultForQml`'s own opaque-handoff pattern) feeds
+  a new `"cv"` `MplCanvasItem` mode with honest capacitance/gate-voltage
+  labels, reachable from the toolbar's view-mode selector as "C-V".
+  Previously the data existed (`cvSweep.cvStore()`) but nothing ever
+  rendered it.
+- **Family-sweep staleness warning.** `FamilySweepController` now
+  listens for `AppController.structureChanged` and flags its curves
+  `isStale` once the structure is edited after a family run; the
+  existing status label in the Sweeps panel says so explicitly instead
+  of silently showing stale curves as current.
+- **M20 equilibrium-only Run mode.** A new "Equilibrium only" checkbox
+  in the Physics Lab sets `spec.bias = None` for the next Run instead
+  of the usual contact-voltage dict — `solver_runner.py` already skips
+  the bias solve entirely in that case, so this needed no solver
+  changes, just a GUI path to reach it. This is the first way to
+  exercise the M20 density-gradient correction (`dg`) from the GUI at
+  all; it was previously Python-API-only because every Run path
+  attached a bias dict and `Device1D.solve_bias` refuses `dg=True`
+  unconditionally. Combining this with an armed voltage sweep is
+  refused with an actionable error (a sweep always overrides the bias
+  branch regardless of `spec.bias`, so the combination would be
+  silently ineffective rather than safely inert).
+
+Full non-slow suite: 766 passed, 1 xfailed, 0 regressions. See
+`GUI-IMPROVEMENT-PLAN.md` section 1d for the full implementation
+record, including a self-caught test bug along the way.
+
+## v0.6 Phase 2 — Visualization Depth & Backend Selection (2026-08-29)
+
+- **Contour overlays.** A "contours" checkbox overlays a handful of
+  contour lines on every 2D field/doping/bands/recombination map, read
+  from the exact same (already log-transformed) array the colour map
+  itself shows.
+- **Line-cut mode.** A new "Line Cut" viewport mode extracts a 1D
+  slice (nearest mesh node, not interpolated -- stated honestly, since
+  the mesh may be non-uniform) through whichever field the field
+  selector currently has chosen, in either orientation, plotted with
+  proper spatial-coordinate labels. The extraction itself
+  (`gui.services.result_store.extract_line_cut`) is gated directly,
+  independent of rendering.
+- **Solver backend selector.** The real gap here wasn't a missing
+  dropdown -- nothing wired DEVSIM into a subprocess-invokable path at
+  all before this (`AppController` always spawned the pytcad runner
+  module unconditionally; DEVSIM's backend was only ever called
+  directly from tests). `DeviceSpec` gained an additive `backend`
+  field; `solver_runner.py`'s CLI dispatches through
+  `workbench.solvers.base.get_backend(...)` for anything but
+  `"pytcad"`. A new `check_devsim_compatible()` in
+  `devsim_backend.py` is the single source of truth the selector, the
+  defensive Run-time re-check, and the backend itself all share --
+  and it found a real pre-existing gap along the way: the backend
+  never read `spec.models` or `spec.region_materials` at all, so a
+  non-default model config or a heterostructure job was previously
+  solved **silently without the requested physics** rather than
+  refused. Both now raise. The selector only appears for 1D devices
+  (DEVSIM is 1D-two-terminal-only) and greys out "devsim" with the
+  exact refusal message whenever a job wouldn't actually be solvable.
+- **Side-by-side backend comparison.** A new "Compare: other backend"
+  button re-solves the last swept run on the OTHER backend (models
+  unchanged -- this compares engines on identical physics, not
+  different physics) and overlays it dashed, reusing the exact
+  mechanism the M9 "compare models" feature already established.
+  Discovered along the way: `runModelComparison()` itself had no QML
+  button at all before this session (Python-API/test-only) -- both
+  comparison buttons now live together in the Physics Lab.
+
+Full non-slow suite: 793 passed, 1 xfailed, 0 regressions. See
+`GUI-IMPROVEMENT-PLAN.md` section 2e for the full implementation
+record.

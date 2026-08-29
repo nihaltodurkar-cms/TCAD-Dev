@@ -582,7 +582,24 @@ def main(argv):
               file=sys.stderr)
         return 2
     try:
-        run_job(argv[1], argv[2])
+        # v0.6 Phase 2c: JobRunner always spawns THIS module regardless
+        # of which backend a job wants (AppController is the only
+        # caller today, and it always used this module even before
+        # DeviceSpec had a "backend" field at all) -- so backend
+        # selection is dispatched here, from the job itself, rather
+        # than by changing which module gets spawned. "pytcad" keeps
+        # calling run_job() directly (bit-identical to pre-2c behavior,
+        # not routed through get_backend("pytcad").run() even though
+        # that is ALSO just run_job() under the hood -- no reason to
+        # add a layer of indirection to the path every prior job used).
+        backend_id = DeviceSpec.from_json(argv[1]).backend
+        if backend_id == "pytcad":
+            run_job(argv[1], argv[2])
+        else:
+            from workbench.solvers.base import SolveRequest, get_backend
+            get_backend(backend_id).run(
+                SolveRequest(job_json_path=argv[1], out_npz_path=argv[2]))
+            print(f"RESULT_PATH={argv[2]}", flush=True)
     except Exception as exc:
         # Structured, parseable failure -- JobRunner turns this into a
         # concise message plus expandable details, and the GUI process

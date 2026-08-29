@@ -892,12 +892,15 @@ class Device1D:
 
             if dg:
                 # M20 outer fixed point: refresh the lagged quantum
-                # potentials from the DG-corrected densities that just
-                # converged; warm-restart until Lambda closes.
-                n_c = nie * np.exp(np.clip(psi, -700, 700)) \
-                    * np.exp(-Lam_n / self.VT)
-                p_c = nie * np.exp(np.clip(-psi, -700, 700)) \
-                    * np.exp(-Lam_p / self.VT)
+                # potentials from the CLASSICAL density of the psi that
+                # just converged -- NOT the DG-corrected density (see
+                # moscap.py's solve_psi for the full explanation: sourcing
+                # this from the DG-corrected density closes a 1-node
+                # self-reference at the node next to the Lambda=0
+                # boundary and produces a rigid, non-damping period-2
+                # oscillation rather than convergence).
+                n_c = nie * np.exp(np.clip(psi, -700, 700))
+                p_c = nie * np.exp(np.clip(-psi, -700, 700))
                 Lam_n_new = quantum_potential(self.x, n_c, m_n,
                                               gamma=gamma, T=self.T)
                 Lam_p_new = quantum_potential(self.x, p_c, m_p,

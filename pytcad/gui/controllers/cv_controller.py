@@ -7,7 +7,7 @@ import os
 import tempfile
 import uuid
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from ..services.job_runner import JobRunner
 from ..services.result_store import NpzResultStore
@@ -70,3 +70,15 @@ class CVController(QObject):
     def cvStore(self):
         """The finished C-V result store, or None before the first run."""
         return self._store
+
+    # Same opaque-handoff rationale as AppController.sweepResultForQml:
+    # handed to MplCanvasItem.setCvSource() by ViewportPanel, never
+    # attribute-read from QML.
+    @Property(object, notify=cvFinished)
+    def cvResultForQml(self):
+        if self._store is None or not self._store.has_sweep():
+            return None
+        try:
+            return self._store.sweep_result()
+        except Exception:
+            return None

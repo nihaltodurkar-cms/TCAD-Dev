@@ -101,6 +101,68 @@ def test_devsim_output_is_schema_valid(diode_job, tmp_path_factory):
     validate_result(out)
 
 
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2c: check_devsim_compatible
+# ----------------------------------------------------------------------
+def _diode_spec_2c():
+    from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+    x = np.linspace(0.0, 2e-4, 20)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=1, axes={"x": x.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[ContactSpec(name="left", kind="ohmic", nodes={"i": [0]}, V=0.0),
+                  ContactSpec(name="right", kind="ohmic",
+                              nodes={"i": [x.size - 1]}, V=0.0)],
+        bias={"left": 0.0, "right": 0.0})
+
+
+def test_check_devsim_compatible_accepts_a_default_1d_diode():
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    check_devsim_compatible(_diode_spec_2c())      # must not raise
+
+
+def test_check_devsim_compatible_rejects_2d():
+    from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    spec = DeviceSpec(
+        mesh=MeshSpec(dimensionality=2, axes={"x": [0.0, 1e-4], "y": [0.0, 1e-4]}),
+        doping=DopingSpec(kind="array", values=[[1e17, 1e17], [1e17, 1e17]]),
+        contacts=[])
+    with pytest.raises(ValueError, match="1D"):
+        check_devsim_compatible(spec)
+
+
+def test_check_devsim_compatible_rejects_gate_contacts():
+    from gui.services.device_spec import ContactSpec
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    spec = _diode_spec_2c()
+    spec.contacts.append(ContactSpec(name="gate", kind="gate",
+                                     nodes={"i": [1]}, V=0.0,
+                                     tox_cm=1e-6, Vfb=0.0))
+    with pytest.raises(ValueError, match="gate"):
+        check_devsim_compatible(spec)
+
+
+def test_check_devsim_compatible_rejects_region_materials():
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    spec = _diode_spec_2c()
+    spec.region_materials = [{"material": "GaAs", "box": [0.0, 1e-4]}]
+    with pytest.raises(ValueError, match="region_materials"):
+        check_devsim_compatible(spec)
+
+
+def test_check_devsim_compatible_rejects_non_default_models():
+    """The load-bearing new check: devsim never reads spec.models at
+    all, so a non-default config would previously be solved SILENTLY
+    without the requested physics rather than refused."""
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    spec = _diode_spec_2c()
+    spec.models["impact"] = True
+    with pytest.raises(ValueError, match="canonical physics"):
+        check_devsim_compatible(spec)
+
+
 def test_both_backends_stamp_v2_and_backend_id(run_both):
     for bid, d in run_both.items():
         assert int(d["result__schema"]) == 2
@@ -335,3 +397,185 @@ def test_devsim_emits_convergence_trace(diode_job, tmp_path):
     assert any(s.startswith("bias") or s.startswith("ramp") for s in stages)
     for s in steps:
         assert s["iterations"] and isinstance(s["converged"], bool)
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2c: AppController backend selector
+# ----------------------------------------------------------------------
+def _gapp():
+    from PySide6.QtGui import QGuiApplication
+    return QGuiApplication.instance() or QGuiApplication([])
+
+
+def _diode_1d_spec_2c():
+    from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+    x = np.linspace(0.0, 2e-4, 20)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=1, axes={"x": x.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[ContactSpec(name="left", kind="ohmic", nodes={"i": [0]}, V=0.0),
+                  ContactSpec(name="right", kind="ohmic",
+                              nodes={"i": [x.size - 1]}, V=0.0)],
+        bias={"left": 0.0, "right": 0.3})
+
+
+def _resistor_2d_spec_2c():
+    from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+    x = np.linspace(0.0, 2e-4, 8)
+    y = np.linspace(0.0, 1e-4, 6)
+    jj = list(range(y.size))
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=2, axes={"x": x.tolist(), "y": y.tolist()}),
+        doping=DopingSpec(kind="array", values=np.full((y.size, x.size), 1e17).tolist()),
+        contacts=[ContactSpec(name="left", kind="ohmic",
+                              nodes={"i": [0] * len(jj), "j": jj}, V=0.0),
+                  ContactSpec(name="right", kind="ohmic",
+                              nodes={"i": [x.size - 1] * len(jj), "j": jj}, V=0.0)],
+        bias={"left": 0.0, "right": 0.05})
+
+
+def test_backend_selector_hidden_for_a_2d_device():
+    from gui.controllers.app_controller import AppController
+    _gapp()
+    ctl = AppController()
+    ctl.spec = _resistor_2d_spec_2c()
+    assert ctl.canSelectBackend is False
+
+
+def test_backend_selector_enabled_for_a_compatible_1d_device():
+    from gui.controllers.app_controller import AppController
+    _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    assert ctl.canSelectBackend is True
+    opts = {o["id"]: o for o in ctl.backendOptionsForQml()}
+    assert opts["pytcad"]["enabled"] is True
+    assert opts["devsim"]["enabled"] is True, opts["devsim"]["reason"]
+
+
+def test_backend_selector_disabled_for_a_non_default_model_config():
+    from gui.controllers.app_controller import AppController
+    _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    ctl.lab.setModelEnabled("impact", True)
+    opts = {o["id"]: o for o in ctl.backendOptionsForQml()}
+    assert opts["devsim"]["enabled"] is False
+    assert "canonical physics" in opts["devsim"]["reason"]
+
+
+def test_run_with_devsim_backend_tags_the_result(tmp_path):
+    from gui.controllers.app_controller import AppController
+    gapp = _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    ctl.setBackend("devsim")
+    assert ctl.selectedBackend == "devsim"
+
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    ctl.run()
+    t0 = __import__("time").time()
+    while ctl.busy and __import__("time").time() - t0 < 120:
+        gapp.processEvents(); __import__("time").sleep(0.02)
+
+    assert not errors, errors
+    assert ctl.hasResult, ctl.status
+    rec = ctl.currentStore().run_record()
+    assert rec.backend == "devsim"
+
+
+def test_run_refuses_when_backend_choice_goes_stale(tmp_path):
+    """Defense in depth: the QML selector should already prevent this,
+    but a Run must still refuse rather than crash or silently ignore
+    the choice if the spec changed after "devsim" was picked."""
+    from gui.controllers.app_controller import AppController
+    gapp = _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    ctl.setBackend("devsim")
+    ctl.lab.setModelEnabled("impact", True)     # now incompatible
+
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    ctl.run()
+    assert errors, "an incompatible backend choice must be refused, not silently run"
+    assert not ctl.busy
+    assert not ctl.hasResult
+
+
+def test_backend_selector_present_in_qml():
+    from gui import app as gui_app
+    engine, controller = gui_app.create_engine(_gapp())
+    root = engine.rootObjects()[0]
+    selector = root.findChild(object, "backendSelector")
+    assert selector is not None
+    # no spec loaded yet -- 2D-or-nothing default -> hidden
+    assert selector.property("visible") is False
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2d: side-by-side backend comparison
+# ----------------------------------------------------------------------
+def _run_and_wait(ctl, gapp, timeout_s=120):
+    ctl.run()
+    t0 = __import__("time").time()
+    while ctl.busy and __import__("time").time() - t0 < timeout_s:
+        gapp.processEvents(); __import__("time").sleep(0.02)
+
+
+def test_backend_comparison_produces_a_distinct_backend_overlay():
+    """The comparison overlay (comparisonSweepForQml) only exists for a
+    SWEPT run -- has_sweep() is false for a plain static-bias solve, the
+    same precondition M9's own model-comparison overlay needs (see
+    test_m9_plots.py's test_comparison_run_produces_an_overlay_source),
+    so this must arm a sweep first."""
+    from gui.controllers.app_controller import AppController
+    gapp = _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    ctl.setSweepConfig("left", 0.0, 0.2, 0.1)
+    _run_and_wait(ctl, gapp)
+    assert ctl.hasResult, ctl.status
+    assert ctl.currentStore().run_record().backend == "pytcad"
+
+    done = []
+    ctl.comparisonChanged.connect(lambda: done.append(1))
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append((s, d)))
+    ctl.runBackendComparison()
+    t0 = __import__("time").time()
+    while not done and __import__("time").time() - t0 < 120:
+        gapp.processEvents(); __import__("time").sleep(0.02)
+
+    assert not errors, errors
+    assert ctl.hasComparison
+    assert ctl.comparisonLabelForQml == "devsim"
+    overlay = ctl.comparisonSweepForQml
+    assert overlay is not None and list(overlay.channels)
+    # the two stores are genuinely tagged with DIFFERENT backends
+    assert ctl._comparison_store.run_record().backend == "devsim"
+    assert ctl.currentStore().run_record().backend == "pytcad"
+
+
+def test_backend_comparison_refuses_without_a_prior_run():
+    from gui.controllers.app_controller import AppController
+    _gapp()
+    ctl = AppController()
+    errors = []
+    ctl.errorRaised.connect(lambda s, d: errors.append(s))
+    ctl.runBackendComparison()
+    assert errors and "Nothing to compare" in errors[0]
+
+
+def test_compare_backends_button_disabled_for_incompatible_device():
+    from gui import app as gui_app
+    gapp = _gapp()
+    engine, controller = gui_app.create_engine(gapp)
+    root = engine.rootObjects()[0]
+    controller.spec = _resistor_2d_spec_2c()
+    _run_and_wait(controller, gapp)
+    button = root.findChild(object, "compareBackendsButton")
+    assert button is not None
+    assert button.property("enabled") is False

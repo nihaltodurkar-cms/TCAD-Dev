@@ -297,15 +297,28 @@ class MOSCapacitor:
             if not self.dg:
                 break
             # M20 outer fixed point: refresh the quantum potentials from
-            # the DG-CORRECTED densities of the state just converged.
+            # the CLASSICAL density of the psi just converged -- NOT the
+            # DG-corrected density.  Using the DG-corrected density here
+            # (an earlier version of this code did) closes a 1-node
+            # self-reference at the node next to the Lambda=0 boundary:
+            # Lambda[1] enters n[1] via exp(-Lambda[1]/VT), and quantum_
+            # potential's curvature stencil at node 1 reads n[1] right
+            # back out -- a rigid period-2 limit cycle results (Lambda[1]
+            # flips between +LAMBDA_MAX*VT and -LAMBDA_MAX*VT every outer
+            # pass, forever; self-caught by instrumenting the loop and
+            # observing the exact-magnitude sign flip). Sourcing the
+            # curvature from the classical (psi-only) density breaks the
+            # self-reference: verified to converge in as few as 4 outer
+            # passes with NO damping at all, and identically (same
+            # converged Lambda) across damping factors 1.0 down to 0.3.
             e = np.clip(psi, -700, 700)
-            n_corr = self.nie_s * np.exp(e) * np.exp(-Lam_n / self.VT)
-            p_corr = self.nie_s * np.exp(-e) * np.exp(-Lam_p / self.VT)
+            n_cl = self.nie_s * np.exp(e)
+            p_cl = self.nie_s * np.exp(-e)
             Lam_n_new = quantum_potential(
-                self.x, n_corr, self.mat.m_n_star,
+                self.x, n_cl, self.mat.m_n_star,
                 gamma=self.dg_gamma, T=self.T)
             Lam_p_new = quantum_potential(
-                self.x, p_corr, self.mat.m_p_star,
+                self.x, p_cl, self.mat.m_p_star,
                 gamma=self.dg_gamma, T=self.T)
             delta = max(np.abs(Lam_n_new - Lam_n).max(),
                         np.abs(Lam_p_new - Lam_p).max())

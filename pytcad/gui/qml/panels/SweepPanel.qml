@@ -217,12 +217,21 @@ Rectangle {
         }
         Label {
             objectName: "familyStatusLabel"
-            color: root.controller && root.controller.familySweep.hasCurves
-                   ? Theme.ok : Theme.textDim
+            color: !(root.controller && root.controller.familySweep.hasCurves)
+                   ? Theme.textDim
+                   : (root.controller.familySweep.isStale ? Theme.running : Theme.ok)
             font.pixelSize: Theme.fsSmall
-            text: root.controller && root.controller.familySweep.hasCurves
-                  ? root.controller.familySweep.curves.length + " curve(s) ready"
-                  : "no family yet"
+            // Staleness (GUI-IMPROVEMENT-PLAN.md Phase 1b): the structure
+            // was edited after these curves were solved, so they no
+            // longer describe the current device -- said explicitly
+            // rather than silently invalidated (README's own honest-
+            // limits caveat, until now unstated in the UI itself).
+            text: !(root.controller && root.controller.familySweep.hasCurves)
+                  ? "no family yet"
+                  : (root.controller.familySweep.isStale
+                     ? root.controller.familySweep.curves.length
+                       + " curve(s) -- STALE (structure edited since Run)"
+                     : root.controller.familySweep.curves.length + " curve(s) ready")
         }
 
 

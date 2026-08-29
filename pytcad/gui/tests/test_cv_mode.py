@@ -106,3 +106,62 @@ def test_sweep_panel_exposes_the_cv_ui(gapp):
     root = engine.rootObjects()[0]
     for name in ("cvNsubField", "cvToxField", "runCVButton"):
         assert root.findChild(object, name) is not None, f"missing {name}"
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 1a: dedicated C-V viewport mode
+# ----------------------------------------------------------------------
+# Before this, cvSweep.cvStore() held a validated result (the two tests
+# above) but nothing in ViewportPanel/MplCanvasItem ever read it back
+# out -- "Curves" mode is wired to AppController's own I-V SweepResult,
+# not CVController's. These gate the missing wiring, not just the data.
+
+def test_cv_mode_before_any_run_shows_placeholder():
+    """Regression pin, mirrors test_series_mode_placeholder_without_sweep
+    (test_v04_review_fixes.py): "cv" mode must never fall through to
+    field/doping rendering when no C-V sweep has run yet."""
+    from PySide6.QtGui import QGuiApplication
+    QGuiApplication.instance() or QGuiApplication([])
+    from gui.visualization.mpl_canvas_item import MplCanvasItem
+    item = MplCanvasItem()
+    item.setWidth(320); item.setHeight(240)
+    item.setMode("cv")
+    fig = item._build_figure(320, 240)
+    texts = " ".join(t.get_text() for t in fig.axes[0].texts)
+    assert "No C-V sweep yet" in texts
+
+
+def test_cv_mode_renders_the_capacitance_curve(tmp_path):
+    """Feeds a real C-V SweepResult (same pipeline
+    test_cv_curve_matches_analytic_landmarks already gates numerically)
+    through setCvSource() and asserts the RENDERED curve -- not just the
+    stored data -- carries the analytic C_ox-scale y-range, with honest
+    axis labels (capacitance, not the generic "series" mode wording)."""
+    import json
+    from gui.services.moscap_runner import run_job
+    from gui.services.result_store import NpzResultStore
+    from pytcad import MOSCapacitor
+    from PySide6.QtGui import QGuiApplication
+    QGuiApplication.instance() or QGuiApplication([])
+    from gui.visualization.mpl_canvas_item import MplCanvasItem
+
+    job = str(tmp_path / "cv.json")
+    out = str(tmp_path / "cv.npz")
+    json.dump(CV_PARAMS, open(job, "w"))
+    run_job(job, out)
+    sweep = NpzResultStore(out).sweep_result()
+
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setMode("cv")
+    item.setCvSource(sweep)
+    fig = item._build_figure(480, 320)
+    ax = fig.axes[0]
+    assert ax.lines, "no curve drawn in cv mode"
+    ydata = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+
+    landmarks = MOSCapacitor(Nsub=-1e17, tox_cm=5e-7, gate="n+poly") \
+        .analytic_landmarks()
+    assert ydata.max() == pytest.approx(landmarks["C_ox"], rel=0.10)
+    assert ax.get_xlabel() == "Vg [V]"
+    assert ax.get_ylabel() == f"C [{sweep.unit}]"

@@ -277,6 +277,61 @@ def test_gd_dg_changes_the_physics_in_every_required_direction():
 
 
 # ======================================================================
+# Regression: outer fixed-point convergence (hard-debug find, 2026-08-29)
+# ======================================================================
+# The original outer loop computed each pass's target Lambda from the
+# DG-CORRECTED density (n*exp(-Lambda_old/VT)), closing a 1-node self-
+# reference at the node next to the Lambda=0 boundary: Lambda[1] fed
+# into n[1] which fed straight back into Lambda[1]'s own curvature
+# stencil. Instrumenting the loop showed a RIGID period-2 oscillation
+# -- Lambda[1] flipping between exactly +LAMBDA_MAX*VT and
+# -LAMBDA_MAX*VT every single outer pass, forever, immune to under-
+# relaxation at any damping factor from 1.0 down to 0.02 over up to
+# 400 passes. Fixed by sourcing the curvature target from the
+# CLASSICAL (psi-only) density instead, which converges in as few as
+# 4 outer passes with NO damping at all.
+def test_gr_moscap_outer_fixed_point_converges_without_warning():
+    """The MOSCapacitor DG outer loop must converge and must not warn."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mos = MOSCapacitor(**PARAMS, dg=True)
+        psi = mos.solve_psi(_vg_strong())
+    assert np.all(np.isfinite(psi)), "psi is non-finite"
+    assert np.all(np.isfinite(mos._dg_Lam_n)), "Lambda_n is non-finite"
+    assert np.all(np.isfinite(mos._dg_Lam_p)), "Lambda_p is non-finite"
+
+
+def test_gr_device1d_dg_outer_fixed_point_converges_without_warning():
+    """Device1D's equilibrium DG outer loop must converge and not warn."""
+    x = graded_mesh(2e-4, [1e-4], 1e-6, 2e-6, 1.2)
+    dop = np.where(x < 1e-4, -1e17, 1e17)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        d = Device1D(x, dop, models=Models(bgn=False, dg=True))
+        d.solve_equilibrium()
+    assert np.all(np.isfinite(d.psi)), "psi is non-finite"
+    assert np.all(np.isfinite(d._dg_Lam_n)), "Lambda_n is non-finite"
+    assert np.all(np.isfinite(d._dg_Lam_p)), "Lambda_p is non-finite"
+
+
+def test_gr_outer_fixed_point_is_deterministic():
+    """Two fresh, identically-parameterized devices converge to the SAME
+    Lambda -- the old self-referential scheme never converged at all
+    (a rigid oscillation, not a fixed point), so this is only
+    meaningful post-fix; it guards against a future regression back to
+    a scheme that merely LOOKS converged (e.g. hits its pass cap on a
+    state that happens to pass isfinite) without being a genuine,
+    repeatable fixed point."""
+    mos_a = MOSCapacitor(**PARAMS, dg=True)
+    mos_a.solve_psi(_vg_strong())
+    mos_b = MOSCapacitor(**PARAMS, dg=True)
+    mos_b.solve_psi(_vg_strong())
+    assert np.allclose(mos_a._dg_Lam_n, mos_b._dg_Lam_n, rtol=0, atol=1e-9), (
+        "repeated solves of an identical device disagree -- not a "
+        "genuine converged fixed point")
+
+
+# ======================================================================
 # G-E  refusals
 # ======================================================================
 def test_ge_device1d_solve_bias_refuses_dg():

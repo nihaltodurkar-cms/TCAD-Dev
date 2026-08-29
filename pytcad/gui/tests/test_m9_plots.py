@@ -243,3 +243,25 @@ def test_recombination_mode_renders_2d_map(solved_2d):
     colours = {img.pixel(x, y) for x in range(0, img.width(), 17)
                for y in range(0, img.height(), 17)}
     assert len(colours) > 4, "2D recombination map rendered blank"
+
+
+# ----------------------------------------------------------------------
+# GUI-IMPROVEMENT-PLAN.md Phase 2a: contour overlays -- a second code
+# path (workbench observables, not NpzResultStore.scalar_field) from
+# the one covered in test_viewport_modes.py's doping-mode test.
+# ----------------------------------------------------------------------
+def test_bands_2d_map_contour_overlay(solved_2d):
+    from gui.services.result_store import NpzResultStore
+    from gui.visualization.mpl_canvas_item import MplCanvasItem
+    item = MplCanvasItem()
+    item.setWidth(480); item.setHeight(320)
+    item.setStore(NpzResultStore(solved_2d))
+    item.setMode("bands")
+
+    fig_off = item._build_figure(480, 320)
+    n_off = len(fig_off.axes[0].collections)
+
+    item.contours = True
+    fig_on = item._build_figure(480, 320)
+    assert len(fig_on.axes[0].collections) > n_off, \
+        "contours=True must add an artist on the bands 2D map too"

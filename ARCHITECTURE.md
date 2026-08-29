@@ -540,8 +540,24 @@ M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   Depends: M17 (transient machinery for the coupled solve).
 
 M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
-  LANDED-PENDING-VERIFICATION (2026-08-29; same session standing as
-  M16/M22-Schur: implemented and gate-written, tests NOT executed).
+  VERIFIED 2026-08-29, PARTIALLY GREEN, LEFT OPEN BY USER DECISION.
+  Gates run for the first time this session: 14/17 original + 3 new
+  regression tests green, after a hard-debug pass found and fixed a
+  real outer-fixed-point non-convergence bug (the outer loop closed a
+  1-node self-reference at the boundary, producing a rigid period-2
+  oscillation immune to damping at any factor -- fixed by sourcing the
+  target Lambda from the classical density instead of the DG-corrected
+  one). Fixing that convergence bug surfaced a SEPARATE gamma-
+  calibration gap: gamma=1 (explicitly documented as uncalibrated) has
+  no stable operating point reproducing Schrodinger-Poisson-scale
+  physics -- a hard bifurcation between "negligible effect" and
+  "clamp-saturated," not a smooth calibration curve. Three further
+  hypotheses (boundary-condition mismatch with the S-P reference;
+  sub-physical mesh resolution for the curvature stencil; a units/
+  formula bug) were tested and ruled out with numbers. The real fix is
+  either a coupled-Newton reformulation of the DG term or a published,
+  pre-calibrated gamma -- both explicitly deferred by user decision;
+  see M20-DENSITY-GRADIENT-PLAN.md sections 6-7 for the full record.
   Implementation per M20-DENSITY-GRADIENT-PLAN.md:
   - pytcad/dg.py: quantum_potential (Ancona-Stafford Lambda, 3-point
     non-uniform stencil, Lambda=0 at boundary nodes per the Neumann
@@ -556,11 +572,12 @@ M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
     raise NotImplementedError. Default off is bit-identical (G-A gate,
     M13 goldens).
   - Catalog "dg" + wire default; the three key-set pin tests updated.
-  Acceptance gates G-A..G-F in tests/test_m20_dg.py (NOT YET RUN):
-  bit-identity off; S-P vs Airy <=5%; S-P centroid 0.5-4 nm and DG
-  within factor 2 of S-P; DG-on direction gates (centroid >0.2 nm,
-  surface suppression, Lambda interior peak, C_max drop 3-25%);
-  refusals; catalog invariants.
+  Acceptance gates G-A..G-F in tests/test_m20_dg.py: G-A (bit-identity
+  off), G-B (S-P vs Airy <=5%), G-E (refusals), G-F (catalog
+  invariants) all GREEN. G-C/G-D (S-P centroid factor-2 match, DG-on
+  direction gates: centroid >0.2 nm, surface suppression, Lambda
+  interior peak, C_max drop 3-25%) remain OPEN -- the gamma-
+  calibration gap above, not the fixed convergence bug.
   Self-caught defects during the gate-writing cross-check: a double-kT
   bug in the 2D-DOS occupation (sheet densities ~1e-7 cm^-2), an
   inverted E_band sign in the S-P driver (well in the bulk), and an
@@ -805,7 +822,12 @@ for what has actually landed)
   M17 transient simulation                       not started
   M18 small-signal AC                            not started
   M19 self-heating                               not started
-  M20 density-gradient quantum correction        not started
+  M20 density-gradient quantum correction        PARTIALLY GREEN
+                                                  (2026-08-29); G-C/G-D
+                                                  open, gamma-
+                                                  calibration gap,
+                                                  left open by user
+                                                  decision
   M21 general 2D meshing + FV assembly           PHASES 1-2 (1D/2D/3D
                                                   adaptive h-refinement)
                                                   SHIPPED; phase 3 not
@@ -983,10 +1005,12 @@ Independent candidates for the next milestone (any order):
   self-heating (M19).  (M15 impact ionization, M22 phase 2's
   continuation driver, and M16 local Kane BTBT are COMPLETE/LANDED --
   see sections 3 and 5 and pytcad/M16-BTBT-PLAN.md; the nonlocal BTBT
-  variant remains Tier 3.  M20 density gradient is
-  LANDED-PENDING-VERIFICATION -- equilibrium-only DG exists behind
-  Models(dg=True)/MOSCapacitor(dg=True), gates unexecuted; DG
-  TRANSPORT and 2D/3D DG remain not implemented.)
+  variant remains Tier 3.  M20 density gradient is PARTIALLY GREEN --
+  equilibrium-only DG exists behind Models(dg=True)/
+  MOSCapacitor(dg=True); the outer-fixed-point convergence bug is
+  fixed and gated, but G-C/G-D stay open on a gamma-calibration gap
+  left open by user decision (see M20-DENSITY-GRADIENT-PLAN.md
+  sections 6-7); DG TRANSPORT and 2D/3D DG remain not implemented.)
 - Unstructured meshing (M21 phase 3); 2D process geometry engine
   (M23); pair diffusion/TED/segregation (M24); Monte-Carlo implantation
   (M25); general 3D (M26). (M15 impact ionization and M22 phase 2's
@@ -1059,16 +1083,18 @@ recorded here so they are tracked rather than silently absent):
    driving_force descoped, G-C(2D) and G-A remain open (see section 5
    item 5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT --
    small, independent, low-risk, still open.
-7. [DONE 2026-08-29, LANDED-PENDING-VERIFICATION] M20 DENSITY-GRADIENT
-   -- Ancona-Stafford DG quantum correction (equilibrium-only:
-   MOSCapacitor dg flag + Device1D Models.dg) plus the pytcad/dg.py
-   analysis layer with the Schrodinger-Poisson reference solver; gates
-   G-A..G-F in tests/test_m20_dg.py written but NOT executed (same
-   session standing as M16 and the M22 Schur preconditioner; see
-   section 4b's M20 entry and history.md Addendum 18).  Verification
-   backlog for the next session: py_compile the touched files, then
-   test_m16_btbt.py, test_m20_dg.py, test_m22_linsolve.py, and the
-   full suite.
+7. [PARTIALLY DONE 2026-08-29] M20 DENSITY-GRADIENT -- Ancona-Stafford
+   DG quantum correction (equilibrium-only: MOSCapacitor dg flag +
+   Device1D Models.dg) plus the pytcad/dg.py analysis layer with the
+   Schrodinger-Poisson reference solver. Gates run for the first time
+   this session: a real outer-fixed-point non-convergence bug found
+   and fixed (rigid period-2 oscillation, immune to damping -- see
+   section 4b's M20 entry); G-A/G-B/G-E/G-F green. G-C/G-D remain OPEN
+   on a gamma-calibration gap, left open by explicit user decision
+   (see M20-DENSITY-GRADIENT-PLAN.md sections 6-7 for the full
+   investigation record -- three further hypotheses tested and ruled
+   out). Next step, WHEN resumed: either a coupled-Newton
+   reformulation of the DG term or a published, pre-calibrated gamma.
 8. NEXT on the spine: M17 TRANSIENT (unlocks M18 small-signal/AC and
    M27 self-heating's coupled solve).
 6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native

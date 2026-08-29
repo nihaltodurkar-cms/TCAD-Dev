@@ -30,8 +30,19 @@ import scipy.sparse.linalg as spla
 
 from .constants import HBAR, KB, Q, M0, thermal_voltage, trapz
 
-# Numerical guard: clamp |Lambda| at this many thermal voltages.  Only
-# the deep-bulk minority tail (sqrt(n) underflowing) can reach it.
+# Numerical guard: clamp |Lambda| at this many thermal voltages.
+#
+# CORRECTED 2026-08-29 (was: "only the deep-bulk minority tail can
+# reach it" -- measured false): on MOSCapacitor's mesh, the RAW
+# (unclamped) curvature at the first interior node in strong inversion
+# reaches ~81 VT from the classical density alone, at gamma=1, before
+# any outer-loop feedback -- this clamp engages hard at the surface,
+# the primary physics of interest, not just a numerically negligible
+# bulk tail. It is load-bearing: removing it (or raising it much
+# further) makes the outer fixed point diverge outright rather than
+# settle on a larger physical value (measured: raising to 200*VT with
+# the self-reference bug already fixed still overflows). See
+# M20-DENSITY-GRADIENT-PLAN.md section 6 for the full finding.
 LAMBDA_MAX_VT = 20.0
 
 

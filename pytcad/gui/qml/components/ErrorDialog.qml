@@ -6,10 +6,17 @@ import ".."
 // Concise reason up front, full traceback behind a disclosure -- a
 // numerical failure must never be hidden, but it must not be the first
 // thing shouted at the user either.
+//
+// Shared by every errorRaised(summary, details) emission -- not just
+// solver failures but validation errors and save/load notices too (e.g.
+// AppController.saveProject()'s "this project cannot store the device
+// itself" warning, which fires even though the save succeeds). A fixed
+// "Simulation failed" title was actively misleading on those paths, so
+// it stays generic instead of naming a cause the dialog can't verify.
 Dialog {
     id: root
     modal: true
-    title: "Simulation failed"
+    title: "Notice"
     standardButtons: Dialog.Ok
     anchors.centerIn: parent
     width: Math.min(720, parent ? parent.width - 80 : 720)
