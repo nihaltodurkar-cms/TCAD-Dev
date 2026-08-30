@@ -57,6 +57,12 @@ Rectangle {
             // controller (see cv_controller.py's own ownership note).
             canvas.setCvSource(controller ? controller.cvSweep.cvResultForQml : null)
         }
+        if (mode === "transient") {
+            // M17 phase 3: hand the executed transient run (or null
+            // before any transient run) to the canvas -- same opaque-
+            // handoff contract as "series"/"cv" above.
+            canvas.setTransientSource(controller ? controller.transientResultForQml : null)
+        }
     }
 
     // Called from Main.qml on ProcessPanel.stepSelected -- lets clicking a
@@ -257,6 +263,17 @@ Rectangle {
         target: controller
         function onResultChanged() {
             if (controller && root.currentMode === "series") root.setViewMode(root.currentMode)
+        }
+    }
+
+    // M17 phase 3: same trap, transient edition -- a finished transient
+    // run emits resultChanged only; without this, "Transient" mode kept
+    // showing the previous state until the mode selector was re-touched
+    // by hand. Mirrors the "series" Connections block above.
+    Connections {
+        target: controller
+        function onResultChanged() {
+            if (controller && root.currentMode === "transient") root.setViewMode(root.currentMode)
         }
     }
 

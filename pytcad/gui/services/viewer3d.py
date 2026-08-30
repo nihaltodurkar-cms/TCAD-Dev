@@ -12,15 +12,16 @@ mesh bounding-box wireframe plus a solid device surface, proving the
 whole pipeline (real 3D solve -> real result store -> real PyVista mesh
 -> a window on screen). Phase 2 adds a real isosurface mode: pick a
 field and a level, see the actual shell that field crosses through the
-device volume -- still no volumetric rendering or animation, later
-phases.
+device volume. Phase 3 adds volumetric rendering with preset transfer
+functions. Phase 4 adds animated bias-sweep playback with snapshot
+capture and timeline scrubber.
 """
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QMainWindow,
-    QWidget,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
+    QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QWidget,
 )
 from pyvistaqt import QtInteractor
 
@@ -34,6 +35,26 @@ from pyvistaqt import QtInteractor
 # net-doping case -- reusing it instead of picking a second one keeps
 # the doping color convention consistent between the 2D and 3D viewers.
 COLORMAPS = ["viridis", "plasma", "RdBu_r"]
+
+
+# Phase 3: transfer function presets for volumetric rendering.
+# Each preset returns a dict {"color_map": str, "opacity": float} that
+# applies to add_volume(). The presets are deliberately simple -- no
+# custom curve editor for this pass, just a small set of useful
+# defaults that cover the common TCAD visualization cases:
+#   "linear"      : uniform opacity across the full range (default)
+#   "log-high"    : emphasizes high-value regions (carrier densities,
+#                   current density) by compressing the low end
+#   "log-low"     : emphasizes low-value regions (depletion tails,
+#                   minor carrier concentrations) by expanding the low end
+#   "threshold"   : binary threshold at 50% of range, useful for
+#                   isolating specific field magnitudes
+TRANSFER_FUNCTION_PRESETS = {
+    "linear": {"color_map": "viridis", "opacity": 0.3},
+    "log-high": {"color_map": "plasma", "opacity": 0.25},
+    "log-low": {"color_map": "viridis", "opacity": 0.35},
+    "threshold": {"color_map": "RdBu_r", "opacity": 0.5},
+}
 
 
 def attach_scalar_field(grid, mesh_axes, field):
@@ -108,6 +129,24 @@ def extract_isosurface(grid, field_name, level):
     return grid.contour(isosurfaces=[float(level)], scalars=field_name)
 
 
+def _build_transfer_function(preset_name):
+    """Build a transfer-function specification for PyVista's add_volume().
+
+    Returns a dict {"color_map": str, "opacity": float} suitable for
+    passing as keyword arguments to add_volume(). The opacity is kept
+    low (0.2-0.5) so isosurfaces remain visible underneath the volume.
+
+    preset_name: one of TRANSFER_FUNCTION_PRESETS keys.
+    Returns the preset dict; callers should validate the key exists
+    before calling (the sidebar controls enforce this).
+    """
+    if preset_name not in TRANSFER_FUNCTION_PRESETS:
+        raise KeyError(
+            f"unknown transfer function '{preset_name}' "
+            f"(available: {sorted(TRANSFER_FUNCTION_PRESETS.keys())})")
+    return dict(TRANSFER_FUNCTION_PRESETS[preset_name])
+
+
 class _Viewer3DMainWindow(QMainWindow):
     """A QMainWindow whose only job beyond the default is routing the
     native window-manager close button (the ordinary way a user closes
@@ -172,6 +211,22 @@ class Viewer3DWindow:
         self._iso_actor = None
         self._iso_cache_key = None
         self._iso_surface = None
+        # Phase 3: volume rendering state.
+        self._volume_actor = None
+        self._volume_enabled = False
+        self._volume_field_name = ""
+        # Phase 4: sweep playback state.
+        self._snapshots = None
+        self._playback_idx = 0
+        self._playback_playing = False
+        self._playback_timer = QTimer()
+        self._playback_timer.timeout.connect(self._on_playback_tick)
+        self._playback_timer.setInterval(300)  # ~3.3 fps default
+        # Phase 5: exploded view state.
+        self._exploded_view = False
+        self._exploded_separation = 0.5  # cm, adjustable via spinbox
+        self._region_actors = []  # list of (actor, box) tuples for exploded regions
+        self._store = store  # keep reference for region_materials access
         self._build_sidebar(field_names)
         if field_names:
             # "doping" first if present (the example every Phase-1/2
@@ -193,6 +248,8 @@ class Viewer3DWindow:
             self._field_box.setEnabled(False)
             self._level_box.setEnabled(False)
             self._colormap_box.setEnabled(False)
+            self._volume_toggle.setEnabled(False)
+            self._transfer_func_box.setEnabled(False)
         self.plotter.reset_camera()
 
     def _build_sidebar(self, field_names):
@@ -215,8 +272,177 @@ class Viewer3DWindow:
         self._colormap_box.currentTextChanged.connect(self._on_colormap_changed)
         form.addRow("Colormap", self._colormap_box)
 
+        # Phase 3: volume rendering controls.
+        self._volume_toggle = QCheckBox("Volume render")
+        self._volume_toggle.stateChanged.connect(self._on_volume_toggle_changed)
+        form.addRow("Volume", self._volume_toggle)
+
+        self._transfer_func_box = QComboBox()
+        self._transfer_func_box.addItems(sorted(TRANSFER_FUNCTION_PRESETS.keys()))
+        self._transfer_func_box.currentTextChanged.connect(
+            self._on_transfer_func_changed)
+        self._transfer_func_box.setEnabled(False)
+        form.addRow("Transfer func", self._transfer_func_box)
+
+        # Phase 5: exploded view controls.
+        self._exploded_toggle = QCheckBox("Exploded view")
+        self._exploded_toggle.stateChanged.connect(self._on_exploded_toggle_changed)
+        form.addRow("Exploded", self._exploded_toggle)
+
+        self._exploded_sep_spin = QDoubleSpinBox()
+        self._exploded_sep_spin.setRange(0.01, 10.0)
+        self._exploded_sep_spin.setDecimals(3)
+        self._exploded_sep_spin.setSuffix(" cm")
+        self._exploded_sep_spin.setValue(self._exploded_separation)
+        self._exploded_sep_spin.valueChanged.connect(self._on_exploded_sep_changed)
+        self._exploded_sep_spin.setEnabled(False)
+        form.addRow("Separation", self._exploded_sep_spin)
+
         dock.setWidget(panel)
         self._window.addDockWidget(Qt.RightDockWidgetArea, dock)
+
+        # Phase 4: sweep playback controls in a separate dock.
+        self._build_playback_dock()
+
+    def _build_playback_dock(self):
+        """Build the sweep playback dock widget with play/pause, step,
+        and timeline scrubber controls."""
+        dock = QDockWidget("Sweep Playback", self._window)
+        panel = QWidget()
+        lay = QHBoxLayout(panel)
+
+        # Step backward button.
+        self._step_back_btn = QPushButton("<<")
+        self._step_back_btn.clicked.connect(self._on_step_back)
+        self._step_back_btn.setEnabled(False)
+        lay.addWidget(self._step_back_btn)
+
+        # Play/pause button.
+        self._play_btn = QPushButton("Play")
+        self._play_btn.clicked.connect(self._on_play_pause)
+        self._play_btn.setEnabled(False)
+        lay.addWidget(self._play_btn)
+
+        # Step forward button.
+        self._step_fwd_btn = QPushButton(">>")
+        self._step_fwd_btn.clicked.connect(self._on_step_fwd)
+        self._step_fwd_btn.setEnabled(False)
+        lay.addWidget(self._step_fwd_btn)
+
+        # Timeline slider.
+        self._playback_slider = QSlider(Qt.Horizontal)
+        self._playback_slider.valueChanged.connect(self._on_playback_slider_changed)
+        self._playback_slider.setEnabled(False)
+        lay.addWidget(self._playback_slider)
+
+        # Voltage label.
+        self._voltage_label = QLabel("0.000 V")
+        lay.addWidget(self._voltage_label)
+
+        dock.setWidget(panel)
+        self._window.addDockWidget(Qt.BottomDockWidgetArea, dock)
+
+    def set_sweep_snapshots(self, snapshots):
+        """Provide sweep snapshot data for animation playback.
+
+        snapshots: a SweepSnapshots instance, or None to clear playback.
+        """
+        self._snapshots = snapshots
+        if snapshots is None or snapshots.n_snapshots() == 0:
+            self._step_back_btn.setEnabled(False)
+            self._play_btn.setEnabled(False)
+            self._step_fwd_btn.setEnabled(False)
+            self._playback_slider.setEnabled(False)
+            self._playback_slider.setRange(0, 0)
+            self._voltage_label.setText("0.000 V")
+            self._stop_playback()
+            return
+        n = snapshots.n_snapshots()
+        self._playback_slider.setRange(0, n - 1)
+        self._playback_slider.setValue(0)
+        self._playback_idx = 0
+        self._step_back_btn.setEnabled(True)
+        self._play_btn.setEnabled(True)
+        self._step_fwd_btn.setEnabled(True)
+        self._playback_slider.setEnabled(True)
+        self._update_playback_label()
+        # Apply the first snapshot's field data to the grid.
+        self._apply_snapshot(0)
+
+    def _on_play_pause(self):
+        if self._playback_playing:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _start_playback(self):
+        self._playback_playing = True
+        self._play_btn.setText("Pause")
+        self._playback_timer.start()
+
+    def _stop_playback(self):
+        self._playback_playing = False
+        self._play_btn.setText("Play")
+        self._playback_timer.stop()
+
+    def _on_playback_tick(self):
+        if not self._playback_playing or self._snapshots is None:
+            return
+        n = self._snapshots.n_snapshots()
+        self._playback_idx = (self._playback_idx + 1) % n
+        self._playback_slider.setValue(self._playback_idx)
+        self._apply_snapshot(self._playback_idx)
+
+    def _on_step_back(self):
+        if self._snapshots is None or self._snapshots.n_snapshots() == 0:
+            return
+        self._stop_playback()
+        self._playback_idx = max(0, self._playback_idx - 1)
+        self._playback_slider.setValue(self._playback_idx)
+        self._apply_snapshot(self._playback_idx)
+
+    def _on_step_fwd(self):
+        if self._snapshots is None or self._snapshots.n_snapshots() == 0:
+            return
+        self._stop_playback()
+        self._playback_idx = min(self._snapshots.n_snapshots() - 1,
+                                self._playback_idx + 1)
+        self._playback_slider.setValue(self._playback_idx)
+        self._apply_snapshot(self._playback_idx)
+
+    def _on_playback_slider_changed(self, value):
+        self._stop_playback()
+        self._playback_idx = value
+        self._apply_snapshot(value)
+
+    def _apply_snapshot(self, idx):
+        """Update the grid's scalar fields with the snapshot at index `idx`."""
+        if self._snapshots is None:
+            return
+        # Update the active isosurface field from the snapshot.
+        field_name = self._field_box.currentText()
+        if field_name and self._snapshots and field_name in self._snapshots.field_names:
+            try:
+                arr = self._snapshots.field(field_name, idx)
+                self.grid.point_data[field_name] = arr.flatten(order="C")
+            except (KeyError, IndexError):
+                return
+        # Update the isosurface to reflect the new field values.
+        self._redraw_isosurface()
+        # If volume rendering is active, refresh it too.
+        if self._volume_enabled:
+            self._remove_volume()
+            self._add_volume()
+        self._update_playback_label()
+
+    def _update_playback_label(self):
+        if self._snapshots is None or self._snapshots.n_snapshots() == 0:
+            return
+        try:
+            v = self._snapshots.voltage(self._playback_idx)
+            self._voltage_label.setText(f"{v:.3f} V")
+        except IndexError:
+            pass
 
     def _on_field_changed(self, field_name):
         if not field_name:
@@ -245,6 +471,200 @@ class Viewer3DWindow:
 
     def _on_colormap_changed(self, _name):
         self._redraw_isosurface()
+
+    def _on_volume_toggle_changed(self, state):
+        """Toggle volume rendering on/off. When enabled, adds a volume
+        actor using the current field and the selected transfer function
+        preset. When disabled, removes the volume actor."""
+        # PySide6's deprecated stateChanged signal hands back a plain int
+        # (Qt.CheckState.Checked cannot be compared to an int directly in
+        # this PySide6 version -- state == Qt.Checked is always False,
+        # silently disabling this toggle). Normalize through CheckState.
+        self._volume_enabled = (Qt.CheckState(state) == Qt.Checked)
+        if self._volume_enabled:
+            self._transfer_func_box.setEnabled(True)
+            self._add_volume()
+        else:
+            self._transfer_func_box.setEnabled(False)
+            self._remove_volume()
+
+    def _on_transfer_func_changed(self, _name):
+        """When the transfer function preset changes, re-add the volume
+        with the new transfer function."""
+        if self._volume_enabled:
+            self._remove_volume()
+            self._add_volume()
+
+    def _on_exploded_toggle_changed(self, state):
+        """Toggle exploded view on/off. When enabled, pulls regions apart
+        along the Z axis for structural inspection."""
+        # See _on_volume_toggle_changed's comment: state arrives as a
+        # plain int, and Qt.Checked cannot be compared to it directly.
+        self._exploded_view = (Qt.CheckState(state) == Qt.Checked)
+        self._exploded_sep_spin.setEnabled(self._exploded_view)
+        if self._exploded_view:
+            self._build_exploded_view()
+        else:
+            self._remove_exploded_view()
+
+    def _on_exploded_sep_changed(self, value):
+        """When the separation distance changes, rebuild the exploded view."""
+        if self._exploded_view:
+            self._exploded_separation = float(value)
+            self._build_exploded_view()
+
+    def _build_exploded_view(self):
+        """Build the exploded view by separating regions along the Z axis.
+        Removes the monolithic device surface and replaces it with per-region
+        actors, each offset by its region index times the separation distance."""
+        # Remove the monolithic device surface.
+        for actor in self._region_actors:
+            if hasattr(actor, '__len__'):
+                for a in actor:
+                    if a is not None:
+                        self.plotter.remove_actor(a)
+            else:
+                self.plotter.remove_actor(actor)
+        self._region_actors.clear()
+
+        # Get region materials from the store.
+        region_data = None
+        if self._store is not None:
+            try:
+                region_data = self._store.region_materials()
+            except Exception:
+                region_data = None
+        if region_data is None or not isinstance(region_data, list):
+            # No region data available -- keep the monolithic surface.
+            self._exploded_view = False
+            self._exploded_toggle.setChecked(False)
+            self._exploded_sep_spin.setEnabled(False)
+            return
+
+        # Remove the existing monolithic surface actor (index 1 in added list).
+        # We need to find and remove it.
+        self._remove_monolithic_surface()
+
+        # Build per-region actors.
+        z_axes = np.asarray(self.grid.points[:, 2], dtype=float)
+        z_min, z_max = z_axes.min(), z_axes.max()
+        z_range = z_max - z_min if z_max != z_min else 1.0
+
+        # Assign a distinct color to each region.
+        region_colors = [
+            "lightcoral", "lightblue", "lightgreen", "lightyellow",
+            "plum", "peachpuff", "lightcyan", "wheat",
+            "lavender", "mistyrose", "honeydew", "powderblue",
+        ]
+
+        for idx, region in enumerate(region_data):
+            box = region.get("box", [])
+            if len(box) < 6:
+                # 3D box should have [x0, x1, y0, y1, z0, z1]
+                continue
+
+            x0, x1, y0, y1, z0, z1 = box
+            # Calculate Z offset: separate by region index.
+            z_offset = idx * self._exploded_separation
+
+            # Extract the region's portion of the grid.
+            region_grid = self._extract_region_grid(x0, x1, y0, y1, z0, z1)
+            if region_grid is None or region_grid.n_points == 0:
+                continue
+
+            # Apply Z offset to the region. RectilinearGrid stores its
+            # geometry as per-axis coordinate arrays, not a free point
+            # array -- points itself is derived and cannot be assigned
+            # (pyvista raises AttributeError); shift the z axis instead.
+            region_grid.z = region_grid.z + z_offset
+
+            # Render as a semi-transparent surface with a distinct color.
+            color = region_colors[idx % len(region_colors)]
+            actor = self.plotter.add_mesh(
+                region_grid, style="surface", opacity=0.6,
+                show_edges=True, color=color, smooth_shading=True)
+            self._region_actors.append(actor)
+
+        self.plotter.reset_camera()
+
+    def _extract_region_grid(self, x0, x1, y0, y1, z0, z1):
+        """Extract a sub-grid for the region defined by the bounding box.
+        Returns a new RectilinearGrid with only the points inside the box."""
+        x = np.asarray(self.grid.points[:, 0], dtype=float)
+        y = np.asarray(self.grid.points[:, 1], dtype=float)
+        z = np.asarray(self.grid.points[:, 2], dtype=float)
+
+        # Find indices within the box.
+        x_mask = (x >= x0) & (x <= x1)
+        y_mask = (y >= y0) & (y <= y1)
+        z_mask = (z >= z0) & (z <= z1)
+        mask = x_mask & y_mask & z_mask
+
+        if not mask.any():
+            return None
+
+        # Get the unique coordinates within the box.
+        x_unique = np.unique(x[mask])
+        y_unique = np.unique(y[mask])
+        z_unique = np.unique(z[mask])
+
+        # Build a new RectilinearGrid.
+        region_grid = pv.RectilinearGrid(x_unique, y_unique, z_unique)
+
+        # Copy point data for the region.
+        for key in self.grid.point_data.keys():
+            region_grid.point_data[key] = self.grid.point_data[key][mask]
+
+        return region_grid
+
+    def _remove_exploded_view(self):
+        """Remove the exploded view and restore the monolithic device surface."""
+        for actor in self._region_actors:
+            self.plotter.remove_actor(actor)
+        self._region_actors.clear()
+        # Restore the monolithic surface.
+        self.plotter.add_mesh(self.grid, style="surface", opacity=0.15,
+                              show_edges=False, color="lightsteelblue")
+
+    def _remove_monolithic_surface(self):
+        """Remove the monolithic device surface actor from the plotter."""
+        # The monolithic surface is the second added actor (after the outline).
+        # We track it by looking for the lightsteelblue surface actor.
+        to_remove = []
+        for added in self.plotter.added:
+            mesh, kwargs, actor = added
+            if (hasattr(mesh, 'n_points') and mesh.n_points > 0 and
+                    kwargs.get('style') == 'surface' and
+                    kwargs.get('opacity') == 0.15 and
+                    kwargs.get('color') == 'lightsteelblue'):
+                to_remove.append(actor)
+        for actor in to_remove:
+            self.plotter.remove_actor(actor)
+
+    def _add_volume(self):
+        """Add a volume actor to the plotter using the current field
+        and the selected transfer function preset."""
+        field_name = self._field_box.currentText()
+        if not field_name:
+            return
+        # Check that the field has finite values (same guard as
+        # _on_field_changed for isosurface).
+        values = self.grid.point_data[field_name]
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return
+        preset = _build_transfer_function(
+            self._transfer_func_box.currentText())
+        self._volume_actor = self.plotter.add_volume(
+            self.grid, scalars=field_name,
+            cmap=preset["color_map"], opacity=preset["opacity"],
+            show_scalar_bar=True)
+
+    def _remove_volume(self):
+        """Remove the volume actor from the plotter, if present."""
+        if self._volume_actor is not None:
+            self.plotter.remove_actor(self._volume_actor)
+            self._volume_actor = None
 
     def _redraw_isosurface(self):
         field_name = self._field_box.currentText()
@@ -278,6 +698,16 @@ class Viewer3DWindow:
         if self._closed:
             return
         self._closed = True
+        # Stop playback timer.
+        self._stop_playback()
+        # Clean up exploded view actors.
+        for actor in self._region_actors:
+            self.plotter.remove_actor(actor)
+        self._region_actors.clear()
+        # Clean up volume actor before closing the plotter.
+        if self._volume_actor is not None:
+            self.plotter.remove_actor(self._volume_actor)
+            self._volume_actor = None
         self.plotter.close()
 
     def show(self):

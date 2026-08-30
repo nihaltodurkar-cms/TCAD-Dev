@@ -43,6 +43,8 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("resistor_2d") }
             MenuItem { text: "Load 3D resistor example"
                        onTriggered: appController.loadExample("resistor_3d") }
+            MenuItem { text: "Load 3D MOSFET example"
+                       onTriggered: appController.loadExample("mosfet_3d") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }
@@ -156,8 +158,8 @@ ApplicationWindow {
                 objectName: "viewModeSelector"
                 implicitContentWidthPolicy: ComboBox.WidestText
                 model: ["Structure", "Doping", "Mesh", "Process", "Curves",
-                        "C-V", "Line Cut", "Bands", "Recombination",
-                        "Convergence", "Results"]
+                        "C-V", "Transient", "Line Cut", "Bands",
+                        "Recombination", "Convergence", "Results"]
                 ToolTip.visible: hovered
                 ToolTip.delay: 600
                 ToolTip.text: "What the viewport shows"
@@ -165,6 +167,7 @@ ApplicationWindow {
                     var m = {"Structure": "structure", "Doping": "doping",
                             "Mesh": "mesh", "Process": "process",
                             "Curves": "series", "C-V": "cv",
+                            "Transient": "transient",
                             "Line Cut": "cut",
                             "Bands": "bands",
                             "Recombination": "recombination",
@@ -234,6 +237,7 @@ ApplicationWindow {
                                 { "label": "Mesh",      "icon": "▦" },
                                 { "label": "Process",   "icon": "⚗" },
                                 { "label": "Sweeps",    "icon": "∿" },
+                                { "label": "Transient", "icon": "⏱" },
                                 { "label": "Physics Lab", "icon": "⚛" },
                                 { "label": "Builder",   "icon": "✎" }
                             ]
@@ -282,6 +286,12 @@ ApplicationWindow {
                         }
                         SweepPanel {
                             objectName: "sweepPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            controller: appController
+                        }
+                        TransientPanel {
+                            objectName: "transientPanel"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             controller: appController

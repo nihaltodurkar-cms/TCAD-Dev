@@ -46,6 +46,20 @@ Swept runs only (complete block, never partial):
     unit__sweep_current             same unit convention as above
     sweep__meta                     JSON string: {"contact", "start",
                                     "stop", "step", "dimensionality"}
+Transient runs only (complete block, never partial; v3+):
+    transient__times                [s] per accepted time step
+    transient__current__<channel>   per-channel series, same length;
+                                    channel = contact name (1D or 2D/3D
+                                    alike -- unlike sweep__current__, 1D
+                                    reports the two named contacts, not
+                                    a single "device" channel, since a
+                                    transient state has no single
+                                    well-defined device current)
+    unit__transient_current         same unit convention as
+                                    unit__sweep_current
+    transient__meta                 JSON string: {"contact", "waveform"
+                                    (kind/v0/v1/t0/t1), "t_end", "dt0",
+                                    "theta", "dimensionality"}
 
 Validation here is STRUCTURAL, not an inventory: a legal file may carry
 any subset of fields (tests write minimal fixtures), but whatever it
@@ -61,10 +75,15 @@ import numpy as np
 
 # Schema history: 1 = the v0.5.0 grammar (stamped or legacy-absent),
 # 2 = v2 adds geom/mesh/node keys plus record__meta provenance and an
-# optional converge__trace.  Everything is ADDITIVE -- a v2 file is a
-# valid v1 file with more keys, so v1 readers keep working untouched.
-SOLVER_RESULT_SCHEMA_VERSION = 2
-KNOWN_RESULT_SCHEMA_VERSIONS = frozenset({1, 2})
+# optional converge__trace.  3 (M17 phase 3) adds the transient__* block.
+# Everything is ADDITIVE -- a v3 file is a valid v1/v2 file with more
+# keys, so old readers keep working on old files; an OLD reader opening
+# a NEW v3 file is correctly rejected below (result__schema=3 not in
+# its KNOWN set) rather than silently misreading a shape it doesn't
+# understand -- same tradeoff gui/services/project_store.py's v5 bump
+# already made for this codebase.
+SOLVER_RESULT_SCHEMA_VERSION = 3
+KNOWN_RESULT_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 
 GEOM_STRUCTURED = "structured_rectilinear"
 GEOM_POINT_CLOUD = "point_cloud"      # RESERVED: validated as declared-but-
@@ -108,6 +127,7 @@ class RunRecord:
     models: dict
     numerics: dict
     sweep: dict = None
+    transient: dict = None
     trace: tuple = ()                  # ConvergenceStep tuples
     continuation_records: tuple = ()   # Per-stage continuation history
     schema_version: int = SOLVER_RESULT_SCHEMA_VERSION
@@ -140,7 +160,7 @@ class RunRecord:
             material=meta.get("material", ""), T=float(meta.get("T", 0.0)),
             models=dict(meta.get("models", {})),
             numerics=dict(meta.get("numerics", {})),
-            sweep=meta.get("sweep"), trace=trace,
+            sweep=meta.get("sweep"), transient=meta.get("transient"), trace=trace,
             continuation_records=continuation_records,
             schema_version=int(stamped))
 
@@ -376,5 +396,39 @@ def _validate_mapping(d, path):
             raise ResultSchemaError(
                 f"{path}: sweep__meta must be a JSON object with an integer "
                 "'dimensionality'")
+
+    # -- transient block: same all-or-nothing shape as the sweep block --------
+    transient_keys = [k for k in files if k.startswith("transient__")]
+    if transient_keys:
+        for required in ("transient__times", "unit__transient_current",
+                         "transient__meta"):
+            _require(d, required, "an incomplete transient block is invalid",
+                     path)
+        times = np.asarray(d["transient__times"], dtype=float)
+        if times.ndim != 1 or times.size == 0:
+            raise ResultSchemaError(
+                f"{path}: transient__times must be a non-empty 1D array")
+        channels = [k for k in transient_keys
+                    if k.startswith("transient__current__")]
+        if not channels:
+            raise ResultSchemaError(f"{path}: transient block has no "
+                                    "transient__current__<channel> series")
+        for ch in channels:
+            vals = np.asarray(d[ch], dtype=float)
+            if vals.shape != times.shape:
+                raise ResultSchemaError(
+                    f"{path}: {ch} length {vals.size} does not match "
+                    f"transient__times length {times.size}")
+        raw_meta = str(np.asarray(d["transient__meta"]).reshape(()))
+        try:
+            meta = json.loads(raw_meta)
+        except Exception as exc:
+            raise ResultSchemaError(f"{path}: transient__meta is not valid "
+                                    f"JSON ({exc})") from exc
+        if not isinstance(meta, dict) or \
+                not isinstance(meta.get("dimensionality"), int):
+            raise ResultSchemaError(
+                f"{path}: transient__meta must be a JSON object with an "
+                "integer 'dimensionality'")
 
     return schema_found

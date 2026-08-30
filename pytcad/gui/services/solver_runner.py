@@ -35,6 +35,11 @@ from pytcad.device import Device1D, Models, NewtonOptions
 from pytcad.device2d import Device2D
 from pytcad.device3d import Device3D
 from pytcad.linsolve import LinearSolveError
+from pytcad.transient import (
+    StepWaveform, RampWaveform, PulseWaveform, ConstantWaveform,
+    solve_transient as solve_transient_1d,
+)
+from pytcad.transient2d import solve_transient as solve_transient_2d
 
 from .device_spec import DeviceSpec
 from .solver_backend import (
@@ -362,6 +367,101 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
     return fields if fields is not None else fallback_fields, series
 
 
+# ----------------------------------------------------------------------
+#  Transient runs (M17 phase 3)
+# ----------------------------------------------------------------------
+def _waveform_from_dict(w):
+    """Build a real pytcad.transient.Waveform from a WaveformSpec --
+    the SAME classes transient.py/transient2d.py already use, never
+    reimplemented here."""
+    if w.kind == "step":
+        return StepWaveform(w.v0, w.v1, t_step=w.t0)
+    if w.kind == "ramp":
+        return RampWaveform(w.v0, w.v1, w.t0, w.t1)
+    if w.kind == "pulse":
+        return PulseWaveform(w.v0, w.v1, w.t0, w.t1)
+    if w.kind == "constant":
+        return ConstantWaveform(w.v0)
+    raise ValueError(f"unknown waveform kind '{w.kind}'")
+
+
+def run_transient(device, spec, opts=None):
+    """Execute spec.transient on an EQUILIBRIUM-SOLVED device.
+
+    Every contact other than spec.transient.contact holds its merged DC
+    bias (ContactSpec.V, overridden by DeviceSpec.bias) for the whole
+    run -- established by ONE solve_bias call at t=0 (the waveform's
+    own v0, so there is no discontinuity between that DC solve and the
+    transient's initial state), then handed to pytcad.transient /
+    transient2d's own already-gated solve_transient, unmodified.
+
+    Returns (fields, series) shaped like run_sweep's:
+      fields  extract_result() at the FINAL transient state;
+      series  transient__times, transient__current__<contact name> (one
+              per contact the solver reports current for -- BOTH named
+              contacts at 1D, since a transient state has no single
+              well-defined "device" current the way a steady state
+              does; every registered ohmic contact at 2D),
+              unit__transient_current, transient__meta.
+    """
+    opts = opts or NewtonOptions(verbose=True)
+    tr = spec.transient
+    contact_names = [c.name for c in spec.contacts]
+    tr.validate(contact_names)
+    d = spec.mesh.dimensionality
+    if d == 3:
+        raise ValueError(
+            "transient runs are only implemented for 1D/2D devices "
+            "(M17 phase 3 has no Device3D transient module)")
+
+    # Seed every contact's DC bias, INCLUDING the stimulus contact at
+    # its waveform's own v0 -- see docstring.
+    bias = merge_bias(spec, override={tr.contact: tr.waveform.v0})
+    if d == 1:
+        if len(spec.contacts) != 2:
+            raise ValueError("a 1D device needs exactly two contacts "
+                             f"(got {len(spec.contacts)})")
+        device.solve_bias([bias[spec.contacts[0].name],
+                           bias[spec.contacts[1].name]], opts)
+    else:
+        device.solve_bias(bias, opts)
+
+    wf = _waveform_from_dict(tr.waveform)
+    if d == 1:
+        # pytcad.transient.solve_transient requires BOTH "left"/"right"
+        # keys explicitly (unlike transient2d, which defaults an
+        # unmentioned contact to its current bc.V) -- so the non-
+        # stimulus contact is passed as its already-established DC
+        # bias value, which _as_waveform wraps in a ConstantWaveform.
+        stimulus_idx = contact_names.index(tr.contact)
+        other_idx = 1 - stimulus_idx
+        waveforms_1d = {("left" if stimulus_idx == 0 else "right"): wf,
+                        ("left" if other_idx == 0 else "right"):
+                            bias[spec.contacts[other_idx].name]}
+        result = solve_transient_1d(device, waveforms_1d, tr.t_end, tr.dt0,
+                                    theta=tr.theta, opts=opts)
+        currents = {spec.contacts[0].name: result.terminal_current["left"],
+                   spec.contacts[1].name: result.terminal_current["right"]}
+    else:
+        result = solve_transient_2d(device, {tr.contact: wf}, tr.t_end,
+                                    tr.dt0, theta=tr.theta, opts=opts)
+        currents = dict(result.terminal_current)
+
+    fields = extract_result(device, spec, solved_bias=True)
+    series = {
+        "transient__times": np.asarray(result.times, dtype=float),
+        "unit__transient_current": np.array(
+            {1: "A/cm^2", 2: "A/cm", 3: "A"}[d]),
+        "transient__meta": np.array(json.dumps({
+            "contact": tr.contact, "waveform": tr.waveform.to_dict(),
+            "t_end": tr.t_end, "dt0": tr.dt0, "theta": tr.theta,
+            "dimensionality": d})),
+    }
+    for name, vals in currents.items():
+        series[f"transient__current__{name}"] = np.asarray(vals, dtype=float)
+    return fields, series
+
+
 
 # ----------------------------------------------------------------------
 # v0.5.0 M2: provenance + convergence trace, with ZERO numerical changes.
@@ -475,7 +575,12 @@ def _solve_all(device, spec, opts):
     print("PYTCAD_STAGE=equilibrium", flush=True)
     device.solve_equilibrium(opts)
 
-    if spec.sweep is not None:
+    if spec.transient is not None:
+        print("PYTCAD_STAGE=transient", flush=True)
+        fields, series = run_transient(device, spec, opts)
+        result = fields
+        result.update(series)
+    elif spec.sweep is not None:
         print("PYTCAD_STAGE=sweep", flush=True)
         # Snapshot the equilibrium state BEFORE the sweep mutates the
         # device: if every point diverges, this (honestly labeled
@@ -507,6 +612,8 @@ def run_job(job_path, out_path, capture_trace=True):
         # Fail fast on an unexecutable sweep, BEFORE paying for the
         # equilibrium solve.
         spec.sweep.validate([c.name for c in spec.contacts])
+    if spec.transient is not None:
+        spec.transient.validate([c.name for c in spec.contacts])
 
     mesh_obj = build_mesh(spec.mesh)
     doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
@@ -537,6 +644,9 @@ def run_job(job_path, out_path, capture_trace=True):
     result["nodes__count"] = np.array(int(coords.shape[0]))
     result["nodes__coords"] = coords
 
+    transient_meta = None
+    if spec.transient is not None:
+        transient_meta = json.loads(str(result["transient__meta"]))
     sweep_meta = None
     if spec.sweep is not None:
         sweep_meta = json.loads(str(result["sweep__meta"]))
@@ -563,6 +673,7 @@ def run_job(job_path, out_path, capture_trace=True):
         "models": spec.models,
         "numerics": asdict(opts),
         "sweep": sweep_meta,
+        "transient": transient_meta,
     }))
 
     if capture_trace:

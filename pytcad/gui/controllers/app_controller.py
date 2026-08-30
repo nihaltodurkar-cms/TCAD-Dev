@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 from ..services import examples
 from ..services.device_spec import (
     ContactSpec, DeviceSpec, DopingSpec, MeshSpec, SweepSpec,
+    TransientSpec, WaveformSpec,
 )
 from ..services.job_runner import JobRunner
 from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
@@ -59,6 +60,7 @@ class AppController(QObject):
     undoStateChanged = Signal()
     processResultChanged = Signal()
     sweepChanged = Signal()                 # v0.4 sweep configuration edits
+    transientChanged = Signal()             # M17 phase 3 transient config edits
     comparisonChanged = Signal()            # M9 model on/off overlay
 
     def __init__(self, parent=None):
@@ -126,6 +128,11 @@ class AppController(QObject):
         # v0.4 voltage sweep applied to the next Run (not undoable: it is
         # run configuration, like field selection -- not device geometry)
         self._sweep_config = None
+        # M17 phase 3: transient (time-domain) waveform run applied to
+        # the next Run -- same non-undoable run-configuration status as
+        # _sweep_config, and mutually exclusive with it (enforced in
+        # run()).
+        self._transient_config = None
         # v0.6 Phase 2c: which SolverBackend id the next Run uses. Run
         # configuration, like the sweep config above -- not undoable,
         # not device geometry.
@@ -242,7 +249,8 @@ class AppController(QObject):
         window for the current result. Refuses (loudly, via
         errorRaised) rather than silently no-op'ing for anything that
         isn't a solved 3D result -- same house rule as every other
-        dimensionality guard in this codebase."""
+        dimensionality guard in this codebase. Phase 4: also wires up
+        sweep snapshots for animation playback when available."""
         stats = self.meshStats
         if stats is None or not self.hasResult:
             self.errorRaised.emit("Nothing to view in 3D",
@@ -270,6 +278,14 @@ class AppController(QObject):
         if self._viewer3d_window is not None:
             self._viewer3d_window.close()
         self._viewer3d_window = window
+        # Phase 4: wire up sweep snapshots for animation playback.
+        if self._store.has_sweep_snapshots():
+            try:
+                window.set_sweep_snapshots(self._store.sweep_snapshots())
+            except Exception:
+                # Snapshots exist but are corrupt/incomplete -- leave
+                # playback disabled rather than crashing the viewer.
+                pass
         self._viewer3d_window.show()
 
     def lastRunSpec(self):
@@ -467,6 +483,63 @@ class AppController(QObject):
             return None
         return {"contact": s.contact, "start": s.start,
                 "stop": s.stop, "step": s.step}
+
+    # -- M17 phase 3: transient configuration and results -----------------
+    @Property(bool, notify=transientChanged)
+    def hasTransientConfig(self):
+        return self._transient_config is not None
+
+    @Property(bool, notify=resultChanged)
+    def hasTransient(self):
+        return self._store is not None and self._store.has_transient()
+
+    # Same opaque-handoff rationale as sweepResultForQml above: handed to
+    # MplCanvasItem by ViewportPanel, never attribute-read from QML.
+    @Property(object, notify=resultChanged)
+    def transientResultForQml(self):
+        if self._store is None or not self._store.has_transient():
+            return None
+        try:
+            return self._store.transient_result()
+        except Exception:
+            return None
+
+    @Slot(str, str, float, float, float, float, float, float)
+    def setTransientConfig(self, contact, kind, v0, v1, t0, t1, t_end, dt0):
+        """Configure the transient waveform Run() will attach to the
+        spec. Numeric sanity is checked immediately (same M-6 precedent
+        setSweepConfig follows) so a typo'd field cannot sit there
+        labeled 'armed'; contact-name validity still waits for Run,
+        where the real spec is known."""
+        cfg = TransientSpec(
+            contact=str(contact),
+            waveform=WaveformSpec(kind=str(kind), v0=float(v0), v1=float(v1),
+                                  t0=float(t0), t1=float(t1)),
+            t_end=float(t_end), dt0=float(dt0))
+        try:
+            cfg.validate_values()
+        except ValueError as exc:
+            self.errorRaised.emit("Invalid transient configuration", str(exc))
+            return
+        self._transient_config = cfg
+        self.transientChanged.emit()
+
+    @Slot()
+    def clearTransientConfig(self):
+        self._transient_config = None
+        self.transientChanged.emit()
+
+    @Slot(result="QVariant")
+    def transientConfig(self):
+        """Read back the LIVE armed transient config (or null), same
+        write-only-fields-revert-from-here role as sweepConfig()."""
+        c = self._transient_config
+        if c is None:
+            return None
+        return {"contact": c.contact, "kind": c.waveform.kind,
+                "v0": c.waveform.v0, "v1": c.waveform.v1,
+                "t0": c.waveform.t0, "t1": c.waveform.t1,
+                "t_end": c.t_end, "dt0": c.dt0}
 
     # -- v0.6 Phase 2c: solver backend selection --------------------------
     @Property(bool, notify=structureChanged)
@@ -1345,6 +1418,25 @@ class AppController(QObject):
                 self.errorRaised.emit(
                     "Sweep cannot run on this device", str(exc))
                 return
+        # M17 phase 3: same pre-flight validation for an armed
+        # transient config, plus the mutual-exclusion check a sweep and
+        # a transient run can never both attach to the same spec --
+        # _solve_all resolves that deterministically (transient wins)
+        # but arming both is a user-facing mistake, not a state worth
+        # silently picking a winner for.
+        if self._transient_config is not None:
+            try:
+                self._transient_config.validate(
+                    [c.name for c in self.spec.contacts])
+            except ValueError as exc:
+                self.errorRaised.emit(
+                    "Transient run cannot run on this device", str(exc))
+                return
+        if self._sweep_config is not None and self._transient_config is not None:
+            self.errorRaised.emit(
+                "Cannot run a sweep and a transient run together",
+                "Clear one of the two armed configurations first.")
+            return
         # GUI-IMPROVEMENT-PLAN.md Phase 1c: "Equilibrium only" sets
         # spec.bias = None instead of the usual contact-voltage dict --
         # solver_runner.py's _solve_all() already skips solve_bias
@@ -1361,6 +1453,7 @@ class AppController(QObject):
                 "off 'Equilibrium only' in the Physics Lab.")
             return
         self.spec.sweep = self._sweep_config
+        self.spec.transient = self._transient_config
         if self.lab.equilibrium_only:
             self.spec.bias = None
         # The Lab's validated catalog config is what executes; the M2
@@ -1724,6 +1817,14 @@ class AppController(QObject):
         self._set_status("Solve complete")
         self.resultChanged.emit()
         self.selectNode(self._selected)
+        # Phase 4: if sweep snapshots are available, update any open
+        # 3D viewer so playback controls become active.
+        if self._viewer3d_window is not None and self._store.has_sweep_snapshots():
+            try:
+                self._viewer3d_window.set_sweep_snapshots(
+                    self._store.sweep_snapshots())
+            except Exception:
+                pass
 
     def _on_failed(self, summary, details):
         self._set_busy(False)

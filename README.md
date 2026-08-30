@@ -17,7 +17,11 @@ pytcad/
   device.py      drift-diffusion: Poisson + both continuity equations;
                  per-node heterojunction materials (M11); Hurkx trap-
                  assisted tunneling (M12); impact ionization (M15);
-                 local Kane/Hurkx BTBT (M16)
+                 local Kane/Hurkx BTBT (M16); surface recombination
+                 velocity S_n/S_p (M14)
+  transient.py   time-dependent drift-diffusion (M17): backward-Euler/
+                 theta-scheme, step/ramp/pulse waveforms, driving
+                 Device1D through its own residual/Jacobian externally
   btbt.py        BTBT coefficients A, B (Hurkx Table I silicon), pure module
   moscap.py      MOS capacitor, quasi-static C-V, interface traps (M14);
                  density-gradient quantum correction (M20)
@@ -27,16 +31,21 @@ pytcad/
                  preconditioners (M22)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity;
-                 Lombardi CVT surface mobility (M14)
+                 Lombardi CVT surface mobility (M14); S_n/S_p surface
+                 recombination velocity for arbitrary contact shapes (M14)
+  transient2d.py time-dependent drift-diffusion for Device2D (M17),
+                 same external-driver pattern as transient.py
   mosfet.py      2D MOSFET builder + Id-Vg sweep
   mesh3d.py      tensor-product 3D mesh + Debye-length adequacy check
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           830+ tests: analytic-limit validation, published-value
-                   physics benchmarks, headless GUI tests — 530 GUI
-                   tests pass; core has 3 known failures (M16 BTBT,
-                   M20 DG gamma calibration) + 1 xfailed (M14 G-A)
+tests/           900+ tests: analytic-limit validation, published-value
+                   physics benchmarks, headless GUI tests — fast suite
+                   (`-m "not slow"`) currently 896 passed, 25 skipped,
+                   1 xfailed (M14 G-A, blocked on paywalled Lombardi
+                   constants), 4 known failures (M20 DG gamma
+                   calibration gates left open by user decision)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -80,7 +89,8 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 | Classical (no quantisation) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
 | Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
-| Isothermal, steady state | self-heating, transient / AC analysis |
+| Isothermal | self-heating (no lattice-temperature equation) |
+| Steady-state solve is the default | time-domain (M17, `pytcad.transient`/`transient2d`) is now available for 1D/2D, reachable from the GUI's Transient tab; small-signal AC/frequency-domain analysis is not yet built (M18) |
 
 ---
 
@@ -120,7 +130,8 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | Deal–Grove | $x^2 + Ax = B(t+\tau)$ | theory; $A,B$ Arrhenius **fits** |
 | Impact ionization | $G = [\alpha_n(E)\lvert J_n\rvert + \alpha_p(E)\lvert J_p\rvert]/q$, van Overstraeten–de Man (`Models(impact=True)`, 1D) | measured coefficients; lagged-source coupling |
 | Band-to-band tunneling | $G = AF^2e^{-B/F}$ local Kane/Hurkx (`Models(btbt=True)`, 1D) | Hx Table I Si coefficients (M16) |
-| Surface mobility | Lombardi CVT: $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D MOS channel) | Lombardi 1988; simplified phonon term (M14) |
+| Surface mobility | Lombardi CVT: $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D MOS channel) | Lombardi 1988; simplified phonon term, uncalibrated against published values -- blocked on a paywalled source (M14 G-A) |
+| Surface recombination velocity | Robin BC $J_n\cdot\hat n = qS_n(n-n_0)$ (mirrored for holes) at any ohmic contact (`Models(S_n=...)`/`S_p=...`, Device1D and Device2D, arbitrary 2D contact shape) | theory (steady-state particle conservation in the boundary half-box); M14 |
 | Density gradient | $\Lambda = -\frac{\gamma\hbar^2}{2m^\ast q}\frac{(\sqrt n)''}{\sqrt n}$, $n \to n\,e^{-\Lambda/V_T}$ (`Models(dg=True)` / `MOSCapacitor(dg=True)`, equilibrium) | Ancona–Stafford 1999; gated vs the code's own Schrödinger–Poisson solve + Airy analytics (M20) |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.
@@ -129,11 +140,11 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All 530 GUI tests pass with zero regressions; core suite has 301 passed,
-1 xfailed (M14 G-A, blocked on paywalled Lombardi constants), and 5
-known failures (M16 BTBT Zener onset gate, M20 DG gamma calibration
-gates left open by user decision). Every verification result is
-classified as one of
+The fast suite (`pytest tests/ gui/tests/ -n 6 -m "not slow" -q`)
+currently reports 896 passed, 25 skipped, 1 xfailed (M14 G-A, blocked
+on paywalled Lombardi constants), and 4 known failures (M20 DG gamma
+calibration gates left open by user decision). Every verification
+result is classified as one of
 **literature benchmark** (agrees with measured published values),
 **analytical validation** (agrees with closed-form theory independent of
 the solver), **model parameterization** (fitted constant transcribed
@@ -261,6 +272,30 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). The default path is a direct sparse solve (`scipy.sparse.linalg.spsolve`); `pytcad/linsolve.py` provides GMRES with node-block-Jacobi and Schur-complement preconditioners (M22, `precond="schur"`) for the large coupled systems, but the direct path remains the default until iteration counts are measured across the suite. The direct-solve scaling cost is real and measured: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware without the iterative path; do not attempt 40³+ meshes without it.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
 
+### Transient simulation (new)
+
+M17 adds time-dependent drift-diffusion for both `Device1D`
+(`pytcad/transient.py`) and `Device2D` (`pytcad/transient2d.py`):
+backward-Euler/theta-scheme time-stepping, three per-contact waveform
+primitives (step, ramp, pulse), and adaptive time-stepping (grows on
+easy Newton solves, shrinks and retries on failure). Both modules drive
+the device through its own residual/Jacobian from the OUTSIDE, the same
+pattern `continuation.py` already established for bias continuation —
+`device.py`/`device2d.py` were never touched. Real, physically
+meaningful transients are reproduced: dielectric relaxation decaying
+with $\tau=\varepsilon/\sigma$, and a forward-to-reverse diode switch
+showing a measurable charge-storage delay before the current actually
+drops. Reachable end-to-end from the desktop GUI's new **Transient**
+tab (armed waveform + run duration/step, plotted as current vs. time),
+backed by a schema-v3 result file. Honest limits: gate-contact
+voltages are not yet waveform-driven (only ohmic contacts); an armed
+transient config is not persisted across project save/load; only a
+scalar current-vs-time series is stored, not per-step field snapshots;
+one quantitative diode-turn-off charge-storage estimate was
+investigated and left an honest partial result rather than a forced
+tolerance (see `pytcad/M17-TRANSIENT-PLAN.md` section 5). Small-signal
+AC/frequency-domain analysis (M18) is not built.
+
 ### Desktop GUI (new)
 
 There is now a PySide6 / Qt Quick desktop frontend in `gui/` (currently
@@ -294,10 +329,13 @@ model config. v0.6 added a **runtime state validation** system (`GuiStateValidat
 the GUI's two device-construction paths (Process Flow, always 1D;
 Structure/Device-Builder templates, always 2D). v0.6 Phase 2c added a
 solver backend selector (pytcad/devsim, gated on compatible 1D devices),
-and v0.6.1 (`3D-VISUALIZATION-PLAN.md`) added the first GUI path to a
+v0.6.1 (`3D-VISUALIZATION-PLAN.md`) added the first GUI path to a
 `Device3D` -- one hand-built quick-load example plus a separate
 PyVista/VTK viewer window with interactive isosurface controls for an
-already-solved 3D result.
+already-solved 3D result; and M17 phase 3 added a **Transient** tab
+(arm a per-contact waveform, run it through the existing subprocess
+pipeline unchanged, plot current vs. time) backed by a schema-v3
+result file.
 Still not a complete TCAD workbench: no GUI-level 3D device
 CONSTRUCTION (only that one fixed example feeds the 3D viewer; there is
 no Structure/Process-workbench equivalent for 3D), and 3D visualization
@@ -429,12 +467,17 @@ than device currents.
 **Project roadmap.** `ARCHITECTURE.md` section 4b governs all future
 capability growth (three parity tiers, milestones M13–M30 with
 published-value acceptance gates). M13 (Fermi-Dirac statistics), M14
-(surface mobility), M15 (impact ionization), and M21 (meshing) are
-COMPLETE. M16 (BTBT), M20 (density-gradient quantum correction), and
-the M22 Schur preconditioner are LANDED-PENDING-VERIFICATION — code and
-gates written but not executed this session; see `history.md`
-Addenda 16–18. The milestone specs live in `pytcad/M14-…` through
-`pytcad/M22-…` plan files.
+(surface mobility — G-C now covers Device1D and Device2D; G-A remains
+open, blocked on a paywalled source), M15 (impact ionization), M16
+(BTBT), M17 (transient simulation — 1D core, 2D core, and GUI wiring
+all COMPLETE), M21 (meshing), and M22 (linear solver modernization) are
+COMPLETE or effectively so, apart from M14's own open G-A item and
+M20's own open G-C/G-D items. M20 (density-gradient quantum correction)
+remains PARTIALLY DONE — G-C/G-D open on a gamma-calibration gap left
+open by explicit user decision. Next on the roadmap spine: M18
+(small-signal AC analysis), which depends only on the Device1D
+transient machinery M17 already shipped. The milestone specs live in
+`pytcad/M14-…` through `pytcad/M22-…` plan files.
 
 - **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 

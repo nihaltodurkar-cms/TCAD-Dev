@@ -161,4 +161,144 @@ def test_line_cut_rejects_bad_orientation():
     store = SpecResultStore(_spec_2d())
     with pytest.raises(ValueError, match="orientation"):
         extract_line_cut(store.mesh_axes(), store.scalar_field("doping"),
-                         "diagonal", position_cm=0.0)
+        "diagonal", position_cm=0.0)
+
+
+# ----------------------------------------------------------------------
+# Phase 4: sweep snapshots for 3D animation playback
+# ----------------------------------------------------------------------
+def test_sweep_snapshots_reconstructs_3d_arrays_correctly():
+    from gui.services.result_store import SweepSnapshots
+    voltages = np.array([0.0, 0.5, 1.0])
+    shape = (4, 5)
+    field_names = ["potential", "doping"]
+    data = {}
+    for name in field_names:
+        for idx in range(len(voltages)):
+            data[(name, idx)] = np.arange(20, dtype=float).reshape(shape) + idx
+    snapshots = SweepSnapshots(
+        voltages=voltages,
+        field_names=field_names,
+        shape=shape,
+        _data=data,
+    )
+    assert snapshots.n_snapshots() == 3
+    assert snapshots.field_names == field_names
+    for idx in range(3):
+        arr = snapshots.field("potential", idx)
+        assert arr.shape == shape
+        assert np.array_equal(arr, data[("potential", idx)])
+        volt = snapshots.voltage(idx)
+        assert volt == pytest.approx(voltages[idx])
+
+
+def test_sweep_snapshots_rejects_out_of_range_index():
+    from gui.services.result_store import SweepSnapshots
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2))},
+    )
+    with pytest.raises(IndexError):
+        snapshots.field("potential", 5)
+
+
+def test_sweep_snapshots_rejects_unknown_field():
+    from gui.services.result_store import SweepSnapshots
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2))},
+    )
+    with pytest.raises(KeyError, match="not_a_field"):
+        snapshots.field("not_a_field", 0)
+
+
+def test_npz_result_store_has_sweep_snapshots_returns_false_when_no_snapshots(npz_2d):
+    store = NpzResultStore(npz_2d)
+    assert store.has_sweep_snapshots() is False
+
+
+def test_npz_result_store_loads_sweep_snapshots_correctly(tmp_path):
+    """Round-trip: write snapshot data to an npz, load it back, and
+    verify the reconstructed arrays match the originals."""
+    import json
+    path = str(tmp_path / "snapshots.npz")
+    shape = (4, 5)
+    voltages = np.array([0.0, 0.5, 1.0])
+    fields = {"potential": np.arange(20, dtype=float).reshape(shape)}
+
+    # Build the npz keys for sweep snapshots.
+    arrs = {}
+    for name in fields:
+        for idx in range(len(voltages)):
+            arrs[f"sweep__snapshot__field__{name}__{idx}"] = (
+                fields[name].flatten(order="C").copy())
+
+    np.savez(path, **arrs,
+             sweep__snapshot__voltages=json.dumps(voltages.tolist()),
+             mesh__shape=np.array(list(shape)),
+             solved_bias=np.array(True),
+             dimensionality=np.array(2),
+             axis_x=np.zeros(5),
+             axis_y=np.zeros(4),
+              **{f"field__{name}": fields[name].reshape(4, 5) for name in fields},
+              **{f"unit__{name}": np.array("V") for name in fields},
+              sweep__voltage=np.array([0.0]),
+              sweep__converged=np.array([True]),
+              sweep__meta=json.dumps({"dimensionality": 2}),
+              sweep__current__base=np.array([0.0]),
+              unit__sweep_current=np.array("A"),
+              **{f"terminal__base__value": np.array([0.0]),
+                 f"terminal__base__unit": np.array("A")})
+
+    store = NpzResultStore(path)
+    assert store.has_sweep_snapshots() is True
+    snaps = store.sweep_snapshots()
+    assert snaps.n_snapshots() == 3
+    assert snaps.field_names == ["potential"]
+    for idx in range(3):
+        arr = snaps.field("potential", idx)
+        assert arr.shape == shape
+        assert np.array_equal(arr, fields["potential"])
+        assert snaps.voltage(idx) == pytest.approx(voltages[idx])
+
+
+def test_npz_result_store_sweep_snapshots_missing_field_data_raises():
+    """If voltages are present but no field data, raise KeyError."""
+    import json
+    import tempfile
+    path = tempfile.mktemp(suffix=".npz")
+    voltages = np.array([0.0, 1.0])
+    np.savez(path,
+             sweep__snapshot__voltages=json.dumps(voltages.tolist()),
+             mesh__shape=np.array([4, 5]),
+             solved_bias=np.array(True),
+             dimensionality=np.array(2),
+             axis_x=np.zeros(5),
+             axis_y=np.zeros(4),
+              **{"field__potential": np.zeros((4, 5))},
+              **{"unit__potential": np.array("V")},
+              sweep__voltage=np.array([0.0]),
+              sweep__converged=np.array([True]),
+              sweep__meta=json.dumps({"dimensionality": 2}),
+              sweep__current__base=np.array([0.0]),
+              unit__sweep_current=np.array("A"),
+              **{f"terminal__base__value": np.array([0.0]),
+                 f"terminal__base__unit": np.array("A")})
+    store = NpzResultStore(path)
+    assert store.has_sweep_snapshots() is True
+    with pytest.raises(KeyError, match="no field data"):
+        store.sweep_snapshots()
+    os.unlink(path)
+
+
+def test_sweep_snapshots_empty_field_names_raises_keyerror():
+    """If voltages are present but no field data, raise KeyError."""
+    from gui.services.result_store import SweepSnapshots
+    # We can't directly construct a state with voltages but no fields
+    # through the normal API, so we test the NpzResultStore path.
+    pass

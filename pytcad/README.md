@@ -21,7 +21,12 @@ pytcad/ (this package)
                  per-node heterojunction materials (M11); Hurkx trap-
                  assisted tunneling (M12); impact ionization (M15);
                  local Kane/Hurkx BTBT (M16); density-gradient quantum
-                 correction in equilibrium (M20)
+                 correction in equilibrium (M20); surface recombination
+                 velocity S_n/S_p (M14)
+  transient.py   time-dependent drift-diffusion (M17): backward-Euler/
+                 theta-scheme, step/ramp/pulse waveforms, driving
+                 Device1D through its own residual/Jacobian externally
+                 (continuation.py's pattern) -- device.py never touched
   btbt.py        BTBT coefficients A, B (Hurkx Table I silicon), pure module
   moscap.py      MOS capacitor, quasi-static C-V, interface traps (M14);
                  density-gradient quantum correction (M20)
@@ -35,14 +40,19 @@ pytcad/ (this package)
                  moscap.py)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity;
-                 Lombardi CVT surface mobility (M14)
+                 Lombardi CVT surface mobility (M14); S_n/S_p surface
+                 recombination velocity for arbitrary contact shapes (M14)
+  transient2d.py time-dependent drift-diffusion for Device2D (M17),
+                 same external-driver pattern as transient.py
   mosfet.py      2D MOSFET builder + Id-Vg sweep
   mesh3d.py      tensor-product 3D mesh + Debye-length adequacy check
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
 tests/           analytic-limit validation + published-value physics
-                 benchmarks (part of the 541-test suite, zero warnings)
+                 benchmarks -- fast suite (`-m "not slow"`) currently
+                 896 passed, 25 skipped, 1 xfailed, 4 known failures
+                 (M20 gamma calibration, left open by user decision)
 ../workbench/    domain layer: materials library (Si, Ge, GaAs, InGaAs,
                  AlGaAs), model catalog, solver backends, tunneling and
                  impact-ionization physics, deck front end
@@ -82,7 +92,8 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 | Classical (no quantisation; `MOSCapacitor(dg=True)` / `Models(dg=True)` available, equilibrium) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
 | Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
-| Isothermal, steady state | self-heating, transient / AC analysis |
+| Isothermal | self-heating (no lattice-temperature equation) |
+| Steady-state solve is the default | time-domain (M17, `transient.py`/`transient2d.py`) is now available for 1D/2D; small-signal AC/frequency-domain analysis is not yet built (M18) |
 
 ---
 
@@ -120,7 +131,8 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 | Fermi-Dirac statistics | $n = N_c F_{1/2}(\eta)$ with nu-factor generalized SG (`Models(fd=True)`); incomplete ionization (`Models(incomplete_ion=True)`) | theory; gated vs independent roots and published freeze-out curves |
 | Impact ionization | $G = [\alpha_n(E)\lvert J_n\rvert + \alpha_p(E)\lvert J_p\rvert]/q$, van Overstraeten–de Man (`Models(impact=True)`, 1D) | measured coefficients; lagged-source coupling |
 | Band-to-band tunneling | $G = AF^2e^{-B/F}$ local Kane/Hurkx (`Models(btbt=True)`, 1D) | Hurkx Table I Si coefficients |
-| Surface mobility | Lombardi CVT $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D) | Lombardi 1988; simplified phonon term |
+| Surface mobility | Lombardi CVT $1/\mu = 1/\mu_{CT}+1/\mu_{ph}+1/\mu_{SR}$ (`Models(surface_mobility=True)`, 2D) | Lombardi 1988; simplified phonon term, uncalibrated -- blocked on a paywalled source (M14 G-A) |
+| Surface recombination velocity | Robin BC $J_n\cdot\hat n = qS_n(n-n_0)$ (mirrored for holes), any ohmic contact (`Models(S_n=...)`/`S_p=...`, Device1D and Device2D, arbitrary 2D contact shape) | theory; M14 |
 | Density gradient | $\Lambda = -\frac{\gamma\hbar^2}{2m^\ast q}\frac{(\sqrt n)''}{\sqrt n}$, $n \to n\,e^{-\Lambda/V_T}$ (`Models(dg=True)` / `MOSCapacitor(dg=True)`, equilibrium) | Ancona–Stafford 1999; gated vs own S–P solve + Airy analytics |
 
 **Mobility gotcha:** the argument is the *total* ionised impurity concentration $N_A + N_D$, not the net doping $|N_D - N_A|$. Using the net value badly overestimates mobility in compensated regions. `Device1D` takes `Ntotal` separately for exactly this reason.
@@ -129,8 +141,9 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All tests pass as part of the project-wide 541-test suite (zero
-warnings); every result is classified as literature benchmark,
+All tests pass as part of the project-wide fast suite (896 passed, 25
+skipped, 1 xfailed, 4 known M20 failures left open by user decision,
+zero new warnings); every result is classified as literature benchmark,
 analytical validation, model parameterization, or numerical
 regression — see the project README. Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
 
@@ -232,6 +245,23 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). Direct sparse solve only (`scipy.sparse.linalg.spsolve`), no iterative/preconditioned solver, no GPU. This has a real, measured cost: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; do not attempt 40³+ meshes without an iterative solver.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
 
+### Transient simulation (new)
+
+M17 adds time-dependent drift-diffusion for both `Device1D`
+(`transient.py`) and `Device2D` (`transient2d.py`): backward-Euler/
+theta-scheme time-stepping, three per-contact waveform primitives
+(step, ramp, pulse), and adaptive time-stepping. Both drive the device
+through its own residual/Jacobian from the outside, the same pattern
+`continuation.py` uses for bias continuation -- `device.py`/
+`device2d.py` were never touched. Gated against real physics:
+dielectric relaxation decaying with $\tau=\varepsilon/\sigma$, and a
+forward-to-reverse diode switch showing a measurable charge-storage
+delay. Honest limits: gate-contact voltages are not waveform-driven;
+only a scalar current-vs-time series is stored, not per-step field
+snapshots; one quantitative diode-turn-off charge estimate was
+investigated and left an honest partial result. See
+`M17-TRANSIENT-PLAN.md`.
+
 ### Desktop GUI (new)
 
 There is a PySide6 / Qt Quick desktop frontend in `../gui/` that solves
@@ -242,9 +272,10 @@ family (batch) voltage sweeps with curve plotting and derived readouts,
 a MOS C–V mode, a Physics Lab panel (every catalog model as a checkbox
 with its equation and reference), Bands/Recombination viewport modes
 with an all-models-off comparison overlay, deck-driven sessions, a
-versioned result schema with per-run provenance, and a second solver
-backend (DEVSIM, optional). See `../gui/README.md` and
-`../docs/user-guide/` for details.
+versioned result schema with per-run provenance, a second solver
+backend (DEVSIM, optional), and a Transient tab (M17 phase 3) that arms
+a per-contact waveform and plots current vs. time. See
+`../gui/README.md` and `../docs/user-guide/` for details.
 
 ## 7. Where to read more
 

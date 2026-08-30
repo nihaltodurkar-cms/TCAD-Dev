@@ -1,12 +1,21 @@
 # M14-SURFACE-MOBILITY-PLAN.md
 # Surface & Inversion-Layer Mobility + Interface Recombination
 
-Status: MOSTLY COMPLETE (2026-08-28). G-B (D_it), G-C (S_n/S_p in
-Device1D), G-D, G-E, and catalog registration are all green. G-A
-remains OPEN, blocked on a paywalled primary source (see "G-A
-LITERATURE SEARCH" below). S_n/S_p in Device2D was attempted, found to
-be a no-op, and reverted to an explicit NotImplementedError rather than
-shipped broken -- see "G-C, DEVICE2D" below.
+Status: MOSTLY COMPLETE (2026-08-31). G-B (D_it), G-C (S_n/S_p in
+Device1D AND, as of this session, Device2D), G-D, G-E, and catalog
+registration are all green. G-A remains OPEN, blocked on a paywalled
+primary source -- re-searched fresh this session (Darwish-model
+alternative, DEVSIM/MINIMOS-NT source code, academia.edu mirrors) with
+no new result; see "G-A LITERATURE SEARCH" and its 2026-08-31 addendum
+below. G-C at Device2D: the first attempt (2026-08-28) was a no-op,
+reverted to an explicit NotImplementedError; THIS session found a
+different approach (reuse the already-computed box-integration
+residual instead of deriving per-edge boundary stamps) that works and
+generalizes to arbitrary contact shapes with no per-shape logic -- see
+"G-C, DEVICE2D, TAKE 2" below. One honest limitation found and left
+open: Newton convergence for this Robin BC can be non-monotonic for a
+DEEP MINORITY-carrier contact under reverse bias (majority-carrier
+convergence is clean); see that section for the full investigation.
 Owner: session handoff via history.md
 
 RESUMED-SESSION NOTE: the prior session crashed after writing
@@ -426,3 +435,110 @@ they may already have, since both almost certainly contain the table.
 materials.py is UNCHANGED -- implementing the two-term form now with
 guessed mu1/E_ref/N_ref would replace one unverified constant with
 several, which is worse, not better, than the current honest xfail.
+
+## G-A LITERATURE SEARCH ADDENDUM, 2026-08-31 (still blocked)
+
+Re-ran the search fresh at the start of a new session, from different
+angles than 2026-08-28's exhaustive pass, before concluding the same
+thing again: (1) a Darwish (1997) "improved electron and hole mobility
+model" was checked as a possible ALTERNATIVE published model for the
+same transverse-field physics (DEVSIM itself uses Darwish, not
+Lombardi, for exactly this purpose) -- found its title/venue (IEEE
+TED, 1997, vol 44 issue 9) but no accessible numeric parameter table
+either (academia.edu copy returned HTTP 403; a TU Wien PhD thesis
+gives Darwish's EQUATIONS, same as the 2026-08-28 finding, but
+explicitly states it omits the numeric coefficients). (2) Checked
+whether MINIMOS-NT's or DEVSIM's own source/docs expose a usable
+parameter set -- no. (3) Re-tried the Stanford Prophet docs URL
+directly and via web.archive.org -- same as 2026-08-28, unreachable
+(connection refused / archive.org blocked from this environment).
+CONCLUSION UNCHANGED: this stays genuinely blocked on external
+material. Adopting Darwish instead of Lombardi is a real, legitimate
+option in principle (it's what an actual production simulator uses),
+but swapping the underlying model is a bigger decision than filling in
+a missing constant and was not made unilaterally here -- flagged for
+the user rather than assumed.
+
+------------------------------------------------------------------------
+## G-C, DEVICE2D, TAKE 2 (2026-08-31) -- IMPLEMENTED
+
+The first attempt (see "G-C, DEVICE2D" above) failed because it tried
+to derive, per contact node, "which single edge is into the bulk" --
+genuinely hard for an arbitrary 2D contact shape (a node can touch 1-4
+edges, unlike 1D's two fixed single-edge endpoints).
+
+**The insight**: `Device2D._residual_jacobian` already computes the
+correct multi-edge box-integration continuity residual (`F_n`, `F_p`)
+at EVERY node uniformly, contact or not, before the Dirichlet overwrite
+discards it -- exactly what `terminal_current()` already reuses as "the
+net current the contact must supply" (see its own docstring). That
+residual is the 2D generalization of what 1D calls "the one SG edge
+current touching the boundary node" (1D's boundary residual reduces to
+a single edge only because a 1D endpoint happens to have exactly one).
+So the Robin BC (`Jn.n_hat = q*Sn*(n-n0)`, mirrored for holes)
+generalizes to: keep the already-computed `F_n[contact_node]` (don't
+overwrite it), then ADD `S_n_s*(n[node]-n0)` to it -- instead of the
+old code's unconditional overwrite-with-Dirichlet + strip-every-
+Jacobian-entry-in-the-row-to-identity. Every OTHER Jacobian entry
+already in that row (from the general box-assembly pass earlier in the
+same function) stays exactly as computed, which is what makes this
+generalize to any number of edges per contact node with zero new
+"which edge" logic -- confirmed, not just claimed: a genuine multi-edge
+test (an L-shaped patch spanning a domain corner plus several top-row
+nodes, where individual nodes touch 2 or 3 non-contact edges) passes
+FD-Jacobian at the same tolerance as an ordinary single-edge contact.
+
+**Bonus finding**: because this approach reuses the interior-style
+Jacobian entries wholesale rather than hand-deriving new boundary
+stamps, the M13 Fermi-Dirac `wn`/`wp` chain-rule correction (which 1D's
+hand-derived boundary stamps needed a SEPARATE fix for, found in a
+2026-08-28 hard-debug pass) came along automatically -- verified
+directly with an `fd=True` FD-Jacobian check restricted to the
+boundary columns (same "random sampling can miss a handful of boundary
+columns" lesson 1D's own hard-debug pass recorded), not assumed.
+
+**Real limitation found, not hidden**: sweeping S_n from near-zero to
+very large at a DEEP MINORITY-carrier contact under reverse bias (the
+same scenario Device1D's own G-C test uses) is NOT monotonic in
+Device2D the way it is in Device1D -- it collapses to spurious
+near-zero values across several decades of S before recovering near
+the Dirichlet limit at very large S. Traced (not just observed) to
+Newton's own convergence-update criterion: `solve_bias`'s relative-
+update check floors the denominator at `1e-10` (scaled) for EVERY node
+(a deliberate M11-S5 safeguard against deep-minority AlGaAs-barrier
+nodes stalling the whole solve) — Device1D's own analogous check floors
+at `1e-300` instead, i.e. effectively no floor. For a target density
+below that `1e-10` floor, changes there stop counting toward the
+convergence criterion at all, so Newton can (and, empirically, does)
+declare "converged" while this new Robin-BC row is still drifting via
+the per-iteration 0.1x/10x density clamp, landing on a residual that is
+"small" only because both terms in the equation are independently near
+zero at that point -- not because the true self-consistent root was
+found. This is NOT a sign error or a wrong formula (the SAME equation
+converges cleanly, and monotonically, for a MAJORITY-carrier contact,
+and the FD-Jacobian is clean everywhere it was checked, including this
+exact deep-minority regime) -- it is a genuine interaction between a
+pre-existing, deliberately-added convergence safeguard (M11-S5) and a
+new feature that, for the first time, puts a NON-Dirichlet unknown at a
+node whose target value can legitimately sit below that safeguard's
+floor. Not fixed this pass (changing M11-S5's floor is a separate,
+wider-blast-radius decision affecting every 2D solve, not just S_n/S_p)
+-- left as an honest, investigated limitation. The shipped gates
+therefore cover: bit-identity (S=0), FD-Jacobian (single-edge,
+multi-edge corner, and fd=True combinations), majority-carrier
+monotonic convergence, and combination with bgn/auger/surface_mobility
+-- NOT a minority-carrier monotonic-convergence gate, which would be
+gating something not actually reliable yet.
+
+### Files changed:
+- `pytcad/pytcad/device2d.py`: removed the S_n/S_p `NotImplementedError`
+  guard; `_residual_jacobian`'s Dirichlet-BC block now branches per
+  contact/carrier on S_n_s/S_p_s (0 -> exact prior behavior; nonzero ->
+  Robin flux-balance reusing the existing box residual)
+- `pytcad/tests/test_m14_2d_surface_recombination.py` (new, 6 tests)
+- `pytcad/tests/test_m14_surface_mobility.py`: updated
+  `test_s_n_s_p_raise_in_device2d_and_device3d` ->
+  `test_s_n_s_p_works_in_device2d_raises_in_device3d` (Device2D no
+  longer raises; Device3D still does, unchanged)
+- `M14-SURFACE-MOBILITY-PLAN.md`, `ARCHITECTURE.md`, `history.md`:
+  status updates

@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from .base import SolveRequest
+from gui.services.solver_backend import SOLVER_RESULT_SCHEMA_VERSION
 
 
 def _require_devsim():
@@ -76,6 +77,15 @@ def check_devsim_compatible(spec):
         raise ValueError(
             "the devsim backend does not accept region_materials "
             "(heterostructure jobs must use the pytcad backend)")
+    if spec.transient is not None:
+        # M17 phase 3: this backend's run() has no transient dispatch
+        # at all -- an armed transient config would otherwise be
+        # silently ignored and solved as a plain bias/sweep job instead,
+        # exactly the "hidden failure" this function's other checks
+        # already exist to catch.
+        raise ValueError(
+            "the devsim backend does not support transient (time-domain) "
+            "runs (use the pytcad backend)")
     from gui.services.device_spec import _default_models
     if spec.models != _default_models():
         raise ValueError(
@@ -366,13 +376,20 @@ class DevsimBackend:
             # terminal registry and the 1D current convention is the total
             # current density above.
 
-            result["result__schema"] = np.array(2)
+            # M17 phase 3: stamped from the live constant, not a
+            # hardcoded literal, so this backend's version tracks
+            # solver_backend.py's automatically -- it emits no
+            # transient__* keys (that's pytcad-backend-only, gated by
+            # DeviceSpec.transient/check_devsim_compatible), so an
+            # unbumped devsim result is still fully valid under
+            # whatever the CURRENT version number is, additive as ever.
+            result["result__schema"] = np.array(SOLVER_RESULT_SCHEMA_VERSION)
             result["geom__kind"] = np.array("structured_rectilinear")
             result["mesh__shape"] = np.array([x.size])
             result["nodes__count"] = np.array(int(x.size))
             result["nodes__coords"] = x.reshape(-1, 1)
             result["record__meta"] = np.array(json.dumps({
-                "schema_version": 2,
+                "schema_version": SOLVER_RESULT_SCHEMA_VERSION,
                 "backend": "devsim",
                 "created_utc": datetime.now(timezone.utc)
                                      .isoformat(timespec="seconds"),

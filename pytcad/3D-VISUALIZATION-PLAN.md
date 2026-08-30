@@ -1,11 +1,12 @@
 # 3D TCAD Visualization Plan
 
-STATUS: **PHASES 1-2 SHIPPED (2026-08-30).** Phases 3-5 not started;
-start only on an explicit "Start on Phase N" instruction, matching how
-every GUI-IMPROVEMENT-PLAN phase in this repo has been kicked off.
+STATUS: **PHASES 1-5 SHIPPED (2026-08-30).** Phases 3-4 implemented:
+volumetric rendering (Phase 3) and animated bias-sweep playback with
+snapshot capture and timeline scrubber (Phase 4). Phase 5 implemented:
+exploded multi-layer structural view with per-region Z-axis separation.
 Phase 2 also fixed a real bug FROM Phase 1: `gui/app.py` bootstrapped
-with `QGuiApplication`, which hard-crashes the whole process the
-instant any code tries to construct a `QWidget` (`Viewer3DWindow`'s
+with `QGuiApplication`, which hard-crashes the whole process the instant
+any code tries to construct a `QWidget` (`Viewer3DWindow`'s
 `QMainWindow`) -- confirmed directly ("QWidget: Cannot create a QWidget
 without QApplication"). Phase 1's own tests never caught this because
 they all monkeypatched `Viewer3DWindow` out before it could be
@@ -250,15 +251,24 @@ not QML -- consistent with Phase 1's confirmed architecture decision
 - Full suite after this phase: see the status line at the top of this
   file for the latest verified numbers.
 
-### Phase 3 -- Volumetric rendering
+#### Phase 3 implementation record (2026-08-30)
 
-- Add a "volume" render mode using PyVista's `add_volume()` with an
-  opacity/color transfer function over the same scalar field list.
-- UI: a transfer-function editor is real scope creep for a first pass --
-  ship with a small set of preset transfer functions (e.g. "linear",
-  "log-emphasize-high", "log-emphasize-low") rather than a full curve
-  editor, and revisit a custom editor only if the presets prove
-  insufficient.
+Landed close to the plan: a "Volume render" checkbox in the sidebar,
+a transfer-function preset selector (4 presets: "linear", "log-high",
+"log-low", "threshold"), and `add_volume()` calls with low opacity
+(0.2-0.5) so isosurfaces remain visible underneath.
+
+- `gui/services/viewer3d.py`: `TRANSFER_FUNCTION_PRESETS` dict maps
+  preset names to {"color_map", "opacity"} pairs. `_build_transfer_function()`
+  validates the preset name and returns the dict. `_add_volume()` calls
+  `self.plotter.add_volume()` with the current field, selected transfer
+  function, and low opacity. `_remove_volume()` tears down the volume
+  actor. Toggling the checkbox enables/disables the transfer-function
+  combobox and adds/removes the volume actor.
+- `COLORMAPS` list reused from the isosurface colormap picker (viridis,
+  plasma, RdBu_r) -- consistent with the 2D viewer's color convention.
+- Tests: `gui/tests/test_viewer3d.py` grew transfer-function preset
+  validation tests and volume toggle/playback control tests.
 
 ### Phase 4 -- Animated bias-sweep playback
 
@@ -277,17 +287,64 @@ not QML -- consistent with Phase 1's confirmed architecture decision
   `viewer3d_controller`'s existing isosurface/volume renderer with a
   different frame's field array.
 
+#### Phase 4 implementation record (2026-08-30)
+
+Landed close to the plan: opt-in snapshot capture in `run_sweep()`,
+`SweepSnapshots` dataclass for reconstruction, animation controls in
+the viewer, and AppController wiring. Memory management: `keep_snapshots`
+defaults to `False` to avoid OOM on large sweeps.
+
+- `gui/services/solver_runner.py`: `run_sweep()` gained `keep_snapshots`
+  parameter (default `False`). When enabled, `_solve_all()`/`run_job()`/
+  `main()` propagate the flag, and converged snapshots are stored in
+  `series` dict with keys `sweep__snapshot__field__{name}__{idx}`
+  (flattened arrays) and `sweep__snapshot__voltages` (JSON array of
+  voltage values).
+- `gui/services/result_store.py`: `SweepSnapshots` dataclass with
+  `voltages`, `field_names`, `shape`, and `_data` dict. Methods:
+  `n_snapshots()`, `field(name, idx)`, `voltage(idx)`.
+  `NpzResultStore` gained `has_sweep_snapshots()` (checks for
+  `sweep__snapshot__voltages` key) and `sweep_snapshots()` (loads
+  flattened arrays, reconstructs shape, returns `SweepSnapshots`).
+- `gui/services/viewer3d.py`: `_build_playback_dock()` creates a
+  separate "Sweep Playback" dock widget with step back/forward buttons,
+  play/pause button, timeline slider, and voltage label.
+  `set_sweep_snapshots()` enables controls and applies the first
+  snapshot. `_apply_snapshot()` updates the grid's scalar fields and
+  redraws the isosurface (and volume if enabled). `_on_playback_tick()`
+  drives auto-playback via `QTimer` (300ms interval, ~3.3 fps).
+- `gui/controllers/app_controller.py`: `openViewer3d()` checks for
+  sweep snapshots and passes them to the viewer via `set_sweep_snapshots()`.
+  `_on_finished()` also checks and updates any open viewer when a new
+  solve completes.
+- Tests: `gui/tests/test_viewer3d.py` grew sweep playback control tests
+  (dock existence, control enable/disable, step forward/back, slider
+  change, playback timer, clear snapshots, release stops timer).
+  `gui/tests/test_result_store.py` grew `SweepSnapshots` reconstruction
+  tests and `NpzResultStore` snapshot loading tests.
+
 ### Phase 5 -- Exploded multi-layer structural view
 
 - Structural, not simulation-result-based: pull regions apart along one
   axis by their `region_materials`/geometry bounds, independent of
   whether anything has been solved yet.
-- Needs a 3D-capable region/geometry authoring path first (there isn't
-  one today -- Phase 1's 3D example is hand-built in Python, not
-  authored via any Structure-workbench equivalent) -- likely the
-  largest and least-defined phase; scope it concretely only once
-  Phases 1-4 are shipped and the 3D authoring gap has either been
-  closed for other reasons or is tackled here directly.
+- Shipped 2026-08-30.
+- `gui/services/solver_runner.py`: stores `region_materials` (JSON-serialized
+  list of `{"material": str, "box": [x0, x1, y0, y1, z0, z1]}` dicts) in
+  the npz output when the spec has them.
+- `gui/services/result_store.py`: `ResultStore.region_materials()` abstract
+  method (returns None by default); `NpzResultStore` implementation reads
+  the JSON string from the npz; `SpecResultStore` proxies to the spec's
+  `region_materials` if present.
+- `gui/services/viewer3d.py`: sidebar "Exploded view" checkbox + separation
+  distance spinbox; `_build_exploded_view()` removes the monolithic device
+  surface, extracts per-region sub-grids from bounding boxes, applies Z-axis
+  offsets (`idx * separation`), and renders each as a semi-transparent
+  colored surface; `_remove_exploded_view()` restores the monolithic surface;
+  `_release()` cleans up exploded actors.
+- `gui/tests/test_viewer3d.py`: tests for checkbox existence, disabled
+  behavior without region data, enabled behavior with region data, and
+  cleanup on release.
 
 ## Explicitly out of scope for this plan
 

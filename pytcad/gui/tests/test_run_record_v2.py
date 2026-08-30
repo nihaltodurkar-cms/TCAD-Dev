@@ -81,7 +81,10 @@ def test_cli_1d_swept_v2_file_carries_geometry_and_record(tmp_path):
     validate_result(out)
 
     d = np.load(out)
-    assert int(d["result__schema"]) == SOLVER_RESULT_SCHEMA_VERSION == 2
+    # M17 phase 3 bumped SOLVER_RESULT_SCHEMA_VERSION 2 -> 3 (additive:
+    # a v3 file is still a valid v2 file with more keys, this test's own
+    # geometry/record assertions below are unaffected).
+    assert int(d["result__schema"]) == SOLVER_RESULT_SCHEMA_VERSION == 3
     assert str(d["geom__kind"]) == "structured_rectilinear"
     assert list(np.asarray(d["mesh__shape"])) == [40]
     nx = len(_diode_1d_spec().mesh.axes["x"])
@@ -158,8 +161,11 @@ def test_legacy_files_load_and_report_no_record(tmp_path):
 
 
 def test_known_versions_constant_covers_1_and_2():
-    assert KNOWN_RESULT_SCHEMA_VERSIONS == {1, 2}
-    assert SOLVER_RESULT_SCHEMA_VERSION == 2
+    # M17 phase 3 bumped the current version to 3 (additive: 1 and 2
+    # stay known/readable, see the transient__* block's own separate
+    # test coverage for the new key grammar).
+    assert KNOWN_RESULT_SCHEMA_VERSIONS == {1, 2, 3}
+    assert SOLVER_RESULT_SCHEMA_VERSION == 3
 
 
 # ----------------------------------------------------------------------

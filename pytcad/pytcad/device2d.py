@@ -146,22 +146,6 @@ class Device2D:
                 "Canali field-dependent mobility is not implemented in "
                 "Device2D (see design spec, deferred items)."
             )
-        if self.models.S_n != 0.0 or self.models.S_p != 0.0:
-            raise NotImplementedError(
-                "Models.S_n/S_p (M14 surface recombination velocity) is "
-                "implemented in Device1D only. A first Device2D attempt "
-                "generalized the Dirichlet contact row to "
-                "(n-n0)*(1+S_scaled) -- verified (by direct numerical "
-                "check, not assumed) to be a NO-OP: multiplying an "
-                "already-zero-at-convergence residual by a nonzero "
-                "constant does not change its root, so n was still "
-                "pinned to n0 regardless of S. A correct 2D Robin BC "
-                "needs a genuine SG edge-current flux balance like "
-                "Device1D's (see its _residual_jacobian), generalized to "
-                "find, per contact node, whichever neighbor is 'into the "
-                "bulk' -- non-trivial for an arbitrary 2D contact shape, "
-                "unlike 1D's two fixed endpoints. Not yet implemented; "
-                "refusing rather than silently repeating the same bug.")
         if getattr(self.models, "impact", False):
             raise NotImplementedError(
                 "Impact ionization (Models(impact=True)) is implemented "
@@ -745,8 +729,29 @@ class Device2D:
 
         rows = np.concatenate(rows); cols = np.concatenate(cols); vals = np.concatenate(vals)
 
-        # --- Dirichlet (contact) BC on psi, n, p: replace all 3 rows ---
-        contact_k = []
+        # --- Dirichlet (contact) BC on psi, always; n/p when S=0 ----------
+        # M14 G-C (2D): for S_n/S_p != 0, a Robin flux-balance BC
+        # (Jn.n_hat = q*Sn*(n-n0), mirrored for holes) replaces the
+        # Dirichlet density row.  Rather than deriving, per contact node,
+        # "which single edge is into the bulk" (hard for an arbitrary 2D
+        # contact shape -- a node can touch 1-4 edges), this reuses the
+        # box-integration continuity residual F_n/F_p ALREADY computed
+        # above for every node uniformly, contact or not, before this
+        # block ever runs -- exactly what terminal_current() itself reads
+        # as "the net current the contact must supply" (see its own
+        # docstring). That residual already sums over however many edges
+        # touch the node, so ADDING the recombination sink to it (instead
+        # of overwriting it and stripping every other Jacobian entry in
+        # the row) generalizes to any contact shape with no special-casing.
+        # S=0 keeps the EXACT pre-existing Dirichlet row (bit-identical),
+        # not an algebraic reduction of the Robin formula -- S=0 means a
+        # fixed density, S>0 a flux condition, genuinely different physics
+        # (same branching principle Device1D's own S_n/S_p implementation
+        # uses, and for the same reason).
+        S_n_s = self.models.S_n * self.LD / D0_REF
+        S_p_s = self.models.S_p * self.LD / D0_REF
+        strip_rows_list = []
+        extra_rows, extra_cols, extra_vals = [], [], []
         F3 = F.reshape(N, 3)
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
@@ -754,18 +759,34 @@ class Device2D:
                 kk = bc.j * Nx + bc.i
                 psi0, n0, p0 = self._bc_contact_values(bc, V)
                 F3[kk, 0] = psi.ravel()[kk] - psi0
-                F3[kk, 1] = n.ravel()[kk] - n0
-                F3[kk, 2] = p.ravel()[kk] - p0
-                contact_k.append(kk)
-        if contact_k:
-            contact_k = np.unique(np.concatenate(contact_k))
-            all_contact_rows = np.concatenate([3 * contact_k, 3 * contact_k + 1, 3 * contact_k + 2])
-            keep = ~np.isin(rows, all_contact_rows)
+                strip_rows_list.append(3 * kk)
+                if S_n_s == 0.0:
+                    F3[kk, 1] = n.ravel()[kk] - n0
+                    strip_rows_list.append(3 * kk + 1)
+                else:
+                    F3[kk, 1] += S_n_s * (n.ravel()[kk] - n0)
+                    extra_rows.append(3 * kk + 1)
+                    extra_cols.append(3 * kk + 1)
+                    extra_vals.append(np.full(kk.shape, S_n_s))
+                if S_p_s == 0.0:
+                    F3[kk, 2] = p.ravel()[kk] - p0
+                    strip_rows_list.append(3 * kk + 2)
+                else:
+                    F3[kk, 2] += S_p_s * (p.ravel()[kk] - p0)
+                    extra_rows.append(3 * kk + 2)
+                    extra_cols.append(3 * kk + 2)
+                    extra_vals.append(np.full(kk.shape, S_p_s))
+        if strip_rows_list:
+            strip_rows = np.unique(np.concatenate(strip_rows_list))
+            keep = ~np.isin(rows, strip_rows)
             rows, cols, vals = rows[keep], cols[keep], vals[keep]
-            for comp in range(3):
-                r = 3 * contact_k + comp
-                rows = np.concatenate([rows, r]); cols = np.concatenate([cols, r])
-                vals = np.concatenate([vals, np.ones_like(r, dtype=float)])
+            rows = np.concatenate([rows, strip_rows])
+            cols = np.concatenate([cols, strip_rows])
+            vals = np.concatenate([vals, np.ones_like(strip_rows, dtype=float)])
+        if extra_rows:
+            rows = np.concatenate([rows] + extra_rows)
+            cols = np.concatenate([cols] + extra_cols)
+            vals = np.concatenate([vals] + extra_vals)
 
         J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
         # F_n, F_p (returned raw, pre-Dirichlet-overwrite, shape (Ny,Nx),

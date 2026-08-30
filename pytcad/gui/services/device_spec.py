@@ -104,6 +104,124 @@ class SweepSpec:
         self.validate_values()
 
 
+WAVEFORM_KINDS = ("step", "ramp", "pulse", "constant")
+
+
+@dataclass
+class WaveformSpec:
+    """A per-contact bias-vs-time waveform (M17 phase 3 wire format).
+
+    Field meaning depends on `kind` (mirrors pytcad.transient's
+    StepWaveform/RampWaveform/PulseWaveform constructors exactly, just
+    JSON-flattened onto one shape instead of one class per kind):
+      "step":     v0 until t0, then v1 (t1 unused)
+      "ramp":     linear v0 -> v1 over [t0, t1]
+      "pulse":    v0 outside [t0, t0+t1), v1 inside it (t1 = width)
+      "constant": always v0 (v1/t0/t1 unused)
+    """
+    kind: str
+    v0: float = 0.0
+    v1: float = 0.0
+    t0: float = 0.0
+    t1: float = 0.0
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"waveform configuration must be an object, got {type(d).__name__}")
+        try:
+            spec = cls(kind=d["kind"], v0=float(d.get("v0", 0.0)),
+                       v1=float(d.get("v1", 0.0)), t0=float(d.get("t0", 0.0)),
+                       t1=float(d.get("t1", 0.0)))
+        except KeyError as exc:
+            raise ValueError(f"waveform configuration is missing field {exc}") from None
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid waveform configuration: {exc}") from None
+        spec.validate()
+        return spec
+
+    def validate(self):
+        if self.kind not in WAVEFORM_KINDS:
+            raise ValueError(
+                f"waveform kind '{self.kind}' must be one of {WAVEFORM_KINDS}")
+        for label, v in (("v0", self.v0), ("v1", self.v1),
+                         ("t0", self.t0), ("t1", self.t1)):
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError(f"waveform {label} must be finite, got {v!r}")
+        if self.kind == "ramp" and self.t1 <= self.t0:
+            raise ValueError(
+                f"ramp waveform needs t1 ({self.t1}) > t0 ({self.t0})")
+        if self.kind == "pulse" and self.t1 <= 0.0:
+            raise ValueError(f"pulse waveform needs width t1 > 0, got {self.t1}")
+
+
+@dataclass
+class TransientSpec:
+    """A single-contact time-domain run (M17 phase 3).
+
+    Mirrors SweepSpec's role: `contact` is ramped in TIME (not voltage)
+    following `waveform`; every OTHER contact holds its DeviceSpec.bias
+    voltage, same convention pytcad.transient.solve_transient itself
+    already defaults to for any contact not mentioned in its own
+    `waveforms` dict.
+    """
+    contact: str
+    waveform: WaveformSpec
+    t_end: float
+    dt0: float
+    theta: float = 1.0
+
+    def to_dict(self):
+        d = asdict(self)
+        return d
+
+    @classmethod
+    def from_dict(cls, d):
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"transient configuration must be an object, got {type(d).__name__}")
+        try:
+            spec = cls(contact=d["contact"],
+                       waveform=WaveformSpec.from_dict(d["waveform"]),
+                       t_end=float(d["t_end"]), dt0=float(d["dt0"]),
+                       theta=float(d.get("theta", 1.0)))
+        except KeyError as exc:
+            raise ValueError(f"transient configuration is missing field {exc}") from None
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid transient configuration: {exc}") from None
+        spec.validate_values()
+        return spec
+
+    def validate_values(self):
+        self.waveform.validate()
+        for label, v in (("t_end", self.t_end), ("dt0", self.dt0),
+                         ("theta", self.theta)):
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError(f"transient {label} must be finite, got {v!r}")
+        if self.t_end <= 0.0:
+            raise ValueError(f"transient t_end must be > 0, got {self.t_end}")
+        if self.dt0 <= 0.0:
+            raise ValueError(f"transient dt0 must be > 0, got {self.dt0}")
+        if not (0.0 <= self.theta <= 1.0):
+            raise ValueError(f"transient theta must be in [0, 1], got {self.theta}")
+
+    def validate(self, contact_names):
+        """Raise ValueError with an actionable message on any spec that
+        cannot be executed.  `contact_names` is the list of names the
+        enclosing DeviceSpec actually registers."""
+        names = list(contact_names)
+        if not isinstance(self.contact, str) or not self.contact \
+                or self.contact not in names:
+            raise ValueError(
+                f"transient contact '{self.contact}' is not a registered "
+                f"contact (have: {', '.join(names) or 'none'})")
+        self.validate_values()
+
+
 @dataclass
 class MeshSpec:
     """Geometry ONLY -- axis node positions [cm] and nothing else.
@@ -202,6 +320,12 @@ class DeviceSpec:
     contacts: list = field(default_factory=list)
     bias: dict = None                  # {contact_name: V}; None = equilibrium only
     sweep: SweepSpec = None            # v0.4: optional single-contact voltage ramp
+    # M17 phase 3: optional single-contact time-domain waveform run.
+    # Mutually exclusive with `sweep` -- AppController.run() enforces
+    # this before a job is ever started; _solve_all checks `transient`
+    # before `sweep` so a spec that somehow carries both still resolves
+    # deterministically rather than silently picking one.
+    transient: TransientSpec = None
     # M11-S2: optional per-region material overrides (heterostructure
     # wire format).  Each entry: {"material": <library key>, "box":
     # [x0, x1] (1D) | [x0, x1, y0, y1] (2D)} in cm, mesh-aligned.
@@ -222,6 +346,7 @@ class DeviceSpec:
     @classmethod
     def from_dict(cls, d):
         sweep = d.get("sweep")
+        transient = d.get("transient")
         rm = d.get("region_materials")
         if rm is not None:
             _validate_region_materials(rm)
@@ -238,6 +363,7 @@ class DeviceSpec:
             # and load-time validation project_store uses, not a bare
             # SweepSpec(**dict).
             sweep=SweepSpec.from_dict(sweep) if sweep else None,
+            transient=TransientSpec.from_dict(transient) if transient else None,
             backend=d.get("backend", "pytcad"),
         )
 

@@ -294,17 +294,20 @@ def test_g_e_fd_jacobian_with_surface_recombination_and_fd_statistics():
     assert worst <= 5e-5, f"boundary FD-Jacobian FAIL with fd+S_n/S_p: {worst:.3e}"
 
 
-def test_s_n_s_p_raise_in_device2d_and_device3d():
-    """S_n/S_p is Device1D-only this pass (see device2d.py's own guard
-    comment for why a first 2D attempt was reverted as a no-op) --
-    Device2D and Device3D must refuse loudly, not silently ignore it."""
+def test_s_n_s_p_works_in_device2d_raises_in_device3d():
+    """M14 remainder (2026-08-31): S_n/S_p is now implemented in
+    Device1D AND Device2D (see tests/test_m14_2d_surface_recombination.py
+    for the full 2D gate suite -- a Robin flux-balance BC reusing the
+    already-computed box-integration residual, generalizing to any
+    contact shape). Device3D remains unimplemented and must still
+    refuse loudly, not silently ignore the flag."""
     from pytcad import Device3D
     from pytcad.mesh3d import Mesh3D
     x = graded_mesh(2e-4, [1e-4], 1e-8, 1e-6, 1.12)
     y = graded_mesh(5e-5, [0.0], 1e-7, 1e-5, 1.15)
     dop2d = np.tile(np.where(x < 1e-4, -1e16, 1e16), (y.size, 1))
-    with pytest.raises(NotImplementedError, match="Device1D only"):
-        Device2D(Mesh2D(x, y), dop2d, models=Models(S_n=1e4))
+    dev = Device2D(Mesh2D(x, y), dop2d, models=Models(S_n=1e4))
+    assert dev.models.S_n == 1e4
     with pytest.raises(NotImplementedError, match="Device1D and Device2D"):
         z = graded_mesh(3e-5, [0.0], 1e-6, 5e-6, 1.2)
         dop3d = np.tile(dop2d, (z.size, 1, 1))

@@ -846,7 +846,10 @@ for what has actually landed)
                                                   PLAN.md; suite
                                                   confirmation
                                                   pending)
-  M17 transient simulation                       not started
+  M17 transient simulation                       PHASES 1-3 (1D/2D/GUI)
+                                                  DONE 2026-08-31; see
+                                                  pytcad/M17-TRANSIENT-
+                                                  PLAN.md
   M18 small-signal AC                            not started
   M19 self-heating                               not started
   M20 density-gradient quantum correction        PARTIALLY GREEN
@@ -1017,13 +1020,18 @@ Independent candidates for the next milestone (any order):
    Addendum 16).
 4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists and
    is validated; catalog wiring only).
-5. M14 remainder -- LANDED 2026-08-28: G-B (D_it C-V stretch-out), G-C
-   (S_n/S_p surface recombination in Device1D), catalog registration
-   (surface_mobility). driving_force descoped (no consumer). Only G-A
-   (Lombardi phonon-term constants, blocked on a paywalled source) and
-   S_n/S_p in Device2D (attempted, found to be a no-op, reverted to an
-   explicit raise -- needs a per-contact-adjacency generalization not
-   yet built) remain open. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+5. M14 remainder -- LANDED 2026-08-28/31: G-B (D_it C-V stretch-out),
+   G-C (S_n/S_p surface recombination in Device1D AND, as of
+   2026-08-31, Device2D -- a Robin BC reusing the already-computed
+   box-integration residual, generalizing to any contact shape with no
+   per-edge logic), catalog registration (surface_mobility).
+   driving_force descoped (no consumer). Only G-A (Lombardi phonon-term
+   constants, blocked on a paywalled source, re-searched 2026-08-31
+   with no new result) remains open. One honest limitation found in
+   the 2D S_n/S_p work: Newton convergence for a deep minority-carrier
+   contact under reverse bias can be non-monotonic, traced to an
+   interaction with M11-S5's density-floor safeguard, not fixed this
+   pass. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
 
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
@@ -1115,10 +1123,11 @@ recorded here so they are tracked rather than silently absent):
 4. [DONE 2026-08-29] M16 BAND-TO-BAND TUNNELING -- local Kane BTBT
    LANDED in Device1D, residual-ordering and live-state gates written
    first (see section 5 item 3 and pytcad/M16-BTBT-PLAN.md).
-5. [DONE 2026-08-28] M14 remainder -- G-B/G-C(1D)/catalog LANDED;
-   driving_force descoped, G-C(2D) and G-A remain open (see section 5
-   item 5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT --
-   small, independent, low-risk, still open.
+5. [DONE 2026-08-28, G-C(2D) DONE 2026-08-31] M14 remainder --
+   G-B/G-C(1D+2D)/catalog LANDED; driving_force descoped, G-A remains
+   open, re-searched 2026-08-31 with no new result (see section 5 item
+   5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT -- small,
+   independent, low-risk, still open.
 7. [PARTIALLY DONE 2026-08-29] M20 DENSITY-GRADIENT -- Ancona-Stafford
    DG quantum correction (equilibrium-only: MOSCapacitor dg flag +
    Device1D Models.dg) plus the pytcad/dg.py analysis layer with the
@@ -1131,8 +1140,30 @@ recorded here so they are tracked rather than silently absent):
    investigation record -- three further hypotheses tested and ruled
    out). Next step, WHEN resumed: either a coupled-Newton
    reformulation of the DG term or a published, pre-calibrated gamma.
-8. NEXT on the spine: M17 TRANSIENT (unlocks M18 small-signal/AC and
-   M27 self-heating's coupled solve).
+8. [PHASES 1-3 DONE 2026-08-30/31] M17 TRANSIENT -- 1D AND 2D
+   backward-Euler/theta-scheme transient cores LANDED as new sibling
+   modules (pytcad/transient.py, pytcad/transient2d.py), driving
+   Device1D/Device2D through their own _residual_jacobian exactly like
+   continuation.py does for bias continuation -- device.py/device2d.py
+   untouched. Phase 1: G1/G2/G4/G5/G-FD green (G2 left an honest
+   partial result, see M17-TRANSIENT-PLAN.md section 5). Phase 2:
+   G1/G4/G5/G-FD green (G2 not re-attempted); found and fixed a
+   genuinely different charge-conservation sign relationship than
+   Phase 1's (Device2D.terminal_current()'s per-contact "into the
+   device" convention vs 1D's single-wire edge-flux convention -- see
+   plan section 7) and a float64-cancellation bug in the naive
+   absolute stored-charge sum at 2D mesh scale. Phase 3: a transient
+   run is now reachable end-to-end from the desktop app (new Transient
+   tab/panel, schema-v2 -> v3 bump for a new transient__* npz block,
+   new "Transient" viewport mode) -- built entirely on top of Phase
+   1/2's already-gated solvers, called unmodified; closed a real gap
+   found along the way (the devsim backend had no transient dispatch
+   at all and would have silently ignored an armed transient config --
+   now explicitly refused). GateBC waveforms, project-file persistence
+   of an armed transient config, and per-step field-snapshot playback
+   remain out of scope, honestly flagged in the plan doc. Next: M18
+   (small-signal AC), which depends only on the Device1D transient
+   machinery Phase 1 shipped.
 6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native
    `__cxa_deleted_virtual` abort inside `QQuickPaintedItem::
    updatePaintNode`, ~1-in-3 to 1-in-5 full-suite runs). Root cause:

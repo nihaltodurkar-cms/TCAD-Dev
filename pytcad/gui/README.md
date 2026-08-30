@@ -1148,3 +1148,65 @@ integration is a QWidget, not a QML item).
   via a `FakeInteractor` standing in for just the GL surface); only the
   live rendered pixels themselves still need a manual check on a real
   desktop.
+
+## Transient Simulation — M17 Phase 3 GUI Wiring (2026-08-31)
+
+Full plan: `../M17-TRANSIENT-PLAN.md`. Phases 1 (1D) and 2 (2D) shipped
+the actual time-domain solvers (`pytcad/transient.py`,
+`pytcad/transient2d.py`), reachable only from Python/pytest until this
+phase. This phase makes a transient run reachable end-to-end from the
+desktop app.
+
+- **New "Transient" tab** (`TransientPanel.qml`): pick a stimulus
+  contact, a waveform (step/ramp/pulse/constant), start/end bias,
+  switch/ramp/pulse timing, run duration, and initial time step. Arm/
+  Clear buttons mirror `SweepPanel.qml`'s exactly. Every OTHER contact
+  holds its configured DC bias for the whole run — `solve_transient`'s
+  own documented default, no new solver behavior needed.
+- **`AppController`** grew a transient-config quartet
+  (`setTransientConfig`/`clearTransientConfig`/`transientConfig`/
+  `hasTransientConfig`) mirroring the sweep-config one exactly, plus
+  `transientResultForQml`. An armed sweep and an armed transient run
+  are mutually exclusive, refused loudly in `run()` — not silently
+  resolved. Compatible with "Equilibrium only": a transient run can
+  legitimately start from equilibrium (that's exactly what the
+  dielectric-relaxation gate does).
+- **Zero changes to `JobRunner`/the subprocess mechanism** — dispatch
+  is purely data-driven off the `DeviceSpec` JSON (new `WaveformSpec`/
+  `TransientSpec` fields), confirmed by exploration before writing any
+  code. `solver_runner.run_transient()` dispatches to the already-
+  gated Phase 1/2 solvers, called unmodified.
+- **Result schema bumped v2 -> v3** (additive: a v3 file is a valid
+  v1/v2 file with a new `transient__*` block) for a scalar current-
+  vs-time series (NOT per-step field snapshots — a deliberate MVP
+  scope decision, not an oversight). New `NpzResultStore.
+  has_transient()`/`transient_result()` mirror `has_sweep()`/
+  `sweep_result()`'s protocol-with-defaults shape.
+- **New "Transient" viewport mode** (`mpl_canvas_item.py`): plots every
+  contact's current vs. time (both named contacts at 1D, every ohmic
+  contact at 2D — a transient state has no single default channel to
+  pick), reusing the existing curve/hover-readout machinery.
+- **Four real bugs found and fixed**, verified with the live app, not
+  guessed: (1) 1D's `solve_transient` needs both contacts' waveforms
+  passed explicitly (no "defaults to current bias" the 2D module has)
+  — first draft crashed; fixed by passing the other contact's DC bias
+  as a plain float. (2) The plot's axis-fit logic had no transient
+  case, so a rendered screenshot showed the x-axis silently scaled to
+  the device's spatial extent in microns instead of the time range —
+  caught only by actually looking at the screenshot, not a mechanical
+  "did data reach the canvas" check. (3) The schema bump broke three
+  pre-existing tests hardcoding the old version number as "current" —
+  an expected, correct consequence of a real version bump, fixed along
+  with switching the devsim backend's own hardcoded schema literal to
+  the shared constant. (4) `check_devsim_compatible()` had no check for
+  an armed transient config at all — an armed transient config on the
+  devsim backend would have been silently solved as a plain bias job;
+  now explicitly refused.
+- **Honest limits**: `GateBC` voltages are not waveform-driven (only
+  ohmic contacts); an armed transient config is not persisted across
+  project save/load (unlike the sweep config); no per-step field-
+  snapshot playback (only the scalar current series).
+
+Full fast suite after this phase: 891 passed (874 baseline + 4 Phase 2
++ 13 Phase 3), 25 skipped, 1 xfailed, 3 failed (pre-existing, unrelated
+M20 set), zero new warnings.

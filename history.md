@@ -1612,3 +1612,349 @@ catch). Zero new regressions.
 - `pytcad/GUI-IMPROVEMENT-PLAN.md`, `pytcad/gui/README.md`,
   `pytcad/3D-VISUALIZATION-PLAN.md`, `ARCHITECTURE.md`: status/records
   updated to match all of the above
+
+## STATE ADDENDUM -- 3D VISUALIZATION PHASE 5 COMPLETE (2026-08-30)
+Exploded multi-layer structural view **COMPLETE**.
+
+### What was implemented:
+- `pytcad/gui/services/solver_runner.py`: `run_sweep()` now stores
+  `region_materials` (JSON-serialized list of `{"material": str,
+  "box": [x0, x1, y0, y1, z0, z1]}` dicts) in the npz output when the
+  spec has them.
+- `pytcad/gui/services/result_store.py`: `ResultStore.region_materials()`
+  abstract method (returns None by default); `NpzResultStore` reads the
+  JSON string from the npz; `SpecResultStore` proxies to the spec's
+  `region_materials` if present.
+- `pytcad/gui/services/viewer3d.py`: sidebar "Exploded view" checkbox +
+  separation distance spinbox; `_build_exploded_view()` removes the
+  monolithic device surface, extracts per-region sub-grids from bounding
+  boxes, applies Z-axis offsets (`idx * separation`), and renders each
+  as a semi-transparent colored surface; `_remove_exploded_view()`
+  restores the monolithic surface; `_remove_monolithic_surface()` finds
+  and removes the lightsteelblue surface actor from the plotter;
+  `_extract_region_grid()` creates a new `RectilinearGrid` from the
+  region's bounding box; `_release()` cleans up exploded actors.
+- `pytcad/gui/tests/test_viewer3d.py`: tests for checkbox existence,
+  disabled behavior without region data, enabled behavior with region
+  data, and cleanup on release.
+
+### Notes:
+- Uniform silicon devices (no `region_materials`) get a no-op message
+  when the user enables exploded view -- the toggle reverts to off.
+- Heterostructure devices (e.g. Si/GaAs) get per-region semi-transparent
+  colored surfaces, each offset along the Z axis by the separation
+  distance times the region index.
+- The exploded view is independent of simulation results -- it works on
+  the structural geometry alone, making it useful even before solving.
+
+### Files changed (this addendum):
+- `pytcad/gui/services/solver_runner.py`: `region_materials` npz storage
+- `pytcad/gui/services/result_store.py`: `region_materials()` accessor
+- `pytcad/gui/services/viewer3d.py`: exploded view UI + region extraction
+- `pytcad/gui/tests/test_viewer3d.py`: exploded view tests
+- `pytcad/3D-VISUALIZATION-PLAN.md`: Phase 5 status + implementation record
+
+## STATE ADDENDUM -- M17 TRANSIENT SIMULATION PHASE 1 (1D) COMPLETE (2026-08-30)
+
+ARCHITECTURE.md explicitly named M17 (time-dependent DD) as "NEXT on
+the spine" (no unstarted dependencies; unblocks M18 small-signal AC and
+M19/M27 self-heating's coupled solve), unlike M16-remainder/M20 which
+are stuck on open calibration questions by prior explicit user
+decision. New plan: `M17-TRANSIENT-PLAN.md`.
+
+### What was implemented (Phase 1: 1D only):
+- `pytcad/pytcad/transient.py` (new): `solve_transient(device,
+  waveforms, t_end, dt0, theta=1.0, ...)` -- backward-Euler/theta-scheme
+  time-stepping of `Device1D`. Built as a new sibling module driving
+  `Device1D._residual_jacobian`/`_contact_values` from the OUTSIDE,
+  exactly the pattern `pytcad/continuation.py` already uses for bias
+  continuation -- `device.py` was NOT touched. The theta-scheme storage
+  term (`dV*(n-n_old)/dt`, opposite-signed for holes matching the
+  existing `Rs*dV` sign convention on those rows) is added post-hoc to
+  the already-returned `(F, J)` for the interior continuity rows only;
+  Dirichlet contact rows are left untouched each step, driven instead
+  by re-evaluating `_contact_values` at the new time under three new
+  `Waveform` primitives (`StepWaveform`, `RampWaveform`,
+  `PulseWaveform`). Adaptive dt grows/shrinks on Newton
+  success/failure, retrying from the last accepted state -- same
+  control-loop shape as `continuation.py`'s `adaptive_bias_sweep`.
+- `pytcad/tests/test_m17_transient.py` (new): G-FD, G5 (steady-state
+  consistency vs `solve_bias`), G1 (dielectric relaxation vs
+  tau=eps/sigma), G2 (diode turn-off storage delay), G4 (charge
+  conservation) -- all green.
+
+### Two real findings during implementation (not guessed, verified):
+1. G4's sign convention: `d(stored_charge)/dt` (stored_charge =
+   q*sum(n-p)*dx) equals `I_right - I_left`, NOT the naively-expected
+   `I_left - I_right`. Confirmed numerically (the mismatch was
+   near-exactly sign-flipped, not a magnitude bug) before fixing the
+   test rather than the solver -- G-FD and G5 both already passed
+   before this, so the residual/Jacobian construction was never in
+   question.
+2. G1's fitted decay constant came out 42% slower than analytic on the
+   first run. Root cause: `solve_transient`'s default adaptive-dt
+   growth (1.5x/step, capped at `dt0*64`) coarsens `dt` past the
+   decay timescale being measured within a handful of steps, and
+   backward Euler's per-step decay factor `1/(1+dt/tau)` under-damps
+   relative to `exp(-dt/tau)` once `dt` is comparable to or larger than
+   `tau` -- not a bug, but a real usage lesson: a caller measuring a
+   *specific* short timescale must pass an explicit `dt_max` well below
+   it, since the default policy is tuned for reaching a distant `t_end`
+   efficiently, not for resolving a given decay constant. Documented in
+   `M17-TRANSIENT-PLAN.md` section 5 so the next caller doesn't
+   rediscover this the slow way.
+
+### What was explicitly NOT achieved (see M17-TRANSIENT-PLAN.md section 5):
+G2's stored-charge quantity was NOT matched to a textbook Qs~=I_F*tau_p
+(or a short-base transit-time variant) formula -- both came out off by
+a factor of several and sign-ambiguous after direct numerical
+experimentation, most likely because this is voltage-driven bias
+switching (not the constant-reverse-current assumption Kingston-style
+storage-time formulas assume) on a diode geometry between the short-
+and long-base regimes. Descoped to the two independently-verifiable
+claims the gate actually checks (storage delay exists; long-time
+current matches an independent `solve_bias`), following M20's own
+precedent (G-C/G-D) of recording an honest gap rather than forcing a
+tolerance.
+
+Verified: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 874
+passed, 25 skipped, 1 xfailed, 3 failed (the pre-existing M20 G-C/G-D
+set, unrelated to this milestone), zero new warnings. Adversarial pass:
+zero-width `PulseWaveform` rejects at construction; `dt0 > t_end`
+clips cleanly to a single step at `t_end`; a `StepWaveform` with no
+actual voltage jump runs as a no-op; charge conservation (G4) verified
+to still hold under a large forward-turn-on step exercising adaptive
+dt growth; an artificially over-damped `NewtonOptions` correctly
+raised `RuntimeError` (loud failure) rather than silently returning a
+bad state when genuinely stalled.
+
+### Files changed (this addendum):
+- `pytcad/pytcad/transient.py` (new)
+- `pytcad/tests/test_m17_transient.py` (new)
+- `pytcad/M17-TRANSIENT-PLAN.md` (new)
+- `ARCHITECTURE.md`: M17 status updated in sections 5 and 7 (Phase 1
+  done, Phase 2/3 scoped only)
+
+## STATE ADDENDUM -- M17 TRANSIENT SIMULATION PHASE 2 (2D) COMPLETE (2026-08-31)
+
+Followed directly on Phase 1 (1D). New file `pytcad/pytcad/
+transient2d.py`, same external-module pattern against
+`Device2D._residual_jacobian` -- `device2d.py` untouched. Two things
+turned out SIMPLER than in 1D: `_residual_jacobian` already takes a
+`{contact_name: V}` dict directly (no separate contact-values step
+needed), and it already returns the pre-Dirichlet-overwrite `F_n`/`F_p`
+that `Device2D.terminal_current()` itself uses, so per-step terminal
+current for an ARBITRARY number of registered contacts fell out for
+free (Phase 1's 1D version was hardcoded to exactly two, "left"/
+"right"). `pytcad/tests/test_m17_transient2d.py`: G-FD, G1, G4, G5 all
+green (G2 -- diode turn-off -- deliberately not re-attempted; Phase 1
+already left it an honest partial result, and repeating the same
+investigation on a 2D mesh was judged not worth the added cost).
+
+### Two real findings (not guessed, verified) while gating G4 in 2D:
+1. First attempt showed a ~1e4x MAGNITUDE mismatch (not just a sign
+   flip). Printing raw values showed `stored_charge()` returning
+   near-zero (~1e-16 to 1e-22) at every snapshot, including t=0 -- the
+   symmetric Na=Nd diode used for the gate makes the TRUE absolute
+   `sum((n-p)*dA)` over the whole domain near-zero (majority-carrier
+   bulk charge on each side roughly cancels), so what was left over
+   after that cancellation was float64 roundoff, not the real, much
+   smaller transient signal. Ruled out a units bug first (checked
+   `dev.dV.sum()*dev.LD**2` against the mesh's known physical area --
+   matched exactly) before concluding it was cancellation. Fixed by
+   redefining `TransientResult2D.stored_charge()` as a delta relative
+   to the initial snapshot, which never sums the large non-time-varying
+   bulk term at all. Phase 1's 1D `stored_charge()` was deliberately
+   NOT changed to match -- it already passed its own gate at 1D's much
+   smaller node count; a future 1D caller at a much finer mesh should
+   apply the same fix if it's ever needed there.
+2. After that fix, the values didn't match Phase 1's `I_right - I_left`
+   relation either. Re-derived the conservation identity directly from
+   the box-integration telescoping property (sum of the raw continuity
+   residual over ALL nodes is a pure algebraic constant regardless of
+   Newton convergence) rather than guessing at sign combinations:
+   `d(stored_charge)/dt == -(I_left + I_right)`, confirmed numerically
+   to the same rtol=1e-3 Phase 1 used. The relation is genuinely
+   different from 1D's, not a repeat of the same bug: `Device2D.
+   terminal_current()`'s convention is "positive = current INTO the
+   device" independently at EVERY contact, while 1D's `Jn+Jp` edge
+   array is a single continuous current sampled at two points along
+   one wire -- different physical quantities, not the same thing named
+   differently.
+
+Verified: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 878
+passed (874 + 4 new Phase 2 tests), 25 skipped, 1 xfailed, 3 failed
+(the same pre-existing M20 set, unrelated and unchanged), zero new
+warnings. Adversarial pass: `dt0 > t_end` clips cleanly; a no-op
+waveform (no real bias change) runs fine; a contact not mentioned in
+`waveforms` correctly keeps its `bc.V` fixed for the whole run.
+
+### Files changed (this addendum):
+- `pytcad/pytcad/transient2d.py` (new)
+- `pytcad/tests/test_m17_transient2d.py` (new)
+- `pytcad/M17-TRANSIENT-PLAN.md`: Phase 2 status, interface, gates,
+  honest limits, and section 7 implementation record
+- `ARCHITECTURE.md`: M17 status updated to Phase 1+2 complete
+
+## STATE ADDENDUM -- M17 TRANSIENT SIMULATION PHASE 3 (GUI) COMPLETE (2026-08-31)
+
+Followed directly on Phases 1/2 (1D/2D transient solvers, already
+gated, untouched here). Made a transient run reachable end-to-end from
+the desktop app: a new Transient tab lets a user pick a stimulus
+contact, a waveform (step/ramp/pulse/constant), and run duration/step
+size; Run() executes it through the EXISTING JobRunner subprocess path
+(zero changes needed there -- dispatch is purely data-driven off the
+DeviceSpec JSON, confirmed by exploration before writing any code); a
+new "Transient" viewport mode plots every contact's current vs. time.
+
+`SOLVER_RESULT_SCHEMA_VERSION` bumped 2 -> 3 (additive: a v3 file is
+still a valid v1/v2 file, new `transient__*` npz block). New
+`WaveformSpec`/`TransientSpec` dataclasses on the DeviceSpec JSON
+boundary; new `solver_runner.run_transient()` dispatching to
+`pytcad.transient`/`transient2d`'s already-gated solvers (never
+reimplemented at the GUI layer); new `AppController` config
+slots/properties mirroring the sweep-config quartet exactly, including
+mutual exclusion with an armed sweep; new `NpzResultStore.
+has_transient()`/`transient_result()` mirroring `has_sweep()`/
+`sweep_result()`'s protocol-with-defaults shape.
+
+### Four real bugs found and fixed (verified with the live app, not guessed):
+1. `pytcad.transient.solve_transient` (1D) needs BOTH "left"/"right"
+   waveform keys explicitly -- no "defaults to current bias" fallback
+   the 2D module has. First draft crashed
+   (`TypeError: ... not 'NoneType'`) passing only the stimulus
+   contact's waveform; fixed by passing the other contact's DC bias as
+   a plain float.
+2. `MplCanvasItem.fit()` had no `"transient"` branch, so the x-axis
+   autoscaled to the device's SPATIAL extent in microns instead of the
+   time range -- caught only because a rendered screenshot was actually
+   inspected (an "0 to 6" axis looked plausible enough that a purely
+   programmatic check for "did data reach the canvas" would have missed
+   it). Fixed with a `"transient"` branch mirroring "series"/"cv"'s own
+   fit-to-data pattern.
+3. Bumping the schema version broke three pre-existing tests that
+   hardcoded the literal `2` as "the current version" (an expected,
+   correct consequence of a real version bump) -- fixed by updating
+   those literals to `3`, and switching `devsim_backend.py`'s own
+   hardcoded schema literal to import the live constant instead so a
+   future bump doesn't require editing that file again.
+4. `check_devsim_compatible()` had no check for `spec.transient` at
+   all -- confirmed by reading `DevsimBackend.run()` that it never
+   dispatches on it, meaning an armed transient config on that backend
+   would have been silently solved as a plain bias job. Fixed with an
+   explicit rejection, same pattern this function's other checks
+   (region_materials, non-default models) already use.
+
+Verified: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 891
+passed (878 + 13 new), 25 skipped, 1 xfailed, 3 failed (the same
+pre-existing, unrelated M20 set), zero new warnings. Adversarial pass:
+a `"constant"` (no-op) waveform runs without crashing;
+`equilibrium_only=True` + an armed transient config runs correctly from
+equilibrium (the one combination Phase 3 deliberately does NOT reject).
+
+### What was explicitly NOT built (honest limits, see M17-TRANSIENT-PLAN.md section 5):
+`GateBC` voltages are not waveform-driven (only ohmic contacts); an
+armed transient config is not persisted across project save/load
+(`_sweep_config` is, `_transient_config` deliberately is not); no
+per-step field-snapshot storage/playback (only a scalar current-vs-time
+series) -- all left for a future session, not attempted here.
+
+### Files changed (this addendum):
+- `pytcad/gui/services/device_spec.py`: `WaveformSpec`, `TransientSpec`
+- `pytcad/gui/services/solver_runner.py`: `run_transient`,
+  `_waveform_from_dict`, `_solve_all`/`run_job` wiring
+- `pytcad/gui/services/solver_backend.py`: schema v2 -> v3 bump,
+  transient block validation
+- `pytcad/gui/services/result_store.py`: `TransientResult`,
+  `has_transient`/`transient_result`
+- `pytcad/gui/controllers/app_controller.py`: transient config
+  slots/properties, `run()` dispatch
+- `pytcad/gui/qml/panels/TransientPanel.qml` (new)
+- `pytcad/gui/qml/Main.qml`: new tab + view-mode entry
+- `pytcad/gui/qml/panels/ViewportPanel.qml`,
+  `pytcad/gui/visualization/mpl_canvas_item.py`: "transient" view mode
+- `pytcad/workbench/solvers/devsim_backend.py`: reject
+  `spec.transient`; live schema-version constant instead of a literal
+- `pytcad/gui/tests/test_transient_gui.py` (new, 13 tests)
+- `pytcad/gui/tests/test_run_record_v2.py`,
+  `pytcad/gui/tests/test_m7_devsim.py`: updated for the v3 bump
+- `pytcad/M17-TRANSIENT-PLAN.md`, `ARCHITECTURE.md`: Phase 3 status
+
+## STATE ADDENDUM -- M14 REMAINDER: G-C(2D) LANDED, G-A STILL BLOCKED (2026-08-31)
+
+Picked up M14's two open items: G-A (Lombardi phonon-term calibration,
+blocked on a paywalled 1988 paper) and G-C at Device2D (S_n/S_p surface
+recombination, previously reverted to a `NotImplementedError` after a
+first attempt turned out to be a no-op).
+
+### G-A: re-searched fresh, still blocked
+Tried new angles the 2026-08-28 session hadn't: a Darwish (1997)
+alternative model (DEVSIM itself uses Darwish, not Lombardi, for this
+exact physics), DEVSIM/MINIMOS-NT source code, academia.edu mirrors.
+Found the Darwish paper's title/venue but no accessible parameter
+table (HTTP 403 on the one promising academia.edu hit); re-tried the
+Stanford Prophet docs and web.archive.org, both still unreachable from
+this environment, same as before. Conclusion unchanged: genuinely
+blocked on external material, not search effort. Recorded as a dated
+addendum in M14-SURFACE-MOBILITY-PLAN.md so a future session doesn't
+repeat the same searches. Swapping to Darwish instead of Lombardi is a
+real option in principle but a bigger decision than filling in a
+missing constant -- flagged, not decided unilaterally.
+
+### G-C(2D): landed, with the insight the first attempt was missing
+The first Device2D attempt (2026-08-28) failed trying to derive, per
+contact node, "which single edge is into the bulk" -- hard for an
+arbitrary 2D contact shape. This session found a different approach:
+`Device2D._residual_jacobian` already computes the correct multi-edge
+box-integration residual (F_n, F_p) at every node uniformly BEFORE the
+Dirichlet overwrite discards it at contact nodes -- exactly what
+`terminal_current()` already reuses. So the Robin BC just needs to ADD
+the recombination sink to that already-computed residual instead of
+overwriting it and stripping the row's other Jacobian entries -- this
+generalizes to any number of edges per contact node automatically,
+confirmed with a genuine multi-edge test (an L-shaped contact spanning
+a domain corner plus several top-row nodes) passing FD-Jacobian at the
+same tolerance as an ordinary single-edge contact. A bonus: because
+this reuses the already-assembled interior-style Jacobian (which
+already carries the M13 Fermi-Dirac wn/wp correction), the fd=True
+combination worked correctly without needing the separate manual fix
+Device1D's own hard-debug pass had to add.
+
+**One real limitation found and left open, not hidden**: sweeping S_n
+from near-zero to very large at a DEEP MINORITY-carrier contact under
+reverse bias (Device1D's own G-C test scenario) is non-monotonic in
+Device2D, unlike Device1D. Traced to a genuine interaction with an
+existing safeguard: `solve_bias`'s Newton convergence check floors the
+relative-update denominator at 1e-10 (scaled) for every node -- a
+deliberate M11-S5 protection against deep-minority nodes stalling the
+whole solve -- while Device1D's analogous check floors at 1e-300
+(effectively none). For a target density below that 1e-10 floor,
+Newton can declare "converged" while this new Robin-BC row is still
+drifting via the per-iteration density clamp, landing on a spurious
+near-zero value rather than the true root. Not a formula/sign bug (the
+FD-Jacobian is clean in this exact regime too, and a MAJORITY-carrier
+contact converges cleanly and monotonically) -- a numerical robustness
+gap between a pre-existing safeguard and a genuinely new kind of
+non-Dirichlet unknown it wasn't designed around. Not fixed this pass
+(the floor is a general 2D-solver setting, not S_n/S_p-specific
+changing it is a separate, wider decision); the shipped gates cover
+bit-identity, FD-Jacobian (single-edge, multi-edge corner, fd=True),
+majority-carrier monotonic convergence, and combinations with
+bgn/auger/surface_mobility -- deliberately NOT a minority-carrier
+monotonic-convergence gate, which would assert something not yet
+reliable.
+
+Verified: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 896
+passed (895 baseline + 1 fixed pre-existing test that expected the
+old NotImplementedError), 25 skipped, 1 xfailed, 4 failed (the
+pre-existing, unrelated M20 set), zero new warnings.
+
+### Files changed (this addendum):
+- `pytcad/pytcad/device2d.py`: removed the S_n/S_p NotImplementedError
+  guard; Dirichlet-BC block branches per contact/carrier on S_n_s/S_p_s
+- `pytcad/tests/test_m14_2d_surface_recombination.py` (new, 6 tests)
+- `pytcad/tests/test_m14_surface_mobility.py`: updated the
+  Device2D-raises test to reflect that it now works
+- `M14-SURFACE-MOBILITY-PLAN.md`: G-C(2D) implementation record, G-A
+  fresh-search addendum
+- `ARCHITECTURE.md`: M14 status updated

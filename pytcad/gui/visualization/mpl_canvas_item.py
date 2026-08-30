@@ -44,6 +44,7 @@ class MplCanvasItem(QQuickPaintedItem):
         self._sweep = None             # result_store.SweepResult (v0.4)
         self._sweep_channel = ""
         self._cv = None                # result_store.SweepResult (v0.6 C-V mode)
+        self._transient = None         # result_store.TransientResult (M17 phase 3)
         self._contours = False         # v0.6 Phase 2a: contour overlay toggle
         self._cut_orientation = "horizontal"   # v0.6 Phase 2b: line-cut mode
         self._cut_position_cm = 0.0
@@ -285,6 +286,47 @@ class MplCanvasItem(QQuickPaintedItem):
         if self._xlim:
             ax.set_xlim(*self._xlim)
 
+    # -- transient (time-domain) run (M17 phase 3) -----------------------
+    @Slot(object)
+    def setTransientSource(self, result):
+        """Data source for "transient" mode: a
+        result_store.TransientResult (or None). A dedicated mode rather
+        than reusing "series"/"cv" -- same reasoning those two already
+        give for staying separate from each other: a transient's x-axis
+        is TIME, not a swept bias, and unlike "series"/"cv" it draws
+        EVERY channel at once (both named contacts at 1D, every ohmic
+        contact at 2D) rather than one selected channel plus an
+        optional family/comparison overlay -- there's no single
+        "the" device current in a transient state to pick by default.
+        Does NOT touch self._mode, like every other source setter --
+        ViewportPanel.setViewMode() drives the mode."""
+        self._transient = result
+        self.fit()
+
+    def _draw_transient(self, ax):
+        result = getattr(self, "_transient", None)
+        if result is None or not result.channels:
+            ax.text(0.5, 0.5, "No transient run yet\n"
+                    "(arm and run one in the Transient panel)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        t = np.asarray(result.times, dtype=float)
+        series = []
+        for k, (name, vals) in enumerate(sorted(result.channels.items())):
+            I = np.asarray(vals, dtype=float)
+            marker = "-o" if t.size <= 40 else "-"
+            ax.plot(t, I, marker, lw=1.3, ms=2.5,
+                    color=self._series_color(k), label=name)
+            series.append((t, I, name))
+        self._remember_series(ax, series, unit=result.unit)
+        ax.legend(fontsize=8, frameon=False)
+        ax.set_xlabel("t [s]")
+        ax.set_ylabel(f"current [{result.unit}]")
+        ax.set_title(f"{result.contact} transient", fontsize=9)
+        if self._xlim:
+            ax.set_xlim(*self._xlim)
+
     # -- convergence history (v0.5.0 M4) ---------------------------------
     @Slot(object)
     def setConvergenceSource(self, record):
@@ -452,6 +494,17 @@ class MplCanvasItem(QQuickPaintedItem):
             self.viewChanged.emit()
             self.update()
             return
+        if self._mode == "transient" and self._transient is not None:
+            t = np.asarray(self._transient.times, dtype=float)
+            lo, hi = (float(t.min()), float(t.max())) if t.size else (0.0, 1.0)
+            if hi == lo:
+                hi = lo + 1.0
+            self._xlim = (lo, hi)
+            self._ylim = None
+            self._home = (self._xlim, self._ylim)
+            self.viewChanged.emit()
+            self.update()
+            return
         # Doping mode before any solve has no ResultStore yet -- fit to the
         # structure's own extent instead. Once a store exists (post-solve)
         # it takes priority below, same as it always has.
@@ -556,6 +609,10 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "cv":
             self._draw_cv(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "transient":
+            self._draw_transient(ax)
             fig.tight_layout()
             return fig
         if self._mode == "cut":

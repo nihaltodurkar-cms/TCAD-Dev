@@ -16,7 +16,8 @@ Read this before doing anything. Then read `history.md`
 not just this file, since state changes faster than this file is
 updated), `ARCHITECTURE.md` (roadmap + live queue,
 including the governing future plan in section 4b, M13-M30), and
-the active milestone spec (currently `pytcad/M16-BTBT-PLAN.md`,
+the active milestone spec (currently `pytcad/M14-SURFACE-MOBILITY-
+PLAN.md` (G-A only), `pytcad/M17-TRANSIENT-PLAN.md`,
 `pytcad/M20-DENSITY-GRADIENT-PLAN.md`,
 `pytcad/M22-LINSOLVE-PLAN.md`, `pytcad/GUI-IMPROVEMENT-PLAN.md`, and
 `pytcad/3D-VISUALIZATION-PLAN.md` -- see
@@ -263,15 +264,39 @@ M15+ per parity-plan rule 4b once green), M15 impact ionization
 (coupled Jacobian + continuation driver, all gates green -- see
 pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
 ACTIVE / OPEN:
-  M14 surface mobility -- PARTIAL: mobility_cvt() wired for
-    Device2D.models.surface_mobility (G-D/G-E green); G-A (absolute
-    curve vs Takagi/Taur) xfail'd -- 2026-08-28 research confirmed the
-    real Lombardi phonon term is two-part and doping-dependent (this
-    code has a one-term stand-in), but the numeric constants are
-    blocked on the 1988 primary source, which is paywalled with zero
-    open-access copies (verified via Unpaywall); G-B/G-C/driving_force/
-    catalog not started. See pytcad/M14-SURFACE-MOBILITY-PLAN.md's
-    "G-A LITERATURE SEARCH" section.
+  M14 surface mobility -- MOSTLY COMPLETE: mobility_cvt() wired for
+    Device2D.models.surface_mobility (G-D/G-E green); G-B (D_it) and
+    G-C (S_n/S_p surface recombination velocity, a Robin flux-balance
+    BC) are green in BOTH Device1D and, as of 2026-08-31, Device2D --
+    the 2D fix reuses the already-computed box-integration residual
+    instead of deriving per-edge boundary stamps, generalizing to any
+    contact shape with no per-edge logic; one honest limitation found
+    (Newton convergence for a deep-minority-carrier contact under
+    reverse bias can be non-monotonic, traced to an interaction with
+    the M11-S5 density-floor safeguard, not fixed). Only G-A (absolute
+    curve vs Takagi/Taur) remains xfail'd -- 2026-08-28 research
+    confirmed the real Lombardi phonon term is two-part and doping-
+    dependent (this code has a one-term stand-in), but the numeric
+    constants are blocked on the 1988 primary source, which is
+    paywalled with zero open-access copies (verified via Unpaywall);
+    re-searched fresh 2026-08-31 (Darwish-model alternative, DEVSIM/
+    MINIMOS-NT source, academia.edu mirrors) with no new result. See
+    pytcad/M14-SURFACE-MOBILITY-PLAN.md's "G-A LITERATURE SEARCH"
+    sections and "G-C, DEVICE2D, TAKE 2".
+  M17 transient simulation -- COMPLETE (2026-08-30/31), all 3 phases:
+    1D (pytcad/transient.py) and 2D (pytcad/transient2d.py)
+    backward-Euler/theta-scheme solvers, driving Device1D/Device2D
+    through their own residual/Jacobian externally (continuation.py's
+    pattern) -- device.py/device2d.py never touched. Phase 3 wires a
+    transient run into the desktop app end-to-end (new Transient tab,
+    schema v2->v3 bump, new viewport mode), reusing the existing
+    JobRunner subprocess path unchanged. See
+    pytcad/M17-TRANSIENT-PLAN.md for the full gate list and the
+    honestly-recorded gaps (G2 diode-turn-off charge quantification,
+    GateBC waveforms, project persistence of an armed config,
+    per-step field snapshots). NEXT on the spine: M18 (small-signal
+    AC), which depends only on the Device1D transient machinery
+    already shipped here.
   M21 meshing -- phase 1 (1D adaptive h-refinement) shipped; geometry
     foundation decided as gmsh (validated via conformality check, not
     just chosen); phases 2-3 not started. See
@@ -331,14 +356,14 @@ colors) -- see history.md Addendum 22 for the full list. Do not
 assume Phase 3/4 code is correct just because it exists; that
 addendum is the record of what was actually verified, not the
 original (less careful) landing.
-3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-2 SHIPPED -- a
+3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-5 SHIPPED -- a
 hand-built `resistor_3d` example (the first GUI entry point to a
 Device3D, closing the other half of the gap above) and a PyVista/VTK
 viewer window (separate top-level QWidget, NOT embedded in QML) with
-interactive isosurface controls. Phases 3-5 (volumetric rendering,
-animated sweep playback, exploded structural view) not started --
-start only on an explicit "Start on Phase N" instruction against
-that document. Landing this ALSO fixed a real bug from Phase 1: see
-the QApplication/QGuiApplication gotcha above.
+interactive isosurface controls, volumetric rendering (Phase 3),
+animated bias-sweep playback with snapshot capture (Phase 4), and
+exploded multi-layer structural view (Phase 5). Landing this ALSO
+fixed a real bug from Phase 1: see the QApplication/QGuiApplication
+gotcha above.
 Live queue: ARCHITECTURE.md sections 5-7; session detail:
 `history.md`.

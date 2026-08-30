@@ -30,12 +30,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import numpy as np
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QDockWidget, QWidget
 
 from gui import app as gui_app
 from gui.services import examples
 from gui.services.result_store import MeshAxes, NpzResultStore, ScalarField
 from gui.services.solver_runner import run_job
+from gui.services import viewer3d
 from gui.services.viewer3d import build_rectilinear_grid
 
 
@@ -392,3 +394,283 @@ def test_open_viewer3d_reports_an_error_instead_of_crashing_on_construction_fail
 
     assert errors == ["Could not open the 3D viewer"]
     assert ctl._viewer3d_window is None
+
+
+# ----------------------------------------------------------------------
+# Phase 4: sweep playback controls
+# ----------------------------------------------------------------------
+def test_viewer3d_window_playback_dock_exists(gapp, resistor_3d_store, monkeypatch):
+    """The sweep playback dock should be created even when no snapshots
+    are provided (it just stays disabled)."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    # The playback dock should exist and be visible.
+    docks = [w for w in win._window.findChildren(QDockWidget)
+             if w.windowTitle() == "Sweep Playback"]
+    assert len(docks) == 1
+
+
+def test_viewer3d_window_playback_controls_disabled_without_snapshots(gapp,
+                                                                      resistor_3d_store,
+                                                                      monkeypatch):
+    """Without sweep snapshots, all playback controls should be disabled."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    assert win._step_back_btn.isEnabled() is False
+    assert win._play_btn.isEnabled() is False
+    assert win._step_fwd_btn.isEnabled() is False
+    assert win._playback_slider.isEnabled() is False
+
+
+def test_viewer3d_window_set_sweep_snapshots_enables_controls(gapp,
+                                                              resistor_3d_store,
+                                                              monkeypatch):
+    """Setting sweep snapshots should enable all playback controls."""
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    assert win._step_back_btn.isEnabled() is True
+    assert win._play_btn.isEnabled() is True
+    assert win._step_fwd_btn.isEnabled() is True
+    assert win._playback_slider.isEnabled() is True
+    assert win._playback_slider.value() == 0
+
+
+def test_viewer3d_window_step_forward_advances_index(gapp, resistor_3d_store,
+                                                     monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    assert win._playback_idx == 0
+    win._on_step_fwd()
+    assert win._playback_idx == 1
+    assert win._playback_slider.value() == 1
+
+
+def test_viewer3d_window_step_backward_advances_index(gapp, resistor_3d_store,
+                                                       monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    win._playback_idx = 2
+    win._on_step_back()
+    assert win._playback_idx == 1
+    win._on_step_back()
+    assert win._playback_idx == 0
+    # Stepping back at index 0 should stay at 0.
+    win._on_step_back()
+    assert win._playback_idx == 0
+
+
+def test_viewer3d_window_step_forward_at_end_stays_at_end(gapp,
+                                                           resistor_3d_store,
+                                                           monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    win._playback_idx = 2
+    win._on_step_fwd()
+    # Should stay at the last index, not wrap.
+    assert win._playback_idx == 2
+
+
+def test_viewer3d_window_slider_change_updates_index(gapp, resistor_3d_store,
+                                                      monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    win._playback_slider.setValue(2)
+    assert win._playback_idx == 2
+
+
+def test_viewer3d_window_playback_timer_starts_and_stops(gapp,
+                                                          resistor_3d_store,
+                                                          monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    assert win._playback_idx == 0
+    # Manually trigger the timer callback to simulate playback.
+    win._on_play_pause()
+    assert win._playback_playing is True
+    assert win._play_btn.text() == "Pause"
+    win._on_play_pause()
+    assert win._playback_playing is False
+    assert win._play_btn.text() == "Play"
+
+
+def test_viewer3d_window_clear_snapshots_disables_controls(gapp,
+                                                            resistor_3d_store,
+                                                            monkeypatch):
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    assert win._step_back_btn.isEnabled() is True
+    # Clear snapshots.
+    win.set_sweep_snapshots(None)
+    assert win._step_back_btn.isEnabled() is False
+    assert win._play_btn.isEnabled() is False
+    assert win._playback_slider.isEnabled() is False
+
+
+def test_viewer3d_window_release_stops_playback_timer(gapp,
+                                                       resistor_3d_store,
+                                                       monkeypatch):
+    """Releasing the viewer (via close) should stop any running playback
+    timer, preventing callbacks from firing after the window is closed."""
+    from gui.services.result_store import SweepSnapshots
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    snapshots = SweepSnapshots(
+        voltages=np.array([0.0, 0.5, 1.0]),
+        field_names=["potential"],
+        shape=(2, 2, 2),
+        _data={("potential", 0): np.zeros((2, 2, 2)),
+               ("potential", 1): np.ones((2, 2, 2)),
+               ("potential", 2): np.full((2, 2, 2), 2.0)},
+    )
+    win.set_sweep_snapshots(snapshots)
+    win._on_play_pause()
+    assert win._playback_playing is True
+    # Release the viewer.
+    win._release()
+    assert win._closed is True
+    assert win._playback_playing is False
+
+
+# ----------------------------------------------------------------------
+# Phase 5: exploded view
+# ----------------------------------------------------------------------
+def test_viewer3d_window_exploded_toggle_exists(gapp, resistor_3d_store, monkeypatch):
+    """The exploded view checkbox and separation spinbox should be
+    present in the sidebar."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    assert hasattr(win, '_exploded_toggle')
+    assert hasattr(win, '_exploded_sep_spin')
+    assert win._exploded_toggle.text() == "Exploded view"
+    assert win._exploded_sep_spin.value() == 0.5
+
+
+def test_viewer3d_window_exploded_disabled_without_region_data(gapp,
+                                                                resistor_3d_store,
+                                                                monkeypatch):
+    """Without region materials, enabling exploded view should disable
+    itself and show a message."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    # The resistor_3d example has no region_materials, so enabling
+    # exploded view should revert to off.
+    win._exploded_toggle.setCheckState(Qt.Checked)
+    assert win._exploded_view is False
+    assert win._exploded_toggle.isChecked() is False
+    assert win._exploded_sep_spin.isEnabled() is False
+
+
+def test_viewer3d_window_exploded_with_region_data(gapp, monkeypatch):
+    """With region materials, enabling exploded view should build per-region
+    actors."""
+    from gui.services.result_store import MeshAxes, ScalarField
+
+    class _RegionStore:
+        def mesh_axes(self):
+            return MeshAxes(axes={"x": [0.0, 1.0], "y": [0.0, 1.0],
+                                  "z": [0.0, 1.0]}, dimensionality=3)
+        def available_scalars(self):
+            return ["doping"]
+        def scalar_field(self, name):
+            return ScalarField(name="doping", values=np.ones((2, 2, 2)),
+                               unit="cm^-3")
+        def region_materials(self):
+            return [
+                {"material": "SILICON", "box": [0.0, 0.5, 0.0, 1.0, 0.0, 1.0]},
+                {"material": "GaAs", "box": [0.5, 1.0, 0.0, 1.0, 0.0, 1.0]},
+            ]
+
+    monkeypatch.setattr(viewer3d, "QtInteractor", FakeInteractor)
+    win = viewer3d.Viewer3DWindow(_RegionStore())
+    # Enable exploded view.
+    win._exploded_toggle.setCheckState(Qt.Checked)
+    assert win._exploded_view is True
+    assert win._exploded_sep_spin.isEnabled() is True
+    # Should have built region actors.
+    assert len(win._region_actors) > 0
+
+
+def test_viewer3d_window_exploded_cleanup_on_release(gapp, monkeypatch):
+    """Releasing the viewer should clean up exploded view actors."""
+    from gui.services.result_store import MeshAxes, ScalarField
+
+    class _RegionStore:
+        def mesh_axes(self):
+            return MeshAxes(axes={"x": [0.0, 1.0], "y": [0.0, 1.0],
+                                  "z": [0.0, 1.0]}, dimensionality=3)
+        def available_scalars(self):
+            return ["doping"]
+        def scalar_field(self, name):
+            return ScalarField(name="doping", values=np.ones((2, 2, 2)),
+                               unit="cm^-3")
+        def region_materials(self):
+            return [
+                {"material": "SILICON", "box": [0.0, 0.5, 0.0, 1.0, 0.0, 1.0]},
+            ]
+
+    monkeypatch.setattr(viewer3d, "QtInteractor", FakeInteractor)
+    win = viewer3d.Viewer3DWindow(_RegionStore())
+    win._exploded_toggle.setCheckState(Qt.Checked)
+    assert len(win._region_actors) > 0
+    # Release the viewer.
+    win._release()
+    assert win._closed is True
+    assert len(win._region_actors) == 0

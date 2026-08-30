@@ -164,8 +164,13 @@ def test_check_devsim_compatible_rejects_non_default_models():
 
 
 def test_both_backends_stamp_v2_and_backend_id(run_both):
+    from gui.services.solver_backend import SOLVER_RESULT_SCHEMA_VERSION
     for bid, d in run_both.items():
-        assert int(d["result__schema"]) == 2
+        # M17 phase 3: compared against the live constant, not a
+        # hardcoded literal, so a future schema bump doesn't require
+        # editing this test again -- both backends stamp from the same
+        # constant now (devsim_backend.py was updated to import it too).
+        assert int(d["result__schema"]) == SOLVER_RESULT_SCHEMA_VERSION
         assert str(json.loads(str(d["record__meta"]))["backend"]) == bid
 
 
