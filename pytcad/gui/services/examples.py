@@ -169,10 +169,107 @@ def resistor_3d_example_spec():
         bias={"left": 0.0, "right": 0.1})
 
 
+def _top_face_node_indices(i_list, nz):
+    """Every (i, j=0, k) node on the y=0 (top-surface) face for a given
+    set of x-indices, as the flat {"i", "j", "k"} lists ContactSpec.nodes
+    expects. Same rationale as _x_face_node_indices above for staying
+    local to this module rather than reaching into frozen pytcad/*.py."""
+    ii, kk = np.meshgrid(np.asarray(i_list, dtype=int), np.arange(nz),
+                         indexing="ij")
+    ii, kk = ii.ravel().tolist(), kk.ravel().tolist()
+    return {"i": ii, "j": [0] * len(ii), "k": kk}
+
+
+def _bottom_face_node_indices(nx, ny, nz):
+    """Every (i, j=ny-1, k) node on the substrate's bottom face -- the
+    body/bulk contact every real (4-terminal) MOSFET needs, same as
+    pytcad/mosfet.py::build_mosfet's own "body" contact at j=Ny-1."""
+    ii, kk = np.meshgrid(np.arange(nx), np.arange(nz), indexing="ij")
+    ii, kk = ii.ravel().tolist(), kk.ravel().tolist()
+    return {"i": ii, "j": [ny - 1] * len(ii), "k": kk}
+
+
+def mosfet_3d_example_spec():
+    """A realistic 3D n-channel MOSFET: Lg=600 nm gate, Lsd=300 nm
+    source/drain, 200 nm deep substrate, W=1 um channel width,
+    Na=1e17 cm^-3 p-channel, Nsd=1e19 cm^-3 n+ source/drain, 5 nm gate
+    oxide, n+ poly gate -- the same cross-section validated in
+    examples/04_mosfet_idvg.py and tests/test_validation_2d.py, now
+    extruded across a real device width with the gate as a true 3D
+    Robin boundary condition (ContactSpec(kind="gate", normal_axis="y")
+    on the top surface). See examples/06_3d_mosfet.py for the full
+    derivation, mesh-quality discussion (M21 adaptive refinement), and
+    the two independent validation checks (dimensional consistency vs.
+    the 2D solver; threshold voltage and subthreshold swing vs. Sze &
+    Ng / Taur & Ning published formulas) this exact structure passed.
+
+    Fixed (non-adaptive) mesh here, deliberately: this is a UI quick-
+    load example that must construct instantly on the UI thread, like
+    every other EXAMPLES entry -- running the M21 adaptive-refinement
+    driver (multiple full 3D solves) does not belong behind a menu
+    click. The fixed mesh below (NX=18/NY=9/NZ=8 grading parameters,
+    ~15,800 actual nodes) is the same one examples/06_3d_mosfet.py
+    started from before adding adaptive refinement, and it already
+    produces the validated, physically clean Id-Vg curve that example
+    reports -- adaptive refinement improved mesh QUALITY (worst h/L_D
+    96 -> 48), not correctness.
+
+    Loads unbiased (Vg=0, Vds=0); use the Sweeps panel for an Id-Vg
+    transfer curve, same as the 2D MOSFET examples.
+    """
+    from pytcad.mesh import graded_mesh, uniform_mesh
+    from pytcad.mesh2d import Mesh2D
+    from pytcad.mosfet import mosfet_doping
+    from pytcad.moscap import flatband_voltage
+    from pytcad.materials import SILICON
+
+    Lg, Lsd, depth = 6e-5, 3e-5, 2e-5
+    W = 1e-4
+    Na, Nsd_peak = 1e17, 1e19
+    tox_cm = 5e-7
+    sigma_y, sigma_lat = 5e-6, 1e-6
+    NX, NY, NZ = 18, 9, 8
+
+    L = 2 * Lsd + Lg
+    x = graded_mesh(L, [Lsd, Lsd + Lg], h_min=L / (NX * 20), h_max=L / NX, ratio=1.15)
+    y = graded_mesh(depth, [0.0], h_min=depth / (NY * 20), h_max=depth / NY, ratio=1.15)
+    z = uniform_mesh(W, NZ)
+    nz = z.size
+
+    mesh2 = Mesh2D(x, y)
+    dop2d, ntot2d = mosfet_doping(mesh2, Lsd, Lg, Na, Nsd_peak, sigma_y, sigma_lat)
+    doping = np.tile(dop2d, (nz, 1, 1))
+    ntotal = np.tile(ntot2d, (nz, 1, 1))
+
+    i_src = np.where(x <= Lsd)[0].tolist()
+    i_drn = np.where(x >= Lsd + Lg)[0].tolist()
+    i_gate = np.where((x > Lsd) & (x < Lsd + Lg))[0].tolist()
+    Vfb = flatband_voltage(-Na, tox_cm, "n+poly", 0.0, 300.0, SILICON)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                     axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist(),
+                          ntotal=ntotal.tolist()),
+        contacts=[
+            ContactSpec(name="source", kind="ohmic",
+                       nodes=_top_face_node_indices(i_src, nz), V=0.0),
+            ContactSpec(name="drain", kind="ohmic",
+                       nodes=_top_face_node_indices(i_drn, nz), V=0.0),
+            ContactSpec(name="body", kind="ohmic",
+                       nodes=_bottom_face_node_indices(x.size, y.size, nz), V=0.0),
+            ContactSpec(name="gate", kind="gate",
+                       nodes=_top_face_node_indices(i_gate, nz),
+                       V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="y"),
+        ],
+        bias={"source": 0.0, "drain": 0.0, "body": 0.0, "gate": 0.0})
+
+
 EXAMPLES = {"mosfet_2d": mosfet_example_spec,
            "diode_1d": diode_1d_example_spec,
            "resistor_2d": resistor_2d_example_spec,
-           "resistor_3d": resistor_3d_example_spec}
+           "resistor_3d": resistor_3d_example_spec,
+           "mosfet_3d": mosfet_3d_example_spec}
 
 
 from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel

@@ -43,6 +43,8 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("resistor_2d") }
             MenuItem { text: "Load 3D resistor example"
                        onTriggered: appController.loadExample("resistor_3d") }
+            MenuItem { text: "Load 3D MOSFET example"
+                       onTriggered: appController.loadExample("mosfet_3d") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }

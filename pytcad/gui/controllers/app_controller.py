@@ -242,7 +242,8 @@ class AppController(QObject):
         window for the current result. Refuses (loudly, via
         errorRaised) rather than silently no-op'ing for anything that
         isn't a solved 3D result -- same house rule as every other
-        dimensionality guard in this codebase."""
+        dimensionality guard in this codebase. Phase 4: also wires up
+        sweep snapshots for animation playback when available."""
         stats = self.meshStats
         if stats is None or not self.hasResult:
             self.errorRaised.emit("Nothing to view in 3D",
@@ -270,6 +271,14 @@ class AppController(QObject):
         if self._viewer3d_window is not None:
             self._viewer3d_window.close()
         self._viewer3d_window = window
+        # Phase 4: wire up sweep snapshots for animation playback.
+        if self._store.has_sweep_snapshots():
+            try:
+                window.set_sweep_snapshots(self._store.sweep_snapshots())
+            except Exception:
+                # Snapshots exist but are corrupt/incomplete -- leave
+                # playback disabled rather than crashing the viewer.
+                pass
         self._viewer3d_window.show()
 
     def lastRunSpec(self):
@@ -1724,6 +1733,14 @@ class AppController(QObject):
         self._set_status("Solve complete")
         self.resultChanged.emit()
         self.selectNode(self._selected)
+        # Phase 4: if sweep snapshots are available, update any open
+        # 3D viewer so playback controls become active.
+        if self._viewer3d_window is not None and self._store.has_sweep_snapshots():
+            try:
+                self._viewer3d_window.set_sweep_snapshots(
+                    self._store.sweep_snapshots())
+            except Exception:
+                pass
 
     def _on_failed(self, summary, details):
         self._set_busy(False)

@@ -12,7 +12,7 @@ import sys
 # however the app is launched -- matching what tests/ and examples/ do.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PySide6.QtCore import QCoreApplication, QEvent, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QUrl
 from PySide6.QtGui import QWindow
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PySide6.QtWidgets import QApplication
@@ -83,6 +83,27 @@ def close_engine(engine):
 
 
 def main():
+    # VTK's OpenGL2 backend on Linux always renders through an X11
+    # window (vtkXOpenGLRenderWindow) -- it has no native Wayland path.
+    # Under a Wayland session, Qt's default "wayland" platform plugin
+    # hands VTK an XWayland-proxied window whose XID handling it gets
+    # wrong: confirmed directly, reproducible even with a bare
+    # QMainWindow + pyvistaqt.QtInteractor and no PyTCAD code involved
+    # -- "vtkXOpenGLRenderWindow: The result is out of range, failed to
+    # get the converted tmp", then an X11 BadWindow/GLX BadAccess and a
+    # hard process segfault the instant the 3D viewer is opened. Forcing
+    # Qt's "xcb" platform plugin (real X11/XWayland-compat windowing
+    # throughout, not Wayland-native) fixes it -- confirmed directly,
+    # same repro now opens and renders cleanly. Only defaults it (never
+    # overrides an explicit QT_QPA_PLATFORM, e.g. the test suite's
+    # "offscreen"), and only when XWayland compatibility is actually
+    # available (DISPLAY set) -- a Wayland-only host with no DISPLAY
+    # would have nothing for "xcb" to attach to.
+    if (os.environ.get("QT_QPA_PLATFORM") is None
+            and os.environ.get("XDG_SESSION_TYPE") == "wayland"
+            and os.environ.get("DISPLAY")):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     # QApplication, not QGuiApplication: the 3D viewer
     # (gui/services/viewer3d.py, 3D-VISUALIZATION-PLAN.md) opens a
     # QtWidgets window (QMainWindow/pyvistaqt.QtInteractor) as a
@@ -92,6 +113,13 @@ def main():
     # directly). QApplication is a strict superset of QGuiApplication
     # (same QML/QQmlApplicationEngine compatibility, confirmed directly),
     # so this has no effect on the existing QML-only app.
+    #
+    # AA_ShareOpenGLContexts must be set before the QApplication is
+    # constructed so Qt Quick's own scene-graph GL context (Main.qml's
+    # QQuickWindow) and pyvistaqt.QtInteractor's separate QOpenGLWidget
+    # context (opened later, on demand, by the 3D viewer) can share a
+    # context group.
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
     app.setApplicationName("PyTCAD")
     engine, controller = create_engine(app)

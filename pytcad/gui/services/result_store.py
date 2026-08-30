@@ -105,6 +105,53 @@ class SweepResult:
         return int(self.converged.sum())
 
 
+@dataclass(frozen=True)
+class SweepSnapshots:
+    """Sweep field snapshots for animated 3D playback.
+
+    Stores a snapshot of every scalar field at each converged sweep
+    point. The viewer reconstructs 3D arrays from the flattened
+    snapshots using the mesh shape from the ResultStore.
+
+    voltages: [V] per converged point (only converged points have
+        snapshots).
+    field_names: sorted list of scalar field names that have snapshots.
+    shape: the mesh shape (Nz, Ny, Nx) for reshaping flattened arrays.
+    _data: flat mapping (field_name, index) -> flattened ndarray.
+    """
+    voltages: np.ndarray
+    field_names: list
+    shape: tuple
+    _data: dict   # {(name, idx): flattened_arr}
+
+    def n_snapshots(self):
+        """Number of converged sweep points with snapshots."""
+        return self.voltages.size
+
+    def field(self, field_name, idx):
+        """Return the 3D field array at snapshot index `idx`.
+
+        Raises KeyError if `field_name` is not one of the snapshot
+        field names or if `idx` is out of range.
+        """
+        if field_name not in self.field_names:
+            raise KeyError(
+                f"no snapshot for field '{field_name}' "
+                f"(available: {self.field_names})")
+        if idx < 0 or idx >= self.n_snapshots():
+            raise IndexError(
+                f"snapshot index {idx} out of range [0, {self.n_snapshots()})")
+        flat = self._data[(field_name, idx)]
+        return flat.reshape(self.shape)
+
+    def voltage(self, idx):
+        """Return the voltage at snapshot index `idx`."""
+        if idx < 0 or idx >= self.n_snapshots():
+            raise IndexError(
+                f"snapshot index {idx} out of range [0, {self.n_snapshots()})")
+        return float(self.voltages[idx])
+
+
 class ResultStore(ABC):
     """The store contract.  Controllers and the visualization layer must
     ask STORES these questions -- never type-check concrete classes --
@@ -240,6 +287,58 @@ class NpzResultStore(ResultStore):
             converged=converged,
             channels=channels,
             unit=str(self._d["unit__sweep_current"]),
+        )
+
+    # -- sweep snapshots (Phase 4) --------------------------------------
+    def has_sweep_snapshots(self):
+        """True when the npz contains sweep snapshot voltages.
+
+        Field data may be absent -- `sweep_snapshots()` will raise
+        KeyError in that case.
+        """
+        return "sweep__snapshot__voltages" in self._d
+
+    def sweep_snapshots(self):
+        """Return SweepSnapshots for animation playback.
+
+        Raises KeyError if voltages are present but no field data exists.
+        """
+        if not self.has_sweep_snapshots():
+            raise KeyError("no sweep snapshots in this store")
+        voltages_data = self._d["sweep__snapshot__voltages"]
+        voltages = np.asarray(json.loads(str(voltages_data)))
+        mesh_shape_data = self._d["mesh__shape"]
+        # Handle both JSON string and numpy array storage
+        mesh_shape_str = str(mesh_shape_data)
+        if mesh_shape_str.startswith("[") and "," not in mesh_shape_str:
+            # numpy array string representation like "[4 5]"
+            mesh_shape = tuple(int(x) for x in mesh_shape_str.strip("[]").split())
+        else:
+            mesh_shape = tuple(json.loads(mesh_shape_str))
+        prefix = "sweep__snapshot__field__"
+        field_names = sorted(set(
+            k[len(prefix):].rsplit("__", 1)[0]
+            for k in self._d.files
+            if k.startswith(prefix)
+        ))
+        if not field_names:
+            raise KeyError("no field data for sweep snapshots")
+        _data = {}
+        for fname in field_names:
+            # Find all indices for this field
+            indices = sorted(set(
+                int(k.rsplit("__", 1)[1])
+                for k in self._d.files
+                if k.startswith(f"{prefix}{fname}__")
+            ))
+            for idx in indices:
+                key = f"{prefix}{fname}__{idx}"
+                _data[(fname, idx)] = np.asarray(self._d[key]).reshape(mesh_shape)
+        return SweepSnapshots(
+            voltages=voltages,
+            field_names=field_names,
+            shape=mesh_shape,
+            _data=_data,
         )
 
 

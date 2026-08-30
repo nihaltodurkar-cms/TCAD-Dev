@@ -1612,3 +1612,44 @@ catch). Zero new regressions.
 - `pytcad/GUI-IMPROVEMENT-PLAN.md`, `pytcad/gui/README.md`,
   `pytcad/3D-VISUALIZATION-PLAN.md`, `ARCHITECTURE.md`: status/records
   updated to match all of the above
+
+## STATE ADDENDUM -- 3D VISUALIZATION PHASE 5 COMPLETE (2026-08-30)
+Exploded multi-layer structural view **COMPLETE**.
+
+### What was implemented:
+- `pytcad/gui/services/solver_runner.py`: `run_sweep()` now stores
+  `region_materials` (JSON-serialized list of `{"material": str,
+  "box": [x0, x1, y0, y1, z0, z1]}` dicts) in the npz output when the
+  spec has them.
+- `pytcad/gui/services/result_store.py`: `ResultStore.region_materials()`
+  abstract method (returns None by default); `NpzResultStore` reads the
+  JSON string from the npz; `SpecResultStore` proxies to the spec's
+  `region_materials` if present.
+- `pytcad/gui/services/viewer3d.py`: sidebar "Exploded view" checkbox +
+  separation distance spinbox; `_build_exploded_view()` removes the
+  monolithic device surface, extracts per-region sub-grids from bounding
+  boxes, applies Z-axis offsets (`idx * separation`), and renders each
+  as a semi-transparent colored surface; `_remove_exploded_view()`
+  restores the monolithic surface; `_remove_monolithic_surface()` finds
+  and removes the lightsteelblue surface actor from the plotter;
+  `_extract_region_grid()` creates a new `RectilinearGrid` from the
+  region's bounding box; `_release()` cleans up exploded actors.
+- `pytcad/gui/tests/test_viewer3d.py`: tests for checkbox existence,
+  disabled behavior without region data, enabled behavior with region
+  data, and cleanup on release.
+
+### Notes:
+- Uniform silicon devices (no `region_materials`) get a no-op message
+  when the user enables exploded view -- the toggle reverts to off.
+- Heterostructure devices (e.g. Si/GaAs) get per-region semi-transparent
+  colored surfaces, each offset along the Z axis by the separation
+  distance times the region index.
+- The exploded view is independent of simulation results -- it works on
+  the structural geometry alone, making it useful even before solving.
+
+### Files changed (this addendum):
+- `pytcad/gui/services/solver_runner.py`: `region_materials` npz storage
+- `pytcad/gui/services/result_store.py`: `region_materials()` accessor
+- `pytcad/gui/services/viewer3d.py`: exploded view UI + region extraction
+- `pytcad/gui/tests/test_viewer3d.py`: exploded view tests
+- `pytcad/3D-VISUALIZATION-PLAN.md`: Phase 5 status + implementation record

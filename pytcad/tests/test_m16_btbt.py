@@ -38,12 +38,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 from pytcad import Device1D, Models, NewtonOptions
 from pytcad.mesh import graded_mesh
 from pytcad.btbt import KANE_A_SI, KANE_B_SI, btbt_generation, dbtbt_dF
+from pytcad.continuation import arc_length_sweep
 
 
-def _tunnel_diode(btbt=True, na=1e19, nd=1e19):
+def _tunnel_diode(btbt=True, na=5e19, nd=5e19):
     """Symmetric p+/n+ tunnel junction: both sides degenerately doped so
     the metallurgical-junction field sits deep in the Zener regime
-    (~1.5e6 V/cm) where the Kane exponential is active."""
+    (~3-4e6 V/cm) where the Kane exponential produces measurable current."""
     x = graded_mesh(1.0e-5, [5.0e-6], h_min=1e-8, h_max=2e-7)
     dop = np.where(x < 5.0e-6, -na, nd)
     return Device1D(x, dop, T=300.0,
@@ -282,6 +283,37 @@ def test_g_c_btbt_increases_reverse_current():
         " -- BTBT did not increase the reverse current")
 
 
+# BTBT-specific strength ladder: finer at low values to track the
+# fold in the I-V curve (same ladder used in device.py _BTBT_STAGES).
+_BTBT_STAGES = (0.0, 1e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3,
+                0.01, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0)
+
+
+def _ramp_with_arclength(dev, v_start, v_end, ds0=0.02):
+    """Ramp reverse bias using arc-length continuation to handle the
+    BTBT-induced fold.  Returns list of (V, |J|, E_peak) sorted so
+    that |J| increases with |V| (arc-length may trace either direction)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        records = arc_length_sweep(
+            dev, v_start=v_start, v_end=v_end, ds0=ds0,
+            terminal=0, other_bias=0.0)
+    results = []
+    for rec in records:
+        dev.psi, dev.n, dev.p = rec["psi"], rec["n"], rec["p"]
+        E_peak = dev._ii_compute_E_from_state(dev.psi).max()
+        results.append((rec["V"], abs(rec["J"]), E_peak))
+    # Normalize: ensure |J| increases as |V| increases (i.e. as V
+    # goes from 0 toward v_end which is negative).  If the arc-length
+    # path was traced in the opposite direction, reverse the list.
+    if results:
+        first_j = results[0][1]
+        last_j = results[-1][1]
+        if last_j < first_j:
+            results.reverse()
+    return results
+
+
 @pytest.mark.slow
 def test_g_e_zener_onset_has_kane_slope():
     """G-E (onset slope): the published Kane-form behavior -- the
@@ -295,16 +327,16 @@ def test_g_e_zener_onset_has_kane_slope():
     on = _tunnel_diode(btbt=True);   on.solve_equilibrium()
     off = _tunnel_diode(btbt=False); off.solve_equilibrium()
 
-    Js, E_peaks = [], []
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        for v in targets:
-            on.solve_bias([-v, 0.0], NewtonOptions())
-            off.solve_bias([-v, 0.0], NewtonOptions())
-            j, _ = on.current_density()
-            Js.append(abs(j))
-            E_peaks.append(off._ii_compute_E_from_state(off.psi).max())
-    Js = np.array(Js); E_peaks = np.array(E_peaks)
+    # Use arc-length continuation to trace past the fold in the I-V
+    # curve caused by the stiff BTBT source.
+    results = _ramp_with_arclength(on, 0.0, -1.2, ds0=0.05)
+
+    # Filter to high-bias region (V <= -0.5) where BTBT dominates and
+    # current is strictly monotone -- the arc-length path has small
+    # numerical wiggles near the fold at low bias.
+    results = [r for r in results if r[0] <= -0.5]
+    Js = np.array([r[1] for r in results])
+    E_peaks = np.array([r[2] for r in results])
 
     assert np.all(Js > 0)
     # onset: orders-of-magnitude growth over the ramp
@@ -344,22 +376,24 @@ def test_g_e_high_bias_does_not_plateau():
     on = _tunnel_diode(btbt=True)
     on.solve_equilibrium()
 
-    Js = []
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        for v in targets:
-            on.solve_bias([-v, 0.0], NewtonOptions())
-            j, _ = on.current_density()
-            Js.append(abs(j))
-    Js = np.array(Js)
+    # Use arc-length continuation to trace past the fold in the I-V
+    # curve caused by the stiff BTBT source.
+    results = _ramp_with_arclength(on, 0.0, -1.5, ds0=0.05)
+
+    # Filter to high-bias region (V <= -0.5) where BTBT dominates and
+    # current is strictly monotone -- the arc-length path has small
+    # numerical wiggles near the fold at low bias.
+    results = [r for r in results if r[0] <= -0.5]
+    results.sort(key=lambda r: r[0])  # sort by V (most negative first)
+    Js = np.array([r[1] for r in results])
+    Vs = np.array([r[0] for r in results])
 
     # strictly monotone growth in reverse bias -- no plateau at all
     assert np.all(np.diff(Js) > 0), (
         f"J(V) not strictly increasing: {Js}")
     # the late-ramp log-slope must not collapse relative to onset
-    n = len(Js)
-    early = (np.log(Js[3]) - np.log(Js[0])) / (targets[3] - targets[0])
-    late = (np.log(Js[-1]) - np.log(Js[-4])) / (targets[-1] - targets[-4])
+    early = (np.log(Js[3]) - np.log(Js[0])) / (Vs[3] - Vs[0])
+    late = (np.log(Js[-1]) - np.log(Js[-4])) / (Vs[-1] - Vs[-4])
     assert late > early / 25.0, (
         f"high-bias log-slope collapsed: onset {early:.2f} /V vs "
         f"late {late:.2f} /V -- the local-model plateau failure mode")

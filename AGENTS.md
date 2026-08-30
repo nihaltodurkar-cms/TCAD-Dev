@@ -331,14 +331,14 @@ colors) -- see history.md Addendum 22 for the full list. Do not
 assume Phase 3/4 code is correct just because it exists; that
 addendum is the record of what was actually verified, not the
 original (less careful) landing.
-3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-2 SHIPPED -- a
+3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-5 SHIPPED -- a
 hand-built `resistor_3d` example (the first GUI entry point to a
 Device3D, closing the other half of the gap above) and a PyVista/VTK
 viewer window (separate top-level QWidget, NOT embedded in QML) with
-interactive isosurface controls. Phases 3-5 (volumetric rendering,
-animated sweep playback, exploded structural view) not started --
-start only on an explicit "Start on Phase N" instruction against
-that document. Landing this ALSO fixed a real bug from Phase 1: see
-the QApplication/QGuiApplication gotcha above.
+interactive isosurface controls, volumetric rendering (Phase 3),
+animated bias-sweep playback with snapshot capture (Phase 4), and
+exploded multi-layer structural view (Phase 5). Landing this ALSO
+fixed a real bug from Phase 1: see the QApplication/QGuiApplication
+gotcha above.
 Live queue: ARCHITECTURE.md sections 5-7; session detail:
 `history.md`.
