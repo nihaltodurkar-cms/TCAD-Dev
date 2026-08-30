@@ -338,9 +338,10 @@ pipeline unchanged, plot current vs. time) backed by a schema-v3
 result file.
 Still not a complete TCAD workbench: no GUI-level 3D device
 CONSTRUCTION (only that one fixed example feeds the 3D viewer; there is
-no Structure/Process-workbench equivalent for 3D), and 3D visualization
-itself covers isosurfaces only so far -- no volumetric rendering,
-animated sweep playback, or exploded structural view yet; the DEVSIM
+no Structure/Process-workbench equivalent for 3D) -- 3D visualization
+ITSELF is no longer limited to isosurfaces: volumetric rendering,
+animated bias-sweep playback, and an exploded multi-layer structural
+view all shipped in 3D-VISUALIZATION-PLAN.md phases 3-5; the DEVSIM
 backend solves 1D two-terminal
 silicon devices only (a devsim
 `edge_volume_model` unit anomaly is documented in `benchmarks/`); impact

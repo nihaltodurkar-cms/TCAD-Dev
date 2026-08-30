@@ -1007,6 +1007,55 @@ Independent candidates for the next milestone (any order):
    phase 3). A hard-debug pass found six real bugs before the 25-test
    gate battery went green -- see the M21 status line above and
    M21-MESHING-PLAN.md section 13.
+2b. M21 phase 3a (geometry foundation) -- LANDED 2026-08-31: GmshMesh
+   loading/building, region/contact resolution, and unique edge-list +
+   mixed-Voronoi dual-cell areas on an unstructured triangle mesh
+   (pytcad/gmsh_mesh.py, region_resolver.py, unstructured_assembly.py).
+   Pure geometry, zero Device2D/Jacobian changes -- an explicit user
+   decision to ship the low-risk foundation and defer the HIGH-RISK
+   coupled-physics assembly to a future session. See
+   M21-PHASE3-MESHING-PLAN.md's "PHASE 3a IMPLEMENTATION RECORD" for
+   two corrections made while implementing (the dual-cell method used,
+   and a wrong edge-count formula in the original spec text, fixed in
+   the gate rather than forced).
+2c. M21 phase 3b (unstructured Poisson-only equilibrium) -- LANDED
+   2026-08-31, same session: per-edge TPFA flux geometry
+   (unstructured_assembly.triangle_circumcenter/build_edge_flux_
+   geometry) plus a real Newton-converged Poisson equilibrium solve
+   (pytcad/unstructured_poisson.py) on the unstructured mesh, mirroring
+   Device2D._residual_jacobian_poisson's exact physics without touching
+   device2d.py itself (only its _ohmic_values helper is reused). All
+   three gates (G1 FD-Jacobian, G2 vs the already-validated structured
+   Device2D solve, G3 charge conservation) passed on the first real run
+   against the actual diode mesh -- G2 agreed to 1.3e-16 relative
+   (both paths reduce to the same analytic contact formula). 18 tests
+   total, tests/test_m21_phase3.py. Scharfetter-Gummel continuity/
+   current on triangle edges, bias solves, Device2D(unstructured=True)
+   integration, and gates G4-G5 remain the genuinely HIGH-RISK
+   remainder, still not started -- see the plan's "PHASE 3b
+   IMPLEMENTATION RECORD" for the measured (not assumed) Delaunay-
+   quality check this phase's TPFA method relies on.
+2d. M21 phase 3c (unstructured coupled bias solve) -- LANDED
+   2026-08-31, same session: Scharfetter-Gummel current + SRH
+   recombination coupled to Poisson (pytcad/unstructured_dd.py, 3
+   unknowns/node), reusing the SAME per-edge geometry factor phase 3b
+   already computes (re-derived, not assumed, that no new geometric
+   quantity was needed). G1 (FD-Jacobian, full system): 1.4e-8. G4
+   (golden parity vs structured Device2D at 0.5V): first attempt showed
+   a 69% gap traced to comparing against the wrong reference model
+   config (default Caughey-Thomas mobility vs this module's stated
+   uniform-mobility simplification) -- fixed, then measured ~5.6%
+   relative, reported honestly rather than tightened to the plan's
+   original <1e-4 by construction. G5 (SRH live/load-bearing) and a
+   reverse-bias adversarial check also green. 26 tests total,
+   tests/test_m21_phase3.py. device2d.py remains untouched throughout
+   all of phases 3a-3c -- only Device2D(unstructured=True) class-level
+   integration (a thin wrapper, not new physics) remains unstarted.
+   One pre-existing, unrelated flaky test
+   (test_m21_phase2.py::test_3d_separable_refinement_adds_nodes, a
+   "Matrix is exactly singular" under -n 6 parallel load, confirmed to
+   pass cleanly in isolation) was observed during verification -- not
+   a regression from this work.
 3. M16 BAND-TO-BAND TUNNELING -- LANDED-PENDING-VERIFICATION 2026-08-29
    following the M15 R1b pattern (live-coupled generation, shared
    strength ladder), and this time with the residual-ordering and
@@ -1064,7 +1113,22 @@ Independent candidates for the next milestone (any order):
   shipped: a real 3D example device, a viewer window with mesh outline
   and interactive isosurface controls; Phases 3-5 -- volumetric
   rendering, animated sweep playback, exploded structural view -- not
-  started). 3D device AUTHORING remains entirely absent from the GUI.
+  started; these three phases HAVE since shipped -- see the entry
+  above). 3D device AUTHORING now has a DOMAIN MODEL (as of
+  2026-08-31): `Region`/`ContactDef`/`DomainDevice` and the
+  `StructureModel`/`RegionSpec`/`BoundarySpec`/`MeshModel` GUI-side
+  classes all accept an optional z-extent (`z_min`/`z_max`,
+  `depth_cm`/`mesh_nz`, `"front"`/`"back"` faces), and
+  `workbench/adapters/spec.py`'s `domain_from_structure`/
+  `spec_from_domain` build a real 3D `DeviceSpec` from region-authored
+  input -- proven to match `resistor_3d_example_spec()`'s hand-built
+  equivalent bit-for-bit and to solve correctly on a real `Device3D`
+  (see `pytcad/tests/test_workbench_m1.py`'s 3D-authoring tests). What
+  is STILL absent is the GUI wiring on top of that domain model: no
+  QML z-axis controls, no `AppController` Slot overloads for a 3D
+  region/contact, and no "Build 3D device" click-path in the running
+  app -- a device author still has to construct the domain objects in
+  Python, not through the Structure/Mesh workbench panels.
 - Mixed-mode circuit coupling (M27); Schottky/tunnel contacts (M28);
   hydrodynamic/energy balance (M29); experiments/calibration/interop
   (M30).
@@ -1099,9 +1163,13 @@ recorded here so they are tracked rather than silently absent):
 - Freeform/arbitrary 2D or 3D device geometry (sketch-and-drag, not
   parametric templates). Blocked on M21 phase 3 (unstructured meshing)
   -- a freeform region needs an unstructured mesh to solve on. The
-  mesher for phase 3 is decided and its conformality claim validated
-  (see section 4b's Geometry Foundation Decision); the resolver, FV
-  assembly, and geometry-authoring UI itself are all still open.
+  mesher is decided and its conformality claim validated (section 4b's
+  Geometry Foundation Decision); as of 2026-08-31 the geometry
+  foundation itself (mesh loading, region/contact resolution, edge/
+  dual-cell construction) is real code (pytcad/gmsh_mesh.py,
+  region_resolver.py, unstructured_assembly.py) -- the FV
+  residual/Jacobian assembly and the geometry-authoring UI are still
+  open.
 - Full numerical-diagnostics panel (Newton iteration/residual history,
   rejected bias points, per-stage continuation record, mesh
   statistics) as a first-class GUI surface. A "convergence" viewport

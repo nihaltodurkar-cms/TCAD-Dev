@@ -143,11 +143,14 @@ def resistor_3d_example_spec():
     path to a Device3D.
 
     Built directly against MeshSpec/ContactSpec rather than through
-    workbench.adapters.spec.spec_from_domain(): that adapter's AUTHORED
-    (Region/ContactDef) path only builds 2D StructureModels today (see
-    structure_from_domain(), hardcoded dimensionality=2) -- there is no
-    DomainDevice->DeviceSpec path for 3D yet, so contact-face node
-    indices are resolved here by hand instead of reusing that machinery.
+    workbench.adapters.spec.spec_from_domain(): this predates the 3D
+    device-authoring domain model (workbench/core/region.py's
+    z_min/z_max, workbench/core/device.py's front/back faces) added in
+    3D device authoring phase 1. That path now exists and produces a
+    bit-identical DeviceSpec for this exact geometry (see
+    tests/test_workbench_m1.py's 3D-authoring golden-parity test) --
+    this function is kept as the GUI's own hand-built demo/foundation
+    example, not because the adapter path is missing.
 
     Small mesh (12x8x8 = 768 nodes) so it solves in well under a second
     -- a demo, not a stress test.

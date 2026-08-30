@@ -23,10 +23,27 @@ class Region:
     y_max: float = 0.0
     doping_cm3: float = 0.0     # signed net doping: + donors / - acceptors
     material: str = "SILICON"   # MaterialLibrary key
+    # 3D device authoring, phase 1: None (default) = a 2D region,
+    # UNCHANGED behavior for every existing caller. Both must be set
+    # together to make this a genuine 3D region -- a half-specified z
+    # extent is refused in validate() rather than silently treated as
+    # 2D or defaulted.
+    z_min: float = None
+    z_max: float = None
+
+    def is_3d(self):
+        return self.z_min is not None and self.z_max is not None
 
     def validate(self):
-        for axis, lo, hi in (("x", self.x_min, self.x_max),
-                             ("y", self.y_min, self.y_max)):
+        axes = [("x", self.x_min, self.x_max), ("y", self.y_min, self.y_max)]
+        if self.z_min is not None or self.z_max is not None:
+            if self.z_min is None or self.z_max is None:
+                raise ValueError(
+                    f"region '{self.id}': z_min and z_max must both be set "
+                    "or both left None -- a half-specified z extent is "
+                    "ambiguous (2D or 3D?), not defaulted")
+            axes.append(("z", self.z_min, self.z_max))
+        for axis, lo, hi in axes:
             if not (math.isfinite(lo) and math.isfinite(hi)):
                 raise ValueError(
                     f"region '{self.id}': {axis} bounds must be finite")

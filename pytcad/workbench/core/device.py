@@ -28,8 +28,10 @@ from .region import Region
 
 @dataclass
 class Boundary:
-    """A device edge or edge segment: "left"|"right"|"top"|"bottom",
-    optionally restricted to [range_lo, range_hi] along that edge [cm]."""
+    """A device edge or edge segment: "left"|"right"|"top"|"bottom"
+    (2D), plus "front"|"back" (the z-normal faces, 3D device authoring
+    phase 1), optionally restricted to [range_lo, range_hi] along that
+    edge [cm]."""
     edge: str
     range_lo: float = None
     range_hi: float = None
@@ -51,7 +53,7 @@ class ContactDef:
     vfb_mode: str = "computed"         # "computed" | "manual"
     vfb_manual: float = None           # flatband voltage when mode=="manual"
 
-    _EDGES = ("left", "right", "top", "bottom")
+    _EDGES = ("left", "right", "top", "bottom", "front", "back")
 
     def validate(self):
         if self.kind not in ("ohmic", "gate"):
@@ -96,6 +98,11 @@ class DomainDevice:
     mesh_grading: str = "uniform"      # "uniform" | "graded"
     mesh_grading_params: dict = field(default_factory=dict)
     regions: list = field(default_factory=list)
+    # 3D device authoring, phase 1: None (default) = a 2D authored
+    # device, unchanged. Both depth_cm and mesh_nz must be set together
+    # to make this a genuine 3D authored device.
+    depth_cm: float = None
+    mesh_nz: int = None
 
     # -- imported geometry (v0.1 spec shape) ----------------------------
     axes: dict = None                  # {"x": [...cm], ...}
@@ -126,10 +133,27 @@ class DomainDevice:
             c.validate()
 
         if self.axes is None:
-            # AUTHORED shape: regions over an extent with a mesh hint
-            if self.dimensionality != 2:
+            # AUTHORED shape: regions over an extent with a mesh hint.
+            # 3D device authoring phase 1: dimensionality==3 is legal
+            # when depth_cm/mesh_nz are both set AND every region is
+            # itself 3D (has both z bounds) -- mixed 2D/3D regions in
+            # one device stay rejected, an honest simplification stated
+            # here rather than silently allowed.
+            if self.dimensionality not in (2, 3):
                 raise ValueError(
-                    "region-authored devices are 2D in this milestone")
+                    "region-authored devices are 2D or 3D in this "
+                    "milestone")
+            is_3d = self.dimensionality == 3
+            if is_3d:
+                if not (self.depth_cm and self.depth_cm > 0 and
+                        isinstance(self.mesh_nz, int) and self.mesh_nz >= 2):
+                    raise ValueError(
+                        "a 3D authored device needs positive depth_cm and "
+                        "integer mesh_nz >= 2")
+            elif self.depth_cm is not None or self.mesh_nz is not None:
+                raise ValueError(
+                    "depth_cm/mesh_nz are 3D-only -- a 2D authored "
+                    "device (dimensionality=2) must leave both None")
             if not (self.width_cm and self.width_cm > 0 and
                     self.height_cm and self.height_cm > 0):
                 raise ValueError("region path needs positive width_cm/"
@@ -142,6 +166,16 @@ class DomainDevice:
                 raise ValueError("region path needs at least one region")
             for r in self.regions:
                 r.validate()
+                if is_3d and not r.is_3d():
+                    raise ValueError(
+                        f"region '{r.id}': a 3D authored device needs "
+                        "every region to have z_min/z_max set -- mixed "
+                        "2D/3D regions in one device are not supported")
+                if not is_3d and r.is_3d():
+                    raise ValueError(
+                        f"region '{r.id}': has a z extent but the device "
+                        "is dimensionality=2 -- mixed 2D/3D regions in "
+                        "one device are not supported")
                 # Fail loudly rather than silently solving the wrong
                 # material.  M11-S5: lookup is CASE-INSENSITIVE (the
                 # MaterialLibrary contract -- legacy labels like the

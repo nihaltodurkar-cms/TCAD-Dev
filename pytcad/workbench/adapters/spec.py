@@ -113,6 +113,7 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
             x_min=r.x_min, x_max=r.x_max, y_min=r.y_min, y_max=r.y_max,
             doping_cm3=r.net_doping_cm3,
             material=r.material,
+            z_min=r.z_min, z_max=r.z_max,
         )
         for r in structure.regions
     ]
@@ -130,19 +131,22 @@ def domain_from_structure(structure: StructureModel, mesh_model: MeshModel,
     ]
     domain = DomainDevice(
         id=id, name=name,
-        dimensionality=2,
+        dimensionality=(3 if structure.depth_cm is not None else 2),
         T=300.0,
         material=structure.material,
         width_cm=structure.width_cm, height_cm=structure.height_cm,
         mesh_nx=mesh_model.nx, mesh_ny=mesh_model.ny,
         mesh_grading=mesh_model.grading,
         # every grading parameter carried verbatim so MeshModel equality
-        # survives the round trip (ratio has a default; pass it anyway)
+        # survives the round trip (ratio has a default; pass it anyway).
+        # z_focus is a 3D-only MeshModel field (None for a 2D mesh,
+        # harmless to always include).
         mesh_grading_params={
             "x_focus": mesh_model.x_focus, "y_focus": mesh_model.y_focus,
             "h_min": mesh_model.h_min, "h_max": mesh_model.h_max,
-            "ratio": mesh_model.ratio},
+            "ratio": mesh_model.ratio, "z_focus": mesh_model.z_focus},
         regions=regions, contacts=contacts,
+        depth_cm=structure.depth_cm, mesh_nz=mesh_model.nz,
     )
     domain.validate()          # unknown materials/config fail at import
     return domain
@@ -158,7 +162,8 @@ def structure_from_domain(dev: DomainDevice):
                    x_min=r.x_min, x_max=r.x_max,
                    y_min=r.y_min, y_max=r.y_max,
                    net_doping_cm3=r.doping_cm3,
-                   material=r.material)
+                   material=r.material,
+                   z_min=r.z_min, z_max=r.z_max)
         for r in dev.regions
     ]
     contacts = [
@@ -176,9 +181,10 @@ def structure_from_domain(dev: DomainDevice):
     structure = StructureModel(
         width_cm=dev.width_cm, height_cm=dev.height_cm,
         material=dev.material,
-        regions=regions, contacts=contacts, gates=gates)
+        regions=regions, contacts=contacts, gates=gates,
+        depth_cm=dev.depth_cm)
     mesh_model = MeshModel(nx=dev.mesh_nx, ny=dev.mesh_ny,
-                           grading=dev.mesh_grading,
+                           grading=dev.mesh_grading, nz=dev.mesh_nz,
                            **dev.mesh_grading_params)
     return structure, mesh_model
 

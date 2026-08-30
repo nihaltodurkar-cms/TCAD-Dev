@@ -337,3 +337,128 @@ def test_imported_path_requires_complete_axes():
                      doping=DopingSpec(kind="array", values=[[0., 0.]]))
     with pytest.raises(ValueError, match="axes"):
         spec_adapter.domain_from_device_spec(bad)
+
+
+# ----------------------------------------------------------------------
+#  3D device authoring, phase 1: bit-identity + new 3D round-trip +
+#  golden parity against the hand-built resistor_3d_example_spec()
+# ----------------------------------------------------------------------
+def test_2d_authoring_paths_are_bit_identical_after_3d_fields_added():
+    """z_min/z_max (Region), depth_cm/mesh_nz (DomainDevice) are additive
+    fields defaulting to None -- every existing 2D fixture must produce
+    byte-for-byte identical output through the whole adapter stack."""
+    structure, mesh_model = STRUCTURE_EXAMPLES["mosfet_2d_structure"]()
+    assert structure.depth_cm is None and mesh_model.nz is None
+    for r in structure.regions:
+        assert r.z_min is None and r.z_max is None
+
+    direct = structure.to_device_spec(mesh_model)
+    domain = spec_adapter.domain_from_structure(structure, mesh_model)
+    assert domain.dimensionality == 2
+    assert domain.depth_cm is None and domain.mesh_nz is None
+    via_domain = spec_adapter.spec_from_domain(domain)
+    assert via_domain == direct
+
+    structure2, mesh_model2 = spec_adapter.structure_from_domain(domain)
+    assert structure2 == structure and mesh_model2 == mesh_model
+
+    original = EXAMPLES["mosfet_2d"]()
+    domain2 = spec_adapter.domain_from_device_spec(original)
+    assert spec_adapter.spec_from_domain(domain2) == original
+
+
+def _resistor_3d_structure_and_mesh():
+    """A StructureModel/MeshModel pair describing the exact same box
+    resistor as gui.services.examples.resistor_3d_example_spec():
+    4e-4 x 1e-4 x 1e-4 cm, uniform 1e17 doping, ohmic contacts on the
+    two x-faces at V=0.0/0.1, mesh 12x8x8."""
+    from gui.services.structure_model import (
+        BoundarySpec, ContactModel, RegionSpec,
+    )
+    width_cm, height_cm, depth_cm = 4e-4, 1e-4, 1e-4
+    structure = StructureModel(
+        width_cm=width_cm, height_cm=height_cm, depth_cm=depth_cm,
+        regions=[RegionSpec(id="bar", name="bar",
+                            x_min=0.0, x_max=width_cm,
+                            y_min=0.0, y_max=height_cm,
+                            net_doping_cm3=1e17,
+                            z_min=0.0, z_max=depth_cm)],
+        contacts=[
+            ContactModel(id="left", name="left",
+                        boundary=BoundarySpec(edge="left"), V=0.0),
+            ContactModel(id="right", name="right",
+                        boundary=BoundarySpec(edge="right"), V=0.1),
+        ],
+    )
+    mesh_model = MeshModel(nx=12, ny=8, nz=8)
+    return structure, mesh_model
+
+
+def test_3d_authoring_produces_valid_domain_device():
+    structure, mesh_model = _resistor_3d_structure_and_mesh()
+    domain = spec_adapter.domain_from_structure(structure, mesh_model)
+    domain.validate()                     # must not raise
+    assert domain.dimensionality == 3
+    assert domain.depth_cm == 1e-4 and domain.mesh_nz == 8
+    assert all(r.is_3d() for r in domain.regions)
+
+    structure2, mesh_model2 = spec_adapter.structure_from_domain(domain)
+    assert structure2 == structure and mesh_model2 == mesh_model
+
+
+def test_3d_authoring_matches_hand_built_resistor_3d_example():
+    """Golden parity: the new generic authoring path must produce a
+    DeviceSpec identical (contact node sets, doping array, mesh axes) to
+    gui.services.examples.resistor_3d_example_spec()'s hand-built
+    equivalent for the same geometry."""
+    from gui.services.examples import resistor_3d_example_spec
+
+    structure, mesh_model = _resistor_3d_structure_and_mesh()
+    domain = spec_adapter.domain_from_structure(structure, mesh_model)
+    new_spec = spec_adapter.spec_from_domain(domain)
+    new_spec.bias = {"left": 0.0, "right": 0.1}
+
+    old_spec = resistor_3d_example_spec()
+
+    assert new_spec.mesh.axes == old_spec.mesh.axes
+    assert new_spec.doping.values == old_spec.doping.values
+
+    for name in ("left", "right"):
+        new_c = next(c for c in new_spec.contacts if c.name == name)
+        old_c = next(c for c in old_spec.contacts if c.name == name)
+        new_nodes = set(zip(new_c.nodes["i"], new_c.nodes["j"],
+                            new_c.nodes["k"]))
+        old_nodes = set(zip(old_c.nodes["i"], old_c.nodes["j"],
+                            old_c.nodes["k"]))
+        assert new_nodes == old_nodes
+        assert new_c.V == old_c.V
+
+
+def test_3d_authoring_solves_and_matches_hand_built_result(tmp_path):
+    """End-to-end: the newly-authored 3D device, run through the
+    already-generic solver_runner.run_job(), must solve on a real
+    Device3D and produce terminal currents matching the hand-built
+    resistor_3d_example_spec() equivalent."""
+    from gui.services.examples import resistor_3d_example_spec
+    from gui.services.solver_runner import run_job
+
+    structure, mesh_model = _resistor_3d_structure_and_mesh()
+    domain = spec_adapter.domain_from_structure(structure, mesh_model)
+    new_spec = spec_adapter.spec_from_domain(domain)
+    new_spec.bias = {"left": 0.0, "right": 0.1}
+    old_spec = resistor_3d_example_spec()
+
+    new_job, new_out = tmp_path / "new.json", tmp_path / "new.npz"
+    old_job, old_out = tmp_path / "old.json", tmp_path / "old.npz"
+    new_spec.to_json(str(new_job))
+    old_spec.to_json(str(old_job))
+    run_job(str(new_job), str(new_out))
+    run_job(str(old_job), str(old_out))
+
+    import numpy as np
+    dn, do = np.load(new_out), np.load(old_out)
+    assert np.array_equal(dn["field__potential"], do["field__potential"])
+    assert dn["terminal__left__value"] == do["terminal__left__value"]
+    assert dn["terminal__right__value"] == do["terminal__right__value"]
+    # sane physical result: current flows one way in, the other way out
+    assert dn["terminal__left__value"] < 0 < dn["terminal__right__value"]
