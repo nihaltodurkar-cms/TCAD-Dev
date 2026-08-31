@@ -2,7 +2,9 @@
 
 Status: implementation landed 2026-08-29; gate battery
 `tests/test_m16_btbt.py` + coefficient pins in
-`tests/test_model_benchmarks.py`.
+`tests/test_model_benchmarks.py`. VERIFIED GREEN 2026-08-31 (the
+gates were written but never actually run before this date -- see
+"Gate verification, 2026-08-31" at the end of section 3).
 
 ## 1. Scope
 
@@ -76,6 +78,47 @@ ports (Device2D/Device3D raise NotImplementedError on `btbt=True`).
     PLATEAU.  The gate asserts strictly monotone growth and that the
     late-ramp log-slope does not collapse relative to onset.
 12. **G-F catalog/wire format + 2D/3D refusal**.
+
+### Gate verification, 2026-08-31
+
+`tests/test_m16_btbt.py` was actually executed for the first time this
+date (ARCHITECTURE.md had flagged the whole file
+LANDED-PENDING-VERIFICATION since 2026-08-29 -- the authoring
+session's shell was blocked). 11/13 tests passed immediately; the two
+G-E ("Zener onset Kane slope" and "high-bias non-plateau") tests
+failed. Root-caused all three failures to bugs in the TEST code, not
+the `pytcad/btbt.py` physics or its Newton-core coupling -- none of
+gates 1-9 above needed any change:
+
+- `test_g_e_high_bias_does_not_plateau` sorted its ramp records
+  ascending by V (most-negative-first, largest |V|/largest J first)
+  but then asserted `np.diff(Js) > 0` -- i.e. it asserted J increases
+  going FROM the largest-bias point TO the smallest-bias point, the
+  reverse of the intended trend. Fixed: sort with `reverse=True` so
+  the list runs from least to most reverse bias.
+- The same test's "log-slope must not collapse" check compared
+  `late > early / 25.0` on two NEGATIVE slopes (J grows as V
+  decreases, so d(lnJ)/dV < 0 by construction) -- for negative
+  numbers, dividing by 25 moves the bound toward zero, so the
+  inequality asserted the opposite of "the magnitude didn't shrink."
+  Fixed: compare `abs(late) > abs(early) / 25.0`.
+- `test_g_e_zener_onset_has_kane_slope` asserted the ln(J)-vs-1/E_peak
+  correlation `r > 0.98`, but a genuine Kane fit (ln J = -B/E + const)
+  has slope < 0 and therefore r near -1, never near +1. Fixed:
+  `abs(r) > 0.98`. Measured r = -0.99999.
+- Also found (not a bug, a too-narrow test window): the onset test's
+  original -0.2V..-1.2V ramp only achieves ~262x current growth in the
+  V <= -0.5 window it filters to, short of the gate's own >1000x
+  threshold. Measured directly rather than adjusting the threshold
+  blind: the V in [-0.5, -1.5] window (matching the high-bias test's
+  own range) achieves ~1425x. Fixed by ramping to -1.5V instead of
+  -1.2V, not by loosening the threshold.
+
+After these test-only fixes, all 13 tests pass
+(`pytest tests/test_m16_btbt.py -q` -> 13 passed, ~45s). Coefficient
+pins (`test_model_benchmarks.py::test_btbt_coefficients_match_
+published_table`) independently pass unchanged. M16 is now genuinely
+VERIFIED, not just landed.
 
 ## 4. Known limitations (honest)
 

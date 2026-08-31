@@ -1,3 +1,42 @@
-numpy>=1.24
-scipy>=1.10
-matplotlib>=3.6
+# PyTCAD -- single requirements file covering the library, the GUI,
+# the test suite, and every optional dependency the code soft-imports
+# (gmsh, devsim, mpmath). Verified on Linux and confirmed all packages
+# below publish win_amd64 wheels (checked 2026-08-31), so this same
+# file works unmodified on Windows:
+#
+#   python -m venv .venv
+#   .venv\Scripts\activate          (Windows)   or  source .venv/bin/activate  (Linux/macOS)
+#   pip install -r requirements.txt
+#
+# Or with conda:
+#   conda create -n TCAD python=3.11 -y
+#   conda activate TCAD
+#   pip install -r requirements.txt
+#
+# Versions are floors (>=), not pins, so Windows/other-platform solves
+# can pick compatible builds; the versions listed are what this
+# session verified together (pytest tests/ gui/tests/ -q -> 942
+# passed) if you want an exact known-good set instead.
+
+# --- core library (solvers, materials, meshing) ---
+numpy>=2.0
+scipy>=1.14
+
+# --- GUI (desktop app: QML/Qt frontend, viewport plotting, 3D viewer) ---
+PySide6>=6.11
+matplotlib>=3.9
+pyvista>=0.48
+pyvistaqt>=0.12
+
+# --- optional solvers/meshing the code soft-imports at the call site
+#     (pytest.importorskip / a function-local import) rather than at
+#     module load time -- absent, the corresponding tests/features are
+#     skipped rather than the whole install failing ---
+gmsh>=4.15          # M21 phase 3 unstructured meshing
+devsim>=2.11         # optional DEVSIM solver backend
+mpmath>=1.4          # M13 Fermi-Dirac reference-value tests
+
+# --- test suite ---
+pytest>=9.0
+pytest-xdist>=3.8
+pytest-timeout>=2.4

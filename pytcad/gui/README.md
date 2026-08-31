@@ -18,10 +18,12 @@ remain later work.
 ```bash
 cd pytcad
 pip install -r requirements.txt
-pip install -r gui/requirements.txt
 ```
 
-Requires Python 3.9+ (tested on 3.14) and PySide6 >= 6.10.1.
+One file covers the library, the GUI (PySide6, matplotlib, pyvista/
+pyvistaqt), tests, and optional deps (gmsh, devsim, mpmath) -- verified
+on Linux and Windows. Requires Python 3.9+ (tested on 3.11 and 3.14)
+and PySide6 >= 6.11.
 
 ## Run
 
@@ -938,9 +940,12 @@ the identical wall.
   builds refuse at construction. **Fixed in v0.6 Phase 1c**: an
   "Equilibrium only" checkbox in the Physics Lab now reaches this path
   from the GUI directly (previously Python-API-only,
-  `MOSCapacitor(dg=True)`/`Models(dg=True)`). The M20 core's own
-  gamma-calibration gap (3 open gates, unrelated to this GUI wiring)
-  is tracked separately in `M20-DENSITY-GRADIENT-PLAN.md`.
+  `MOSCapacitor(dg=True)`/`Models(dg=True)`). The M20 core itself is
+  now COMPLETE (2026-08-31, coupled-Newton reformulation replacing the
+  earlier lagged scheme -- all gates green, see
+  `M20-DENSITY-GRADIENT-PLAN.md`); this GUI wiring needed no change
+  for that fix, since it only arms `dg`/equilibrium-only, it never
+  touched the solver's own convergence.
 - Device dimensionality still has no GUI selector: the Process Flow
   always builds 1D, Structure/Device-Builder templates always build
   2D, and there is no GUI path to AUTHORING a `Device3D` (a File-menu

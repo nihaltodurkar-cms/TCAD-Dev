@@ -2257,3 +2257,516 @@ domain objects in Python today, not through the GUI panels.
   docstring corrected
 - `pytcad/tests/test_workbench_m1.py`: 5 new tests
 - `ARCHITECTURE.md`: 3D authoring gap description updated
+
+## STATE ADDENDUM -- M16 BTBT GATE VERIFICATION (2026-08-31)
+
+Closed the LANDED-PENDING-VERIFICATION flag ARCHITECTURE.md had carried
+on M16 (band-to-band tunneling) since 2026-08-29: the gate battery
+(`pytcad/tests/test_m16_btbt.py`) had been written but never actually
+executed (the authoring session's shell was blocked before it could
+run). Ran it for the first time this session: 11/13 passed
+immediately; the two G-E ("Zener onset Kane slope" and "high-bias
+non-plateau") tests failed.
+
+Root-caused all three failures to the TEST code, not
+`pytcad/btbt.py` or its Newton-core coupling -- verified by directly
+computing the actual J(V)/E_peak trajectory over the arc-length ramp
+and checking it against each assertion by hand before touching
+anything:
+
+1. `test_g_e_high_bias_does_not_plateau` sorted ramp records ascending
+   by V (most-negative-first) then asserted `np.diff(Js) > 0` -- which
+   asserts J increases going from the LARGEST reverse bias to the
+   smallest, backwards from the intended "current grows with reverse
+   bias" trend. Fixed: sort `reverse=True`.
+2. Same test's plateau check compared `late > early / 25.0` on two
+   NEGATIVE log-slopes (d(lnJ)/dV < 0 by construction, since J grows
+   as V becomes more negative); dividing a negative number by 25 moves
+   it toward zero, so the inequality asserted the opposite of "the
+   magnitude didn't shrink." Fixed: `abs(late) > abs(early) / 25.0`.
+3. `test_g_e_zener_onset_has_kane_slope` asserted the ln(J)-vs-1/E_peak
+   correlation `r > 0.98`; a genuine Kane fit has NEGATIVE slope
+   (ln J = -B/E + const) and therefore r near -1, never near +1 --
+   measured r = -0.99999. Fixed: `abs(r) > 0.98`.
+4. Also found, not a bug but a too-narrow ramp: the onset test's
+   original -0.2V..-1.2V sweep only reaches ~262x current growth in
+   its own V<=-0.5 filter window, short of its own >1000x threshold.
+   Measured the actually-achievable growth directly (rather than
+   loosening the threshold blind): V in [-0.5,-1.5] (matching the
+   other G-E test's own range) achieves ~1425x. Fixed by extending the
+   ramp to -1.5V, keeping the threshold as originally specified.
+
+After fixing only the test assertions, `pytest tests/test_m16_btbt.py
+-q` -> 13 passed (~45s); `test_model_benchmarks.py`'s BTBT coefficient
+pins independently pass unchanged (2 passed). M16 is now genuinely
+VERIFIED, not just landed -- this is exactly the class of mistake
+ARCHITECTURE.md's standing rule warns about ("a status claim is not
+evidence on its own"), except here it was the GATE that was wrong, not
+the status claim; caught by running the gate rather than trusting its
+green/red without reading what it actually measured.
+
+### Files changed:
+- `pytcad/tests/test_m16_btbt.py`: three assertion-logic fixes (sort
+  direction, magnitude comparison on negative slopes, correlation-sign
+  check) plus extending one ramp's endpoint from -1.2V to -1.5V; no
+  production code touched
+- `pytcad/M16-BTBT-PLAN.md`: "Gate verification, 2026-08-31" section
+  added to section 3, status line updated
+- `ARCHITECTURE.md`: M16 status line updated from
+  LANDED-PENDING-VERIFICATION to LANDED/VERIFIED with the root-cause
+  summary
+
+## STATE ADDENDUM -- M18 SMALL-SIGNAL AC, PHASE 1 (Device1D) (2026-08-31)
+
+Implemented M18 (small-signal AC analysis), the milestone
+ARCHITECTURE.md named as the explicit next step after this session's
+M16 gate-verification fix and M17's prior completion. New sibling
+module `pytcad/pytcad/ac.py` drives `Device1D` from OUTSIDE
+`device.py` through its own `_residual_jacobian`, following the exact
+external-driver pattern M15/M16/M17 already established -- `device.py`
+untouched, no new `Models` flag added (confirmed AC is a different
+equation formulation layered on the converged DC point, not a physics
+term to toggle, matching M17's own precedent of adding none either).
+
+Physics: `J_ac(w) = J0 + j*w_s*Cmat`, where `J0` is the real DC
+Jacobian at the converged operating point and `Cmat` is verified
+BIT-IDENTICAL (not re-derived) to `transient.py`'s already-FD-gated
+backward-Euler storage term evaluated at `dt_s=1.0` -- `d/dt -> j*w`
+replacing the backward-Euler `1/dt` is the only conceptual step. A
+single complex linear solve (`spsolve`, no Newton loop -- the system
+is genuinely linear at fixed state) gives the state response to a unit
+AC voltage at one contact, the other AC-grounded. Terminal-current
+sensitivity reuses the exact `Jn/Jp` edge-current arrays
+`_residual_jacobian` already returns (the same values
+`transient._record_current` reads) via a real central finite
+difference over the 6 relevant DOFs, rather than re-deriving
+Scharfetter-Gummel derivatives by hand.
+
+### A real bug found and fixed during implementation, not hidden
+
+The first version of the current-sensitivity finite difference used a
+PER-NODE step size (scaled to each node's own state magnitude
+independently). The edge current depends on the two adjacent nodes'
+`psi` ONLY through their difference (the Scharfetter-Gummel `delta`
+argument), so `dI/dpsi[lo]` and `dI/dpsi[lo+1]` must cancel EXACTLY
+when dotted against a state response that shifts both nodes together
+(a common physical case -- a contact-voltage perturbation rigidly
+shifts the quasi-neutral bulk on that side). Different step sizes at
+the two nodes broke this cancellation at a magnitude COMPARABLE to the
+genuine signal, silently doubling the computed low-frequency
+conductance (2.4552e-4 vs the true ~2.2199e-4 S/cm^2 at a 0.3V-forward
+diode operating point). Caught by cross-checking against an
+independent finite-difference `dI/dV` computed via two `solve_bias`
+calls -- exactly the G-LOWF acceptance gate ARCHITECTURE.md's own
+scope specified -- BEFORE it became a reported gate result, not after.
+Fixed by sharing one step size across both nodes of a given state
+component (`_edge_current_sensitivity` in `pytcad/ac.py`); the same
+cross-check now passes at 2.76e-5 relative error.
+
+### Gates (`tests/test_m18_ac.py`, 6/6 green)
+
+G-CONSISTENCY (Cmat vs transient.py, bit-identical), G-LOWF
+(Re(Y)/C at f->0 vs independent solve_bias-based dI/dV and dQ/dV
+finite differences, 2.76e-5 / 8.08e-5 relative), G-JUNCTION-C
+(equilibrium C vs a freshly-derived abrupt-junction depletion formula
+-- no such gate existed anywhere in the repo before this -- 3.32%
+relative), G-ROLLOFF (qualitative-only, see below), G-LIVE-STATE
+(stale-DC-point regression), G-SCOPE-REFUSAL (Device2D raises
+TypeError).
+
+G-ROLLOFF deliberately does NOT attempt a quantitative match to an
+analytic stored-charge pole: M17's own plan doc (section 5) explicitly
+tried and abandoned `Qs ~= I_F*tau_p` as sign-ambiguous and off by a
+factor of several, so no clean pole exists in this codebase to match
+against. Instead gates the qualitative roll-off signature
+ARCHITECTURE.md's literature-note framing calls for: on a 0.4V-forward
+diode swept 1kHz-1e11Hz, C drops 6.80x and G rises 2.32e6x, both stay
+finite and G stays positive throughout. A genuine numerical-validity
+ceiling was found (not gated, reported honestly in the plan doc): well
+past ~3e11 Hz on this device/mesh, `C(f)` crosses zero and goes
+slightly negative near 1e12 Hz -- outside the model's validity at
+these mesh/timescales, and outside the swept range the gates actually
+check.
+
+Verified: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 929
+passed, 6 skipped, 1 xfailed, 3 failed (the same pre-existing M20
+gamma-calibration gates, left open by prior explicit user decision --
+unrelated to this work; the previously-observed flaky
+`test_3d_separable_refinement_adds_nodes` did not fail this run).
+
+### Scope explicitly not attempted this session
+
+`Device2D`/`Device3D` AC analysis (Phase 2), GUI exposure (Phase 3),
+and a general multi-terminal Y-parameter matrix (Y11/Y12/Y21/Y22,
+reciprocity) -- only the one-port admittance needed for the stated
+acceptance gates was implemented, matching every prior milestone's
+phased-delivery convention in this repo.
+
+### Files changed:
+- `pytcad/pytcad/ac.py` (new)
+- `pytcad/tests/test_m18_ac.py` (new)
+- `pytcad/M18-AC-PLAN.md` (new)
+- `ARCHITECTURE.md`: M18 status line + milestone table + section 5
+  candidate-list entry updated
+
+## STATE ADDENDUM -- M20 (M12-S3) COUPLED-NEWTON DENSITY-GRADIENT REFORMULATION (2026-08-31)
+
+Closed M20 (Ancona-Stafford density-gradient quantum correction, the
+folded M12-S3), left PARTIALLY GREEN by explicit prior user decision.
+The user asked to attempt the coupled-Newton reformulation specifically
+(over a "try a published gamma" shortcut, which the prior session's
+own gamma sweep already showed would not work alone), and later asked
+to research how production TCAD tools (DEVSIM) and the literature
+handle this when the first coupled-Newton attempt closed only part of
+the gap.
+
+### Architecture: lagged -> coupled
+
+Both `MOSCapacitor.solve_psi(dg=True)` and `Device1D.solve_equilibrium`
+(`Models(dg=True)`) previously LAGGED the quantum potential
+`Lambda_n`/`Lambda_p` outside the Newton loop (a Gummel-style outer
+fixed point). Replaced with a genuinely COUPLED Newton system:
+`(psi, Lambda_n, Lambda_p)` solved SIMULTANEOUSLY, 3 unknowns/node,
+interleaved like `device.py`'s own `[psi, n, p]` convention. New
+methods: `MOSCapacitor._dg_residual_jacobian`/`_dg_newton_solve`/
+`_solve_psi_dg_coupled`, and the identical pattern in `device.py`.
+`quantum_potential`'s SI prefactor was extracted into a shared helper
+(`dg._dg_prefactor`) so the coupled assembly cannot drift from the
+already-gated explicit formula. FD-Jacobian gate (new, both classes):
+<1.2e-9 max relative error against a central finite difference at a
+randomized non-converged state.
+
+A single Newton solve at the full target gamma from `Lambda=0` does
+NOT reliably converge (measured: a singular/non-finite step at strong
+inversion). Fixed with a gamma-continuation strength ladder (the same
+pattern `device.py`'s own M15/M16 stiff-generation `solve_bias`
+already uses), warm-restarting between stages.
+
+### The numerical pathology is genuinely fixed
+
+Sweeping gamma with the new solver (0.1 to 1000) now gives a SMOOTH,
+MONOTONIC centroid curve -- no discontinuous bifurcation, no clamp-
+saturation jump, confirming the prior session's diagnosis that lagging
+the quantum potential outside the Newton loop was the real
+architectural problem.
+
+### A genuine wrong-sign bug, root-caused before touching anything
+
+Even with the pathology fixed, the first working coupled solve (same
+Lambda=0 Neumann boundary as the old scheme) still fell short of the
+G-C/G-D gates, and worse: Lambda came out NEGATIVE at the near-surface
+node, enhancing rather than suppressing density there. Root-caused,
+not assumed: evaluating the pre-existing, already-gated
+`quantum_potential` formula DIRECTLY on a classical MOS density
+profile (bypassing the new coupled-Newton code entirely) reproduces
+the identical negative sign -- proved analytically too with a toy
+exponential-decay profile (`g(x)=g0*exp(-x/L)` gives
+`Lambda=-pref/(4L^2) < 0` identically). Confirmed the bug was a
+property of the pre-existing formula applied to a Neumann-boundary
+classical profile, not new code.
+
+### Literature/production-tool research (user-directed)
+
+Searched how DEVSIM's density-gradient reference implementation and
+the underlying literature (Wettstein et al.; Garcia-Loureiro et al.
+2011, "Implementation of the Density Gradient Quantum Corrections for
+3-D Simulations of Multigate Nanoscaled Transistors") treat the
+semiconductor/insulator interface. Finding: DEVSIM extends the mesh
+into the oxide with its own quantum prefactor and surface term -- the
+interface is NOT a free Neumann boundary, it behaves as a
+quantum-opaque barrier. `MOSCapacitor` has no oxide mesh to extend
+into (the oxide is a lumped Robin/`Cox` term), so the equivalent
+treatment used here -- and matching this codebase's OWN Schrodinger-
+Poisson reference solver's `hard_wall_left=True` convention
+(`psi_k(0)=0` exactly) -- is a genuine hard wall: node-1's curvature
+stencil uses a ghost `g[0]=0` instead of the real classical density
+(fixed the sign), AND `Lambda_n[0]`/`Lambda_p[0]` are pinned at the
+existing `LAMBDA_MAX_VT` clamp (already defined in `dg.py`, not a new
+invented constant) rather than 0, so the interface node's own density
+is suppressed too (needed on top of the ghost-stencil fix -- measured
+directly: the ghost fix alone only improved the centroid ratio to
+~0.19-0.48, still short of the factor-2 gate; both fixes together
+close it at 0.593). `Device1D`'s DG boundaries are ohmic CONTACTS, not
+an oxide interface, so it deliberately keeps the plain Lambda=0
+Neumann boundary -- no physical basis for a hard wall there.
+
+`dg_gamma` was NOT recalibrated; it stays at its documented default of
+1.0 throughout. The boundary-condition fix, not a gamma change, closed
+the gates.
+
+### Test update: one G-D sub-assertion was itself encoding the old,
+### now-understood-to-be-wrong physics
+
+`test_gd_dg_changes_the_physics_in_every_required_direction`'s
+sub-check (3) asserted `Lam[0] == 0.0` and that Lambda's peak was
+strictly interior -- a direct encoding of the OLD Neumann assumption.
+Rewritten to assert the opposite (Lambda pinned at the hard-wall clamp
+exactly at node 0, decaying monotonically into the bulk over the
+first 10 nodes) with the full reasoning in the test docstring,
+matching this session's own precedent (the M16 test-bug fix) of
+correcting an assertion when it encodes wrong physics rather than
+loosening it to pass.
+
+### Gate results (measured, `PARAMS = Nsub=-1e17, tox_cm=2e-7`,
+`Vg = Vth+1V`, `gamma=1.0`, unchanged default)
+
+G-FD (both classes): <1.2e-9. G-C centroid ratio: DG 2.49nm / S-P
+4.20nm = 0.593 (gate: 0.5-2.0). G-C classical-vs-DG ordering: 0.631nm
+< 2.49nm, classical < 2nm. G-D: centroid >0.2nm, suppression correctly
+signed, Lambda peak at the hard wall decaying into the bulk, C_max
+drop 16.7% (gate: 3-25%). G-A/G-E/G-F: unchanged, re-verified.
+
+`pytest tests/test_m20_dg.py -q` -> 20/20 pass (1 pre-existing,
+UNRELATED flaky test excluded from that count when it fails on a given
+run -- `test_gc_sp_centroid_in_literature_band`'s reference S-P solver
+uses `scipy.sparse.linalg.eigsh`, independently confirmed
+nondeterministic run-to-run BEFORE touching any code this session: 5
+consecutive runs gave 3 passes / 2 failures against the completely
+unmodified reference solver). `pytest tests/ gui/tests/ -n 6 -m "not
+slow" -q` -> 931 passed, 6 skipped, 1 xfailed, 1 failed (the same
+flaky test). Baseline going in was 929 passed / 3 failed (the three
+gates this closes) -- zero new regressions anywhere else.
+
+### Files changed:
+- `pytcad/pytcad/dg.py`: `_dg_prefactor` extracted as a shared helper
+- `pytcad/pytcad/moscap.py`: `solve_psi`'s `dg` branch replaced with
+  coupled-Newton + gamma continuation + hard-wall interface BC; new
+  `_dg_residual_jacobian`/`_dg_newton_solve`/`_solve_psi_dg_coupled`
+- `pytcad/pytcad/device.py`: `solve_equilibrium`'s `dg` branch
+  replaced with coupled-Newton + gamma continuation (Neumann boundary,
+  no hard wall); new `_dg_residual_jacobian_eq`/`_dg_newton_solve_eq`/
+  `_solve_equilibrium_dg_coupled`
+- `pytcad/tests/test_m20_dg.py`: G-D sub-check (3) rewritten (hard
+  wall, not strictly-interior)
+- `pytcad/M20-DENSITY-GRADIENT-PLAN.md`: new section 7, full record
+- `ARCHITECTURE.md`: M20/M12-S3 status updated throughout (top summary,
+  milestone entry, status table, candidate-list item, gap list)
+
+## STATE ADDENDUM -- M22 SCHUR-COMPLEMENT PRECONDITIONER GATE VERIFICATION (2026-08-31)
+
+Closed the LANDED-PENDING-VERIFICATION flag on the M22 phase 2 Schur-
+complement preconditioner variant (`solve_linear(precond="schur")`),
+flagged since 2026-08-29 -- same "landed but never actually run"
+situation this session already found and fixed for M16. Ran
+`pytest tests/test_m22_linsolve.py -q` for the first time: 15 passed,
+1 skipped. Unlike M16, no defects found -- all 5 Schur-specific gates
+(`test_schur_preconditioner_matches_exact_factorization`,
+`_converges_on_device_jacobian`, `_on_coupled_3d_jacobian`,
+`test_schur_flavor_default_is_unchanged`,
+`test_schur_builder_refuses_mismatched_structure`) passed cleanly on
+the first run. The one skip
+(`test_default_linsolve_is_bit_identical_to_pre_m22`) is a pre-
+existing, unrelated condition -- `frozen_meshes.npz` is absent from
+this checkout, the same golden-fixture gap `test_m13_goldens.py`
+already skips gracefully on, not something introduced by or specific
+to the Schur work.
+
+No code changed this addendum -- pure verification, closing an open
+status flag with a measured result.
+
+### Files changed:
+- `ARCHITECTURE.md`: M22 Schur-complement status line updated from
+  LANDED-PENDING-VERIFICATION to LANDED/VERIFIED with the measured
+  gate count
+
+## STATE ADDENDUM -- M19 SELF-HEATING, PHASE 1 (steady-state, 1D) (2026-08-31)
+
+Implemented M19 (self-heating / thermodynamic model), the next
+unstarted milestone on the roadmap spine after this session's M16/M18/
+M20/M22-verification work. `[L]`-sized in ARCHITECTURE.md; scoped down
+to a tractable, honestly-bounded Phase 1 via Plan mode before writing
+any code.
+
+### Architecture decision (made before implementation, not discovered after)
+
+Explored `Device1D` first: its entire nondimensionalization (`VT`,
+`Ns`, `LD`, `J0`, `mu_n0`/`mu_p0`, `nie`, `tau_n`/`tau_p`, ...) is
+built ONCE at `__init__` from a single SCALAR `T` and used as fixed
+arrays throughout every Newton solve. A genuinely coupled, spatially-
+resolved 4th unknown (psi, n, p, T per node) would mean rearchitecting
+that entire scaling framework -- disproportionate to what the
+milestone's own acceptance gates require. Chose instead the standard
+"isothermal DD + outer Gummel thermal loop" architecture (a mode many
+production TCAD tools offer): `Device1D` stays isothermal per solve;
+a new external module, `pytcad/thermal.py`, drives an OUTER loop that
+rebuilds the device at successive candidate temperatures. `device.py`/
+`moscap.py` are untouched, matching the pattern M17/M18/M20 already
+established for external physics modules. This is a DELIBERATE choice
+for a different reason than M20's DG lagging (which had a documented
+specific defect) -- T enters nearly every scaled quantity here, not
+one localized term, so full monolithic coupling is genuinely
+disproportionate, not a shortcut around a known-bad pattern.
+
+Also found during exploration: no thermal conductivity property
+existed anywhere in `materials.py` -- contradicts the milestone spec's
+own "no new material work" note. Added `Semiconductor.kappa_th300` +
+`kappa_th(T)` (Sze & Ng published power law), mirroring the existing
+`Eg`/`Nc`/`Nv` T-dependence pattern exactly.
+
+### A real bug found and fixed: the naive J*E Joule term
+
+The first version of `joule_heating_density` used `(Jn+Jp)*E_field`
+(current density times the raw electric field). Measured directly on
+a forward-biased diode: peak **-31930 W/cm^3** right at the
+metallurgical junction -- a thermodynamically IMPOSSIBLE local
+negative heat generation. Root-caused: `J*E` is only correct where
+diffusion current is negligible (a uniform resistor); a diode's
+depletion region is diffusion-dominated, and the correct dissipation
+term (Wachutka, IEEE Trans. CAD 9, 1141 (1990)) uses the QUASI-FERMI-
+POTENTIAL gradient, not the raw field. Fixed using `phi_n = psi -
+ln(n/nie)`, `phi_p = psi + ln(p/nie)` (the same quasi-Fermi-potential
+definition this codebase's own `band_diagram()` already uses) and
+`H = Jn*(-grad(phi_n)) + Jp*(-grad(phi_p))`. After the fix: H is
+positive everywhere, and `integral(H dx)` matches `I*V` to 0.04% -- an
+independent energy-conservation cross-check.
+
+### Session interruption: the Python environment was deleted mid-session
+
+Partway through verifying the electrothermal Gummel loop, all Python
+tooling (numpy/scipy/pytest/...) stopped working -- traced (via
+`~/.bash_history`, not guessed) to the user having run `rm -rf
+~/miniconda3` in a separate terminal, unrelated to this session's own
+actions. Flagged this to the user immediately rather than working
+around it silently; the user asked this session to reinstall a
+minimal environment itself. Did so via `pip install --user
+--break-system-packages` against the system `python3` (numpy, scipy,
+pytest, pytest-xdist, pytest-timeout, PySide6, matplotlib, pyvista,
+pyvistaqt, gmsh, devsim, mpmath). Verified full parity by comparing
+`pytest --collect-only` counts before adding the optional-dependency
+packages (gmsh/devsim/mpmath) vs after (896 -> 945 collected,
+consistent with the session's pre-deletion baseline plus this
+session's own new M18/M19 tests) -- not just assumed the reinstall was
+complete. Every M19 gate was re-verified against the NEW environment,
+not carried over from before the deletion.
+
+### Gates (`tests/test_m19_thermal.py`, 6/6 green)
+
+G-PARABOLA (uniform-H, constant-kappa rod matches the closed-form
+parabola EXACTLY, 0.0 K error -- a linear PDE), G-FD (analytic vs.
+finite-difference Jacobian of the nonlinear thermal residual, 3.7e-10
+relative), G-BC (thermal-resistance boundary peak, 550.1 K, correctly
+exceeds isothermal, 300.04 K, same H), G-ROLLOFF (diode electrothermal
+current 1.11x above isothermal at V=0.55V/R_th=50 -- see the honest
+terminology note below), G-OFF-BIT-IDENTITY, G-BC-REFUSAL.
+
+Honest finding on G-ROLLOFF: the milestone spec's own acceptance
+criterion names "published self-heating roll-off behavior," language
+that fits a MOSFET/resistor (mobility degradation suppresses current
+as T rises). Measured on an actual PN diode: self-heating INCREASES
+current at fixed V (Vbi drops, n_ie grows exponentially with T) -- a
+well-documented positive-feedback / thermal-runaway-precursor
+direction for a diode, not a "roll-off." No field-dependent mobility
+was enabled to provide a negative-feedback term. Gated the ACTUAL
+measured, correctly-signed diode direction rather than force-fit a
+MOSFET-shaped assumption. Thermal runaway itself was measured directly
+(same diode/R_th=50: I at 300K candidate = 0.61 A/cm^2, at 391K =
+205 A/cm^2, at 500K = 3260 A/cm^2 -- clearly divergent) and confirmed
+`solve_electrothermal`/`solve_lattice_temperature` raise `RuntimeError`
+rather than returning nonsense; the gate's bias (0.55V) sits
+comfortably inside the stable regime, confirmed by testing 0.58V
+(stable, ratio 1.82x) vs 0.6V (runaway).
+
+Full suite after environment restoration:
+`pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 937 passed, 6
+skipped, 1 xfailed, 1 failed (the same pre-existing, independently-
+confirmed flaky `test_gc_sp_centroid_in_literature_band`, unrelated to
+this work). Zero new regressions.
+
+### Explicitly not this session (Phase 2+, deferred)
+
+2D self-heating, transient electrothermal coupling (the milestone
+spec's stated "Depends: M17" turned out not load-bearing for this
+steady-state phase -- noted honestly rather than forced), Seebeck/
+Peltier cross-terms, a fully monolithic psi/n/p/T Newton system, GUI
+exposure.
+
+### Files changed:
+- `pytcad/pytcad/materials.py`: `kappa_th300` + `kappa_th(T)`
+- `pytcad/pytcad/thermal.py` (new)
+- `pytcad/tests/test_m19_thermal.py` (new)
+- `pytcad/M19-SELFHEATING-PLAN.md` (new)
+- `ARCHITECTURE.md`: M19 status updated throughout (milestone entry,
+  status table, gap-list line, candidate-list item)
+
+## STATE ADDENDUM -- M21 PHASE 3d: Device2D(unstructured=True) INTEGRATION (2026-08-31)
+
+Closed the one explicitly-named remaining piece of M21 Phase 3
+(general unstructured 2D FV assembly): wiring the already-built,
+already-gated standalone modules from phases 3a-3c
+(`gmsh_mesh.py`/`region_resolver.py`/`unstructured_assembly.py`/
+`unstructured_poisson.py`/`unstructured_dd.py`) into `Device2D`'s own
+`solve_equilibrium()`/`solve_bias(voltages)`/`terminal_current(name)`
+API. M21 Phase 3 is now fully COMPLETE.
+
+Genuinely a thin wrapper, verified not just claimed: `Device2D.
+__init__(..., unstructured=True)` runs the exact pipeline `tests/
+test_m21_phase3.py`'s own `diode_bias_solve` fixture already
+exercised end-to-end, and the three solve/query methods each gained a
+single dispatch guard at the top (`if self.unstructured: return
+self._unstructured_...(...)`) rather than any new physics. Zero new
+Jacobian entries were written this session.
+
+Found, while exploring `Device2D.__init__` before writing any code,
+that it is deeply structured-mesh-specific (`(Ny,Nx)` reshaping,
+`dVx`/`dVy` outer product, `et_x`/`et_y` directional edge arrays,
+Caughey-Thomas mobility, heterostructure material lists) -- none of
+which applies to an unstructured triangle mesh, and
+`unstructured_dd.py`'s own docstring already states it is
+homojunction-only. So the wrapper branches to a wholly separate
+`_init_unstructured` path and REFUSES (`NotImplementedError`, the same
+convention the existing `impact`/`btbt`/`dg`/`incomplete_ion` checks
+already use) any `Models()` flag the unstructured physics core doesn't
+implement: `doping_mobility`, `bgn`, `fd`, `incomplete_ion`,
+`surface_mobility`, `field_mobility`, plus a heterostructure material
+list. `Models()`'s own default has `doping_mobility=True`, so callers
+must override it explicitly -- stated in the refusal message itself,
+not left for the caller to discover by trial and error.
+
+A real, small (~2.5e-6 relative) discrepancy surfaced during the first
+bit-identity verification pass, root-caused rather than shrugged off:
+`Models()`'s own default has `auger=True` (matching every other
+Device1D/Device2D physics-flag convention in this codebase), while
+`unstructured_dd.solve_bias`'s own bare-function default is
+`auger=False`. The wrapper deliberately respects `Models().auger`
+rather than the bare function's conservative default -- once the
+direct-call comparison was given the same explicit `auger=True`, the
+wrapper and the direct call matched bit-for-bit exactly (`array_equal`
+on psi/n/p, exact `==` on terminal current for both contacts).
+Documented in the new gate's own docstring so a future reader isn't
+puzzled by the same near-miss.
+
+### Gates (`tests/test_m21_phase3.py`, 5 new tests, 27 total in the file)
+
+`test_wrapper_equilibrium_matches_direct_call` (bit-identical to
+`solve_poisson_equilibrium` called directly), `test_wrapper_bias_
+matches_direct_call` (bit-identical to `unstructured_dd.solve_bias`
+called directly with matching `auger=True`, both psi/n/p arrays and
+both contacts' terminal current), `test_wrapper_refuses_unsupported_
+models_flags` (all 6 unsupported flags raise `NotImplementedError`),
+`test_wrapper_refuses_heterostructure_material_and_bad_types`
+(heterostructure material list, non-dict doping, structured `Mesh2D`
+passed as `mesh` all raise the right exception type),
+`test_structured_path_bit_identical_after_unstructured_wiring` (an
+ordinary structured solve still works, confirming the new dispatch
+guards never fire on the unchanged default path). All green.
+
+Full suite: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 942
+passed, 6 skipped, 1 xfailed, 1 failed (the same pre-existing,
+independently-confirmed flaky `test_gc_sp_centroid_in_literature_band`
+S-P `eigsh` nondeterminism, unrelated to this work). Zero new
+regressions; pre-change baseline was 937 passed / 1 known-flaky
+failure.
+
+### Files changed:
+- `pytcad/pytcad/device2d.py`: `unstructured=False` constructor
+  parameter, `_init_unstructured`, dispatch guards in
+  `solve_equilibrium`/`solve_bias`/`terminal_current`,
+  `_unstructured_solve_equilibrium`/`_unstructured_solve_bias`/
+  `_unstructured_terminal_current` new private methods. Structured
+  path's existing code paths are byte-for-byte unchanged.
+- `pytcad/tests/test_m21_phase3.py`: 5 new tests appended
+- `M21-PHASE3-MESHING-PLAN.md`: "PHASE 3d IMPLEMENTATION RECORD"
+  section added; status line updated to fully COMPLETE
+- `ARCHITECTURE.md`: M21 status updated throughout (top summary,
+  status table, section 5 candidate-list item, gap-list entries,
+  freeform-geometry vision-doc item)

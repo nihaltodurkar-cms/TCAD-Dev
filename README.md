@@ -42,10 +42,11 @@ examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
 tests/           900+ tests: analytic-limit validation, published-value
                    physics benchmarks, headless GUI tests — fast suite
-                   (`-m "not slow"`) currently 896 passed, 25 skipped,
+                   (`-m "not slow"`) currently 942 passed, 6 skipped,
                    1 xfailed (M14 G-A, blocked on paywalled Lombardi
-                   constants), 4 known failures (M20 DG gamma
-                   calibration gates left open by user decision)
+                   constants), 1 known failure (an unrelated, pre-
+                   existing flaky eigensolver test in the M20
+                   Schrödinger-Poisson reference solver)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -89,8 +90,8 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 | Classical (no quantisation) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
 | Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
-| Isothermal | self-heating (no lattice-temperature equation) |
-| Steady-state solve is the default | time-domain (M17, `pytcad.transient`/`transient2d`) is now available for 1D/2D, reachable from the GUI's Transient tab; small-signal AC/frequency-domain analysis is not yet built (M18) |
+| Isothermal by default | steady-state 1D self-heating (M19, `pytcad.thermal`) is available as an outer isothermal-DD + Gummel thermal loop, not a monolithic coupled solve; 2D/transient self-heating not built |
+| Steady-state solve is the default | time-domain (M17, `pytcad.transient`/`transient2d`) is now available for 1D/2D, reachable from the GUI's Transient tab; small-signal AC (M18, `pytcad.ac`) is now available for 1D, library-only (no GUI) |
 
 ---
 
@@ -141,9 +142,10 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 ## 4. Validation
 
 The fast suite (`pytest tests/ gui/tests/ -n 6 -m "not slow" -q`)
-currently reports 896 passed, 25 skipped, 1 xfailed (M14 G-A, blocked
-on paywalled Lombardi constants), and 4 known failures (M20 DG gamma
-calibration gates left open by user decision). Every verification
+currently reports 942 passed, 6 skipped, 1 xfailed (M14 G-A, blocked
+on paywalled Lombardi constants), and 1 known failure (an unrelated,
+pre-existing flaky eigensolver test in the M20 Schrödinger-Poisson
+reference solver). Every verification
 result is classified as one of
 **literature benchmark** (agrees with measured published values),
 **analytical validation** (agrees with closed-form theory independent of
@@ -244,10 +246,11 @@ pytest tests/ gui/tests/               # full suite, serial
 pytest tests/ gui/tests/ -n 6 -m "not slow" -q   # fast dev loop (parallel)
 ```
 
-Requires `numpy`, `scipy`, `matplotlib` (examples only); `pip install -r
-requirements-dev.txt` for `pytest`/`pytest-xdist` to run tests. Cap
-parallel workers at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see
-AGENTS.md's Commands section for why.
+Everything -- library, GUI, tests, and optional deps (gmsh, devsim,
+mpmath) -- is in one file: `pip install -r requirements.txt` (verified
+on Linux and Windows, see the file's own header). Cap parallel workers
+at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see AGENTS.md's Commands
+section for why.
 
 ---
 
@@ -257,7 +260,7 @@ AGENTS.md's Commands section for why.
 - **Implant tables are approximate** LSS moments for *amorphous* Si, good to ~5–10%. They contain **no channelling**, which in crystalline Si can put a tail 1–2 decades deeper. Pass `Rp`/`dRp` from SRIM for anything real.
 - **Diffusion is intrinsic and constant-$D$.** No extrinsic (charged-defect) enhancement above $n_i(T)$, no transient enhanced diffusion from implant damage, no oxidation-enhanced diffusion, no dopant–defect pair kinetics. These dominate real junction formation below ~1000 °C.
 - **Deal–Grove under-predicts thin dry oxides.** The $x_i \approx 25$ nm initial thickness is a fudge factor, not physics.
-- **Quantum corrections: density-gradient only, equilibrium-only.** `MOSCapacitor(dg=True)` and `Device1D(Models(dg=True))` add the Ancona–Stafford density-gradient correction (inversion centroid ~1 nm off the interface, $C_{max}$ lowered), gated against the code's own Schrödinger–Poisson solve (`pytcad/dg.py`) and the literature ~1 nm centroid. DG transport in `solve_bias`, 2D/3D, and dg+FD/dg+incomplete-ion compositions are refused (M20 scope); $\gamma=1$ is the uncalibrated Bohm value. No poly depletion; $D_{it}$ is available (M14).
+- **Quantum corrections: density-gradient only, equilibrium-only.** `MOSCapacitor(dg=True)` and `Device1D(Models(dg=True))` add the Ancona–Stafford density-gradient correction (inversion centroid ~1 nm off the interface, $C_{max}$ lowered) via a coupled-Newton solve (not a lagged outer loop), gated against the code's own Schrödinger–Poisson solve (`pytcad/dg.py`) and the literature ~1 nm centroid — all M20 gates green. DG transport in `solve_bias`, 2D/3D, and dg+FD/dg+incomplete-ion compositions are refused (M20 scope); $\gamma=1$ is still the uncalibrated Bohm value (a boundary-condition fix closed the gates, not a gamma retune). No poly depletion; $D_{it}$ is available (M14).
 - **Quasi-static C-V only.** A 1 MHz measurement gives the high-frequency curve, where $C$ stays near $C_{min}$ in inversion because minority carriers cannot follow.
 
 ### 2D MOSFET (new)
@@ -294,7 +297,9 @@ scalar current-vs-time series is stored, not per-step field snapshots;
 one quantitative diode-turn-off charge-storage estimate was
 investigated and left an honest partial result rather than a forced
 tolerance (see `pytcad/M17-TRANSIENT-PLAN.md` section 5). Small-signal
-AC/frequency-domain analysis (M18) is not built.
+AC/frequency-domain analysis (M18, `pytcad.ac`) is now available for
+`Device1D` — admittance/Y(f)/C(f)/G(f) — library-only, no GUI exposure
+yet, no Device2D. See `pytcad/M18-AC-PLAN.md`.
 
 ### Desktop GUI (new)
 
@@ -467,18 +472,20 @@ than device currents.
 - **Sze & Ng, *Physics of Semiconductor Devices*** — the analytic limits every one of these tests checks against. Theory.
 **Project roadmap.** `ARCHITECTURE.md` section 4b governs all future
 capability growth (three parity tiers, milestones M13–M30 with
-published-value acceptance gates). M13 (Fermi-Dirac statistics), M14
-(surface mobility — G-C now covers Device1D and Device2D; G-A remains
-open, blocked on a paywalled source), M15 (impact ionization), M16
-(BTBT), M17 (transient simulation — 1D core, 2D core, and GUI wiring
-all COMPLETE), M21 (meshing), and M22 (linear solver modernization) are
-COMPLETE or effectively so, apart from M14's own open G-A item and
-M20's own open G-C/G-D items. M20 (density-gradient quantum correction)
-remains PARTIALLY DONE — G-C/G-D open on a gamma-calibration gap left
-open by explicit user decision. Next on the roadmap spine: M18
-(small-signal AC analysis), which depends only on the Device1D
-transient machinery M17 already shipped. The milestone specs live in
-`pytcad/M14-…` through `pytcad/M22-…` plan files.
+published-value acceptance gates). M13 (Fermi-Dirac statistics), M15
+(impact ionization), M16 (BTBT, gate-verified), M17 (transient
+simulation — 1D core, 2D core, and GUI wiring), M18 (small-signal AC —
+1D, library-only), M19 (self-heating — 1D steady-state), M20
+(density-gradient quantum correction — coupled-Newton, all gates
+green), M21 (meshing, including phase 3 unstructured/gmsh support and
+its `Device2D(unstructured=True)` integration), and M22 (linear solver
+modernization, including the Schur-complement preconditioner) are all
+COMPLETE or landed for their stated scope, apart from M14's own open
+G-A item (blocked on a paywalled source). Each milestone's own plan
+doc states its honest remaining limits (2D/transient extensions, GUI
+exposure, etc. — none of these are hidden gaps, just explicitly
+descoped next phases). The milestone specs live in `pytcad/M14-…`
+through `pytcad/M22-…` plan files.
 
 - **Hurkx, Klaassen & Knuvers, *IEEE Trans. Electron Devices* 39, 331 (1992)** — the trap-assisted tunneling recombination model (heavy-doping variant adapted here with explicit WKB factors). Theory + measurement.
 

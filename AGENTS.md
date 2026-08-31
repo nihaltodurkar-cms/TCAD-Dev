@@ -16,12 +16,13 @@ Read this before doing anything. Then read `history.md`
 not just this file, since state changes faster than this file is
 updated), `ARCHITECTURE.md` (roadmap + live queue,
 including the governing future plan in section 4b, M13-M30), and
-the active milestone spec (currently `pytcad/M14-SURFACE-MOBILITY-
-PLAN.md` (G-A only), `pytcad/M17-TRANSIENT-PLAN.md`,
-`pytcad/M20-DENSITY-GRADIENT-PLAN.md`,
-`pytcad/M22-LINSOLVE-PLAN.md`, `pytcad/GUI-IMPROVEMENT-PLAN.md`, and
-`pytcad/3D-VISUALIZATION-PLAN.md` -- see
-"Milestone state & plans" below for what's actually open).
+the active milestone spec -- as of 2026-08-31 the only genuinely OPEN
+core-solver item is `pytcad/M14-SURFACE-MOBILITY-PLAN.md`'s G-A
+(blocked on a paywalled source); M16/M17/M18/M19/M20/M21/M22 are all
+landed for their stated scope (see "Milestone state & plans" below and
+each milestone's own plan doc for exactly what that scope was and
+what's honestly still deferred). Also read `pytcad/GUI-IMPROVEMENT-
+PLAN.md` and `pytcad/3D-VISUALIZATION-PLAN.md` for GUI-side state.
 
 ## What this is
 
@@ -56,12 +57,17 @@ tests/             core validation (incl. test_model_benchmarks.py --
                    new physics MUST land here first)
 gui/tests/         GUI-level tests (headless QML pattern)
 ARCHITECTURE.md sec 4b   governing roadmap M13-M30
-pytcad/M14-SURFACE-MOBILITY-PLAN.md / M16-BTBT-PLAN.md /
-  M20-DENSITY-GRADIENT-PLAN.md / M21-MESHING-PLAN.md /
-  M22-LINSOLVE-PLAN.md   active milestone plans (numerical core)
+pytcad/M14-SURFACE-MOBILITY-PLAN.md   the one genuinely OPEN item (G-A)
+pytcad/M16-BTBT-PLAN.md / M17-TRANSIENT-PLAN.md / M18-AC-PLAN.md /
+  M19-SELFHEATING-PLAN.md / M20-DENSITY-GRADIENT-PLAN.md /
+  M21-MESHING-PLAN.md / M21-PHASE3-MESHING-PLAN.md /
+  M22-LINSOLVE-PLAN.md   milestone plans (numerical core); all LANDED
+  for their stated scope as of 2026-08-31 -- read each one's own
+  "honest limits" section for what's deliberately still deferred
 pytcad/GUI-IMPROVEMENT-PLAN.md   GUI feature roadmap (Phases 1-4 shipped)
 pytcad/3D-VISUALIZATION-PLAN.md   PyVista/VTK 3D viewer roadmap
-  (Phases 1-2 shipped: 3D example + isosurface viewer; 3-5 not started)
+  (Phases 1-5 SHIPPED: 3D example, isosurface viewer, volumetric
+  rendering, animated bias-sweep playback, exploded structural view)
 history.md   session-by-session state + handoff notes
 ```
 
@@ -78,7 +84,9 @@ QT_QPA_PLATFORM=offscreen python3 -m gui.app          # live app
 python3 examples/01_pn_diode.py            # examples 01..05
 ```
 
-Parallel runs need `pip install -r requirements-dev.txt` (pytest-xdist) once.
+One `pip install -r requirements.txt` (repo root: `pytcad/requirements.txt`)
+covers the library, GUI, tests, and all optional deps (gmsh, devsim,
+mpmath) -- verified on Linux and Windows. Run it once.
 Cap workers at `-n 6` on this machine (not `-n auto`) -- more workers
 oversubscribe available memory/cores.  Set `OPENBLAS_NUM_THREADS=1` (or
 export it in your shell) when running in parallel: numpy/scipy's BLAS
@@ -105,7 +113,7 @@ with `pytest.warns` in the test that intends it.
 - New physics model = published-value benchmark in
   `tests/test_model_benchmarks.py` FIRST + catalog metadata.
 - Optional deps stay optional (devsim auto-detected). EXCEPTION,
-  deliberate: pyvista/pyvistaqt (gui/requirements.txt) are a HARD
+  deliberate: pyvista/pyvistaqt (in requirements.txt) are a HARD
   dependency of gui/ -- the 3D viewer (gui/services/viewer3d.py,
   3D-VISUALIZATION-PLAN.md) imports them unconditionally at module
   level, discussed and approved with the user, not an oversight.
@@ -263,7 +271,9 @@ templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13
 M15+ per parity-plan rule 4b once green), M15 impact ionization
 (coupled Jacobian + continuation driver, all gates green -- see
 pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
-ACTIVE / OPEN:
+MILESTONE-BY-MILESTONE STATE (only M14's own G-A below is genuinely
+OPEN; M16-M22 are landed for their stated scope -- read each entry for
+what that scope actually was and what's honestly still deferred):
   M14 surface mobility -- MOSTLY COMPLETE: mobility_cvt() wired for
     Device2D.models.surface_mobility (G-D/G-E green); G-B (D_it) and
     G-C (S_n/S_p surface recombination velocity, a Robin flux-balance
@@ -294,13 +304,43 @@ ACTIVE / OPEN:
     pytcad/M17-TRANSIENT-PLAN.md for the full gate list and the
     honestly-recorded gaps (G2 diode-turn-off charge quantification,
     GateBC waveforms, project persistence of an armed config,
-    per-step field snapshots). NEXT on the spine: M18 (small-signal
-    AC), which depends only on the Device1D transient machinery
-    already shipped here.
-  M21 meshing -- phase 1 (1D adaptive h-refinement) shipped; geometry
-    foundation decided as gmsh (validated via conformality check, not
-    just chosen); phases 2-3 not started. See
-    pytcad/M21-MESHING-PLAN.md.
+    per-step field snapshots).
+  M18 small-signal AC -- Phase 1 LANDED 2026-08-31: pytcad/ac.py, an
+    external module (device.py untouched) computing complex admittance
+    Y(f)/C(f)/G(f) for Device1D by perturbing the converged DC Jacobian
+    with jw*Cmat (Cmat verified bit-identical to transient.py's own
+    storage term). A real bug (per-node FD step size breaking an exact
+    analytic cancellation, silently doubling the low-frequency
+    conductance) was caught by the G-LOWF gate before being reported.
+    Library-only: no Device2D, no GUI. See pytcad/M18-AC-PLAN.md.
+  M19 self-heating -- Phase 1 LANDED 2026-08-31: pytcad/thermal.py, an
+    outer isothermal-DD + Gummel thermal loop (NOT a monolithic
+    psi/n/p/T Newton system -- Device1D's whole scaling framework is
+    built from a single scalar T, so that would be a much larger
+    rewrite than the gates require). A real bug (naive J*E Joule
+    heating gives thermodynamically impossible negative heat in a
+    diode's diffusion-dominated depletion region) was found and fixed
+    using the correct quasi-Fermi-potential-gradient dissipation term
+    (Wachutka 1990), cross-checked against energy conservation (I*V) to
+    0.04%. Added Semiconductor.kappa_th300/kappa_th(T) to materials.py
+    (none existed before, despite the milestone spec's "no new
+    material work" note). See pytcad/M19-SELFHEATING-PLAN.md, including
+    an honest finding that a real diode's self-heating INCREASES
+    current (the opposite of the "roll-off" language in the milestone
+    spec, which fits a MOSFET, not a diode).
+  M21 meshing -- phase 1 (1D adaptive h-refinement, pytcad/M21-MESHING-
+    PLAN.md) and phase 2 (2D/3D separable adaptive refinement) shipped.
+    Phase 3 (general unstructured 2D + Delaunay FV assembly,
+    pytcad/M21-PHASE3-MESHING-PLAN.md) is now COMPLETE 2026-08-31: 3a
+    (gmsh_mesh.py/region_resolver.py/unstructured_assembly.py geometry
+    foundation), 3b (unstructured_poisson.py, Poisson-only equilibrium),
+    3c (unstructured_dd.py, coupled SG bias solve), and 3d
+    (Device2D(unstructured=True) -- a thin wrapper into Device2D's own
+    solve_equilibrium/solve_bias/terminal_current API, verified
+    bit-identical to calling the standalone functions directly) all
+    landed and gated. Homojunction/Boltzmann-only by explicit design
+    (unstructured_dd.py's own docstring); Device2D(unstructured=True)
+    refuses any Models() flag that physics core doesn't implement.
   M22 linear solver -- phase 1 (Krylov+ILU+block-Jacobi preconditioner)
     shipped; a hard-debug pass found and fixed a real bit-identity bug
     in solve_linear(method="direct") reformatting the matrix before
@@ -308,25 +348,30 @@ ACTIVE / OPEN:
     gate green; phase 2 (continuation driver, strength-ladder-aware
     corrector) LANDED 2026-08-28 and is what let M15 R1b close; the
     section-7 Schur-complement preconditioner (solve_linear(precond=
-    "schur")) LANDED-PENDING-VERIFICATION 2026-08-29 (additive, default
-    unchanged, NOT wired into NewtonOptions yet).  See
-    pytcad/M22-LINSOLVE-PLAN.md.
+    "schur")) landed 2026-08-29 and was VERIFIED 2026-08-31 (gates were
+    written but never run until then; all 5 Schur-specific gates passed
+    cleanly on first execution -- additive, default unchanged, not
+    wired into NewtonOptions).  See pytcad/M22-LINSOLVE-PLAN.md.
   M16 BTBT -- local Kane/Hurkx generation, live Jacobian coupling,
-    LANDED-PENDING-VERIFICATION 2026-08-29: code + gates written, NEVER
-    EXECUTED (history.md Addendum 16).  The next session MUST run
-    tests/test_m16_btbt.py before treating it as complete.
+    landed 2026-08-29, VERIFIED 2026-08-31: the gates had never been
+    run; once executed, 2 of 13 failed, but all three root causes were
+    bugs in the TEST assertions (inverted sort direction, a sign error
+    comparing two negative slopes, a correlation-sign check that could
+    never pass for a genuine negative-slope fit) -- not the physics.
+    All 13 pass now. See pytcad/M16-BTBT-PLAN.md.
   M20 density gradient -- Ancona-Stafford DG quantum correction
-    (equilibrium-only, MOSCapacitor dg flag + Device1D Models.dg,
-    lagged-Lambda outer fixed point), plus the pytcad/dg.py analysis
-    layer (quantum_potential, Airy reference, Schroedinger-Poisson
-    solver).  LANDED-PENDING-VERIFICATION 2026-08-29: code + gates
-    (tests/test_m20_dg.py, G-A..G-F) written, NEVER EXECUTED; three
-    real defects self-caught during the gate-writing cross-check
-    (double-kT occupation bug, inverted E_band sign, np.empty garbage
-    far-boundary diagonal -- history.md Addendum 18).  Catalog "dg"
-    + wire default landed; three key-set pin tests updated
-    (test_smoke_e2e's toggle parametrize deliberately does NOT include
-    dg -- equilibrium-only, same precedent as surface_mobility).
+    (equilibrium-only, MOSCapacitor dg flag + Device1D Models.dg), plus
+    the pytcad/dg.py analysis layer (quantum_potential, Airy reference,
+    Schroedinger-Poisson solver). COMPLETE, ALL GATES GREEN 2026-08-31:
+    the original lagged-Lambda outer fixed point converged cleanly but
+    to the WRONG physics (a gamma-calibration gap); replaced with a
+    genuinely coupled Newton solve of (psi, Lambda_n, Lambda_p)
+    together, plus a hard-wall interface boundary condition for
+    MOSCapacitor (researched against DEVSIM's own density-gradient
+    implementation) that fixed a real wrong-sign bug in the near-
+    surface quantum potential. gamma stays at its documented default of
+    1.0, untouched -- the boundary-condition fix closed the gates, not
+    a gamma retune. See pytcad/M20-DENSITY-GRADIENT-PLAN.md section 7.
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

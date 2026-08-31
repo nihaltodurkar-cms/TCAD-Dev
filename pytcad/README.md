@@ -21,15 +21,23 @@ pytcad/ (this package)
                  per-node heterojunction materials (M11); Hurkx trap-
                  assisted tunneling (M12); impact ionization (M15);
                  local Kane/Hurkx BTBT (M16); density-gradient quantum
-                 correction in equilibrium (M20); surface recombination
-                 velocity S_n/S_p (M14)
+                 correction in equilibrium (M20, coupled-Newton); surface
+                 recombination velocity S_n/S_p (M14)
   transient.py   time-dependent drift-diffusion (M17): backward-Euler/
                  theta-scheme, step/ramp/pulse waveforms, driving
                  Device1D through its own residual/Jacobian externally
                  (continuation.py's pattern) -- device.py never touched
+  ac.py          small-signal AC analysis for Device1D (M18): complex
+                 admittance Y(f)/C(f)/G(f) from the converged DC
+                 Jacobian + a capacitive block, same external-driver
+                 pattern as transient.py; 1D only, library-only (no GUI)
+  thermal.py     steady-state 1D self-heating (M19): isothermal DD +
+                 outer Gummel loop against a nonlinear lattice heat
+                 equation; device.py untouched
   btbt.py        BTBT coefficients A, B (Hurkx Table I silicon), pure module
   moscap.py      MOS capacitor, quasi-static C-V, interface traps (M14);
-                 density-gradient quantum correction (M20)
+                 density-gradient quantum correction (M20, coupled-Newton,
+                 hard-wall Si/SiO2 interface BC)
   dg.py          M20 analysis layer: DG quantum potential, Airy triangular-
                  well reference, Schrödinger-Poisson inversion-layer solver
   linsolve.py    direct/GMRES/BiCGStAB + ILU, node-block-Jacobi and Schur
@@ -41,18 +49,30 @@ pytcad/ (this package)
   mesh2d.py      tensor-product 2D mesh + Debye-length adequacy check
   device2d.py    2D drift-diffusion: box-integration Poisson + continuity;
                  Lombardi CVT surface mobility (M14); S_n/S_p surface
-                 recombination velocity for arbitrary contact shapes (M14)
+                 recombination velocity for arbitrary contact shapes (M14);
+                 unstructured=True (M21 phase 3d): a gmsh triangle mesh,
+                 thin wrapper around unstructured_poisson.py/
+                 unstructured_dd.py, homojunction-only
   transient2d.py time-dependent drift-diffusion for Device2D (M17),
                  same external-driver pattern as transient.py
-  mosfet.py      2D MOSFET builder + Id-Vg sweep
+  mosfet.py      2D MOSFET builder + Id-Vg sweep (structured mesh only)
   mesh3d.py      tensor-product 3D mesh + Debye-length adequacy check
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
+  gmsh_mesh.py, region_resolver.py, unstructured_assembly.py,
+  unstructured_poisson.py, unstructured_dd.py
+                 M21 phase 3: unstructured (gmsh triangle) 2D meshing --
+                 region/contact resolution, dual-cell + TPFA flux
+                 geometry, Poisson-equilibrium and coupled SG bias
+                 solves; standalone, directly tested, and wired into
+                 Device2D(unstructured=True) above
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
 tests/           analytic-limit validation + published-value physics
-                 benchmarks -- fast suite (`-m "not slow"`) currently
-                 896 passed, 25 skipped, 1 xfailed, 4 known failures
-                 (M20 gamma calibration, left open by user decision)
+                 benchmarks + headless GUI tests -- fast suite
+                 (`-m "not slow"`) currently 942 passed, 6 skipped,
+                 1 xfailed, 1 known failure (a pre-existing, unrelated
+                 flaky eigensolver test in the M20 Schrödinger-Poisson
+                 reference solver -- see M20-DENSITY-GRADIENT-PLAN.md)
 ../workbench/    domain layer: materials library (Si, Ge, GaAs, InGaAs,
                  AlGaAs), model catalog, solver backends, tunneling and
                  impact-ionization physics, deck front end
@@ -92,8 +112,8 @@ $$J_n = q\mu_n n E + qD_n \frac{dn}{dx}, \qquad J_p = q\mu_p p E - qD_p \frac{dp
 | Classical (no quantisation; `MOSCapacitor(dg=True)` / `Models(dg=True)` available, equilibrium) | thin-oxide inversion layers: real charge centroid sits ~1 nm deep, so $C_{max}$ is overestimated by 10–20% |
 | Local mobility model | quasi-ballistic transport in sub-30 nm channels |
 | Local impact-ionisation / BTBT models (`Models(impact=True)`, `Models(btbt=True)` available, 1D) | avalanche breakdown needs voltage continuation; nonlocal tunneling paths (GIDL at large reverse bias), direct gate leakage below ~2 nm oxide |
-| Isothermal | self-heating (no lattice-temperature equation) |
-| Steady-state solve is the default | time-domain (M17, `transient.py`/`transient2d.py`) is now available for 1D/2D; small-signal AC/frequency-domain analysis is not yet built (M18) |
+| Isothermal by default | steady-state 1D self-heating (M19, `pytcad.thermal`) is available as an isothermal-DD + outer Gummel thermal loop, not a monolithic coupled solve; 2D and transient self-heating are not built |
+| Steady-state solve is the default | time-domain (M17, `transient.py`/`transient2d.py`) is available for 1D/2D; small-signal AC (M18, `pytcad.ac`) is available for 1D, library-only (no GUI exposure yet) |
 
 ---
 
@@ -141,9 +161,10 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 
 ## 4. Validation
 
-All tests pass as part of the project-wide fast suite (896 passed, 25
-skipped, 1 xfailed, 4 known M20 failures left open by user decision,
-zero new warnings); every result is classified as literature benchmark,
+All tests pass as part of the project-wide fast suite (942 passed, 6
+skipped, 1 xfailed, 1 known failure -- a pre-existing, unrelated flaky
+eigensolver test, see M20-DENSITY-GRADIENT-PLAN.md -- zero new
+warnings); every result is classified as literature benchmark,
 analytical validation, model parameterization, or numerical
 regression — see the project README. Selected results for an abrupt 10¹⁷/10¹⁷ Si junction, 2 µm long, 300 K:
 
@@ -217,16 +238,17 @@ pytest tests/ gui/tests/               # full suite, serial
 pytest tests/ gui/tests/ -n 6 -m "not slow" -q   # fast dev loop (parallel)
 ```
 
-Requires `numpy`, `scipy`, `matplotlib` (examples only); `pip install -r
-requirements-dev.txt` for `pytest`/`pytest-xdist` to run tests. Cap
-parallel workers at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see
-AGENTS.md's Commands section for why.
+Everything -- library, GUI, tests, and optional deps (gmsh, devsim,
+mpmath) -- is in one file: `pip install -r requirements.txt` (verified
+on Linux and Windows, see the file's own header). Cap parallel workers
+at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see AGENTS.md's Commands
+section for why.
 
 ---
 
 ## 6. Honest limits of *this* code
 
-- **The 1D core** has no short-channel-effect modeling beyond drift-diffusion, no LOCOS/STI, and no unstructured mesh. A real $I_d$–$V_g$ MOSFET sweep with a gate-controlled channel *is* now available — see the "2D MOSFET (new)" subsection below.
+- **The 1D core** has no short-channel-effect modeling beyond drift-diffusion, no LOCOS/STI. A real $I_d$–$V_g$ MOSFET sweep with a gate-controlled channel *is* now available — see the "2D MOSFET (new)" subsection below. Unstructured (gmsh triangle) 2D meshing now exists (M21 phase 3, `Device2D(unstructured=True)`) but is homojunction-only (no Caughey-Thomas mobility, no FD statistics, no heterojunctions) and library-only -- no GUI path to build or edit an unstructured mesh.
 - **Implant tables are approximate** LSS moments for *amorphous* Si, good to ~5–10%. They contain **no channelling**, which in crystalline Si can put a tail 1–2 decades deeper. Pass `Rp`/`dRp` from SRIM for anything real.
 - **Diffusion is intrinsic and constant-$D$.** No extrinsic (charged-defect) enhancement above $n_i(T)$, no transient enhanced diffusion from implant damage, no oxidation-enhanced diffusion, no dopant–defect pair kinetics. These dominate real junction formation below ~1000 °C.
 - **Deal–Grove under-predicts thin dry oxides.** The $x_i \approx 25$ nm initial thickness is a fudge factor, not physics.
@@ -261,6 +283,60 @@ only a scalar current-vs-time series is stored, not per-step field
 snapshots; one quantitative diode-turn-off charge estimate was
 investigated and left an honest partial result. See
 `M17-TRANSIENT-PLAN.md`.
+
+### Small-signal AC analysis (new)
+
+M18 adds frequency-domain small-signal analysis for `Device1D`
+(`ac.py`): the complex admittance `Y(f) = J_ac(w)^-1` reuses the
+converged DC Jacobian plus a capacitive block that is bit-identical to
+`transient.py`'s own backward-Euler storage term with `d/dt -> jw`
+substituted in -- `device.py` untouched. Gated against a finite-
+difference `dI/dV`/`dQ/dV` from independent `solve_bias` calls (the
+low-frequency limit), a freshly-derived analytic abrupt-junction
+depletion capacitance, and a qualitative high-frequency roll-off
+check. One-port only (drive one contact, the other AC-grounded) --
+no general multi-terminal Y-parameter matrix. 1D only; library-only,
+no GUI exposure. See `M18-AC-PLAN.md`.
+
+### Self-heating (new)
+
+M19 adds steady-state 1D self-heating (`thermal.py`): an isothermal
+Device1D electrical solve coupled to a nonlinear steady lattice-
+temperature equation (`kappa_th(T)` is genuinely temperature-
+dependent) through an outer Gummel loop -- a deliberate architecture
+choice (`Device1D`'s entire scaling framework is built from a single
+scalar `T`; a monolithic per-node coupled temperature unknown would be
+a much larger rewrite than the acceptance gates need), not a shortcut.
+Gated against a closed-form parabolic temperature profile (uniform
+heat source, constant `kappa`), an FD-Jacobian check on the nonlinear
+heat equation, and a measured electrothermal feedback direction on a
+diode (current *increases* with self-heating at fixed bias -- the
+correct PN-junction physics, not the MOSFET-style "roll-off" the
+milestone's own shorthand name suggested). Thermal runaway is real
+above a measured bias/thermal-resistance threshold and raises
+`RuntimeError` rather than returning nonsense. 1D steady-state only;
+no 2D, no transient coupling, no Seebeck/Peltier. See
+`M19-SELFHEATING-PLAN.md`.
+
+### Unstructured (gmsh) 2D meshing (new)
+
+M21 phase 3 adds general unstructured 2D meshing on top of `Device2D`:
+`Device2D(mesh, doping, unstructured=True)` accepts a `gmsh_mesh.
+GmshMesh` triangle mesh (nodes/triangles/region+contact Physical
+Groups) and a `{region_name: doping_value}` dict, and solves through
+the same `solve_equilibrium`/`solve_bias`/`terminal_current` API as a
+structured device. Internally a thin wrapper (zero new Jacobian
+entries, bit-identical to calling `unstructured_poisson.py`/
+`unstructured_dd.py` directly) around a genuinely new box-integration
+FV assembly on an arbitrary triangulation (dual-cell areas, per-edge
+TPFA flux geometry, Scharfetter-Gummel current on non-axis-aligned
+edges). Golden-parity gated against the structured solver (~5-6%
+relative on terminal current -- reported honestly, not tightened).
+Homojunction-only (uniform mobility, no Caughey-Thomas/FD/
+incomplete-ionization/surface-mobility) -- any incompatible
+`Models()` flag raises `NotImplementedError` rather than solving
+silently wrong. No 3D, no adaptive refinement, no heterojunctions, no
+GUI path to build or edit a mesh. See `M21-PHASE3-MESHING-PLAN.md`.
 
 ### Desktop GUI (new)
 

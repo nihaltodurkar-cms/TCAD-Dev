@@ -239,8 +239,30 @@ def test_gc_classical_centroid_is_the_sub_debye_tail():
 def test_gd_dg_changes_the_physics_in_every_required_direction():
     """One comparison, four directions: (1) DG centroid strictly
     > 0.2 nm, (2) the surface density is SUPPRESSED by the correction,
-    (3) Lambda peaks at a first-INTERIOR node (Neumann choice), (4)
-    C_max drops 3-25% vs the classical curve."""
+    (3) Lambda peaks AT the hard-wall interface and decays
+    monotonically into the bulk, (4) C_max drops 3-25% vs the
+    classical curve.
+
+    (3) was rewritten 2026-08-31 (M20 coupled-Newton reformulation):
+    the OLD assumption ("Lambda[0]==0, Neumann, peak strictly
+    interior") was itself found to be the wrong boundary condition --
+    researched against DEVSIM's density-gradient reference
+    implementation (Wettstein et al. 2002; Garcia-Loureiro et al.
+    2011), which treats the semiconductor/insulator interface as
+    quantum-mechanically opaque (extending into the oxide with its own
+    quantum prefactor), not as a free Neumann boundary. This
+    MOSCapacitor has no oxide mesh to extend into (the oxide is a
+    lumped Robin/Cox term), so the equivalent, and this codebase's OWN
+    Schrodinger-Poisson reference solver's convention
+    (dg.schrodinger_poisson's hard_wall_left=True: psi_k(0)=0 exactly)
+    is a HARD WALL: Lambda pinned at its maximum (numerical-clamp)
+    value exactly at the interface, decaying away from it -- the
+    correct physical signature of an infinite confining barrier, not
+    a defect. See M20-DENSITY-GRADIENT-PLAN.md section 6 for the full
+    record (this fixed a real, independently-confirmed WRONG-SIGN bug
+    in the old Neumann treatment along the way: the near-surface
+    Lambda was NEGATIVE under the old BC, enhancing rather than
+    suppressing density there)."""
     mos_dg = MOSCapacitor(**PARAMS, dg=True)
     mos_cl = MOSCapacitor(**PARAMS)
 
@@ -249,8 +271,7 @@ def test_gd_dg_changes_the_physics_in_every_required_direction():
     assert xc > 0.2e-7, f"DG centroid {xc*1e7:.3f} nm not > 0.2 nm"
 
     # (2) suppression: evaluate BOTH densities on the SAME (DG) psi, so
-    # the comparison isolates the quantum correction itself; the first
-    # interior node is where Lambda acts (Lambda[0] == 0 by BC).
+    # the comparison isolates the quantum correction itself.
     psi_dg = mos_dg.solve_psi(_vg_strong())
     Lam = mos_dg._dg_Lam_n
     e = np.clip(psi_dg, -700, 700)
@@ -259,11 +280,21 @@ def test_gd_dg_changes_the_physics_in_every_required_direction():
     assert n_dg[1] < n_cl_same_psi[1], (
         "DG correction did not suppress the near-surface density")
 
-    # (3) Lambda peaks at a first-interior node, NOT the boundary
-    assert Lam[0] == 0.0, "Lambda at the Si/SiO2 interface must be 0"
+    # (3) Lambda peaks AT the hard wall (node 0) and decays into the
+    # bulk over the first several nodes (real confinement decay, not
+    # numerical noise) -- the opposite assertion from the pre-2026-08-31
+    # version, see docstring above.
+    from pytcad.dg import LAMBDA_MAX_VT
+    assert Lam[0] == pytest.approx(LAMBDA_MAX_VT * mos_dg.VT), (
+        f"Lambda at the hard-wall interface should sit at the clamp "
+        f"({LAMBDA_MAX_VT * mos_dg.VT:.4f} V), got {Lam[0]:.4f} V")
     k_peak = int(np.argmax(Lam))
-    assert 0 < k_peak < len(Lam) - 1, (
-        f"Lambda peak at node {k_peak} of {len(Lam)} -- must be interior")
+    assert k_peak == 0, (
+        f"Lambda peak at node {k_peak} of {len(Lam)} -- must be AT "
+        f"the hard wall (node 0)")
+    assert np.all(np.diff(Lam[:10]) < 0), (
+        "Lambda must decay monotonically moving away from the "
+        f"hard wall over the first 10 nodes: {Lam[:10]}")
 
     # (4) C_max drop: 3-25% (the README section-6 caveat's 10-20% band,
     #     widened for the uncalibrated gamma=1 and this oxide/doping)

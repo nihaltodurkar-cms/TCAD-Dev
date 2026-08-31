@@ -110,14 +110,38 @@ class Device2D:
 
     Parameters
     ----------
-    mesh     : Mesh2D
-    doping   : net doping N_D - N_A [cm^-3], shape (Ny, Nx) or flat (N,)
+    mesh     : Mesh2D, or a gmsh_mesh.GmshMesh when unstructured=True
+    doping   : net doping N_D - N_A [cm^-3], shape (Ny, Nx) or flat (N,);
+               when unstructured=True, a {region_name: doping_value}
+               dict instead (there is no (Ny,Nx) grid to reshape a
+               per-node array into -- mirrors unstructured_poisson.
+               evaluate_doping_at_nodes's own doping_by_region param)
     Ntotal   : total ionised impurity concentration for mobility/lifetime
-               models [cm^-3]; defaults to |doping|
+               models [cm^-3]; defaults to |doping|. Not used when
+               unstructured=True (see the M21 phase 3d refusal list).
+    unstructured : M21 phase 3d -- wire the standalone, already-gated
+               unstructured_poisson.py/unstructured_dd.py physics core
+               (region_resolver.py, unstructured_assembly.py) into this
+               class's normal solve_equilibrium/solve_bias/terminal_
+               current API. A THIN WRAPPER, not new physics: refuses
+               loudly (NotImplementedError) for any Models() flag or
+               material config that core doesn't implement
+               (doping_mobility, bgn, fd, incomplete_ion,
+               surface_mobility, field_mobility, heterostructure
+               material lists) rather than silently ignoring it -- see
+               M21-PHASE3-MESHING-PLAN.md section "PHASE 3d
+               IMPLEMENTATION RECORD". self.psi/n/p are flat (N,)
+               arrays on this path, NOT reshaped to (Ny,Nx) -- there is
+               no grid.
     """
 
-    def __init__(self, mesh: Mesh2D, doping, Ntotal=None, T=300.0,
-                 material: Semiconductor = SILICON, models: Models = None):
+    def __init__(self, mesh, doping, Ntotal=None, T=300.0,
+                 material: Semiconductor = SILICON, models: Models = None,
+                 unstructured=False):
+        self.unstructured = bool(unstructured)
+        if self.unstructured:
+            self._init_unstructured(mesh, doping, T, material, models)
+            return
         self.mesh = mesh
         self.Nx, self.Ny, self.N = mesh.Nx, mesh.Ny, mesh.N
         self.doping = np.asarray(doping, dtype=float).reshape(self.Ny, self.Nx)
@@ -284,6 +308,145 @@ class Device2D:
 
         self.bcs = {}   # name -> DirichletBC | GateBC
         self.psi = self.n = self.p = None
+
+    # ------------------------------------------------------------------
+    #  M21 phase 3d -- unstructured (gmsh triangle mesh) path
+    # ------------------------------------------------------------------
+    def _init_unstructured(self, mesh, doping, T, material, models):
+        """Thin-wrapper setup: run the exact pipeline tests/test_m21_
+        phase3.py's own diode_bias_solve fixture already exercises
+        end-to-end (the golden, already-gated reference sequence),
+        store the results, and refuse any Models()/material config the
+        standalone unstructured_poisson.py/unstructured_dd.py physics
+        core does not implement. See M21-PHASE3-MESHING-PLAN.md
+        "PHASE 3d IMPLEMENTATION RECORD" for the full rationale.
+        """
+        # Local imports: unstructured_poisson.py/unstructured_dd.py both
+        # import _ohmic_values FROM this module, so a top-level import
+        # here would be circular.
+        from .gmsh_mesh import GmshMesh
+        from .region_resolver import resolve_regions, resolve_contacts
+        from .unstructured_assembly import (
+            build_unstructured_stencil, build_edge_flux_geometry,
+        )
+        from .unstructured_poisson import evaluate_doping_at_nodes
+
+        if not isinstance(mesh, GmshMesh):
+            raise TypeError(
+                "Device2D(unstructured=True) requires a gmsh_mesh.GmshMesh, "
+                f"got {type(mesh).__name__}")
+        if not isinstance(doping, dict):
+            raise TypeError(
+                "Device2D(unstructured=True) requires doping as a "
+                "{region_name: doping_value} dict (no (Ny,Nx) grid exists "
+                f"to reshape a per-node array into), got {type(doping).__name__}")
+        if not isinstance(material, Semiconductor):
+            raise NotImplementedError(
+                "Device2D(unstructured=True) does not support a "
+                "heterostructure material list -- unstructured_dd.py is "
+                "explicitly homojunction-only (see its module docstring). "
+                "Pass a single Semiconductor.")
+
+        models = models or Models()
+        self.models = models
+        unsupported = {
+            "doping_mobility": getattr(models, "doping_mobility", False),
+            "bgn": getattr(models, "bgn", False),
+            "fd": getattr(models, "fd", False),
+            "incomplete_ion": getattr(models, "incomplete_ion", False),
+            "surface_mobility": getattr(models, "surface_mobility", False),
+            "field_mobility": getattr(models, "field_mobility", False),
+        }
+        bad = [name for name, on in unsupported.items() if on]
+        if bad:
+            raise NotImplementedError(
+                f"Device2D(unstructured=True) does not implement {bad} -- "
+                "unstructured_poisson.py/unstructured_dd.py are homojunction-"
+                "only (uniform mu_n_max/mu_p_max, no Caughey-Thomas doping "
+                "dependence, no FD statistics, no incomplete ionization, no "
+                "surface/field mobility). Refusing rather than silently "
+                "ignoring the flag(s) -- same convention as the impact/btbt/"
+                "dg/incomplete_ion refusals above for the structured path. "
+                "NOTE: Models()'s own default has doping_mobility=True, so "
+                "unstructured=True callers must pass "
+                "Models(doping_mobility=False, ...) explicitly.")
+
+        self.mesh = mesh
+        self.mat = material
+        self.mats = None          # no per-node material list on this path
+        self.T = T
+        self.doping = doping      # {region_name: value}, unlike structured
+
+        regions = resolve_regions(mesh)
+        self._u_contacts = resolve_contacts(mesh)
+        edge_list, node_areas = build_unstructured_stencil(
+            mesh.nodes, mesh.triangles)
+        interior_edges, trans_geom = build_edge_flux_geometry(
+            mesh.nodes, mesh.triangles, edge_list)
+        region_of_triangle = np.empty(mesh.n_triangles(), dtype=object)
+        for name, idx in regions.items():
+            region_of_triangle[idx] = name
+        C_phys = evaluate_doping_at_nodes(
+            mesh.nodes, mesh.triangles, region_of_triangle, doping)
+
+        self._u_edge_list = edge_list
+        self._u_node_areas = node_areas
+        self._u_interior_edges = interior_edges
+        self._u_trans_geom = trans_geom
+        self._u_C = C_phys
+        self._u_terminal_current = {}
+        self.N = mesh.n_nodes()
+        self.bcs = {}
+        self.psi = self.n = self.p = None
+
+    def _unstructured_solve_equilibrium(self, opts):
+        from .unstructured_poisson import solve_poisson_equilibrium
+        psi, scale = solve_poisson_equilibrium(
+            self.mesh.nodes, self.mesh.triangles, self._u_edge_list,
+            self._u_node_areas, self._u_interior_edges, self._u_trans_geom,
+            self._u_C, self._u_contacts, material=self.mat, T=self.T,
+            opts=opts)
+        Ns, nie_s = scale["Ns"], scale["nie"] / scale["Ns"]
+        C_s = self._u_C / Ns
+        e = np.clip(psi, -700, 700)
+        n = np.where(C_s >= 0,
+                    0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
+                    nie_s ** 2 / np.maximum(
+                        0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
+                        1e-300))
+        p = nie_s ** 2 / np.maximum(n, 1e-300)
+        self.psi, self.n, self.p = psi, n, p
+        self._u_scale = scale
+        self.Ns, self.LD, self.VT = scale["Ns"], scale["LD"], scale["VT"]
+        self.J0 = Q * D0_REF * self.Ns / self.LD
+        return self
+
+    def _unstructured_solve_bias(self, voltages, opts):
+        from .unstructured_dd import solve_bias as _u_solve_bias
+        if self.psi is None:
+            self._unstructured_solve_equilibrium(opts)
+        voltages = voltages or {}
+        psi, n, p, scale, terminal_current = _u_solve_bias(
+            self.mesh.nodes, self.mesh.triangles, self._u_edge_list,
+            self._u_node_areas, self._u_interior_edges, self._u_trans_geom,
+            self._u_C, self._u_contacts, bias=voltages, material=self.mat,
+            T=self.T, opts=opts, srh=self.models.srh,
+            auger=getattr(self.models, "auger", False))
+        self.psi, self.n, self.p = psi, n, p
+        self._u_terminal_current = terminal_current
+        self._u_scale = scale
+        self.Ns, self.LD, self.VT = scale["Ns"], scale["LD"], scale["VT"]
+        self.J0 = Q * D0_REF * self.Ns / self.LD
+        return self
+
+    def _unstructured_terminal_current(self, name):
+        if self.psi is None:
+            raise RuntimeError("terminal_current: solve the device first")
+        if name not in self._u_terminal_current:
+            raise ValueError(
+                f"terminal_current: '{name}' is not a known contact "
+                f"(known: {sorted(self._u_terminal_current)})")
+        return self._u_terminal_current[name]
 
     # ------------------------------------------------------------------
     def _update_surface_mobility(self, psi):
@@ -478,6 +641,8 @@ class Device2D:
     # ------------------------------------------------------------------
     def solve_equilibrium(self, opts: NewtonOptions = None):
         opts = opts or NewtonOptions()
+        if self.unstructured:
+            return self._unstructured_solve_equilibrium(opts)
         Ny, Nx = self.Ny, self.Nx
 
         psi = self._bulk_psi_guess()
@@ -804,6 +969,8 @@ class Device2D:
         not mentioned keep their previously set voltage.  Gate voltage is
         set the same way, using the gate's registered name."""
         opts = opts or NewtonOptions()
+        if self.unstructured:
+            return self._unstructured_solve_bias(voltages, opts)
         if self.psi is None:
             self.solve_equilibrium(opts)
 
@@ -885,6 +1052,8 @@ class Device2D:
         sign, automatically, with no separate edge-walking or restriction
         to a single boundary row.
         """
+        if self.unstructured:
+            return self._unstructured_terminal_current(name)
         bc = self.bcs[name]
         if not isinstance(bc, DirichletBC):
             raise ValueError(f"terminal_current: '{name}' is not a Dirichlet contact")

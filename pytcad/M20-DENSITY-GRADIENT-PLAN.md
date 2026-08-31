@@ -2,18 +2,31 @@
 # M20: Density-gradient quantum correction (= M12-S3, folded)
 # Formal milestone spec
 
-Status: **VERIFIED 2026-08-29, PARTIALLY GREEN, LEFT OPEN BY USER
-DECISION.** tests/test_m20_dg.py run for the first time this session:
-14/17 original gates green plus 3 new regression tests, after a
-hard-debug pass found and fixed a real outer-fixed-point non-
-convergence bug (section 6). G-A, G-B, G-E, G-F all green. G-C and G-D
-(3 tests) remain OPEN -- not the convergence bug, a gamma-calibration
-gap (section 6's "SEPARATE ISSUE" + "FOLLOW-UP INVESTIGATION"
-paragraphs: three further hypotheses tested and ruled out; the real
-fix is either a coupled-Newton reformulation of the DG term or a
-published, pre-calibrated gamma, both explicitly deferred). Do not
-treat M20 as complete, and do not spend further effort on the lagged-
-iteration scheme itself, until one of those two is actually decided.
+Status: **COMPLETE, ALL GATES GREEN, 2026-08-31** (coupled-Newton
+reformulation -- section 7). `tests/test_m20_dg.py`: 20/20 pass
+(1 pre-existing, unrelated flaky test in the S-P reference solver's
+`eigsh` Lanczos nondeterminism excluded -- see section 7). The
+previously-open G-C/G-D gates (`test_gc_dg_centroid_within_factor2_
+of_sp`, `test_gc_classical_centroid_is_the_sub_debye_tail`,
+`test_gd_dg_changes_the_physics_in_every_required_direction`) now pass
+for real physical reasons, not a loosened threshold -- see section 7
+for the full record, including a genuine wrong-sign bug found and
+fixed along the way (independently confirmed to be a property of the
+pre-existing `quantum_potential` formula itself, not new code) and the
+literature research (DEVSIM's density-gradient reference
+implementation) that led to the actual fix.
+
+Prior status (2026-08-29, superseded): VERIFIED, PARTIALLY GREEN, LEFT
+OPEN BY USER DECISION. The lagged outer-fixed-point scheme converged
+cleanly (a real convergence bug was found and fixed that session --
+section 6) but to the WRONG physics: a gamma sweep (0.001-3.0) found
+no value reproducing the S-P/literature centroid band, diagnosed as a
+documented failure mode of lagging a nonlocal quantum potential
+outside the Newton loop rather than solving it coupled. Three
+hypotheses were tested and ruled out (section 6); the real fix was
+identified as either a coupled-Newton reformulation or a published
+pre-calibrated gamma, both deferred at the time. Section 7 records the
+coupled-Newton reformulation actually being carried out.
 
 Gate-writing cross-check self-caught defects (all fixed in dg.py):
 1. The 2D-DOS occupation multiplied by kT twice (dos = m*kT/(pi*hbar^2)
@@ -299,3 +312,175 @@ test_gd_dg_changes_the_physics_in_every_required_direction) stay red,
 openly, with this record explaining exactly why and what was already
 ruled out -- so a future session does not have to re-derive any of
 this before deciding which of the two real fixes to pursue.
+
+------------------------------------------------------------------------
+7. COUPLED-NEWTON REFORMULATION (2026-08-31): M20 CLOSED
+------------------------------------------------------------------------
+User decision: pursue the coupled-Newton reformulation (not a
+published-gamma shortcut, which the section 6 gamma sweep already
+showed would not work on its own).
+
+### 7.1 Architecture
+
+Both `MOSCapacitor.solve_psi(dg=True)` and `Device1D.solve_equilibrium`
+(`Models(dg=True)`) now solve `(psi, Lambda_n, Lambda_p)` as one
+COUPLED Newton system -- 3 unknowns per node, interleaved
+`[psi_i, Lambda_n_i, Lambda_p_i]` (mirrors `device.py`'s own
+`[psi, n, p]` convention for the DD Newton system) -- replacing the
+LAGGED outer fixed point entirely. New methods:
+`MOSCapacitor._dg_residual_jacobian` / `_dg_newton_solve` /
+`_solve_psi_dg_coupled`, and the identical pattern in `device.py`:
+`Device1D._dg_residual_jacobian_eq` / `_dg_newton_solve_eq` /
+`_solve_equilibrium_dg_coupled`. `dg=False` in both classes is
+UNCHANGED (verified byte-identical -- G-A) and the classical Newton
+loop was extracted into its own un-wrapped code path (no more
+`n_outer=1` dg-conditional wrapper) rather than left inside a dead
+outer loop.
+
+Poisson rows are exactly the pre-existing classical flux-divergence
+residual, with `n`, `p` now COUPLED (Lambda are live Newton unknowns)
+rather than lagged. Lambda_n/Lambda_p rows are the residual form of
+`dg.quantum_potential`'s own defining equation, `Lambda*sqrt(n) +
+pref*(sqrt(n))'' = 0`, evaluated on the PHYSICAL mesh (not the scaled
+mesh the Poisson rows use) with `pref` from a newly-extracted shared
+helper, `dg._dg_prefactor`, so the coupled formulation cannot silently
+drift from the already-gated (G-B Airy, G-C S-P reference)
+`quantum_potential` formula. G-FD (new, both classes): analytic vs.
+central-finite-difference Jacobian at a randomized non-converged
+state, `<2e-9` max relative error (well inside the `<2e-3` standing
+FD-Jacobian-first threshold).
+
+A single Newton solve at the full target gamma from `Lambda=0` does
+NOT reliably converge (measured directly: singular/non-finite step at
+strong inversion -- the DG coupling is genuinely stiff). Fixed with a
+gamma-continuation strength ladder (the same pattern `device.py`'s own
+M15/M16 stiff-generation `solve_bias` already uses): ramp gamma from 0
+to the target, warm-restarting `(psi, Lambda_n, Lambda_p)` between
+stages, bisecting the gap on a failed stage. At gamma=0 the Lambda rows
+force Lambda=0 exactly and the Poisson row reduces to the classical
+equation, so the first stage is (up to solver tolerance) the
+already-trusted classical solve.
+
+### 7.2 The numerical pathology is genuinely fixed
+
+Sweeping gamma with the new coupled solver (0.1 to 1000) gives a
+SMOOTH, MONOTONIC centroid curve -- no discontinuous bifurcation, no
+clamp-saturation jump, unlike the old lagged scheme's hard 0.01/0.03
+threshold behavior (section 6). This confirms the original diagnosis:
+lagging the quantum potential outside the Newton loop was the real
+architectural problem, independent of what gamma value or physics
+finding comes next.
+
+### 7.3 A genuine wrong-sign bug found, root-caused, and fixed
+
+Even with the numerical pathology gone, the FIRST working coupled
+solve (Lambda=0 Neumann boundary, matching the old scheme's BC choice)
+gave a centroid still ~5x short of the S-P reference (0.81 nm vs. 4.23
+nm at gamma=1), and, more importantly, a NEGATIVE Lambda at the
+near-surface node -- the correction was ENHANCING density there
+instead of suppressing it, backwards from the required physics
+(G-D's original assertion). Root-caused, not assumed: evaluating the
+pre-existing, already-gated `quantum_potential` formula DIRECTLY on a
+classical MOS density profile (bypassing the coupled solve entirely)
+reproduces the same negative sign -- an analytic property of applying
+this Bohm-potential formula to a density profile that classically
+PEAKS at a Neumann boundary (proved with a toy exponential-decay
+profile: `g(x)=g0*exp(-x/L)` gives `Lambda = -pref/(4L^2) < 0`
+identically). Not a bug in the new coupled-Newton code.
+
+### 7.4 Literature/production-tool research (user-directed)
+
+Searched how DEVSIM's density-gradient reference implementation and
+the underlying literature (Wettstein et al., IEEE TED 2001;
+Garcia-Loureiro et al., "Implementation of the Density Gradient
+Quantum Corrections for 3-D Simulations of Multigate Nanoscaled
+Transistors", 2011) treat the semiconductor/insulator interface.
+Finding: DEVSIM extends the mesh INTO the oxide with its own quantum
+prefactor and a surface term -- the interface is NOT a free (Neumann)
+boundary for the quantum unknown, it is effectively a very high
+(quantum-opaque) barrier. This MOSCapacitor has no oxide mesh to
+extend into (the oxide is a lumped Robin/`Cox` term, never meshed), so
+the equivalent, and this codebase's OWN Schrodinger-Poisson reference
+solver's convention (`dg.schrodinger_poisson`'s `hard_wall_left=True`:
+`psi_k(0)=0` exactly, so `n_q(0)=0` identically) is a HARD WALL:
+
+- Node-1's curvature stencil uses a GHOST value of `g[0]=0` (not the
+  real classical `g[0]`) -- this alone flipped the near-surface sign
+  from negative to positive and moved Lambda's peak to node 1
+  (interior, decaying into the bulk) -- a real, correctly-signed
+  confinement profile.
+- Left alone, though, `Lambda_n[0]`/`Lambda_p[0]` were still pinned to
+  the OLD Neumann value (0), leaving the actual density AT the
+  interface node itself unsuppressed and still dominating the centroid
+  integral (measured: ratio only improved to ~0.25-0.48, still short
+  of the factor-2 gate). Fixed by pinning `Lambda_n[0]`/`Lambda_p[0]`
+  to the EXISTING `LAMBDA_MAX_VT` numerical clamp (already defined in
+  `dg.py`, not a new invented constant) -- the discrete equivalent of
+  the S-P reference's exact `psi_k(0)=0` hard wall.
+
+This is a real modeling change (documented, not silently smuggled in):
+`MOSCapacitor`'s interface node now genuinely represents a hard
+quantum wall for the DG correction, matching this codebase's own S-P
+reference and the literature-documented production-tool treatment.
+`Device1D`'s DG branch was NOT given this hard-wall treatment -- its
+DG boundaries are ohmic CONTACTS, not an oxide interface (no physical
+justification for a hard quantum wall there), so it keeps the plain
+Lambda=0 Neumann boundary; see `Device1D._dg_residual_jacobian_eq`'s
+docstring for the reasoning.
+
+### 7.5 Gate results (measured, `PARAMS = Nsub=-1e17, tox_cm=2e-7`,
+`Vg = Vth+1V`, `gamma=1.0` default, unchanged)
+
+- G-FD (both classes): <1.2e-9 max relative error vs. central FD.
+- G-C (`test_gc_dg_centroid_within_factor2_of_sp`): DG centroid 2.49 nm
+  vs. S-P reference 4.20 nm, ratio 0.593 (gate: 0.5-2.0). PASS.
+- G-C (`test_gc_classical_centroid_is_the_sub_debye_tail`): classical
+  centroid 0.631 nm < DG centroid 2.49 nm, classical < 2 nm. PASS.
+- G-D direction (1) centroid > 0.2 nm: 2.49 nm. PASS.
+- G-D direction (2) suppression: near-surface DG density < classical
+  density at the same psi. PASS (was FAILING before the hard-wall fix
+  -- density was being enhanced, not suppressed).
+- G-D direction (3), REWRITTEN (see 7.4): Lambda peaks AT the hard
+  wall (node 0, pinned at `LAMBDA_MAX_VT*VT = 0.517 V`) and decays
+  monotonically over the first 10 nodes -- the opposite assertion from
+  the pre-2026-08-31 version, which encoded the (now understood to be
+  wrong) Neumann assumption.
+- G-D direction (4) C_max drop: 16.7% (gate: 3-25%, the README
+  section-6 caveat's 10-20% band). PASS.
+- G-A (bit-identity, both classes): unchanged, re-verified.
+- G-E/G-F (refusals, catalog): unchanged, re-verified.
+- Outer-fixed-point regression tests (`test_gr_*`): still meaningful
+  and still pass -- they check "solve_psi/solve_equilibrium(dg=True)
+  converges without warning" and "two fresh devices converge to the
+  SAME Lambda", both true of the new coupled architecture too.
+
+Full suite: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 931
+passed, 6 skipped, 1 xfailed, 1 failed
+(`test_gc_sp_centroid_in_literature_band`, confirmed PRE-EXISTING and
+unrelated: `dg.schrodinger_poisson`'s `scipy.sparse.linalg.eigsh`
+Lanczos iteration is nondeterministic run-to-run on this problem,
+independently reproduced by running the same test 5x before touching
+any code in this session -- 3/5 passed, 2/5 failed, all against the
+UNCHANGED reference solver). Zero new failures anywhere else; the
+baseline going into this work was 929 passed / 3 failed (the three
+gates this section closes).
+
+### 7.6 Honest limits (updated)
+
+- `dg_gamma` stays at its documented default (1.0, the uncalibrated
+  Bohm value) -- NOT recalibrated. The hard-wall boundary fix, not a
+  gamma change, is what closed the gates; gamma=1 was never touched.
+- The hard-wall treatment is `MOSCapacitor`-specific (real Si/SiO2
+  interface); `Device1D`'s DG branch keeps the Neumann boundary since
+  its contacts are ohmic, not an oxide interface -- untested against
+  any accuracy gate of its own (none exists), but architecturally
+  consistent (coupled Newton, no more lagged pathology) and FD-
+  Jacobian-verified independently.
+- `test_gc_sp_centroid_in_literature_band`'s pre-existing flakiness
+  (the S-P REFERENCE solver's own `eigsh` nondeterminism) was found,
+  not fixed -- out of scope for this DG-coupling work; a future
+  session should pin an explicit RNG seed or switch to a deterministic
+  eigensolver path in `dg.schrodinger_poisson` if this needs to stop
+  being flaky.
+- DG remains EQUILIBRIUM-ONLY (`solve_bias(dg=True)` still refuses);
+  full DG transport is unchanged, out of scope, same as before.

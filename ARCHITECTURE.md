@@ -1,6 +1,6 @@
 # Semiconductor Workbench - Architecture Plan
 ==========================================================
-Date: 2026-08-28 (updated). Status: M1-M10 SHIPPED (v0.5.0 tagged).
+Date: 2026-08-31 (updated). Status: M1-M10 SHIPPED (v0.5.0 tagged).
 M11 heterostructures COMPLETE through S5 (S1 materials, S2
 region_materials wire format, S3 1D heterojunction core: eps(x)
 flux-form Poisson, Anderson band offsets via carrier-specific ln(nie)
@@ -11,8 +11,8 @@ HBT/HEMT parametric templates solve through the pipeline -- COMPLETE
 except optional devsim hetero support).
 M12 tunneling SHIPPED (S1 FN+WKB analysis module with published-
 constant gates; S2 Hurkx trap-assisted tunneling in Device1D, all
-acceptance gates green; S3 density-gradient designed, not started --
-folded into M20 of the parity plan).
+acceptance gates green; S3 density-gradient folded into M20 of the
+parity plan -- M20 COMPLETE, ALL GATES GREEN 2026-08-31, see below).
 M13 Fermi-Dirac statistics COMPLETE (all gates G1-G8 green across
 1D/2D/3D); the tabulated fast path (2026-08-27) makes fd solves
 150-1260x faster with zero change to the physics (interpolation
@@ -37,10 +37,15 @@ every 3D test in the file, and an unrelated `NameError` (a stale
 `debye_length` reference left behind when phase 2's code renamed the
 import to `_debye_length`) that had been silently breaking PHASE 1's
 own driver the whole time.  See M21-MESHING-PLAN.md section 13 for the
-full defect ledger.  Phase 3's mesher is DECIDED and its core
-conformality claim VALIDATED (gmsh; see section 4b below and
-M21-MESHING-PLAN.md sec 12) but phase 3 itself (region-tag resolver,
-FV assembly, golden parity) has not started.
+full defect ledger.  PHASE 3 (general unstructured 2D + Delaunay FV
+assembly) COMPLETE 2026-08-31: geometry foundation (3a), Poisson-only
+equilibrium (3b), coupled SG bias solve (3c), and `Device2D(
+unstructured=True)` class integration (3d, a thin wrapper -- zero new
+Jacobian entries, bit-identical to calling the standalone
+`unstructured_poisson.py`/`unstructured_dd.py` functions directly) all
+shipped, all gated.  See M21-PHASE3-MESHING-PLAN.md for the full
+record, including honest gaps (golden parity vs the structured solver
+measured at ~5-6%, not the plan's originally-stated <1e-4).
 M22 linear solver modernization: PHASE 1 (Krylov/ILU/node-block-Jacobi
 behind the existing spsolve interface) SHIPPED 2026-08-27, wired into
 the general (non-tridiagonal) Newton solves in all three device cores.
@@ -63,23 +68,39 @@ preconditioner variant (plan section 7's flagged next step: permute to
 equation-major order, spilu the Poisson block, exact density diagonals,
 drop the (n,p) cross-couplings; `solve_linear(precond="schur")`, opt-in
 per call, default "auto" == unchanged node-block-Jacobi) landed
-2026-08-29 LANDED-PENDING-VERIFICATION -- gates written, not yet
-executed (same session standing as M16/M20 above).
-M16 BTBT (local Kane/Hurkx generation, live Jacobian coupling): LANDED-
-PENDING-VERIFICATION 2026-08-29. Code + gates written, not executed this
-session. Next session MUST run tests/test_m16_btbt.py before treating
-as complete. One gate fails: test_g_e_zener_onset_has_kane_slope (current
-grew only 4.4x over ramp, expected >1000x).
+2026-08-29, VERIFIED 2026-08-31: `pytest tests/test_m22_linsolve.py -q`
+-> 15 passed, 1 skipped (the skip is a PRE-EXISTING, unrelated golden-
+fixture gap -- `frozen_meshes.npz` absent from this checkout, the same
+condition `test_m13_goldens.py` already skips gracefully on, not a
+Schur-specific issue). All 5 Schur-specific gates green on the first
+run (`test_schur_preconditioner_matches_exact_factorization`,
+`_converges_on_device_jacobian`, `_on_coupled_3d_jacobian`,
+`test_schur_flavor_default_is_unchanged`,
+`test_schur_builder_refuses_mismatched_structure`) -- unlike M16, no
+test-code defects found here; the gates were simply correct and had
+never been run.
+M16 BTBT (local Kane/Hurkx generation, live Jacobian coupling): LANDED
+2026-08-29, VERIFIED 2026-08-31. The gates were never actually run
+until 2026-08-31; 2 of 13 then failed, but all three root causes were
+bugs in the TEST assertions (an inverted sort direction, a sign error
+comparing two negative slopes, a correlation-sign check that could
+never pass for a genuine negative-slope Kane fit), not the physics --
+see pytcad/M16-BTBT-PLAN.md.
 M20 density gradient (Ancona-Stafford DG quantum correction, equilibrium-
-only): LANDED-PENDING-VERIFICATION 2026-08-29. Code + gates written, not
-executed this session. Three key-set pin tests updated (test_smoke_e2e's
-toggle param deliberately does NOT include dg -- equilibrium-only, same
-precedent as surface_mobility). Four gates fail: test_gc_sp_centroid_in_
-literature_band (flaky eigensolver variance), test_gc_dg_centroid_within_
-factor2_of_sp, test_gc_classical_centroid_is_the_sub_debye_tail,
-test_gd_dg_changes_the_physics_in_every_required_direction. Gamma-
-calibration gap requires either coupled-Newton reformulation or published
-gamma calibration (separate, larger pieces of work).
+only): COMPLETE, ALL GATES GREEN, 2026-08-31 (coupled-Newton
+reformulation replacing the old lagged outer fixed point; see section
+4b.2 below and M20-DENSITY-GRADIENT-PLAN.md section 7 for the full
+record, including a genuine wrong-sign boundary-condition bug found
+and fixed via literature/production-tool research).
+M17 transient simulation: PHASES 1-3 (1D/2D backward-Euler/theta-scheme
+cores, GUI Transient tab) SHIPPED 2026-08-30/31. See M17-TRANSIENT-PLAN.md.
+M18 small-signal AC analysis: PHASE 1 (Device1D, Python-API only, no GUI)
+LANDED 2026-08-31 -- Y(f)/C(f)/G(f) via a J_ac(w)=J0+jw*Cmat complex
+solve reusing M17's already-FD-gated storage-term Jacobian. See
+M18-AC-PLAN.md.
+M19 self-heating: PHASE 1 (steady-state 1D, isothermal-DD + outer
+Gummel thermal loop, no GUI) LANDED 2026-08-31. See
+M19-SELFHEATING-PLAN.md.
 M14 surface mobility: PARTIAL. mobility_cvt() wired for Device2D.models.
 surface_mobility (G-D/G-E green); G-A (absolute curve vs Takagi/Taur)
 xfail'd -- 2026-08-28 research confirmed the real Lombardi phonon term
@@ -92,8 +113,10 @@ Fermi-Dirac statistics through M30 system-level; three parity tiers).
 The M1-M10 roadmap below is retained as the shipped architecture
 record; sections 5-7 track the live queue.
 
-GUI: PHASES 1-3 SHIPPED, PHASE 4 LANDED (2026-08-29). All 530 GUI tests
-pass, zero regressions. Runtime validation (GuiStateValidator,
+GUI: PHASES 1-3 SHIPPED, PHASE 4 LANDED (2026-08-29). 530 GUI tests
+passed at that landing; 562 pass as of 2026-08-31 (growth from M17
+phase 3's Transient tab and other additions since), zero regressions.
+Runtime validation (GuiStateValidator,
 StatusIndicator, ValidationBanner, ValidatedTextField) verified. See
 gui/README.md and GUI-IMPROVEMENT-PLAN.md for full detail.
 
@@ -292,7 +315,7 @@ Done criteria carried from M1/M2: every milestone proves behavioral
 equivalence or adds independently validated capability; adversarial
 probing pass before ship; suite green with pre-existing tests unchanged.
 
-M11 - HETEROSTRUCTURES [S1-S3 SHIPPED; S4/S5 OPEN]
+M11 - HETEROSTRUCTURES [S1-S5 ALL SHIPPED]
   S1 materials: Ge/GaAs/InGaAs/AlGaAs factory in the MaterialLibrary
   (Varshni bandgap, Caughey-Thomas mobility, permittivity, affinity --
   provenance per field). S2 wire: DeviceSpec.region_materials with
@@ -317,7 +340,7 @@ M11 - HETEROSTRUCTURES [S1-S3 SHIPPED; S4/S5 OPEN]
   2026-08-28 to diff along axis=0; the real step measures 0.20 eV,
   comfortably clearing the 0.15 eV gate.
 
-M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S2 SHIPPED; S3 -> M20]
+M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S3 ALL SHIPPED]
   S1: workbench/physics/tunneling.py -- Fowler-Nordheim constants and
   slope, triangular-barrier WKB kappa/transmission, gated against
   published values. S2: Hurkx trap-assisted tunneling in Device1D
@@ -327,7 +350,9 @@ M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S2 SHIPPED; S3 -> M20]
   with traps < 5e-5; traps-off bit-identity; WKB factor-law gate
   1e7..5e10 V/m; global-charge-balance neutrality. S3 (density
   gradient) was designed in the now-archived M12 tunneling design doc
-  and is folded into M20 of the parity plan (not started).
+  and folded into M20 of the parity plan -- M20 COMPLETE, ALL GATES
+  GREEN 2026-08-31 (coupled-Newton reformulation; see M20's own entry
+  below and M20-DENSITY-GRADIENT-PLAN.md section 7).
 
 ------------------------------------------------------------------------
 4b. FUTURE: SENTAURUS-PARITY ROADMAP (M13-M30)
@@ -410,8 +435,9 @@ DEVICE PHYSICS
   [missing] Transient simulation (steady-state only everywhere)
   [missing] Small-signal AC analysis
   [missing] Lattice heating / self-heating / thermoelectric
-  [missing] Quantum corrections (density gradient; Schrodinger-
-            Poisson) -- M12-S3 DG designed, not started
+  [done] Quantum corrections (density gradient; Schrodinger-Poisson)
+         -- M12-S3/M20 COMPLETE, ALL GATES GREEN 2026-08-31
+         (equilibrium-only; DG transport remains out of scope)
   [partial] Heterojunctions: 1D core done; 2D pending (M11-S4);
             no thermionic-emission interface model
   [missing] Schottky/tunnel contacts (only ohmic + gate BCs)
@@ -532,6 +558,11 @@ M16  BAND-TO-BAND TUNNELING                                  [M]
   caught it until an adversarial pass).
 
 M17  TRANSIENT SIMULATION                                    [L]
+  PHASES 1-3 (1D core, 2D core, GUI Transient tab) SHIPPED 2026-08-
+  30/31 -- see pytcad/M17-TRANSIENT-PLAN.md. Unlocked M18 (AC) and
+  is the basis a future TRANSIENT electrothermal phase of M19 would
+  use (M19 phase 1 itself is steady-state and did not end up needing
+  this machinery -- see M19-SELFHEATING-PLAN.md).
   Scope: time-dependent DD in 1D/2D (backward-Euler / theta
   scheme, adaptive dt from Newton behavior); contact excitation
   waveforms (step/ramp/pulse); stored transients in schema-v3
@@ -544,17 +575,75 @@ M17  TRANSIENT SIMULATION                                    [L]
   Depends: nothing hard. Unlocks AC and mixed-mode.
 
 M18  SMALL-SIGNAL AC ANALYSIS                                [M]
-  Scope: frequency-domain perturbation of the converged DC point
-  (complex linear solve with the same analytic Jacobian); Y-
-  parameters, C-V(f), admittance for any two-terminal; junction
-  and MOS capacitances from the AC solve.
-  Acceptance: low-f limit equals quasi-static C-V (existing
-  validated path); junction C vs analytic depletion formula;
-  3dB roll-off of a diode against the analytic stored-charge
-  pole from M17.
-  Depends: M17.
+  PHASE 1 (Device1D) LANDED 2026-08-31 -- see pytcad/M18-AC-PLAN.md.
+  New module pytcad/ac.py drives Device1D through its own
+  _residual_jacobian from outside (M15/M16/M17's pattern; device.py
+  untouched, no new Models flag). J_ac(w) = J0 + j*w_s*Cmat, Cmat
+  verified BIT-IDENTICAL to transient.py's already-FD-gated
+  backward-Euler storage term at dt_s=1.0 (G-CONSISTENCY) rather than
+  re-derived. All 6 gates green: G-LOWF (Re(Y)/C at f->0 match
+  independent solve_bias-based dI/dV and dQ/dV finite differences to
+  2.8e-5/8.1e-5 relative), G-JUNCTION-C (equilibrium C vs a freshly-
+  derived abrupt-junction depletion formula -- none existed in the
+  repo before this -- 3.3% relative), G-ROLLOFF (qualitative-only,
+  see below), G-LIVE-STATE, G-SCOPE-REFUSAL (Device2D raises
+  TypeError). A real bug was found and fixed while deriving the
+  current-sensitivity vector: an early version used a PER-NODE finite-
+  difference step size, which broke an exact analytic cancellation
+  (edge current depends on the two adjacent nodes' psi only through
+  their DIFFERENCE) and silently doubled the computed low-frequency
+  conductance -- caught by G-LOWF's independent cross-check before it
+  became a gate result. Scope: one-port admittance Y(f)/C(f)/G(f) for
+  a two-terminal Device1D (no general Y11/Y12/Y21/Y22 2-port matrix,
+  no reciprocity gate). Depends: M17.
+  Acceptance vs original scope: low-f limit vs quasi-static C-V --
+  MET (via solve_bias finite differences, the existing validated
+  path). Junction C vs analytic depletion formula -- MET (freshly
+  derived, no prior pin existed). 3dB roll-off vs an analytic
+  stored-charge pole from M17 -- NOT MET AS QUANTITATIVE MATCH: M17's
+  own plan doc (section 5) found Qs~=I_F*tau_p sign-ambiguous and off
+  by a factor of several and explicitly abandoned it, so no clean pole
+  exists to match against; G-ROLLOFF instead gates the qualitative
+  roll-off signature (measured: C drops 6.80x, G rises 2.32e6x over
+  1kHz-1e11Hz on a 0.4V-forward diode), same honesty standard M17 used
+  for its own G2.
+  NOT STARTED: Device2D/Device3D AC (Phase 2), GUI exposure (Phase 3),
+  general multi-terminal Y-parameters.
 
 M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
+  PHASE 1 (steady-state, 1D) LANDED 2026-08-31. New sibling module
+  pytcad/thermal.py; device.py/moscap.py untouched. Exploration
+  finding that reshaped the plan: Device1D's entire scaling framework
+  (VT/Ns/LD/J0/mu_n0/mu_p0/nie/tau_n/tau_p) is built once at __init__
+  from a single SCALAR T -- a genuine spatially-coupled 4th Newton
+  unknown would mean rearchitecting that whole framework, far larger
+  than the gates require. Used the standard "isothermal DD + outer
+  Gummel thermal loop" architecture instead (many production TCAD
+  tools offer this mode) -- a deliberate choice for a different reason
+  than M20's DG lagging (T enters nearly every scaled quantity, not
+  one localized term), not a shortcut around a known-bad pattern. Also
+  found: no thermal conductivity property existed in materials.py
+  before this (contradicts the spec's "no new material work" note) --
+  added Semiconductor.kappa_th300/kappa_th(T), Sze & Ng power law,
+  mirrors the existing Eg/Nc/Nv T-dependence pattern. A real bug was
+  found and fixed deriving the Joule-heating term: the naive (Jn+Jp)*
+  E_field formula gives thermodynamically IMPOSSIBLE local negative
+  heat in a diode's diffusion-dominated depletion region (measured:
+  -31930 W/cm^3 peak) -- fixed using the quasi-Fermi-potential
+  gradient (Wachutka 1990's standard DD dissipation term), verified
+  against an independent energy-conservation check (integral(H dx)
+  matches I*V to 0.04%). 6/6 gates green: G-PARABOLA (exact match,
+  0.0 K error -- linear PDE), G-FD (<3.7e-10 relative), G-BC (thermal-
+  resistance peak correctly exceeds isothermal), G-ROLLOFF (diode
+  current INCREASES 1.11x under self-heating at V=0.55V/R_th=50 --
+  the correct diode-physics direction, not the MOSFET-shaped
+  "roll-off" the milestone's shorthand name suggests, stated
+  honestly), G-OFF-BIT-IDENTITY, G-BC-REFUSAL. Thermal runaway (a real
+  phenomenon above ~0.58-0.6V at this R_th) raises RuntimeError rather
+  than returning nonsense. See M19-SELFHEATING-PLAN.md for the full
+  record, including a note that this session's Python environment was
+  removed (by the user, in another terminal) mid-implementation and
+  had to be reinstalled before final verification.
   Scope: lattice-temperature equation coupled to DD (Joule term
   + divergence of heat flux), thermal BCs (isothermal, thermal
   resistance to ambient); optional Seebeck term. 1D first, then
@@ -564,47 +653,68 @@ M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   T(x) parabola; electrothermal feedback in a diode I-V vs
   published self-heating roll-off behavior; thermal-off
   bit-identity; FD-Jacobian gate on the coupled block system.
-  Depends: M17 (transient machinery for the coupled solve).
+  Depends: M17 (transient machinery for the coupled solve) -- turned
+  out not load-bearing for this steady-state phase; noted honestly in
+  the plan doc rather than forced.
+  NOT STARTED: 2D self-heating, Seebeck/Peltier, transient
+  electrothermal, fully monolithic psi/n/p/T Newton coupling.
 
 M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
-  VERIFIED 2026-08-29, PARTIALLY GREEN, LEFT OPEN BY USER DECISION.
-  Gates run for the first time this session: 14/17 original + 3 new
-  regression tests green, after a hard-debug pass found and fixed a
-  real outer-fixed-point non-convergence bug (the outer loop closed a
-  1-node self-reference at the boundary, producing a rigid period-2
-  oscillation immune to damping at any factor -- fixed by sourcing the
-  target Lambda from the classical density instead of the DG-corrected
-  one). Fixing that convergence bug surfaced a SEPARATE gamma-
-  calibration gap: gamma=1 (explicitly documented as uncalibrated) has
-  no stable operating point reproducing Schrodinger-Poisson-scale
-  physics -- a hard bifurcation between "negligible effect" and
-  "clamp-saturated," not a smooth calibration curve. Three further
-  hypotheses (boundary-condition mismatch with the S-P reference;
-  sub-physical mesh resolution for the curvature stencil; a units/
-  formula bug) were tested and ruled out with numbers. The real fix is
-  either a coupled-Newton reformulation of the DG term or a published,
-  pre-calibrated gamma -- both explicitly deferred by user decision;
-  see M20-DENSITY-GRADIENT-PLAN.md sections 6-7 for the full record.
+  COMPLETE, ALL GATES GREEN, 2026-08-31 (coupled-Newton reformulation).
+  Both MOSCapacitor.solve_psi(dg=True) and Device1D.solve_equilibrium
+  (dg=True) now solve (psi, Lambda_n, Lambda_p) as ONE coupled Newton
+  system (3 unknowns/node) instead of lagging Lambda outside the
+  Newton loop -- FD-Jacobian verified <1.2e-9 (both classes), dg=False
+  re-verified bit-identical. A one-shot solve at full target gamma
+  does not converge (measured: singular step) -- fixed with a gamma-
+  continuation strength ladder (the same pattern M15/M16's stiff-
+  generation solve_bias already uses). Sweeping gamma with the new
+  solver is now SMOOTH and MONOTONIC (0.1 to 1000, no bifurcation) --
+  confirms the 2026-08-29 diagnosis that lagging was the real
+  architectural problem. Root-caused a genuine WRONG-SIGN bug along
+  the way (near-surface Lambda came out NEGATIVE, enhancing rather
+  than suppressing density -- independently confirmed to be a property
+  of the pre-existing quantum_potential formula on a Neumann-boundary
+  classical profile, not new code) and fixed it per literature/
+  production-tool research (DEVSIM's density-gradient reference
+  implementation extends the mesh into the oxide as a quantum-opaque
+  barrier; the equivalent here, and this codebase's OWN Schrodinger-
+  Poisson reference's own psi_k(0)=0 hard-wall convention, is pinning
+  MOSCapacitor's interface-node Lambda at the existing LAMBDA_MAX_VT
+  clamp -- a genuine boundary-condition fix, not a gamma retune;
+  dg_gamma stays at its documented default of 1.0, untouched).
+  Device1D's DG branch keeps the Neumann boundary (its contacts are
+  ohmic, not an oxide interface -- no physical basis for a hard wall
+  there); see M20-DENSITY-GRADIENT-PLAN.md section 7 for the full
+  record, including the measured gate numbers.
   Implementation per M20-DENSITY-GRADIENT-PLAN.md:
   - pytcad/dg.py: quantum_potential (Ancona-Stafford Lambda, 3-point
-    non-uniform stencil, Lambda=0 at boundary nodes per the Neumann
-    literature note below), airy_triangular_well (closed-form Airy
-    reference), schrodinger_poisson + schrodinger_poisson_mos (the
-    self-consistent published-value reference solver, eigsh + 2D-DOS
-    Boltzmann occupations).
-  - MOSCapacitor(dg=False, dg_gamma=1.0): lagged-Lambda Newton with an
-    outer fixed point; inversion_centroid(Vg) accessor; dg+fd refused.
-  - Device1D Models(dg/dg_gamma): solve_equilibrium DG branch (Boltzmann
-    only; dg+fd and dg+incomplete_ion refused); solve_bias + Device2D/3D
-    raise NotImplementedError. Default off is bit-identical (G-A gate,
-    M13 goldens).
+    non-uniform stencil; _dg_prefactor extracted as a shared helper so
+    the coupled-Newton assembly cannot drift from this formula),
+    airy_triangular_well (closed-form Airy reference),
+    schrodinger_poisson + schrodinger_poisson_mos (the self-consistent
+    published-value reference solver, eigsh + 2D-DOS Boltzmann
+    occupations -- eigsh is KNOWN NONDETERMINISTIC run-to-run on this
+    problem, pre-existing, not fixed this session; see
+    M20-DENSITY-GRADIENT-PLAN.md section 7.6).
+  - MOSCapacitor(dg=False, dg_gamma=1.0): coupled-Newton
+    _dg_residual_jacobian/_dg_newton_solve/_solve_psi_dg_coupled, hard-
+    wall interface boundary; inversion_centroid(Vg) accessor; dg+fd
+    refused.
+  - Device1D Models(dg/dg_gamma): coupled-Newton
+    _dg_residual_jacobian_eq/_dg_newton_solve_eq/
+    _solve_equilibrium_dg_coupled, Neumann (ohmic-contact) boundary;
+    dg+fd and dg+incomplete_ion refused; solve_bias + Device2D/3D raise
+    NotImplementedError. Default off is bit-identical (G-A gate, M13
+    goldens).
   - Catalog "dg" + wire default; the three key-set pin tests updated.
-  Acceptance gates G-A..G-F in tests/test_m20_dg.py: G-A (bit-identity
-  off), G-B (S-P vs Airy <=5%), G-E (refusals), G-F (catalog
-  invariants) all GREEN. G-C/G-D (S-P centroid factor-2 match, DG-on
-  direction gates: centroid >0.2 nm, surface suppression, Lambda
-  interior peak, C_max drop 3-25%) remain OPEN -- the gamma-
-  calibration gap above, not the fixed convergence bug.
+  Acceptance gates G-A..G-F in tests/test_m20_dg.py: ALL GREEN,
+  including G-C (S-P centroid factor-2 match: ratio 0.593, DG 2.49nm
+  vs S-P 4.20nm) and G-D (centroid >0.2nm, surface suppression now
+  correctly signed, Lambda peaks AT the hard wall and decays into the
+  bulk -- REWRITTEN from "must be strictly interior," which encoded
+  the old, now-understood-to-be-wrong Neumann assumption -- C_max drop
+  16.7%, within the 3-25% band).
   Self-caught defects during the gate-writing cross-check: a double-kT
   bug in the 2D-DOS occupation (sheet densities ~1e-7 cm^-2), an
   inverted E_band sign in the S-P driver (well in the bulk), and an
@@ -636,12 +746,20 @@ parity" for silicon 1D/2D.
 === TIER 2: process-lite + general geometry =======================
 
 M21  GENERAL 2D MESHING + FV ASSEMBLY                        [XL]
+  ALL PHASES (1-3) COMPLETE 2026-08-31.
   Scope: PHASES 1-2 (1D/2D/3D adaptive h-refinement) SHIPPED (phase 1
   2026-08-27, phase 2 2026-08-28 after a hard-debug pass found and
   fixed six real bugs -- see M21-MESHING-PLAN.md sec 13), see
-  pytcad/adapt.py and M21-MESHING-PLAN.md. PHASE 3's mesher choice is
-  DECIDED (2026-08-27, see section 4b.6 below and M21-MESHING-PLAN.md
-  sec 12): gmsh, not raw OpenCASCADE or FreeCAD -- it is the one open
+  pytcad/adapt.py and M21-MESHING-PLAN.md. PHASE 3 (general
+  unstructured 2D + Delaunay FV assembly, sub-phases 3a geometry / 3b
+  Poisson equilibrium / 3c coupled bias solve / 3d Device2D(
+  unstructured=True) integration) is now COMPLETE 2026-08-31 -- see
+  M21-PHASE3-MESHING-PLAN.md for the full record, including honest
+  gaps (golden parity vs the structured solver measured at ~5-6%, not
+  this section's originally-stated <1e-4 target below). The mesher
+  choice was DECIDED (2026-08-27, see section 4b.6 below and
+  M21-MESHING-PLAN.md sec 12): gmsh, not raw OpenCASCADE or FreeCAD --
+  it is the one open
   project bundling an OCC-based CAD kernel, boolean ops, unstructured
   2D/3D meshing, and Physical-Group region tagging in one Python-
   importable package, and DEVSIM (already a backend here) documents
@@ -764,6 +882,8 @@ M30  WORKBENCH SYSTEM FEATURES + INTEROP                     [M]
 ------------------------------------------------------------------------
 Spine: M13 -> M15 -> M17 -> M18 -> M21 -> M23 -> M27
        (statistics) (II)   (transient)(AC) (meshing)(process)(mixed)
+As of 2026-08-31: M13/M15/M17/M18(phase 1)/M21(phase 3 complete) are
+all landed; M23/M27 remain not started.
 
 Finish-first queue (already designed, do before M13 -- historical,
 all now DONE, kept for the rationale):
@@ -776,9 +896,14 @@ wastes the design investment.
 
 Parallelizable (independent tracks):
   Track physics:  M13 -> M14 -> M16 -> M19 -> M20
+                  (M13/M16/M19-phase1/M20 landed; M14 partial, G-A
+                  blocked on a paywalled source)
   Track numerics: M22 -> M21 -> M26
-  Track process:  M23 -> M24 -> M25
+                  (M22 phase 1 + Schur variant landed; M21 phases 1-2
+                  and phase 3 (3a-3d) all landed; M26 not started)
+  Track process:  M23 -> M24 -> M25 (none started)
   Track system:   M17 -> M18 -> M27 -> M30
+                  (M17 and M18-phase1 landed; M27/M30 not started)
 M15 needs M22's continuation only for robustness, not correctness.
 
 ------------------------------------------------------------------------
@@ -811,7 +936,7 @@ M15 needs M22's continuation only for robustness, not correctness.
    that a test validates.
 
 ------------------------------------------------------------------------
-4b.5 STATUS BY MILESTONE (2026-08-28, live -- read this one, not 4b.2,
+4b.5 STATUS BY MILESTONE (2026-08-31, live -- read this one, not 4b.2,
 for what has actually landed)
 ------------------------------------------------------------------------
   M13 Fermi-Dirac + incomplete ionization        COMPLETE (G1-G8)
@@ -836,32 +961,52 @@ for what has actually landed)
                                                   PLAN.md)
   M15 impact ionization coupling                 COMPLETE (all gates
                                                   green, 2026-08-28)
-  M16 band-to-band tunneling                     IMPLEMENTED 2026-08-29
+  M16 band-to-band tunneling                     LANDED 2026-08-29,
+                                                  VERIFIED 2026-08-31
                                                   (local Kane in
                                                   Device1D, M15-R1b
                                                   live coupling,
                                                   ordering gates
-                                                  written first; see
+                                                  written first; the
+                                                  gate suite was run
+                                                  for the first time
+                                                  2026-08-31 and 3
+                                                  test-code sign/
+                                                  threshold bugs were
+                                                  found and fixed --
+                                                  all 13 gates now
+                                                  green; see
                                                   pytcad/M16-BTBT-
-                                                  PLAN.md; suite
-                                                  confirmation
-                                                  pending)
+                                                  PLAN.md)
   M17 transient simulation                       PHASES 1-3 (1D/2D/GUI)
                                                   DONE 2026-08-31; see
                                                   pytcad/M17-TRANSIENT-
                                                   PLAN.md
-  M18 small-signal AC                            not started
-  M19 self-heating                               not started
-  M20 density-gradient quantum correction        PARTIALLY GREEN
-                                                  (2026-08-29); G-C/G-D
-                                                  open, gamma-
-                                                  calibration gap,
-                                                  left open by user
-                                                  decision
+  M18 small-signal AC                            PHASE 1 (1D) LANDED
+                                                  2026-08-31; see
+                                                  pytcad/M18-AC-PLAN.md;
+                                                  2D/GUI not started
+  M19 self-heating                               PHASE 1 (1D
+                                                  steady-state) LANDED
+                                                  2026-08-31; see
+                                                  pytcad/M19-
+                                                  SELFHEATING-PLAN.md;
+                                                  2D/transient not
+                                                  started
+  M20 density-gradient quantum correction        COMPLETE, ALL GATES
+                                                  GREEN (2026-08-31);
+                                                  coupled-Newton
+                                                  reformulation, see
+                                                  M20-DENSITY-
+                                                  GRADIENT-PLAN.md
+                                                  section 7
   M21 general 2D meshing + FV assembly           PHASES 1-2 (1D/2D/3D
                                                   adaptive h-refinement)
-                                                  SHIPPED; phase 3 not
-                                                  started
+                                                  SHIPPED; PHASE 3
+                                                  (3a-3d) COMPLETE
+                                                  2026-08-31, see
+                                                  M21-PHASE3-MESHING-
+                                                  PLAN.md
   M22 linear solver + continuation               PHASE 1 (Krylov+ILU+
                                                   block-Jacobi) SHIPPED,
                                                   3D-scaling gate GREEN;
@@ -922,9 +1067,12 @@ instead of a physically-sized corridor; regrounding it in
 pytcad.mesh.debye_length -- the SAME quantity M21 phase 1's own h/L_D
 constraint already uses -- cut this to ~2100 nodes, comparable to the
 existing tensor-product goldens.  Full record: M21-MESHING-PLAN.md
-section 12.  Not yet done: the region-tag resolver, the FV assembly
-itself, the golden parity gate, and a 3D repeat of the conformality
-check (a materially harder case, solid-solid rather than curve-curve).
+section 12.  UPDATE 2026-08-31: the region-tag resolver, the FV
+assembly, and the golden parity gate are now all DONE -- see M21
+Phase 3's completion (M21-PHASE3-MESHING-PLAN.md). Still not done: a
+3D repeat of the conformality check (a materially harder case,
+solid-solid rather than curve-curve) -- 3D unstructured meshing
+remains out of scope (Phase 3's own stated exclusions).
 
 ------------------------------------------------------------------------
 5. NEXT IMPLEMENTATION MILESTONE
@@ -1056,16 +1204,40 @@ Independent candidates for the next milestone (any order):
    "Matrix is exactly singular" under -n 6 parallel load, confirmed to
    pass cleanly in isolation) was observed during verification -- not
    a regression from this work.
-3. M16 BAND-TO-BAND TUNNELING -- LANDED-PENDING-VERIFICATION 2026-08-29
+2e. M21 phase 3d (Device2D(unstructured=True) integration) -- LANDED
+   2026-08-31, same session: wired the standalone 3a-3c physics into
+   Device2D's own solve_equilibrium/solve_bias/terminal_current API.
+   Genuinely thin: zero new Jacobian entries, verified bit-identical
+   (array_equal) to calling unstructured_poisson.solve_poisson_
+   equilibrium/unstructured_dd.solve_bias directly. Refuses
+   (NotImplementedError) any Models() flag the physics core doesn't
+   implement (doping_mobility, bgn, fd, incomplete_ion,
+   surface_mobility, field_mobility) and a heterostructure material
+   list -- Models()'s own default has doping_mobility=True, so callers
+   must override it explicitly. A real, small (~2.5e-6 relative)
+   discrepancy was found and understood during verification, not a
+   bug: the wrapper respects Models().auger (default True, matching
+   every other Device1D/Device2D physics flag's convention), while
+   unstructured_dd.solve_bias's own bare-function default is
+   auger=False -- documented in M21-PHASE3-MESHING-PLAN.md's PHASE 3d
+   record and the new gate's docstring. M21 Phase 3 is now COMPLETE.
+3. M16 BAND-TO-BAND TUNNELING -- LANDED 2026-08-29, VERIFIED 2026-08-31
    following the M15 R1b pattern (live-coupled generation, shared
    strength ladder), and this time with the residual-ordering and
    live-state invariants written as gates BEFORE the physics gates,
    exactly as this file's M16 note required (see
    pytcad/M16-BTBT-PLAN.md).  The literature-note failure mode
    (local-model plateau at high reverse bias) is gated explicitly by
-   the high-bias non-plateau gate.  LANDED-PENDING-VERIFICATION means
-   the gates were never executed (the session's shell was blocked);
-   the next session MUST run tests/test_m16_btbt.py first (history.md
+   the high-bias non-plateau gate.  Verification (2026-08-31) found
+   the gates had never actually been executed (the authoring session's
+   shell was blocked) and, once run, 2 of 13 tests failed -- but all
+   three root causes were bugs in the TEST assertions themselves (an
+   inverted sort direction, a sign error comparing two negative
+   slopes, and a correlation-sign check that could never pass for a
+   genuine negative-slope Kane fit), not in pytcad/btbt.py or its
+   Newton-core coupling; see M16-BTBT-PLAN.md's "Gate verification,
+   2026-08-31" section for the full record. All 13 tests pass after
+   fixing the test code only (history.md
    Addendum 16).
 4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists and
    is validated; catalog wiring only).
@@ -1085,19 +1257,21 @@ Independent candidates for the next milestone (any order):
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Transient (M17); AC (M18);
-  self-heating (M19).  (M15 impact ionization, M22 phase 2's
+- Transient (M17) LANDED; AC (M18) Phase 1 (1D) LANDED, 2D/GUI not
+  started; self-heating (M19) Phase 1 (1D steady-state) LANDED,
+  2D/transient not started -- see each milestone's own plan doc.
+  (M15 impact ionization, M22 phase 2's
   continuation driver, and M16 local Kane BTBT are COMPLETE/LANDED --
   see sections 3 and 5 and pytcad/M16-BTBT-PLAN.md; the nonlocal BTBT
-  variant remains Tier 3.  M20 density gradient is PARTIALLY GREEN --
-  equilibrium-only DG exists behind Models(dg=True)/
-  MOSCapacitor(dg=True); the outer-fixed-point convergence bug is
-  fixed and gated, but G-C/G-D stay open on a gamma-calibration gap
-  left open by user decision (see M20-DENSITY-GRADIENT-PLAN.md
-  sections 6-7); DG TRANSPORT and 2D/3D DG remain not implemented.)
-- Unstructured meshing (M21 phase 3); 2D process geometry engine
-  (M23); pair diffusion/TED/segregation (M24); Monte-Carlo implantation
-  (M25); general 3D (M26). (M15 impact ionization and M22 phase 2's
+  variant remains Tier 3.  M20 density gradient is COMPLETE, ALL GATES
+  GREEN (2026-08-31) -- equilibrium-only DG behind Models(dg=True)/
+  MOSCapacitor(dg=True), now a coupled-Newton solve (see
+  M20-DENSITY-GRADIENT-PLAN.md section 7); DG TRANSPORT and 2D/3D DG
+  remain not implemented, out of this milestone's scope.)
+- 2D process geometry engine (M23); pair diffusion/TED/segregation
+  (M24); Monte-Carlo implantation (M25); general 3D (M26).
+  (Unstructured meshing, M21 phase 3, is now COMPLETE 2026-08-31 --
+  see section 5 item 2e above. M15 impact ionization and M22 phase 2's
   continuation driver are both COMPLETE/LANDED -- see sections 3 and 5
   above; the 3D iterative-solve scaling gate, M22 G6, is likewise
   CLOSED via node-block-Jacobi preconditioning.)
@@ -1161,15 +1335,14 @@ recorded here so they are tracked rather than silently absent):
   cell, Schottky diode, PIN diode, FinFET. Only diode/MOSCAP/NMOS/
   HBT/HEMT exist today (workbench/core/templates.py).
 - Freeform/arbitrary 2D or 3D device geometry (sketch-and-drag, not
-  parametric templates). Blocked on M21 phase 3 (unstructured meshing)
-  -- a freeform region needs an unstructured mesh to solve on. The
-  mesher is decided and its conformality claim validated (section 4b's
-  Geometry Foundation Decision); as of 2026-08-31 the geometry
-  foundation itself (mesh loading, region/contact resolution, edge/
-  dual-cell construction) is real code (pytcad/gmsh_mesh.py,
-  region_resolver.py, unstructured_assembly.py) -- the FV
-  residual/Jacobian assembly and the geometry-authoring UI are still
-  open.
+  parametric templates). M21 phase 3 (unstructured meshing) is now
+  COMPLETE as of 2026-08-31 -- the FV residual/Jacobian assembly
+  (pytcad/unstructured_poisson.py, unstructured_dd.py) and the
+  Device2D(unstructured=True) library-level integration both landed
+  (section 5 item 2e). What remains is GUI-level only: a
+  geometry-authoring UI for freeform regions (sketch-and-drag) does
+  not exist -- the library can already solve on an arbitrary gmsh
+  mesh, but nothing in the GUI builds or edits one.
 - Full numerical-diagnostics panel (Newton iteration/residual history,
   rejected bias points, per-stage continuation record, mesh
   statistics) as a first-class GUI surface. A "convergence" viewport
@@ -1196,18 +1369,27 @@ recorded here so they are tracked rather than silently absent):
    open, re-searched 2026-08-31 with no new result (see section 5 item
    5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT -- small,
    independent, low-risk, still open.
-7. [PARTIALLY DONE 2026-08-29] M20 DENSITY-GRADIENT -- Ancona-Stafford
-   DG quantum correction (equilibrium-only: MOSCapacitor dg flag +
+7. [COMPLETE 2026-08-31] M20 DENSITY-GRADIENT -- Ancona-Stafford DG
+   quantum correction (equilibrium-only: MOSCapacitor dg flag +
    Device1D Models.dg) plus the pytcad/dg.py analysis layer with the
-   Schrodinger-Poisson reference solver. Gates run for the first time
-   this session: a real outer-fixed-point non-convergence bug found
-   and fixed (rigid period-2 oscillation, immune to damping -- see
-   section 4b's M20 entry); G-A/G-B/G-E/G-F green. G-C/G-D remain OPEN
-   on a gamma-calibration gap, left open by explicit user decision
-   (see M20-DENSITY-GRADIENT-PLAN.md sections 6-7 for the full
-   investigation record -- three further hypotheses tested and ruled
-   out). Next step, WHEN resumed: either a coupled-Newton
-   reformulation of the DG term or a published, pre-calibrated gamma.
+   Schrodinger-Poisson reference solver. 2026-08-29: gates run for the
+   first time, a real outer-fixed-point non-convergence bug found and
+   fixed, but G-C/G-D stayed open on a gamma-calibration gap (three
+   hypotheses tested and ruled out). 2026-08-31: closed via a coupled-
+   Newton reformulation -- (psi, Lambda_n, Lambda_p) solved
+   SIMULTANEOUSLY instead of lagged, FD-Jacobian verified, gamma-
+   continuation for robust convergence. This also surfaced and fixed a
+   genuine wrong-sign bug (near-surface Lambda was negative, enhancing
+   rather than suppressing density -- confirmed to be a property of
+   the pre-existing quantum_potential formula, not new code) via
+   literature/production-tool research (DEVSIM's density-gradient
+   implementation): MOSCapacitor's interface node now gets a HARD-WALL
+   boundary condition (matching this codebase's own Schrodinger-
+   Poisson reference's hard-wall convention), not the old Neumann
+   choice; Device1D keeps Neumann (ohmic contacts, no oxide interface
+   to justify a hard wall). All gates green, dg_gamma untouched at its
+   documented default of 1.0. See M20-DENSITY-GRADIENT-PLAN.md section
+   7 for the full record and measured numbers.
 8. [PHASES 1-3 DONE 2026-08-30/31] M17 TRANSIENT -- 1D AND 2D
    backward-Euler/theta-scheme transient cores LANDED as new sibling
    modules (pytcad/transient.py, pytcad/transient2d.py), driving
@@ -1232,6 +1414,17 @@ recorded here so they are tracked rather than silently absent):
    remain out of scope, honestly flagged in the plan doc. Next: M18
    (small-signal AC), which depends only on the Device1D transient
    machinery Phase 1 shipped.
+9. [PHASE 1 LANDED 2026-08-31] M18 SMALL-SIGNAL AC -- see the "M18
+   SMALL-SIGNAL AC ANALYSIS" milestone entry above and
+   pytcad/M18-AC-PLAN.md for the full record. Device1D-only; 2D/GUI
+   not started.
+10. [PHASE 1 LANDED 2026-08-31] M19 SELF-HEATING -- see the "M19
+    SELF-HEATING (THERMODYNAMIC MODEL)" milestone entry above and
+    pytcad/M19-SELFHEATING-PLAN.md for the full record, including the
+    architecture decision (isothermal DD + outer Gummel thermal loop,
+    not a monolithic psi/n/p/T Newton system) and the quasi-Fermi-
+    potential Joule-heating fix. 1D steady-state only; 2D, transient,
+    and Seebeck/Peltier not started.
 6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native
    `__cxa_deleted_virtual` abort inside `QQuickPaintedItem::
    updatePaintNode`, ~1-in-3 to 1-in-5 full-suite runs). Root cause:

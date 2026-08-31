@@ -75,6 +75,22 @@ class Semiconductor:
     m_n_star: float = 0.26             # electrons (Si)
     m_p_star: float = 0.386            # holes (Si)
 
+    # --- thermal conductivity (M19 self-heating prereq) ---
+    # No thermal property existed anywhere in this module before M19;
+    # added here rather than in pytcad/thermal.py so it follows the
+    # same per-material, T-dependent pattern as Eg/Nc/Nv above.
+    kappa_th300: float = 1.48          # Si thermal conductivity at
+                                        # 300 K [W/(cm*K)] (Sze & Ng)
+
+    def kappa_th(self, T) -> float:
+        """Thermal conductivity [W/(cm*K)] vs temperature.
+
+        kappa_th(T) = kappa_th300 * (T/300)^-1.33 -- the standard
+        published power-law fit for silicon (Sze & Ng, "Physics of
+        Semiconductor Devices"); accepts a scalar or array T.
+        """
+        return self.kappa_th300 * (np.asarray(T, dtype=float) / 300.0) ** -1.33
+
     def Eg(self, T: float) -> float:
         """Varshni temperature dependence of the bandgap [eV].
 

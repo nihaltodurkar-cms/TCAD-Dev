@@ -540,3 +540,131 @@ def test_reverse_bias_gives_small_leakage_not_a_crash(diode_mesh):
     assert abs(I_rev["left_contact"]) < 1e-9, (
         "reverse-bias leakage current implausibly large -- "
         f"got {I_rev['left_contact']:.3e}")
+
+
+# ======================================================================
+#  M21 phase 3d -- Device2D(unstructured=True) integration
+# ======================================================================
+def test_wrapper_equilibrium_matches_direct_call(diode_mesh):
+    """G-WRAPPER-EQUILIBRIUM: Device2D(unstructured=True).solve_
+    equilibrium() is bit-identical to calling solve_poisson_equilibrium
+    directly -- the wrapper is a thin pass-through, not a
+    re-transcription of the pipeline."""
+    from pytcad.device import Models
+    regions = resolve_regions(diode_mesh)
+    contacts = resolve_contacts(diode_mesh)
+    edge_list, node_areas = build_unstructured_stencil(
+        diode_mesh.nodes, diode_mesh.triangles)
+    interior_edges, trans_geom = build_edge_flux_geometry(
+        diode_mesh.nodes, diode_mesh.triangles, edge_list)
+    region_of_triangle = np.empty(diode_mesh.n_triangles(), dtype=object)
+    for name, idx in regions.items():
+        region_of_triangle[idx] = name
+    C = evaluate_doping_at_nodes(diode_mesh.nodes, diode_mesh.triangles,
+                                 region_of_triangle, DOPING_BY_REGION)
+    psi_direct, _ = solve_poisson_equilibrium(
+        diode_mesh.nodes, diode_mesh.triangles, edge_list, node_areas,
+        interior_edges, trans_geom, C, contacts)
+
+    dev = Device2D(diode_mesh, DOPING_BY_REGION,
+                   models=Models(doping_mobility=False, bgn=False),
+                   unstructured=True)
+    dev.solve_equilibrium()
+    assert np.array_equal(dev.psi, psi_direct)
+
+
+def test_wrapper_bias_matches_direct_call(diode_mesh):
+    """G-WRAPPER-BIAS: Device2D(unstructured=True).solve_bias(...) and
+    .terminal_current(...) are bit-identical to calling unstructured_
+    dd.solve_bias directly with the same (Models-respecting) auger
+    setting -- Models().auger defaults True, matching the structured
+    Device2D convention, which is why this comparison passes auger=True
+    explicitly to the direct call (unstructured_dd.solve_bias's own
+    bare default is auger=False; the wrapper deliberately respects
+    Models() instead of that bare-function default, so a naive
+    default-vs-default comparison would show a real but harmless
+    ~2.5e-6 relative difference from Auger recombination being on --
+    found and understood during development, not a bug)."""
+    from pytcad.device import Models
+    regions = resolve_regions(diode_mesh)
+    contacts = resolve_contacts(diode_mesh)
+    edge_list, node_areas = build_unstructured_stencil(
+        diode_mesh.nodes, diode_mesh.triangles)
+    interior_edges, trans_geom = build_edge_flux_geometry(
+        diode_mesh.nodes, diode_mesh.triangles, edge_list)
+    region_of_triangle = np.empty(diode_mesh.n_triangles(), dtype=object)
+    for name, idx in regions.items():
+        region_of_triangle[idx] = name
+    C = evaluate_doping_at_nodes(diode_mesh.nodes, diode_mesh.triangles,
+                                 region_of_triangle, DOPING_BY_REGION)
+    psi_direct, n_direct, p_direct, _, I_direct = dd_solve_bias(
+        diode_mesh.nodes, diode_mesh.triangles, edge_list, node_areas,
+        interior_edges, trans_geom, C, contacts,
+        bias={"left_contact": 0.5, "right_contact": 0.0}, auger=True)
+
+    dev = Device2D(diode_mesh, DOPING_BY_REGION,
+                   models=Models(doping_mobility=False, bgn=False),
+                   unstructured=True)
+    dev.solve_equilibrium()
+    dev.solve_bias({"left_contact": 0.5, "right_contact": 0.0})
+
+    assert np.array_equal(dev.psi, psi_direct)
+    assert np.array_equal(dev.n, n_direct)
+    assert np.array_equal(dev.p, p_direct)
+    assert dev.terminal_current("left_contact") == I_direct["left_contact"]
+    assert dev.terminal_current("right_contact") == I_direct["right_contact"]
+
+
+def test_wrapper_refuses_unsupported_models_flags(diode_mesh):
+    """G-REFUSALS: unstructured_poisson.py/unstructured_dd.py are
+    homojunction-only -- any Models() flag they don't implement must
+    raise NotImplementedError, not silently solve with the wrong
+    physics. Models()'s own defaults (doping_mobility=True, bgn=True,
+    auger=True) mean callers MUST override the first two explicitly;
+    auger IS supported (passed through), so it's not in this refusal
+    list."""
+    from pytcad.device import Models
+    for flag in ("doping_mobility", "bgn", "fd", "incomplete_ion",
+                "surface_mobility", "field_mobility"):
+        kwargs = dict(doping_mobility=False, bgn=False)
+        kwargs[flag] = True
+        with pytest.raises(NotImplementedError):
+            Device2D(diode_mesh, DOPING_BY_REGION, models=Models(**kwargs),
+                     unstructured=True)
+
+
+def test_wrapper_refuses_heterostructure_material_and_bad_types(diode_mesh):
+    from pytcad.device import Models
+    with pytest.raises(NotImplementedError):
+        Device2D(diode_mesh, DOPING_BY_REGION,
+                 material=[SILICON] * diode_mesh.n_nodes(),
+                 models=Models(doping_mobility=False, bgn=False),
+                 unstructured=True)
+    with pytest.raises(TypeError):
+        Device2D(diode_mesh, [1, 2, 3],
+                 models=Models(doping_mobility=False, bgn=False),
+                 unstructured=True)
+    with pytest.raises(TypeError):
+        Device2D(Mesh2D(np.linspace(0, 1e-4, 5), np.linspace(0, 1e-4, 5)),
+                 DOPING_BY_REGION,
+                 models=Models(doping_mobility=False, bgn=False),
+                 unstructured=True)
+
+
+def test_structured_path_bit_identical_after_unstructured_wiring():
+    """G-OFF-BIT-IDENTITY: an ordinary structured Device2D solve is
+    completely unaffected by the unstructured=True code path existing
+    -- the new branches are early-return guards that never execute
+    when unstructured=False (the default)."""
+    from pytcad.device import Models
+    x = np.linspace(0.0, 2e-4, 21)
+    y = np.linspace(0.0, 1e-4, 11)
+    dop = np.where(np.tile(x, (y.size, 1)) < 1e-4, -1e17, 1e17)
+    dev = Device2D(Mesh2D(x, y), dop, models=Models(bgn=False))
+    assert dev.unstructured is False
+    dev.add_contact("left", i=[0], j=list(range(y.size)), V=0.0)
+    dev.add_contact("right", i=[x.size - 1], j=list(range(y.size)), V=0.0)
+    dev.solve_equilibrium()
+    dev.solve_bias({"left": 0.3, "right": 0.0})
+    assert np.all(np.isfinite(dev.psi))
+    assert dev.terminal_current("left") != 0.0

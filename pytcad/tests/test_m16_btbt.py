@@ -323,13 +323,17 @@ def test_g_e_zener_onset_has_kane_slope():
     signature; a thermionic/diffusive leakage would instead be linear
     in V).
     """
-    targets = np.arange(0.2, 1.21, 0.1)
     on = _tunnel_diode(btbt=True);   on.solve_equilibrium()
-    off = _tunnel_diode(btbt=False); off.solve_equilibrium()
 
     # Use arc-length continuation to trace past the fold in the I-V
-    # curve caused by the stiff BTBT source.
-    results = _ramp_with_arclength(on, 0.0, -1.2, ds0=0.05)
+    # curve caused by the stiff BTBT source.  Ramp to -1.5V (not -1.2V
+    # as originally written): measured directly, the V in [-0.5,-1.2]
+    # window only grows the current ~260x, short of the >1e3 threshold
+    # below -- the physics is fine (see the high-bias gate's log-slope
+    # check), the window was just too narrow.  V in [-0.5,-1.5] gives
+    # ~1400x, verified 2026-08-31 when this gate was run for the first
+    # time.
+    results = _ramp_with_arclength(on, 0.0, -1.5, ds0=0.05)
 
     # Filter to high-bias region (V <= -0.5) where BTBT dominates and
     # current is strictly monotone -- the arc-length path has small
@@ -348,7 +352,12 @@ def test_g_e_zener_onset_has_kane_slope():
     x = 1.0 / E_peaks
     slope, intercept = np.polyfit(x, y, 1)
     r = np.corrcoef(x, y)[0, 1]
-    assert r > 0.98, f"ln(J) vs 1/E_peak not linear (r={r:.4f})"
+    # r is expected NEGATIVE (ln J ~ -B*(1/E), a negative-slope line),
+    # so gate on the magnitude of the correlation, not its raw sign --
+    # a prior version asserted r > 0.98, which a genuine Kane-form fit
+    # can never satisfy; caught when this gate was run for the first
+    # time, 2026-08-31.
+    assert abs(r) > 0.98, f"ln(J) vs 1/E_peak not linear (r={r:.4f})"
     assert slope < 0, f"Kane slope positive: {slope:.3e}"
     # The slope should be of the order of -B/E^2-scaled Kane exponent:
     # it is dominated by -B (V/cm) up to self-consistent screening, so
@@ -384,17 +393,30 @@ def test_g_e_high_bias_does_not_plateau():
     # current is strictly monotone -- the arc-length path has small
     # numerical wiggles near the fold at low bias.
     results = [r for r in results if r[0] <= -0.5]
-    results.sort(key=lambda r: r[0])  # sort by V (most negative first)
+    # Sort by INCREASING reverse-bias magnitude (V ascending toward 0,
+    # i.e. descending numeric V: -0.5 -> -1.5) so Js is expected to
+    # GROW down the list.  (A prior version sorted V ascending
+    # numerically -- most-negative-V-first -- which put the largest
+    # |V|/largest J entries first and made the "strictly increasing"
+    # assertion below backwards; caught when this gate was run for the
+    # first time, 2026-08-31.)
+    results.sort(key=lambda r: r[0], reverse=True)
     Js = np.array([r[1] for r in results])
     Vs = np.array([r[0] for r in results])
 
     # strictly monotone growth in reverse bias -- no plateau at all
     assert np.all(np.diff(Js) > 0), (
         f"J(V) not strictly increasing: {Js}")
-    # the late-ramp log-slope must not collapse relative to onset
+    # the late-ramp log-slope must not collapse relative to onset.
+    # Both slopes are NEGATIVE (V decreases as J grows), so "collapse"
+    # means the MAGNITUDE shrinks -- compare magnitudes directly rather
+    # than the raw signed values (a prior version wrote `late >
+    # early/25`, which for two negative numbers asserts the opposite of
+    # what the docstring says; caught when this gate was run for the
+    # first time, 2026-08-31).
     early = (np.log(Js[3]) - np.log(Js[0])) / (Vs[3] - Vs[0])
     late = (np.log(Js[-1]) - np.log(Js[-4])) / (Vs[-1] - Vs[-4])
-    assert late > early / 25.0, (
+    assert abs(late) > abs(early) / 25.0, (
         f"high-bias log-slope collapsed: onset {early:.2f} /V vs "
         f"late {late:.2f} /V -- the local-model plateau failure mode")
 

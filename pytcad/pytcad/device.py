@@ -751,11 +751,13 @@ class Device1D:
         fd = getattr(self.models, "fd", False)
         ion = getattr(self.models, "incomplete_ion", False)
         # M20: density-gradient quantum correction (equilibrium-only;
-        # see Models.dg).  LAGGED quantum potential inside the Newton
-        # loop (frozen-Lambda => dn/dpsi == n exactly, classical
-        # Jacobian form) with an outer fixed-point rerun until Lambda
-        # closes -- the same Gummel-style architecture the MOSCapacitor
-        # DG branch uses.  dg+fd is REFUSED (joint density law not
+        # see Models.dg).  dg=True delegates to _solve_equilibrium_dg_
+        # coupled, a genuinely COUPLED Newton solve of (psi, Lambda_n,
+        # Lambda_p) together -- see that method's docstring, and
+        # moscap.py's identical MOSCapacitor reformulation, for why an
+        # earlier LAGGED outer-fixed-point scheme was replaced
+        # (M20-DENSITY-GRADIENT-PLAN.md section 6).  dg+fd and
+        # dg+incomplete_ion stay refused (joint density law not
         # derived/validated; plan section 5).
         dg = getattr(self.models, "dg", False)
         if dg and fd:
@@ -773,154 +775,109 @@ class Device1D:
                 "Models(dg=True, incomplete_ion=True) is refused "
                 "(unvalidated composition; M20 plan sec 5).")
         if dg:
-            from .dg import quantum_potential
-            gamma = getattr(self.models, "dg_gamma", 1.0)
-            m_n = np.array([m.m_n_star for m in self.mats])
-            m_p = np.array([m.m_p_star for m in self.mats])
-            Lam_n = np.zeros(self.N)
-            Lam_p = np.zeros(self.N)
-        n_outer = 60 if dg else 1
-        psi_prev = None
+            return self._solve_equilibrium_dg_coupled(opts)
 
-        for _outer in range(n_outer):
-            if fd or ion:
-                # M13: eta-space neutral guess (the Boltzmann arcsinh form
-                # overshoots badly when ln(Nc/nie) is large -- e.g. GaAs,
-                # cryogenic T); psi = eta + ln(Nc/nie) per node.
-                psi = self._fd_neutral_eta(C) + self.ln_gn
+        if fd or ion:
+            # M13: eta-space neutral guess (the Boltzmann arcsinh form
+            # overshoots badly when ln(Nc/nie) is large -- e.g. GaAs,
+            # cryogenic T); psi = eta + ln(Nc/nie) per node.
+            psi = self._fd_neutral_eta(C) + self.ln_gn
+        else:
+            psi = np.arcsinh(C / (2.0 * nie))      # neutral-bulk guess
+        bc = self._contact_values([0.0, 0.0])
+        psi[0], psi[-1] = bc[0][0], bc[1][0]
+
+        for it in range(opts.max_iter):
+            if fd:
+                # M13: FD equilibrium densities slaved to psi
+                # (phi_n = phi_p = 0):  n = Nc F(psi - ln(Nc/nie)),
+                # p = Nv F(-psi - Eg/kT - ln(Nv/nie)).
+                # Clamp to FERMI_ETA_MAX before evaluating, matching the
+                # np.minimum(..., FERMI_ETA_MAX) guard used for the same
+                # quantity elsewhere in this file (e.g. the neutral-guess
+                # bisection above): a transient Newton overshoot must not
+                # abort the whole solve when the converged answer would
+                # be valid -- fd_density/fd_ddensity_deta still refuse
+                # loudly for any eta that is genuinely out of range once
+                # this loop actually converges.
+                en = np.minimum(psi - self.ln_gn, FERMI_ETA_MAX)
+                ep = np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX)
+                n = fd_density(self.nc_s, en)
+                p = fd_density(self.nv_s, ep)
+                dnp = (fd_ddensity_deta(self.nc_s, en)
+                       + fd_ddensity_deta(self.nv_s, ep))
             else:
-                psi = np.arcsinh(C / (2.0 * nie))      # neutral-bulk guess
-            if dg and psi_prev is not None:
-                psi = psi_prev.copy()                  # warm restart
-            bc = self._contact_values([0.0, 0.0])
-            psi[0], psi[-1] = bc[0][0], bc[1][0]
-
-            for it in range(opts.max_iter):
+                n = nie * np.exp(np.clip(psi, -700, 700))
+                p = nie * np.exp(np.clip(-psi, -700, 700))
+                dnp = n + p
+            # M13: incomplete ionization under EITHER statistics;
+            # rho = n - p - C_ion with the slaved-density chain
+            # d(rho)/d(psi) = (1-dcden)*dn/dpsi + (1+dcdp)*|dp/dpsi|
+            # (eta_p falls as psi rises, cancelling the carrier sign).
+            c_eff = C
+            if getattr(self.models, "incomplete_ion", False):
+                cion, dcden, dcdp = self._ionized_C(n, p)
+                c_eff = cion
                 if fd:
-                    # M13: FD equilibrium densities slaved to psi
-                    # (phi_n = phi_p = 0):  n = Nc F(psi - ln(Nc/nie)),
-                    # p = Nv F(-psi - Eg/kT - ln(Nv/nie)).
-                    # Clamp to FERMI_ETA_MAX before evaluating, matching the
-                    # np.minimum(..., FERMI_ETA_MAX) guard used for the same
-                    # quantity elsewhere in this file (e.g. the neutral-guess
-                    # bisection above): a transient Newton overshoot must not
-                    # abort the whole solve when the converged answer would
-                    # be valid -- fd_density/fd_ddensity_deta still refuse
-                    # loudly for any eta that is genuinely out of range once
-                    # this loop actually converges.
-                    en = np.minimum(psi - self.ln_gn, FERMI_ETA_MAX)
-                    ep = np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX)
-                    n = fd_density(self.nc_s, en)
-                    p = fd_density(self.nv_s, ep)
-                    dnp = (fd_ddensity_deta(self.nc_s, en)
-                           + fd_ddensity_deta(self.nv_s, ep))
+                    fddn = fd_ddensity_deta(
+                        self.nc_s,
+                        np.minimum(psi - self.ln_gn, FERMI_ETA_MAX))
+                    fddp = fd_ddensity_deta(
+                        self.nv_s,
+                        np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX))
+                    dnp = dnp - dcden * fddn + dcdp * fddp
                 else:
-                    n = nie * np.exp(np.clip(psi, -700, 700))
-                    p = nie * np.exp(np.clip(-psi, -700, 700))
-                    dnp = n + p
-                # M13: incomplete ionization under EITHER statistics;
-                # rho = n - p - C_ion with the slaved-density chain
-                # d(rho)/d(psi) = (1-dcden)*dn/dpsi + (1+dcdp)*|dp/dpsi|
-                # (eta_p falls as psi rises, cancelling the carrier sign).
-                c_eff = C
-                if getattr(self.models, "incomplete_ion", False):
-                    cion, dcden, dcdp = self._ionized_C(n, p)
-                    c_eff = cion
-                    if fd:
-                        fddn = fd_ddensity_deta(
-                            self.nc_s,
-                            np.minimum(psi - self.ln_gn, FERMI_ETA_MAX))
-                        fddp = fd_ddensity_deta(
-                            self.nv_s,
-                            np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX))
-                        dnp = dnp - dcden * fddn + dcdp * fddp
-                    else:
-                        dnp = dnp - dcden * n + dcdp * p
+                    dnp = dnp - dcden * n + dcdp * p
 
-                # M20 DG correction (Boltzmann path only -- dg+fd and
-                # dg+incomplete_ion are refused above; with Lambda
-                # LAGGED, dn/dpsi == n exactly, so dnp keeps the
-                # classical form in terms of corrected n, p).
-                if dg:
-                    n = n * np.exp(-Lam_n / self.VT)
-                    p = p * np.exp(-Lam_p / self.VT)
-                    dnp = n + p
+            F = np.zeros(self.N)
+            F[1:-1] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
+                   - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
+                   - dV[1:-1] * (n[1:-1] - p[1:-1]
+                                 - c_eff[1:-1]))
+            F[0] = psi[0] - bc[0][0]
+            F[-1] = psi[-1] - bc[1][0]
 
-                F = np.zeros(self.N)
-                F[1:-1] = (et[1:] * (psi[2:] - psi[1:-1]) / h[1:]
-                       - et[:-1] * (psi[1:-1] - psi[:-2]) / h[:-1]
-                       - dV[1:-1] * (n[1:-1] - p[1:-1]
-                                     - c_eff[1:-1]))
-                F[0] = psi[0] - bc[0][0]
-                F[-1] = psi[-1] - bc[1][0]
+            main = np.zeros(self.N)
+            lower = np.zeros(self.N - 1)
+            upper = np.zeros(self.N - 1)
+            main[1:-1] = (-et[1:] / h[1:] - et[:-1] / h[:-1]
+                          - dV[1:-1] * dnp[1:-1])
+            upper[1:] = et[1:] / h[1:]
+            lower[:-1] = et[:-1] / h[:-1]
+            main[0] = main[-1] = 1.0
+            upper[0] = 0.0
+            lower[-1] = 0.0
 
-                main = np.zeros(self.N)
-                lower = np.zeros(self.N - 1)
-                upper = np.zeros(self.N - 1)
-                main[1:-1] = (-et[1:] / h[1:] - et[:-1] / h[:-1]
-                              - dV[1:-1] * dnp[1:-1])
-                upper[1:] = et[1:] / h[1:]
-                lower[:-1] = et[:-1] / h[:-1]
-                main[0] = main[-1] = 1.0
-                upper[0] = 0.0
-                lower[-1] = 0.0
+            rows = np.concatenate([np.arange(self.N),
+                                   np.arange(1, self.N),
+                                   np.arange(self.N - 1)])
+            cols = np.concatenate([np.arange(self.N),
+                                   np.arange(self.N - 1),
+                                   np.arange(1, self.N)])
+            vals = np.concatenate([main, lower, upper])
+            A = csr_matrix((vals, (rows, cols)), shape=(self.N, self.N))
 
-                rows = np.concatenate([np.arange(self.N),
-                                       np.arange(1, self.N),
-                                       np.arange(self.N - 1)])
-                cols = np.concatenate([np.arange(self.N),
-                                       np.arange(self.N - 1),
-                                       np.arange(1, self.N)])
-                vals = np.concatenate([main, lower, upper])
-                A = csr_matrix((vals, (rows, cols)), shape=(self.N, self.N))
-
-                # linsolve.solve_linear(method="direct") no longer
-                # reformats A before calling spsolve (that reformatting was
-                # itself the bug -- see linsolve.py), so this is now
-                # actually bit-identical to the raw spsolve(A, -F) call
-                # while adding the finiteness/singularity checks every
-                # other Newton loop in this file already goes through.
-                d, _ = linsolve.solve_linear(A, -F, method="direct")
-                d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
-                psi = psi + d
-                if opts.verbose:
-                    print(f"    eq it {it:2d}  |dpsi|={np.abs(d).max():.3e}")
-                if np.abs(d).max() < opts.tol_update:
-                    break
-            else:
-                warnings.warn("Equilibrium Poisson solve did not converge.")
-
-            if dg:
-                # M20 outer fixed point: refresh the lagged quantum
-                # potentials from the CLASSICAL density of the psi that
-                # just converged -- NOT the DG-corrected density (see
-                # moscap.py's solve_psi for the full explanation: sourcing
-                # this from the DG-corrected density closes a 1-node
-                # self-reference at the node next to the Lambda=0
-                # boundary and produces a rigid, non-damping period-2
-                # oscillation rather than convergence).
-                n_c = nie * np.exp(np.clip(psi, -700, 700))
-                p_c = nie * np.exp(np.clip(-psi, -700, 700))
-                Lam_n_new = quantum_potential(self.x, n_c, m_n,
-                                              gamma=gamma, T=self.T)
-                Lam_p_new = quantum_potential(self.x, p_c, m_p,
-                                              gamma=gamma, T=self.T)
-                delta = max(np.abs(Lam_n_new - Lam_n).max(),
-                            np.abs(Lam_p_new - Lam_p).max())
-                Lam_n, Lam_p = Lam_n_new, Lam_p_new
-                psi_prev = psi.copy()
-                if delta < 1e-8:
-                    break                     # Lambda closed: done
-                if _outer == n_outer - 1:
-                    warnings.warn("M20 DG equilibrium outer fixed point "
-                                  "did not converge (Lambda still moving "
-                                  "at the iteration cap).")
+            # linsolve.solve_linear(method="direct") no longer
+            # reformats A before calling spsolve (that reformatting was
+            # itself the bug -- see linsolve.py), so this is now
+            # actually bit-identical to the raw spsolve(A, -F) call
+            # while adding the finiteness/singularity checks every
+            # other Newton loop in this file already goes through.
+            d, _ = linsolve.solve_linear(A, -F, method="direct")
+            d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
+            psi = psi + d
+            if opts.verbose:
+                print(f"    eq it {it:2d}  |dpsi|={np.abs(d).max():.3e}")
+            if np.abs(d).max() < opts.tol_update:
+                break
+        else:
+            warnings.warn("Equilibrium Poisson solve did not converge.")
 
         self._ii_gs = None               # no II source at equilibrium
         self._ii_gs_cache = None         # clear frozen generation cache
         self._btbt_gs_cache = None       # M16: no BTBT source at V=0 gauge
-        self._dg_Lam_n = Lam_n if dg else None
-        self._dg_Lam_p = Lam_p if dg else None
+        self._dg_Lam_n = None
+        self._dg_Lam_p = None
         self.psi = psi
         if fd:
             # The clamp above in the loop protects against a TRANSIENT
@@ -941,17 +898,204 @@ class Device1D:
                     "applicability).  Refusing to extrapolate.")
             self.n = fd_density(self.nc_s, en_raw)
             self.p = fd_density(self.nv_s, ep_raw)
-        elif dg:
-            # M20: the returned densities must be the DG-CORRECTED ones
-            # (the same law the residual converged with), not the bare
-            # Boltzmann values.
-            self.n = nie * np.exp(np.clip(psi, -700, 700)) \
-                * np.exp(-Lam_n / self.VT)
-            self.p = nie * np.exp(np.clip(-psi, -700, 700)) \
-                * np.exp(-Lam_p / self.VT)
         else:
             self.n = nie * np.exp(np.clip(psi, -700, 700))
             self.p = nie * np.exp(np.clip(-psi, -700, 700))
+        return self
+
+    # ------------------------------------------------------------------
+    #  M20 coupled-Newton density-gradient equilibrium solve
+    # ------------------------------------------------------------------
+    def _dg_residual_jacobian_eq(self, psi, Lam_n, Lam_p, bc, gamma=None):
+        """M20 coupled-Newton DG residual/Jacobian for equilibrium.
+
+        Same architecture as MOSCapacitor._dg_residual_jacobian (see
+        that method's docstring for the full derivation) -- unknowns
+        interleaved [psi_i, Lambda_n_i, Lambda_p_i] per node,
+        replacing the lagged outer fixed point. Two differences from
+        the MOSCapacitor version, both from Device1D's own physics:
+        (1) the Poisson row uses the permittivity-weighted edge
+        conductance et[] (heterostructure-aware) instead of a bare
+        1/h; (2) BOTH boundary nodes are pure Dirichlet OHMIC CONTACTS
+        (psi[0]=bc[0][0], psi[-1]=bc[1][0]), not a Si/SiO2 interface,
+        so the Lambda boundary rows stay the plain Lambda=0 Neumann
+        choice -- the MOSCapacitor hard-wall fix (forcing Lambda to
+        its clamp at the interface) is specific to a real oxide
+        boundary and does NOT apply here; an ohmic contact's classical
+        density is not sharply peaked at the boundary node the way a
+        strong-inversion MOS surface is, so the wrong-sign pathology
+        that motivated that fix has no equivalent here.
+
+        Returns (F [3N], J [3N x 3N] csr_matrix).
+        """
+        from .dg import _dg_prefactor
+        N = self.N
+        VT = self.VT
+        gamma = getattr(self.models, "dg_gamma", 1.0) if gamma is None else gamma
+        h, dV, C, nie = self.h, self.dV, self.C, self.nie_s
+        et = self._eps_tilde_edge()
+
+        e = np.clip(psi, -700, 700)
+        n = nie * np.exp(e) * np.exp(-Lam_n / VT)
+        p = nie * np.exp(-e) * np.exp(-Lam_p / VT)
+        dnp = n + p
+        rho = n - p - C
+
+        h_phys = np.diff(self.x)                       # cm, PHYSICAL
+        m_n = np.array([m.m_n_star for m in self.mats])
+        m_p = np.array([m.m_p_star for m in self.mats])
+        pref_n = _dg_prefactor(m_n, gamma) * 1e4
+        pref_p = _dg_prefactor(m_p, gamma) * 1e4
+
+        gn = np.sqrt(np.maximum(n, 1e-300))
+        gp = np.sqrt(np.maximum(p, 1e-300))
+
+        F = np.zeros(3 * N)
+        rows, cols, vals = [], [], []
+
+        def add(r, c, v):
+            rows.append(r); cols.append(c); vals.append(v)
+
+        def ip(i): return 3 * i
+        def iln(i): return 3 * i + 1
+        def ilp(i): return 3 * i + 2
+
+        # ---- Poisson rows: pure Dirichlet at both contacts ----------
+        F[ip(0)] = psi[0] - bc[0][0]
+        add(ip(0), ip(0), 1.0)
+        F[ip(N - 1)] = psi[N - 1] - bc[1][0]
+        add(ip(N - 1), ip(N - 1), 1.0)
+
+        if N >= 3:
+            i = np.arange(1, N - 1)
+            F[3 * i] = (et[i] * (psi[i + 1] - psi[i]) / h[i]
+                        - et[i - 1] * (psi[i] - psi[i - 1]) / h[i - 1]
+                        - dV[i] * rho[i])
+        for i in range(1, N - 1):
+            add(ip(i), ip(i - 1), et[i - 1] / h[i - 1])
+            add(ip(i), ip(i),
+                -et[i] / h[i] - et[i - 1] / h[i - 1] - dV[i] * dnp[i])
+            add(ip(i), ip(i + 1), et[i] / h[i])
+            add(ip(i), iln(i), dV[i] * n[i] / VT)
+            add(ip(i), ilp(i), -dV[i] * p[i] / VT)
+
+        # ---- Lambda_n / Lambda_p rows --------------------------------
+        # Boundary nodes: Lambda = 0 (Neumann -- ohmic contacts, see
+        # docstring; NOT the MOSCapacitor hard-wall treatment).
+        for idxb in (iln, ilp):
+            F[idxb(0)] = (Lam_n if idxb is iln else Lam_p)[0]
+            add(idxb(0), idxb(0), 1.0)
+            F[idxb(N - 1)] = (Lam_n if idxb is iln else Lam_p)[N - 1]
+            add(idxb(N - 1), idxb(N - 1), 1.0)
+
+        for i in range(1, N - 1):
+            hm, hp = h_phys[i - 1], h_phys[i]
+            c0 = 2.0 / (hm + hp)
+
+            for g, Lam, pref, idx, sign in (
+                (gn, Lam_n, pref_n, iln, +1.0),
+                (gp, Lam_p, pref_p, ilp, -1.0),
+            ):
+                dd_i = c0 * ((g[i + 1] - g[i]) / hp - (g[i] - g[i - 1]) / hm)
+                F[idx(i)] = Lam[i] * g[i] + pref[i] * dd_i
+
+                dg_dpsi_i = sign * g[i] / 2.0
+                dg_dLam_i = -g[i] / (2.0 * VT)
+                dg_dpsi_im1 = sign * g[i - 1] / 2.0
+                dg_dLam_im1 = -g[i - 1] / (2.0 * VT)
+                dg_dpsi_ip1 = sign * g[i + 1] / 2.0
+                dg_dLam_ip1 = -g[i + 1] / (2.0 * VT)
+
+                ddd_dgi = -c0 * (1.0 / hp + 1.0 / hm)
+                ddd_dgim1 = c0 / hm
+                ddd_dgip1 = c0 / hp
+
+                add(idx(i), ip(i),
+                    Lam[i] * dg_dpsi_i + pref[i] * ddd_dgi * dg_dpsi_i)
+                add(idx(i), idx(i),
+                    g[i] + Lam[i] * dg_dLam_i + pref[i] * ddd_dgi * dg_dLam_i)
+                add(idx(i), ip(i - 1), pref[i] * ddd_dgim1 * dg_dpsi_im1)
+                add(idx(i), (iln(i - 1) if idx is iln else ilp(i - 1)),
+                    pref[i] * ddd_dgim1 * dg_dLam_im1)
+                add(idx(i), ip(i + 1), pref[i] * ddd_dgip1 * dg_dpsi_ip1)
+                add(idx(i), (iln(i + 1) if idx is iln else ilp(i + 1)),
+                    pref[i] * ddd_dgip1 * dg_dLam_ip1)
+
+        J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        return F, J
+
+    def _dg_newton_solve_eq(self, psi, Lam_n, Lam_p, bc, gamma, max_iter, tol):
+        """One coupled-Newton solve at FIXED gamma from a warm start.
+        Mirrors MOSCapacitor._dg_newton_solve exactly -- see that
+        method's docstring. Never raises on non-convergence/singular
+        step; reports via the `converged` flag instead."""
+        for _ in range(max_iter):
+            F, J = self._dg_residual_jacobian_eq(psi, Lam_n, Lam_p, bc, gamma=gamma)
+            try:
+                d, _ = linsolve.solve_linear(J.tocsc(), -F, method="direct")
+            except linsolve.LinearSolveError:
+                return psi, Lam_n, Lam_p, False
+            if not np.all(np.isfinite(d)):
+                return psi, Lam_n, Lam_p, False
+            d_psi = np.clip(d[0::3], -5.0, 5.0)
+            d_ln = np.clip(d[1::3], -10.0 * self.VT, 10.0 * self.VT)
+            d_lp = np.clip(d[2::3], -10.0 * self.VT, 10.0 * self.VT)
+            psi = psi + d_psi
+            Lam_n = Lam_n + d_ln
+            Lam_p = Lam_p + d_lp
+            err = max(np.abs(d_psi).max(), np.abs(d_ln).max(), np.abs(d_lp).max())
+            if err < tol:
+                return psi, Lam_n, Lam_p, True
+        return psi, Lam_n, Lam_p, False
+
+    def _solve_equilibrium_dg_coupled(self, opts: NewtonOptions):
+        """M20 coupled-Newton DG equilibrium solve: (psi, Lambda_n,
+        Lambda_p) solved SIMULTANEOUSLY, replacing the lagged outer
+        fixed-point scheme -- see MOSCapacitor._solve_psi_dg_coupled's
+        docstring for the full architecture and the gamma-continuation
+        rationale (a one-shot solve at full target gamma does not
+        reliably converge; ramping gamma from 0 with warm-restarting
+        does, the same pattern device.py's own M15/M16 stiff-
+        generation solve_bias already uses).
+        """
+        C, nie = self.C, self.nie_s
+        psi = np.arcsinh(C / (2.0 * nie))          # neutral-bulk guess
+        bc = self._contact_values([0.0, 0.0])
+        psi[0], psi[-1] = bc[0][0], bc[1][0]
+        Lam_n = np.zeros(self.N)
+        Lam_p = np.zeros(self.N)
+
+        target_gamma = getattr(self.models, "dg_gamma", 1.0)
+        stages = [0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0]
+        k = 0
+        retries_at_stage = 0
+        converged_final = True
+        while k < len(stages):
+            gamma_k = target_gamma * stages[k]
+            psi_new, Ln_new, Lp_new, ok = self._dg_newton_solve_eq(
+                psi, Lam_n, Lam_p, bc, gamma_k, opts.max_iter, opts.tol_update)
+            if ok:
+                psi, Lam_n, Lam_p = psi_new, Ln_new, Lp_new
+                k += 1
+                retries_at_stage = 0
+                continue
+            retries_at_stage += 1
+            if retries_at_stage > 20:
+                converged_final = False
+                break
+            stages.insert(k, 0.5 * (stages[k - 1] if k > 0 else 0.0) + 0.5 * stages[k])
+        if not converged_final:
+            warnings.warn("M20 DG equilibrium coupled-Newton solve did not "
+                          "converge (gamma continuation stalled).")
+
+        self._ii_gs = None
+        self._ii_gs_cache = None
+        self._btbt_gs_cache = None
+        self._dg_Lam_n = Lam_n
+        self._dg_Lam_p = Lam_p
+        self.psi = psi
+        self.n = nie * np.exp(np.clip(psi, -700, 700)) * np.exp(-Lam_n / self.VT)
+        self.p = nie * np.exp(np.clip(-psi, -700, 700)) * np.exp(-Lam_p / self.VT)
         return self
 
     # ------------------------------------------------------------------

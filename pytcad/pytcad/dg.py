@@ -46,6 +46,16 @@ from .constants import HBAR, KB, Q, M0, thermal_voltage, trapz
 LAMBDA_MAX_VT = 20.0
 
 
+def _dg_prefactor(m_star, gamma):
+    """The DG quantum-potential SI prefactor, gamma*hbar^2/(2 m* q),
+    in V*m^2 -- shared between quantum_potential's explicit-formula
+    evaluation and the coupled-Newton residual/Jacobian assembly in
+    moscap.py/device.py, so both use the EXACT SAME formula rather
+    than a second hand-transcription of it (M20 coupled-Newton
+    reformulation, 2026-08-31)."""
+    return gamma * HBAR * HBAR / (2.0 * np.asarray(m_star, dtype=float) * M0 * Q)
+
+
 def quantum_potential(x, n, m_star, gamma=1.0, T=300.0):
     """DG quantum potential Lambda(x) [V] of a 1D density profile.
 
@@ -81,7 +91,7 @@ def quantum_potential(x, n, m_star, gamma=1.0, T=300.0):
             - (g[1:-1] - g[:-2]) / h[:-1])            # [cm^-2]
         # SI prefactor: hbar^2/(2 m* q) [V m^2]; dd is per cm^2 -> *1e4
         # (m* may be a per-node array -- heterostructure devices)
-        pref = gamma * HBAR * HBAR / (2.0 * m * M0 * Q)     # V m^2
+        pref = _dg_prefactor(m, gamma)     # V m^2
         Lam[interior] = -pref[1:-1] * 1e4 * dd / g[1:-1]
     # boundary nodes: Lambda = 0 (Neumann choice, plan section 1)
     Lam = np.clip(Lam, -LAMBDA_MAX_VT * VT, LAMBDA_MAX_VT * VT)

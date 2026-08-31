@@ -2,9 +2,13 @@
 # M21 Phase 3: General unstructured 2D + Delaunay FV assembly
 # Formal milestone spec
 
-Status: **PHASES 3a (GEOMETRY), 3b (POISSON-ONLY EQUILIBRIUM), AND 3c
-(COUPLED BIAS SOLVE) ALL SHIPPED 2026-08-31; ONLY `Device2D
-(unstructured=True)` CLASS INTEGRATION NOT STARTED.** Phases 1-2
+Status: **ALL OF PHASE 3 (3a GEOMETRY, 3b POISSON EQUILIBRIUM, 3c
+COUPLED BIAS SOLVE, 3d `Device2D(unstructured=True)` INTEGRATION)
+SHIPPED 2026-08-31 -- M21 PHASE 3 COMPLETE.** Phase 3d wires the
+already-gated 3a-3c modules into `Device2D`'s own
+`solve_equilibrium`/`solve_bias`/`terminal_current` API as a thin,
+bit-identical-vs-direct-call wrapper -- see "PHASE 3d IMPLEMENTATION
+RECORD" below. Phases 1-2
 (1D/2D/3D separable adaptive h-refinement) SHIPPED. Phase 3a's geometry
 foundation -- `GmshMesh` loading/building (`pytcad/gmsh_mesh.py`),
 region/contact resolution (`pytcad/region_resolver.py`), and the unique
@@ -655,3 +659,109 @@ combinations, and adaptive refinement on unstructured meshes.
 - `ARCHITECTURE.md`, `history.md`: status updates
 
 (End of file - total 283 lines, plus these three implementation records)
+
+------------------------------------------------------------------------
+PHASE 3d IMPLEMENTATION RECORD (2026-08-31) -- Device2D(unstructured=True)
+------------------------------------------------------------------------
+Wired the standalone, already-gated `unstructured_poisson.py`/
+`unstructured_dd.py` physics into `Device2D`'s own
+`solve_equilibrium()`/`solve_bias(voltages)`/`terminal_current(name)`
+API. Genuinely a THIN wrapper: zero new numerical formulas, zero new
+Jacobian entries -- `Device2D.__init__(..., unstructured=True)` runs
+the exact pipeline `tests/test_m21_phase3.py`'s own `diode_bias_solve`
+fixture already exercised (`resolve_regions`/`resolve_contacts`/
+`build_unstructured_stencil`/`build_edge_flux_geometry`/`evaluate_
+doping_at_nodes`), and `solve_equilibrium`/`solve_bias`/`terminal_
+current` each gained a one-line dispatch guard (`if self.unstructured:
+return self._unstructured_...(...)`) at the very top, before any
+structured-only code runs.
+
+**Key finding that shaped the design**: `Device2D.__init__` is deeply
+structured-mesh-specific (`(Ny,Nx)` reshaping, `dVx`/`dVy` outer
+product, `et_x`/`et_y` directional edge arrays, Caughey-Thomas
+mobility, heterostructure material lists) -- none of it applies to an
+unstructured triangle mesh, and `unstructured_dd.py`'s own docstring
+already states it is homojunction-only (uniform `mu_n_max`/`mu_p_max`,
+no Caughey-Thomas doping dependence, no heterojunction edge term). So
+`unstructured=True` branches to an entirely separate `_init_unstructured`
+method rather than reusing any of the structured setup, and REFUSES
+(`NotImplementedError`, same convention as the existing `impact`/
+`btbt`/`dg`/`incomplete_ion` refusals) any `Models()` flag the
+physics core doesn't implement: `doping_mobility`, `bgn`, `fd`,
+`incomplete_ion`, `surface_mobility`, `field_mobility`, and a
+heterostructure `material` list. `doping` becomes a `{region_name:
+value}` dict (mirroring `evaluate_doping_at_nodes`'s own `doping_by_
+region` parameter) since there is no `(Ny,Nx)` grid to reshape a
+per-node array into; `self.psi`/`n`/`p` are flat `(N,)` arrays on this
+path, not reshaped.
+
+**A real, small discrepancy found and understood during verification,
+not a bug**: the first bit-identity check between the wrapper and a
+direct `unstructured_dd.solve_bias(...)` call showed a ~2.5e-6
+relative difference in terminal current. Root-caused: `Models()`'s own
+default has `auger=True` (matching the structured `Device2D`/
+`Device1D` convention elsewhere in this codebase), while `unstructured_
+dd.solve_bias`'s own bare function default is `auger=False`. The
+wrapper deliberately passes `auger=self.models.auger` (respecting the
+user's `Models()` config, the same convention every other Device1D/
+Device2D physics flag in this codebase follows) rather than the bare
+function's own conservative default -- once the direct comparison call
+was given the same explicit `auger=True`, the two paths matched
+bit-for-bit exactly. Not a defect; documented in the new gate's own
+docstring so a future reader isn't confused by the same discrepancy.
+
+### Gates (`tests/test_m21_phase3.py`, 5 new tests appended)
+
+- `test_wrapper_equilibrium_matches_direct_call`: `Device2D(unstructured=
+  True).solve_equilibrium()` bit-identical to `solve_poisson_
+  equilibrium(...)` called directly. PASS (exact `array_equal`).
+- `test_wrapper_bias_matches_direct_call`: `.solve_bias(...)` and
+  `.terminal_current(...)` bit-identical to `unstructured_dd.solve_
+  bias(...)` called directly with matching `auger=True`. PASS (exact
+  `array_equal` on psi/n/p, exact `==` on both contacts' terminal
+  current).
+- `test_wrapper_refuses_unsupported_models_flags`: each of
+  `doping_mobility`/`bgn`/`fd`/`incomplete_ion`/`surface_mobility`/
+  `field_mobility` raises `NotImplementedError`. PASS.
+- `test_wrapper_refuses_heterostructure_material_and_bad_types`:
+  heterostructure material list, non-dict `doping`, and a structured
+  `Mesh2D` passed as `mesh` all raise the correct exception type. PASS.
+- `test_structured_path_bit_identical_after_unstructured_wiring`: an
+  ordinary structured `Device2D` solve (equilibrium + bias,
+  `unstructured` defaults to `False`) still converges and produces a
+  sane, nonzero terminal current -- confirms the new branches never
+  execute on the existing path. PASS.
+
+27 tests total in `tests/test_m21_phase3.py` (26 phase 3a-3c + 5 new,
+minus one net accounting difference from shared fixtures).
+
+Full suite: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -> 942
+passed, 6 skipped, 1 xfailed, 1 failed (the same pre-existing,
+independently-confirmed flaky `test_gc_sp_centroid_in_literature_band`
+S-P `eigsh` nondeterminism, unrelated to this work). Zero new
+regressions; the pre-change baseline was 937 passed / 1 known-flaky
+failure.
+
+### What remains NOT started (M21 Phase 3 as a whole is now COMPLETE
+for its own stated scope; these are explicitly out of scope per
+section 1's "Phase 3 does NOT cover" list, unchanged)
+
+3D (tetrahedral) unstructured meshing, adaptive refinement on
+unstructured meshes, heterojunction unstructured meshes (Si/GaAs),
+GUI wire-format changes for unstructured devices, and Caughey-Thomas/
+FD-statistics/incomplete-ionization/surface-mobility support in the
+unstructured physics core itself (still homojunction-Boltzmann-only,
+by explicit design of `unstructured_poisson.py`/`unstructured_dd.py`,
+not something Phase 3d's wrapper could or should silently extend).
+
+### Files changed (Phase 3d):
+- `pytcad/pytcad/device2d.py`: `__init__` gains `unstructured=False`
+  parameter + `_init_unstructured`; `solve_equilibrium`/`solve_bias`/
+  `terminal_current` gain a dispatch guard each;
+  `_unstructured_solve_equilibrium`/`_unstructured_solve_bias`/
+  `_unstructured_terminal_current` new private methods. Structured
+  path's existing code paths are otherwise byte-for-byte unchanged.
+- `pytcad/tests/test_m21_phase3.py`: 5 new tests appended
+- `M21-PHASE3-MESHING-PLAN.md`: this record; status line updated to
+  fully COMPLETE
+- `ARCHITECTURE.md`, `history.md`: status updates
