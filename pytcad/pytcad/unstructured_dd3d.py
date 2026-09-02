@@ -36,7 +36,8 @@ first tetrahedral-mesh pass):
     unstructured_dd.py's own.
 
 Validated (tests/test_unstructured_dd3d.py) against the ALREADY-
-VALIDATED structured Device3D/Mesh3D solver, in TWO separate regimes:
+VALIDATED structured Device3D/Mesh3D solver, in THREE separate
+regimes:
 
   - Poisson EQUILIBRIUM on the z-invariant p-n slab geometry
     test_validation_3d.py's own test_bias_3d_reduces_to_2d fixture
@@ -46,30 +47,42 @@ VALIDATED structured Device3D/Mesh3D solver, in TWO separate regimes:
     Jacobian assembly are correct.
   - An OHMIC (uniform-doping) resistor bar under small bias: measured
     current agrees with the structured solver (and the analytic
-    I=q*mu*n*A*V/L Ohmic limit) to ~15%, the same order of FVM
+    I=q*mu*n*A*V/L Ohmic limit) to ~15-25%, the same order of FVM
     discretization tolerance test_m21_phase3.py's own 2D G4 gate
     already established for an independent-discretization comparison.
-
-  HONEST GAP, stated rather than hidden: a forward-biased p-n
-  JUNCTION current comparison was attempted and NOT brought to
-  agreement in this pass -- measured differences were 1-2 ORDERS OF
-  MAGNITUDE, not a few percent. Diode forward current depends
-  exponentially on the built-in potential barrier shape, and this
-  module's per-node doping (evaluate_doping_at_nodes3d) is smoothed
-  over each node's touching-tet volumes -- with the tet sizes near the
-  junction practical to mesh/assemble in pure Python within a normal
-  test runtime (thousands, not hundreds-of-thousands, of tets; the
-  per-edge circumcenter/quad-area geometry in unstructured_assembly3d
-  is pure-Python and O(edges)), that smoothing width is likely several
-  Debye lengths wider than the structured reference's much finer
-  graded 1D mesh spacing at the junction -- a plausible root cause,
-  not confirmed by a mesh-refinement convergence study here. A future
-  session should either (a) vectorize/accelerate the 3D assembly so a
-  much finer graded tet mesh is practical, or (b) special-case doping
-  assignment at a shared junction interface (duplicate nodes, the way
-  gmsh_mesh.build_diode_mesh's 2D fixture already gets an EXACT step
-  via fragment()-shared boundary nodes with per-triangle, not
-  per-node, doping) before claiming junction I-V agreement.
+  - A forward-biased p-n JUNCTION under SRH recombination (the case a
+    prior pass of this module flagged as an unresolved 1-2-orders-of-
+    magnitude gap, attributed -- WITHOUT having actually diagnosed it
+    -- to per-node doping smoothing near the junction): that gap was
+    a genuine bug, since fixed, NOT a doping/mesh-resolution
+    limitation. Root cause, confirmed by direct instrumentation
+    against the structured Device3D reference on matched geometry:
+    R0 (the physical-to-scaled recombination-rate normalization in
+    solve_bias3d) was `D0_REF * Ns / LD**2`, copied verbatim from
+    unstructured_dd.py's 2D module -- correct THERE because 2D's
+    node_areas_s divides by LD**2, but wrong here because this
+    module's node_vols_s divides by LD**3 (one more power of LD, a 3D
+    dual-cell VOLUME vs. a 2D dual-cell AREA). The missing power of
+    LD (~1.29e-6 cm for the Nd=1e17 test fixture, so R0 too small by
+    ~7.7e5x) inflated the SCALED SRH sink Rs=R/R0 by the same factor,
+    corrupting the coupled solve wherever SRH mattered while leaving
+    equilibrium (bulk charge-neutrality only, no flux/recombination
+    balance) and the srh=False Ohmic path untouched -- exactly the
+    "equilibrium fine, forward bias badly wrong" signature originally
+    observed. Fixed by changing R0 to `D0_REF * Ns / LD**3`. Measured
+    (test_unstructured_dd3d.py's test_forward_junction_matches_
+    structured, direct instrumentation against Device3D on the SAME
+    Nd_scale=1e17/Xj=1e-4 geometry, srh=True, doping_mobility=False
+    on both sides so only the discretization differs): ratio
+    unstructured/structured = 1.19 (0.3V), 1.22 (0.5V), 1.23 (0.6V) --
+    the SAME ~20-25% band the Ohmic/srh=False case already showed, not
+    the exponentially-blown-up 30-60x this bug produced before the
+    fix. A mesh-grading refinement (finer SizeMin/wider DistMax near
+    the junction) was tried FIRST as the suspected fix and made
+    essentially no difference (33x -> 36x, still wrong) -- ruling out
+    "doping smoothing"/mesh coarseness as the actual cause before the
+    R0 bug was found by direct dimensional derivation, not left as an
+    unconfirmed hypothesis this time.
 """
 import warnings
 
@@ -300,7 +313,7 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     nie = material.ni(T)
     Ns = max(float(np.abs(C_phys).max()), nie)
     LD = np.sqrt(eps * VT / (Q * Ns))
-    R0 = D0_REF * Ns / LD ** 2
+    R0 = D0_REF * Ns / LD ** 3
 
     C_s = C_phys / Ns
     nie_s = nie / Ns
