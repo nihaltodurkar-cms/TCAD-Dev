@@ -1489,3 +1489,135 @@ stay optional; gate-bearing milestones block their dependents; a
 this file was wrong about M15 for a full session before 2026-08-27's
 debug pass, and the fix is to measure, not to trust the last status
 block.
+
+## Known limitations, honestly stated
+
+Every item below is cited against the code/docstring that admits it --
+this is not speculation, it is what the source already says about
+itself. Kept here as one consolidated list so a reader doesn't have to
+go hunting through a dozen module docstrings to find the edges.
+
+### 1. Process simulation deficiencies
+
+- **Implantation modeling.** Relies on approximate LSS/Pearson moment
+  tables for amorphous silicon; does not model the channelling effect,
+  which in crystalline silicon can extend doping tails 1-2 decades
+  deeper than predicted (`process.py` module docstring).
+- **Diffusion limitations.** Modeled as intrinsic with a constant
+  diffusion coefficient D. No extrinsic (charged-defect) enhancement
+  above n_i(T), no transient enhanced diffusion (TED) from implant
+  damage, no oxidation-enhanced diffusion, no dopant-defect pair
+  kinetics (`diffusivity()` docstring, `process.py`).
+- **Oxidation.** The Deal-Grove model under-predicts thin dry oxides
+  (below ~30 nm) and relies on a heuristic initial-thickness fudge
+  (x_i ~ 25 nm) rather than a strictly physical treatment
+  (`oxide_thickness()` docstring, `process.py`).
+
+### 2. Physical models and quantum corrections
+
+- **Quantum mechanical corrections.** Restricted to the Density-
+  Gradient (DG) model, and strictly equilibrium-only (`dg.py`). No DG
+  transport during bias sweeps, no 2D/3D DG, no coupled DG/Fermi-Dirac
+  or incomplete-ionization models. Poly-silicon depletion is not
+  modeled.
+- **C-V profiling.** Only quasi-static C-V sweeps are supported.
+  High-frequency C-V (e.g. 1 MHz, where minority carriers can't
+  respond) is not modeled (`moscap.py`).
+- **Self-heating.** The core solver is isothermal by default. 1D
+  steady-state self-heating exists via an outer Gummel-like loop
+  (`thermal.py`), but a fully coupled, monolithic 2D or transient
+  self-heating solver is absent.
+- **Surface mobility.** The Lombardi CVT surface mobility model
+  (`device2d.py`) includes a simplified phonon-scattering term and
+  remains uncalibrated against published values, blocked on paywalled
+  literature (also the reason for the M14 xfail in the test suite).
+- **Impact ionization and BTBT.** Both implemented as local models
+  (van Overstraeten-de Man / Kane-Hurkx). Non-local tunneling paths
+  such as gate-induced drain leakage (GIDL) are not supported --
+  local models can't reproduce GIDL's non-saturating growth with
+  reverse bias (`btbt.py`).
+
+### 3. Dimensionality, geometry, and meshing
+
+- **3D device construction.** A 3D Cartesian tensor-product mesh and
+  solver exist, and a scripted 3D FinFET example exists
+  (`gui/services/examples.py::finfet_3d_example_spec`), but there is
+  no GUI-level 3D device construction workbench -- no 3D equivalent
+  of the Structure/Process workbench. Specific 3D geometries (FinFET,
+  GAA nanowire/nanosheet) as first-class, editable GUI templates
+  remain deferred (`gui/README.md`).
+- **2D process simulation.** Process simulation (implantation,
+  diffusion, oxidation) remains strictly 1D; not extended to 2D.
+- **Unstructured meshing in 1D.** Unstructured (triangle) meshing
+  exists only for 2D, and only as a Poisson-only slice
+  (`unstructured_poisson.py`, `unstructured_dd.py`). The 1D core has
+  no unstructured meshing capability.
+
+### 4. GUI and workbench limitations
+
+- **Transient simulation gaps.** Gate-contact voltages cannot yet be
+  waveform-driven -- only ohmic (`DirichletBC`) contacts can
+  (`transient2d.py::solve_transient` docstring). Armed transient
+  configurations are not persisted across project save/load cycles,
+  and only scalar current-vs-time series are stored, with no per-step
+  field snapshots.
+- **Small-signal AC analysis.** Available in the library (`ac.py`)
+  for 1D devices only; no GUI integration and no 2D support
+  (`gui/README.md`).
+- **DEVSIM backend limits.** The alternative DEVSIM solver backend is
+  restricted to 1D, two-terminal silicon devices, and does not
+  support impact ionization (`workbench/solvers/devsim_backend.py`).
+- **Result visualization.** C-V results are surfaced through the
+  general result store rather than a dedicated, specialized C-V
+  plotting interface.
+
+### 5. Solver scalability and performance
+
+- **Direct sparse solver scaling.** The default linear solver
+  (`scipy.sparse.linalg.spsolve`) uses direct sparse factorization,
+  which suffers from superlinear fill-in. A uniformly-doped cubic
+  resistor benchmark grew from 3.0s at N=8,000 nodes to 51.8s at
+  N=27,000 (an 18x jump for 3.4x more nodes), and N=64,000 did not
+  complete within 30 minutes (~19 GB memory before being killed). In
+  practice `"direct"` alone is usable only up to roughly N~=27,000
+  nodes (~=81,000 DOF) on 30 GB-class hardware (see the README
+  limitations paragraph and M22-LINSOLVE-PLAN.md section 9).
+- **Iterative and MPI solvers.** GMRES/BiCGStAB iterative solvers and
+  a 4-rank MPI Schwarz domain decomposition exist
+  (`gui/services/mpi_schwarz_runner.py`), but the MPI path is scoped
+  to equilibrium plus a single bias point only -- no sweeps, no
+  transients -- and `run_job()` explicitly checks the doping array
+  and refuses the MPI path when doping varies along the domain-
+  decomposition split axis, because convergence degrades sharply or
+  fails outright for that geometry class.
+
+### How this compares to commercial TCAD (Synopsys Sentaurus)
+
+The gaps above are exactly where a production tool like Sentaurus
+TCAD earns its multi-decade head start. Not a criticism of either
+tool -- different design goals -- but useful context for anyone
+deciding whether PyTCAD is fit for a given purpose:
+
+| Area | PyTCAD (this repo) | Sentaurus TCAD |
+|---|---|---|
+| Implantation | LSS/Pearson moment tables, no channelling | Full Monte Carlo (Crystal-TRIM) with real channelling in crystalline Si, plus analytic tables for speed |
+| Diffusion | Constant-D, intrinsic only; no TED, no OED, no defect-pair kinetics | Charged-defect pair-diffusion models, point-defect kinetics, TED and OED built in |
+| Oxidation | Deal-Grove with a fitted initial-thickness fudge for thin dry oxide | Viscoelastic 2D/3D oxidation (compressible-flow model), stress-dependent growth, proper LOCOS bird's-beak geometry |
+| Quantum corrections | Density-Gradient, equilibrium-only, 1D-proven | Density-Gradient and Schrodinger-Poisson (1D/2D/3D, with bias); routine for sub-20nm inversion layers and poly-depletion |
+| C-V | Quasi-static only | Quasi-static and small-signal AC (true high-frequency C-V, arbitrary frequency) |
+| Self-heating | 1D steady-state, outer Gummel loop | Fully monolithic coupled electro-thermal, 1D/2D/3D, transient |
+| Surface mobility | Lombardi CVT, uncalibrated (paywalled constants) | Calibrated, production-validated mobility model library, cross-validated against fab data |
+| Impact ionization / BTBT | Local Kane/Hurkx only, no GIDL | Local and non-local (path-integral) models, built for GIDL and avalanche breakdown |
+| Dimensionality | 1D/2D/3D solver exists; 3D device construction is script-only, no GUI workbench; process is 1D-only | Full 3D from geometry through mesh through solve, GUI-driven, native FinFET/GAA/nanosheet templates |
+| Meshing | Structured tensor-product 1D/2D/3D; unstructured only in 2D (Poisson-only slice) | Unstructured, adaptive, curvature- and gradient-driven Delaunay meshing in 2D/3D by default |
+| Transient | Gate contacts not waveform-driven yet; scalar I(t) only, no field snapshots persisted | Arbitrary time-domain excitation on every contact type, full field history storage, mixed-mode circuit coupling |
+| AC/small-signal | 1D library-only, no GUI | Full AC small-signal analysis, all dimensionalities, GUI-integrated |
+| Linear solver / scaling | Direct sparse solver caps out ~27k nodes (~81k DOF) before impractical on commodity hardware; iterative/GPU paths exist but aren't default | Production-grade iterative solvers (algebraic multigrid, parallel MPI), routinely multi-million-node 3D meshes on HPC clusters |
+| MPI parallelism | 4-rank Schwarz, equilibrium/single-bias only, fails when doping varies along the split axis | Mature MPI domain decomposition across sweeps, transients, and full bias ramps, scales to many nodes |
+
+PyTCAD's value is pedagogical and architectural transparency -- every
+model states its equation, provenance, and where it breaks, and the
+whole engine is small enough to read end to end. Sentaurus's value is
+validated, production-scale predictive accuracy across a multi-decade,
+thousands-of-engineer codebase. Neither claim substitutes for the
+other.
