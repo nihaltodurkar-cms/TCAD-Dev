@@ -160,7 +160,6 @@ def build_edge_flux_geometry3d(nodes, tets, edge_list):
     """
     nodes_xyz = np.asarray(nodes, dtype=float)[:, :3]
     tet = np.asarray(tets, dtype=int)
-    N_tet = tet.shape[0]
 
     tet_cc = np.array([tetrahedron_circumcenter(nodes_xyz[t]) for t in tet])
     FACES = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
