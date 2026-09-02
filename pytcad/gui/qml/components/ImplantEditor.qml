@@ -86,11 +86,22 @@ ColumnLayout {
             currentIndex: parameters && parameters.species != null ? model.indexOf(parameters.species) : 0
             onActivated: if (stepId) controller.setProcessStepParameters(stepId,
                 Object.assign({}, parameters, {species: currentText}))
+            background: Rectangle {
+                implicitWidth: 90
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: speciesBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: speciesBox.activeFocus ? 2 : 1
+                border.color: speciesBox.activeFocus ? Theme.focus
+                              : speciesBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
     RowLayout {
         Label { text: "Energy [keV]"; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             objectName: "implantEnergyField"
             Layout.fillWidth: true
             text: parameters && parameters.energy_keV != null ? parameters.energy_keV.toString() : ""
@@ -100,7 +111,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Dose [cm⁻²]"; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             objectName: "implantDoseField"
             Layout.fillWidth: true
             text: parameters && parameters.dose_cm2 != null ? parameters.dose_cm2.toExponential(2) : ""
@@ -110,7 +121,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Window [µm]"; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             id: fromField
             objectName: "implantWindowFromField"
             Layout.fillWidth: true
@@ -119,7 +130,7 @@ ColumnLayout {
             ToolTip.visible: hovered
         }
         Label { text: "to" ; color: Theme.textDim }
-        TextField {
+        ValidatedTextField {
             id: toField
             objectName: "implantWindowToField"
             Layout.fillWidth: true
@@ -130,9 +141,19 @@ ColumnLayout {
     }
     RowLayout {
         Button {
+            id: applyWindowButton
             objectName: "implantWindowApplyButton"
             text: "Apply Window"
             onClicked: editorRoot._applyWindow()
+            background: Rectangle {
+                radius: Theme.radiusSm
+                color: applyWindowButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
+                       : applyWindowButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
+                       : Theme.panelRaised
+                border.width: 1
+                border.color: Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
         Label {
             text: "empty pair = whole domain"
@@ -142,7 +163,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Tilt [deg]"; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             // Python None crosses to QML as undefined, not null -- see
             // GateEditor.qml's vfbValue comment. tilt_deg may legitimately

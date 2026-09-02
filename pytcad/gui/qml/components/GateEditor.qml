@@ -19,7 +19,7 @@ ColumnLayout {
             ToolTip.visible: hTox.hovered; ToolTip.delay: 400
             ToolTip.text: "Gate-oxide thickness. Below ~2 nm direct tunneling leakage appears -- not modeled here."
         }
-        TextField {
+        ValidatedTextField {
             objectName: "gateToxField"
             Layout.fillWidth: true
             text: gateData ? (gateData.tox * 1e7).toString() : ""
@@ -34,7 +34,7 @@ ColumnLayout {
             ToolTip.visible: hGV.hovered; ToolTip.delay: 400
             ToolTip.text: "Gate voltage vs body. Above threshold it inverts the surface and forms a channel."
         }
-        TextField {
+        ValidatedTextField {
             objectName: "gateVoltageField"
             Layout.fillWidth: true
             text: gateData ? gateData.voltage.toString() : ""
@@ -51,12 +51,23 @@ ColumnLayout {
             currentIndex: gateData && gateData.vfbMode === "manual" ? 1 : 0
             onActivated: if (gateId) controller.setGateVfbMode(
                 gateId, currentText, manualField.text ? parseFloat(manualField.text) : 0.0)
+            background: Rectangle {
+                implicitWidth: 120
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: modeBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: modeBox.activeFocus ? 2 : 1
+                border.color: modeBox.activeFocus ? Theme.focus
+                              : modeBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
     RowLayout {
         visible: modeBox.currentText === "manual"
         Label { text: "Vfb [V]"; color: Theme.textDim; Layout.preferredWidth: 80 }
-        TextField {
+        ValidatedTextField {
             id: manualField
             objectName: "gateVfbValueField"
             Layout.fillWidth: true

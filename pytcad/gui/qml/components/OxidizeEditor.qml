@@ -33,7 +33,7 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Temperature [°C]"; Layout.preferredWidth: 120 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.temperature_C != null ? parameters.temperature_C.toString() : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,
@@ -42,7 +42,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Time [hours]"; Layout.preferredWidth: 120 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.time_hours != null ? parameters.time_hours.toString() : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,
@@ -52,10 +52,22 @@ ColumnLayout {
     RowLayout {
         Label { text: "Ambient"; Layout.preferredWidth: 120 }
         ComboBox {
+            id: ambientBox
             model: ["dry", "wet"]
             currentIndex: parameters && parameters.ambient != null ? model.indexOf(parameters.ambient) : 0
             onActivated: if (stepId) controller.setProcessStepParameters(stepId,
                 Object.assign({}, parameters, {ambient: currentText}))
+            background: Rectangle {
+                implicitWidth: 90
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: ambientBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: ambientBox.activeFocus ? 2 : 1
+                border.color: ambientBox.activeFocus ? Theme.focus
+                              : ambientBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
 }

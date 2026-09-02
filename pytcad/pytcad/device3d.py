@@ -66,6 +66,32 @@ class DirichletBC:
         self.V = float(V)
 
 
+class PinnedBC:
+    """An interior interface pinned directly to given per-node state
+    values (psi0, and for the bias/DD system also n0/p0) -- NOT derived
+    from a contact voltage via the equilibrium ohmic relations
+    (_bc_contact_values), unlike DirichletBC.
+
+    Used by MPI Schwarz domain decomposition (gui/services/
+    mpi_schwarz.py): splitting a device into subdomains creates
+    artificial internal boundaries that must track whatever the
+    NEIGHBORING subdomain's current iterate says there -- an arbitrary
+    field value exchanged over MPI each Schwarz sweep, not a physical
+    ohmic contact. Structurally handled identically to DirichletBC in
+    both _residual_jacobian_poisson and _residual_jacobian (same row-
+    replacement treatment), just sourcing its target values directly
+    instead of computing them from a voltage.
+    """
+
+    def __init__(self, i, j, k, psi0, n0=None, p0=None):
+        self.i = np.atleast_1d(np.asarray(i, dtype=int))
+        self.j = np.atleast_1d(np.asarray(j, dtype=int))
+        self.k = np.atleast_1d(np.asarray(k, dtype=int))
+        self.psi0 = np.atleast_1d(np.asarray(psi0, dtype=float))
+        self.n0 = None if n0 is None else np.atleast_1d(np.asarray(n0, dtype=float))
+        self.p0 = None if p0 is None else np.atleast_1d(np.asarray(p0, dtype=float))
+
+
 class GateBC:
     """Gate/oxide coupling (Robin condition on psi only) at a set of
     silicon-surface (i,j,k) grid nodes, on a face normal to normal_axis."""
@@ -136,10 +162,23 @@ class Device3D:
     doping   : net doping N_D - N_A [cm^-3], shape (Nz, Ny, Nx) or flat (N,)
     Ntotal   : total ionised impurity concentration for mobility/lifetime
                models [cm^-3]; defaults to |doping|
+    Ns_override : force the reference concentration (normally
+               max(|doping|, ni)) to a given value instead of deriving
+               it from THIS device's own doping array. Every downstream
+               dimensionless quantity is scaled from Ns -- not just
+               psi/n/p but LD, J0, and even the mesh coordinates
+               themselves (xs = mesh.x / LD) -- so two Device3D
+               instances covering DIFFERENT spatial slices of the SAME
+               physical device (gui/services/mpi_schwarz_runner.py's
+               domain-decomposed subdomains) would otherwise silently
+               disagree on units unless both are pinned to the same
+               reference derived from the FULL device's doping range.
+               None (default) is the original, bit-identical behavior.
     """
 
     def __init__(self, mesh: Mesh3D, doping, Ntotal=None, T=300.0,
-                 material: Semiconductor = SILICON, models: Models = None):
+                 material: Semiconductor = SILICON, models: Models = None,
+                 Ns_override=None):
         self.mesh = mesh
         self.Nx, self.Ny, self.Nz, self.N = mesh.Nx, mesh.Ny, mesh.Nz, mesh.N
         self.doping = np.asarray(doping, dtype=float).reshape(
@@ -222,7 +261,8 @@ class Device3D:
         self.eps = self.eps0                 # legacy attribute name
         self.ni = self.mats[0].ni(T)
 
-        self.Ns = max(float(np.abs(self.doping).max()), self.ni)
+        self.Ns = (max(float(np.abs(self.doping).max()), self.ni)
+                  if Ns_override is None else float(Ns_override))
         self.LD = np.sqrt(self.eps * self.VT / (Q * self.Ns))
         self.J0 = Q * D0_REF * self.Ns / self.LD
         self.R0 = D0_REF * self.Ns / self.LD ** 2
@@ -469,6 +509,10 @@ class Device3D:
                 psi0 = self._bc_contact_values(bc, 0.0)[0]
                 F_flat[kk] = psi.ravel()[kk] - psi0
                 contact_k.append(kk)
+            elif isinstance(bc, PinnedBC):
+                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
+                F_flat[kk] = psi.ravel()[kk] - bc.psi0
+                contact_k.append(kk)
         if contact_k:
             contact_k = np.unique(np.concatenate(contact_k))
             keep = ~np.isin(rows, contact_k)
@@ -501,21 +545,41 @@ class Device3D:
             # 19683-node 3D resistor -- direct sparse LU's fill-in on a
             # genuinely large 3D structured grid (7-point stencil, no
             # tridiagonal structure to exploit) is a different story,
-            # confirmed directly: bicgstab solved the identical
+            # confirmed directly: bicgstab solved the FIRST iteration's
             # equilibrium Jacobian for a real ~40k-node device over
-            # 100x faster than spsolve (5.07s -> 0.047s, one linear
-            # solve), agreeing to a relative error of 2.5e-9 -- well
-            # inside Newton's own per-iteration tolerance. Default
-            # stays "direct" (opts.linsolve default), so this is
-            # bit-identical unless the caller opts in, exactly as
-            # solve_bias below already does. No block_size is passed:
-            # this is a single scalar (psi-only) system, one unknown
-            # per node, not the psi/n/p-interleaved triple solve_bias
-            # solves -- block_size=None correctly skips straight to
-            # the ILU preconditioner (see solve_linear's docstring).
-            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
-                                         method=opts.linsolve,
-                                         rtol=opts.linsolve_rtol)
+            # 100x faster than spsolve (5.07s -> 0.047s), agreeing to a
+            # relative error of 2.5e-9. But a later iteration's
+            # Jacobian on the SAME device -- confirmed directly, not
+            # assumed -- failed to converge in 500 bicgstab iterations
+            # (scipy code -11): the matrix's conditioning shifts as psi
+            # moves away from the bulk guess, and an iterative method's
+            # convergence is not guaranteed the way direct LU's is. So
+            # a requested non-default method is tried FIRST for speed,
+            # but a LinearSolveError falls back to "direct" for that
+            # ONE iteration only, rather than aborting the whole solve
+            # or (worse) silently accepting a wrong/unconverged update
+            # -- the Newton loop always sees a real solution, just
+            # sometimes the slow one. No block_size is passed: this is
+            # a single scalar (psi-only) system, one unknown per node,
+            # not the psi/n/p-interleaved triple solve_bias solves --
+            # block_size=None correctly skips straight to the ILU
+            # preconditioner (see solve_linear's docstring). Default
+            # opts.linsolve="direct" never enters the except branch at
+            # all, so this is bit-identical unless the caller opts in,
+            # exactly as solve_bias below already does.
+            try:
+                d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
+                                             method=opts.linsolve,
+                                             rtol=opts.linsolve_rtol)
+            except linsolve.LinearSolveError:
+                if opts.linsolve == "direct":
+                    raise
+                if opts.verbose:
+                    print(f"    eq it {it:2d}  {opts.linsolve} did not "
+                          "converge -- falling back to direct for this "
+                          "iteration")
+                d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
+                                             method="direct")
             d = d.reshape(Nz, Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
@@ -817,6 +881,12 @@ class Device3D:
                 F3[kk, 1] = n.ravel()[kk] - n0
                 F3[kk, 2] = p.ravel()[kk] - p0
                 contact_k.append(kk)
+            elif isinstance(bc, PinnedBC):
+                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
+                F3[kk, 0] = psi.ravel()[kk] - bc.psi0
+                F3[kk, 1] = n.ravel()[kk] - bc.n0
+                F3[kk, 2] = p.ravel()[kk] - bc.p0
+                contact_k.append(kk)
         if contact_k:
             contact_k = np.unique(np.concatenate(contact_k))
             all_contact_rows = np.concatenate(
@@ -855,6 +925,10 @@ class Device3D:
                 psi[bc.k, bc.j, bc.i] = psi0
                 n[bc.k, bc.j, bc.i] = n0
                 p[bc.k, bc.j, bc.i] = p0
+            elif isinstance(bc, PinnedBC):
+                psi[bc.k, bc.j, bc.i] = bc.psi0
+                n[bc.k, bc.j, bc.i] = bc.n0
+                p[bc.k, bc.j, bc.i] = bc.p0
 
         cur_voltages = {name: bc.V for name, bc in self.bcs.items()
                         if isinstance(bc, DirichletBC)}
@@ -864,9 +938,27 @@ class Device3D:
             if opts.linsolve == "direct":
                 du = spsolve(J.tocsc(), -F)
             else:
-                du, _ = linsolve.solve_linear(
-                    J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
-                    block_size=3)
+                # Same fallback contract as solve_equilibrium above: a
+                # requested iterative method is tried first for speed,
+                # but a LinearSolveError (confirmed directly: the node
+                # block-Jacobi preconditioner does not always converge
+                # on this equation's coupled psi/n/p Jacobian, even
+                # with pyamg installed -- block_size=3 routes to
+                # block-Jacobi before AMG is ever tried, see
+                # linsolve._build_preconditioner) falls back to the
+                # exact same direct spsolve the "if" branch above uses,
+                # for that one iteration only, rather than raising out
+                # of the whole solve.
+                try:
+                    du, _ = linsolve.solve_linear(
+                        J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
+                        block_size=3)
+                except linsolve.LinearSolveError:
+                    if opts.verbose:
+                        print(f"    solve_bias it {it:2d}  {opts.linsolve} "
+                              "did not converge -- falling back to direct "
+                              "for this iteration")
+                    du = spsolve(J.tocsc(), -F)
             dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)

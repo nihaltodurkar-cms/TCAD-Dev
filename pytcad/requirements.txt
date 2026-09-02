@@ -35,6 +35,53 @@ pyvistaqt>=0.12
 gmsh>=4.15          # M21 phase 3 unstructured meshing
 devsim>=2.11         # optional DEVSIM solver backend
 mpmath>=1.4          # M13 Fermi-Dirac reference-value tests
+pyamg>=5.0           # algebraic-multigrid preconditioner for the 3D GUI's
+                     # large-mesh equilibrium solve (gui/services/solver_
+                     # runner.py's node-count-gated bicgstab path) --
+                     # absent, that path silently stays on the direct
+                     # solver instead (correct either way, just slower
+                     # on large 3D meshes)
+
+# --- optional GPU acceleration for the 3D GUI's large-mesh BIAS solve
+#     (gui/services/solver_runner.py's node-count-gated gpu_direct
+#     path, pytcad/linsolve.py) -- NOT a plain floor like the rest of
+#     this file: unlike every package above, this needs an NVIDIA GPU
+#     present, and the package name itself is pinned to the local CUDA
+#     toolkit's major version (this session verified cupy-cuda12x
+#     against a CUDA 13.3 driver/toolkit -- CuPy's cuda12x wheel is the
+#     current one and stays forward-compatible with newer drivers; a
+#     future CUDA 14 toolkit would need cupy-cuda14x once that exists).
+#     Absent, or on a machine with no NVIDIA GPU at all, that path
+#     silently stays on the CPU direct solver instead -- correct
+#     either way, just slower on large 3D meshes. Install the variant
+#     matching your CUDA toolkit, e.g.:
+#       pip install cupy-cuda12x
+#     Deliberately not a line in this file's own installable list:
+#     `pip install -r requirements.txt` must not fail on a machine
+#     with no matching CUDA wheel, so cupy is installed separately.
+
+# --- optional MPI Schwarz domain decomposition for the 3D GUI's
+#     large-mesh solve (gui/services/mpi_schwarz_runner.py, gated in
+#     gui/services/solver_runner.py's run_job()) -- like cupy above,
+#     NOT a line in this file's own installable list: mpi4py's wheel
+#     BUILD (not just its runtime) links against real MPI headers/
+#     libraries, so `pip install -r requirements.txt` would fail on
+#     any machine without an MPI dev package already present -- the
+#     exact "must not fail on a machine without the hardware/library"
+#     problem cupy's comment above describes, just triggered at
+#     install time instead of GPU-detection time. Needs BOTH pieces
+#     installed separately:
+#       1. a real MPI runtime + dev headers (this session used Open
+#          MPI: `apt install openmpi-bin libopenmpi-dev` on Debian/
+#          Ubuntu -- an `mpirun`/`mpiexec` binary must end up on PATH)
+#       2. pip install mpi4py>=3.1
+#     Absent either piece, that path silently stays on the plain
+#     (already AMG/GPU-accelerated where applicable) single-process
+#     solve instead -- correct either way, just without the extra
+#     4-rank speedup on large, x-doping-uniform 3D meshes specifically
+#     (a mesh whose doping varies along the split axis is refused this
+#     path regardless of whether mpi4py is installed -- see
+#     M22-LINSOLVE-PLAN.md section 9).
 
 # --- test suite ---
 pytest>=9.0

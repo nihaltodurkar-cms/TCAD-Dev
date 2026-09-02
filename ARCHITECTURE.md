@@ -1019,7 +1019,38 @@ for what has actually landed)
                                                   strength-ladder-aware
                                                   corrector) LANDED
                                                   2026-08-28, closed
-                                                  M15 R1b
+                                                  M15 R1b; PHASE 3
+                                                  LANDED 2026-09-02 as
+                                                  MPI Schwarz domain
+                                                  decomposition (not
+                                                  the distributed-
+                                                  matrix design
+                                                  originally sketched)
+                                                  -- 4 ranks, 5.1x on
+                                                  bjt_3d, exact to
+                                                  ~1e-17; a real
+                                                  regression on a
+                                                  device whose doping
+                                                  varies along the
+                                                  split axis (tried on
+                                                  pn_junction_3d) was
+                                                  found and gated
+                                                  against before it
+                                                  shipped. Same
+                                                  session: pyamg-
+                                                  backed AMG for the
+                                                  GUI's 3D equilibrium
+                                                  solve (8x-44x on
+                                                  large meshes) and a
+                                                  CUDA (CuPy/cuSOLVER)
+                                                  direct solve for the
+                                                  bias/sweep Newton
+                                                  loop (2.8x on
+                                                  bjt_3d's bias
+                                                  Jacobian) -- see
+                                                  M22-LINSOLVE-PLAN.md
+                                                  section 9 for the
+                                                  full record
   M23 2D process geometry engine                 not started
   M24 pair diffusion/segregation/clustering      not started
   M25 Monte-Carlo implantation (BCA)             not started
@@ -1317,12 +1348,21 @@ Independent candidates for the next milestone (any order):
 VISION-DOC ITEMS NOT ON THE PARITY ROADMAP AT ALL (from
 TCAD_Project_Vision.md, cross-checked against the tree 2026-08-27 --
 recorded here so they are tracked rather than silently absent):
-- GPU acceleration (CUDA/CuPy) and MPI/domain-decomposition parallelism.
-  M22 phase 1 (Krylov behind spsolve) is the correct PREREQUISITE --
-  distributed/accelerated solves need an iterative method, not a
-  distributed LU -- but no GPU or MPI code exists anywhere in the tree.
-  SYCL has no native Python path (oneAPI dpnp is the nearest binding)
-  and was not pursued for that reason.
+- GPU acceleration (CUDA/CuPy) and MPI/domain-decomposition parallelism:
+  LANDED 2026-09-02, in the GUI's own 3D solve path only (gui/services/
+  solver_runner.py + mpi_schwarz_runner.py), not in pytcad's core
+  Device classes themselves. GPU: a CUDA direct sparse solve
+  (cuSOLVER via CuPy, pytcad/linsolve.py's "gpu_direct" method) for
+  the bias/sweep Newton loop, 2.8x on a real 121k-unknown Jacobian.
+  MPI: 4-rank overlapping Schwarz domain decomposition (NOT the
+  distributed-matrix design this bullet originally anticipated -- see
+  M22-LINSOLVE-PLAN.md section 9), 5.1x on bjt_3d, gated off for any
+  device whose doping varies along the split axis after that
+  regression was found and reproduced directly (pn_junction_3d).  Both
+  are size-and-hardware-gated opt-in paths -- a machine without a GPU
+  or without mpi4py/mpirun sees identical behavior to before, just
+  without the speedup.  SYCL has no native Python path (oneAPI dpnp is
+  the nearest binding) and was not pursued for that reason.
 - Cross-backend GUI comparison. workbench/solvers/{base,devsim_backend}.py
   implement the SolverBackend protocol and a working DEVSIM backend, but
   the GUI does not expose backend selection or a side-by-side compare

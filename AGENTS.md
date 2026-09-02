@@ -228,6 +228,18 @@ precedent).
   claims "exactly spsolve, bit-identical" must never reformat A for the
   direct method, or it silently breaks bit-identity golden gates (see
   pytcad/linsolve.py's solve_linear, M22 G2).
+- a size/dimensionality GATING computation (e.g. "only for 3D jobs
+  above N nodes") must have its OWN guard checked first -- writing the
+  gate's math as a bare statement before the `if` that's supposed to
+  protect it runs it unconditionally. Confirmed directly: an x-axis
+  doping-variation check for gui/services/solver_runner.py's MPI-
+  Schwarz gate called `doping.max(axis=2)` before checking
+  dimensionality == 3, and broke EVERY 1D/2D job in gui/tests
+  (AxisError -- a 1D array has no axis 2) -- caught only because the
+  FULL suite (590 tests) was run before calling the change done, not
+  just the handful of 3D-specific tests that seemed relevant. Run the
+  whole suite after touching a shared dispatch function, not the
+  subset the change is "about".
 - clamping an out-of-range value to survive a TRANSIENT Newton overshoot
   (e.g. eta > FERMI_ETA_MAX during iteration) must not also clamp the
   FINAL, converged answer -- that silently defeats whatever loud-refusal
@@ -237,6 +249,18 @@ precedent).
   after convergence.
 
 **Physics/model conventions (empirically established)**
+- Device3D's ENTIRE dimensionless scaling (Ns, LD, J0, and even the
+  mesh coordinates themselves -- xs = mesh.x / LD) is derived from
+  max(|doping|) OF WHATEVER ARRAY THE DEVICE WAS BUILT WITH, not a
+  device-wide constant stored anywhere else. Two Device3D instances
+  covering different SLICES of the same physical device (MPI Schwarz
+  domain decomposition, gui/services/mpi_schwarz_runner.py) silently
+  disagree on units unless BOTH are pinned to the same reference via
+  the new `Ns_override` constructor param, computed once from the
+  FULL device's own doping array -- confirmed as a real risk by
+  reading the __init__ code before any correctness testing, not found
+  by a failure. Any future per-subdomain or per-region Device3D
+  construction needs the same pinning.
 - MOSCapacitor rho balances Qg SAME-sign; inversion sits at POSITIVE
   phi_s for p-substrate; abrupt-junction discretization leaves rho=+-1
   exactly at the two doping-step nodes (global charge balance is the
@@ -351,7 +375,15 @@ what that scope actually was and what's honestly still deferred):
     "schur")) landed 2026-08-29 and was VERIFIED 2026-08-31 (gates were
     written but never run until then; all 5 Schur-specific gates passed
     cleanly on first execution -- additive, default unchanged, not
-    wired into NewtonOptions).  See pytcad/M22-LINSOLVE-PLAN.md.
+    wired into NewtonOptions).  Phase 3 (2026-09-02) LANDED as MPI
+    Schwarz domain decomposition (gui/services/mpi_schwarz_runner.py),
+    not the distributed-matrix design originally scoped -- 4 ranks,
+    5.1x on bjt_3d, exact to ~1e-17; a real regression on a device
+    whose doping varies along the split axis (pn_junction_3d) was
+    found and gated against before shipping. Same session: pyamg AMG
+    for the GUI's 3D equilibrium solve (8x-44x) and a CUDA (CuPy/
+    cuSOLVER) direct solve for bias/sweep (2.8x) -- both opt-in,
+    size-gated, additive.  See pytcad/M22-LINSOLVE-PLAN.md section 9.
   M16 BTBT -- local Kane/Hurkx generation, live Jacobian coupling,
     landed 2026-08-29, VERIFIED 2026-08-31: the gates had never been
     run; once executed, 2 of 13 failed, but all three root causes were

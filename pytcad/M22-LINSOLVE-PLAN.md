@@ -13,8 +13,14 @@ generation-strength ladder) -- FIXED same session by threading the
 ladder into the corrector itself (`arc_length_sweep`'s
 `strength_stages` parameter); this is what let M15 R1b close (M15 is
 now COMPLETE -- see ARCHITECTURE.md section 5 and M15-IONIZATION-
-PLAN.md).  PHASE 3 (solver-level MPI distribution) is SCOPED ONLY, not
-started -- see section 1.
+PLAN.md).  **PHASE 3 LANDED 2026-09-02** as MPI Schwarz domain
+decomposition (a different design than this section's original
+"distributed matrix" sketch -- see section 9 for the full record,
+including a real regression found and gated against before it shipped)
+-- plus, in the same session, two GPU/CPU preconditioner wins for the
+GUI's own 3D solve path that section 9 also covers: pyamg-backed AMG
+for the equilibrium Poisson solve, and a CUDA (CuPy/cuSOLVER) direct
+solve for the bias/sweep Newton loop.
 
 Roadmap slot: ARCHITECTURE.md section 4b.2, "M22 LINEAR SOLVER
 MODERNIZATION + CONTINUATION [L]".
@@ -99,19 +105,30 @@ PHASE 2 [L] -- continuation driver, LANDED 2026-08-28:
   failure) and "R1b ATTEMPT 3" (the fix) for the full record -- M15 is
   now COMPLETE.
 
-PHASE 3 [L] -- solver-level distributed solve, NOT STARTED, SCOPED
-ONLY (2026-08-28): the plan's original motivation for phase 1's Krylov
-abstraction ("a Krylov method is the prerequisite for any GPU or MPI
-solve, since those need a distributed/accelerated matvec + preconditioner
-apply, not a distributed LU") is still just that -- a prerequisite, not
-an implementation.  Distributing Device1D/2D/3D's OWN linear solve or
-Newton assembly across MPI ranks (as opposed to the test-suite-level
-process parallelism landed this session, which is unrelated tooling, not
-a physics change) is a distinct, materially larger undertaking: it needs
-a distributed sparse-matrix representation, a distributed preconditioner
-apply, and a decision on domain decomposition for a 1D/2D/3D mesh.
-Deferred to its own scoping session, same standing as phase 2 was before
-this one.
+PHASE 3 [L] -- solver-level distributed solve, LANDED 2026-09-02 as
+MPI SCHWARZ DOMAIN DECOMPOSITION, not the distributed-matrix design
+this section originally sketched: this plan's original motivation for
+phase 1's Krylov abstraction ("a Krylov method is the prerequisite for
+any GPU or MPI solve, since those need a distributed/accelerated
+matvec + preconditioner apply, not a distributed LU") turned out not
+to be the path actually taken. A genuine distributed sparse matrix
+(PETSc-style) was ruled out as a materially larger undertaking than
+this session's time warranted; overlapping ADDITIVE SCHWARZ -- split
+the mesh into N overlapping subdomains, solve each with the ordinary
+(already-fast) direct solve, exchange one interior column of state
+with each neighbor, repeat until the core region stops changing -- is
+a real, working alternative that needed no distributed-matrix
+machinery at all, just a new boundary-condition type (Device3D.PinnedBC)
+to pin an artificial Schwarz interface to a neighbor's current state.
+See section 9 for the full record: what was measured, a real
+regression this caught before it shipped, and where it's gated in
+gui/services/solver_runner.py. Distributing Device1D/2D/3D's OWN
+linear solve/Newton assembly via a genuinely distributed matrix (as
+opposed to Schwarz's independent-subdomain-solves design, or the
+test-suite-level process parallelism landed 2026-08-28, which is
+unrelated tooling, not a physics change) remains undone and would
+still be the larger undertaking this section always said it was, if a
+future session wants that different design instead.
 
 ------------------------------------------------------------------------
 2. INTERFACE
@@ -373,3 +390,161 @@ that claims bit-identity to a bare library call must never reformat the
 input for that path, because "equivalent" solvers on different sparse
 formats are not eviction-order/pivot-order identical even when both
 are numerically correct.
+
+------------------------------------------------------------------------
+9. PHASE 3 LANDED + TWO GPU/CPU PRECONDITIONER WINS (2026-09-02)
+------------------------------------------------------------------------
+Three separate additions to the GUI's 3D solve path
+(gui/services/solver_runner.py's run_job(), pytcad/linsolve.py,
+pytcad/device3d.py), each gated by measurement, none touching any
+existing call site's default behavior:
+
+A. EQUILIBRIUM: AMG-preconditioned bicgstab. Device3D.solve_equilibrium
+   previously hardcoded method="direct" -- opts.linsolve reached
+   solve_bias but never equilibrium at all. Wired through, with a
+   try/fall-back-to-direct wrapper on LinearSolveError (mirrors
+   solve_bias's own contract exactly). MEASURED on real 3D examples:
+   bicgstab+pyamg cuts bjt_3d's equilibrium from 43.4s to 1.0s (44x),
+   pn_junction_3d 31.1s to 0.8s (39x), finfet_3d 33.1s to 4.0s (8x) --
+   all agreeing with the direct solve to ~1e-17 relative error. But the
+   SAME setting made a SMALLER mesh slower: mosfet_3d's ~15.8k-node
+   equilibrium went 2.1s -> 21.4s (AMG hierarchy setup cost that only
+   pays for itself once direct factorization is already expensive).
+   20,000 nodes (mosfet_3d below, bjt_3d/finfet_3d/pn_junction_3d
+   above) is the measured switch. Also gated on pyamg actually being
+   installed: bicgstab with only ILU (no pyamg) does NOT reliably
+   converge across a full equilibrium trajectory -- confirmed directly,
+   it made bjt_3d's equilibrium SLOWER (79-83s) than plain direct
+   (41s) by repeatedly trying and failing before the fallback kicked
+   in. Separately, installing pyamg alone (no code change) broke a
+   PRE-EXISTING test (test_iterative_methods_on_a_real_device_jacobian):
+   pyamg's Ruge-Stuben coarsening can succeed (no exception) while
+   producing a degenerate hierarchy for a matrix it isn't suited to
+   (an interleaved multi-physics system with no block_size given),
+   which only surfaced as NaN later when the preconditioner was
+   actually applied -- past this function's own try/except. Fixed by
+   probing the built preconditioner with one matvec on an all-ones
+   vector before ever returning it (_build_preconditioner in
+   linsolve.py), falling through to ILU on a non-finite result exactly
+   like a construction-time exception already did.
+
+B. BIAS/SWEEP: GPU direct solve (cuSOLVER via CuPy). solve_bias's
+   block-Jacobi-preconditioned iterative path (gmres/bicgstab) does
+   NOT reliably converge on the coupled psi/n/p Jacobian -- confirmed
+   directly, tried block-Jacobi, Schur (_build_schur_preconditioner
+   REFUSES to build at all on bjt_3d's Jacobian: RuntimeError "Factor
+   is exactly singular" factoring the isolated Poisson block, in
+   ~1s -- a structural refusal, not a slow convergence), and AMG (also
+   fails to converge on the full coupled system, and in one attempt
+   hung for 17+ minutes rather than erroring out) -- so there is no
+   iterative bias solver worth defaulting to. A DIRECT solve run on
+   the GPU sidesteps the convergence question entirely: added
+   method="gpu_direct" to linsolve.py (cupyx.scipy.sparse.linalg.spsolve),
+   same LinearSolveError/fallback contract as everything else.
+   MEASURED on bjt_3d's real 121,824-unknown bias Jacobian, full
+   multi-iteration solve_bias trajectory (not one sample matrix): 2.8x
+   faster than scipy spsolve (128.3s -> 46.1s), agreeing with the CPU
+   result to ~1e-17 relative error. But GPU transfer/kernel-launch
+   overhead doesn't amortize on a small matrix: measured 0.4x-0.7x
+   (SLOWER) on resistor_3d/moscap_3d/jfet_3d's few-thousand-unknown
+   Jacobians, ~1.1x (break-even) at mosfet_3d's 47,304, a clear win
+   from pn_junction_3d's 99,360 up -- the SAME 20,000-node threshold as
+   (A) happens to land in the right place for this too, so it is
+   reused rather than inventing a second unvalidated constant. Also
+   gated on cupy being installed (requirements.txt documents the
+   install command; it is deliberately NOT an unconditional line
+   there, since the package name is CUDA-toolkit-version-specific and
+   `pip install -r requirements.txt` must not fail on a machine with
+   no matching wheel).
+
+C. PHASE 3 ITSELF: MPI Schwarz domain decomposition
+   (gui/services/mpi_schwarz_runner.py). Splits the mesh into 4
+   overlapping x-slabs, each rank solves its own slab with the
+   ordinary direct solve, ranks exchange one interior column of
+   psi/n/p with their neighbor via mpi4py after each local solve,
+   repeats until the core region stops changing. A NEW boundary-
+   condition type was needed and added: Device3D.PinnedBC (device3d.py)
+   pins psi/n/p directly to given per-node values -- unlike the
+   existing DirichletBC, which derives them from a contact voltage via
+   the equilibrium ohmic relations -- for the artificial interior
+   interface a Schwarz split creates. Purely additive: wired into both
+   _residual_jacobian_poisson and _residual_jacobian's existing
+   contact-row-replacement code paths (same treatment as DirichletBC),
+   and into solve_bias's initial-guess setup; nothing else changes
+   when no PinnedBC exists in a device's bcs dict.
+
+   A SECOND core addition, caught by careful checking BEFORE any
+   correctness testing, not discovered by a failure: Device3D derives
+   its ENTIRE dimensionless scaling (Ns, LD, J0, and even the mesh
+   coordinates themselves -- xs = mesh.x / LD) from max(|doping|) of
+   whatever array it's built with. Two ranks seeing different SLICES
+   of a device whose doping varies along the split axis would derive
+   DIFFERENT LD/Ns and silently disagree on units -- every downstream
+   quantity, not just the obviously-doping-dependent ones. Fixed by
+   adding Device3D(..., Ns_override=None): every rank's local device is
+   built with Ns_override pinned to the FULL device's own
+   max(|doping|), computed once from the complete array. Default None
+   is bit-identical to every existing construction site.
+
+   MEASURED on bjt_3d (a genuinely different geometry+contact layout
+   than the M22 gates above were validated on -- three ohmic contacts,
+   each spanning the FULL x-extent, vs. those gates' simpler
+   two-terminal test devices): 4 ranks, 2 Schwarz sweeps to
+   convergence, 31.09s vs. this same job's 158.6s single-process
+   baseline (5.1x) -- and FASTER than that job's own GPU-accelerated
+   single-process result (48.0s) -- exact to a relative L2 error of
+   1.56e-17 against the plain single-process reference. Verified
+   through the REAL gui/services/job_runner.py-equivalent CLI path
+   (`python -m gui.services.solver_runner job.json out.npz`), not just
+   a standalone script: run_job() spawns `mpirun -np 4 ... -m
+   gui.services.mpi_schwarz_runner` as a subprocess and relays rank 0's
+   stdout through its own, so JobRunner's existing PYTCAD_STAGE regex
+   parsing sees the same markers live and neither JobRunner nor
+   AppController needed to change at all. Also checked 6 ranks (18.1s,
+   same 2-sweep/machine-precision result) -- capped at 4 by explicit
+   decision, not a technical limit.
+
+   A REAL REGRESSION, FOUND AND GATED AGAINST BEFORE SHIPPING, not
+   merely "unverified": bjt_3d's clean 2-sweep result is specific to
+   its doping being CONSTANT along x (the split axis) -- every rank's
+   subdomain is a near-identical copy of the others. Tried the same
+   split on pn_junction_3d, whose doping IS the thing varying along x
+   (the junction itself): a middle rank's per-sweep bias solve took
+   39-45s (vs. bjt_3d's ~5s), and the run had not converged after 2
+   sweeps at the point bjt_3d always finishes by -- killed rather than
+   let run to an unknown, possibly multi-minute completion, which would
+   have been dramatically WORSE than that job's already-working ~34s
+   single-process AMG+GPU result. run_job() now computes, directly on
+   the real doping array (not a device-name list), whether doping
+   varies by more than 1% of its own range along x, and refuses the
+   MPI path entirely otherwise -- confirmed bjt_3d still routes to MPI
+   (safe, ratio 0.0) and pn_junction_3d correctly falls through to the
+   single-process AMG+GPU path instead (safe fallback, ratio 1.001,
+   completes in 33.6s as expected). mosfet_3d/finfet_3d's source-
+   channel-drain doping profile would fail the same check for the same
+   reason and has not been separately tried.
+
+   v1 SCOPE, NOT YET DONE: equilibrium + a single bias point only --
+   spec.sweep/spec.transient both fall back to the plain single-process
+   path regardless of mesh size (a sweep re-runs the whole Newton
+   trajectory at many points; re-running the ENTIRE Schwarz loop that
+   many times is a distinct, unexercised cost/convergence question).
+   Terminal current correctness for the MPI path is NOT computed via
+   any per-rank summation -- deliberately avoided as a likely source of
+   double-counting bugs at the overlap -- instead the reassembled
+   global psi/n/p is loaded onto one final, ordinary (unsplit)
+   Device3D and extract_result() runs on it completely unchanged,
+   which is also why terminal__<contact>__value came out correct
+   (verified against the reference) without any new summation logic to
+   audit.
+
+   ONE MORE BUG, CAUGHT BY RUNNING THE FULL SUITE BEFORE CALLING THIS
+   DONE (not by inspection): the x-doping-variation safety check above
+   computed `doping.max(axis=2)` unconditionally, before checking
+   dimensionality -- broke EVERY 1D/2D gui/tests job (AxisError: a 1D
+   doping array has no axis 2 at all), which is most of the suite.
+   Fixed by moving the computation inside the `if is_large_3d:` guard,
+   which already implies dimensionality == 3. gui/tests: 590 passed
+   after the fix (none passed silently-wrong before it -- the bug
+   crashed every affected job outright, which is why it surfaced
+   immediately rather than needing separate scrutiny).

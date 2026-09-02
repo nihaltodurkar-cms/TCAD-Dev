@@ -16,11 +16,14 @@ future non-Qt frontend (design spec section 20).
 This module is also the ONLY place permitted to know pytcad's
 per-dimensionality API differences -- see extract_result().
 """
+import importlib.util
 import io
 import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import traceback
 import warnings
@@ -29,12 +32,21 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+# Optional: 4-rank MPI Schwarz domain decomposition for large 3D jobs
+# (gui/services/mpi_schwarz_runner.py). Checked by presence, never
+# imported at module load -- mpi4py is a real dependency of that OTHER
+# module, not of this one, and a machine without it (or without an
+# mpirun on PATH) must run this file exactly as before.
+_HAVE_MPI = (importlib.util.find_spec("mpi4py") is not None
+            and shutil.which("mpirun") is not None)
+MPI_SCHWARZ_RANKS = 4
+
 from pytcad.mesh2d import Mesh2D
 from pytcad.mesh3d import Mesh3D
 from pytcad.device import Device1D, Models, NewtonOptions
 from pytcad.device2d import Device2D
 from pytcad.device3d import Device3D
-from pytcad.linsolve import LinearSolveError
+from pytcad.linsolve import LinearSolveError, _HAVE_PYAMG, _HAVE_CUPY
 from pytcad.transient import (
     StepWaveform, RampWaveform, PulseWaveform, ConstantWaveform,
     solve_transient as solve_transient_1d,
@@ -605,12 +617,26 @@ def _node_coords(mesh_spec):
 # ----------------------------------------------------------------------
 #  Entry point
 # ----------------------------------------------------------------------
-def _solve_all(device, spec, opts):
+def _solve_all(device, spec, opts, linsolve_bias=None):
     """Equilibrium + (optional) bias or sweep, emitting the same
     PYTCAD_STAGE markers JobRunner has always streamed.  Returns the
-    raw result dict in the v1 key shape."""
+    raw result dict in the v1 key shape.
+
+    linsolve_bias: if given, overrides opts.linsolve for every solve
+    AFTER equilibrium (bias/sweep/transient). Equilibrium and bias are
+    different linear systems with different measured optimal solvers
+    (see run_job()'s node-count gating below) -- one NewtonOptions
+    object can only hold one opts.linsolve value at a time, so this
+    mutates it in place between phases rather than threading a second
+    NewtonOptions through every solve_bias/run_sweep/run_transient call
+    site. NewtonOptions is a plain (non-frozen) dataclass, so this is
+    the same kind of in-place field update opts.verbose already is
+    everywhere else in this file -- not a new mutability contract.
+    """
     print("PYTCAD_STAGE=equilibrium", flush=True)
     device.solve_equilibrium(opts)
+    if linsolve_bias is not None:
+        opts.linsolve = linsolve_bias
 
     if spec.transient is not None:
         print("PYTCAD_STAGE=transient", flush=True)
@@ -639,6 +665,54 @@ def _solve_all(device, spec, opts):
     return result
 
 
+def _solve_via_mpi_schwarz(job_path):
+    """Run gui/services/mpi_schwarz_runner.py under mpirun and return
+    the SAME result-dict shape _solve_all() returns, so run_job()'s
+    surrounding stamping/atomic-write logic below needs no branching
+    of its own -- MPI Schwarz is a drop-in alternative "engine" for
+    producing that dict, not a separate output format.
+
+    v1 scope: equilibrium (+ optional single bias point) only -- the
+    caller only reaches here when spec.sweep/transient are both None
+    (mpi_schwarz_runner.py itself also refuses otherwise, as a second
+    check). Relays the worker's rank-0 stdout through this process's
+    own stdout AS IT ARRIVES, so JobRunner's existing PYTCAD_STAGE
+    regex parsing (gui/services/job_runner.py) sees the same markers
+    live, exactly as it would from the plain single-process path --
+    JobRunner and AppController stay completely unaware MPI is
+    involved at all.
+    """
+    tmp_out = job_path + ".schwarz_result.npz"
+    cmd = ["mpirun", "--allow-run-as-root", "-np", str(MPI_SCHWARZ_RANKS),
+           sys.executable, "-m", "gui.services.mpi_schwarz_runner",
+           job_path, tmp_out]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1,
+                            cwd=os.path.dirname(os.path.dirname(
+                                os.path.dirname(os.path.abspath(__file__)))))
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
+        # Only the worker's own PYTCAD_STAGE markers need relaying for
+        # JobRunner's progress display; its SCHWARZ_RESULT_PATH marker
+        # is this function's own internal handshake, not part of the
+        # documented solver_runner.py stdout contract, so it is not
+        # relayed further.
+        if line.startswith("PYTCAD_STAGE="):
+            print(line, end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0 or not os.path.exists(tmp_out):
+        raise RuntimeError(
+            "MPI Schwarz solve failed (mpirun exit "
+            f"{proc.returncode}):\n" + "".join(lines[-40:]))
+    try:
+        with np.load(tmp_out, allow_pickle=False) as npz:
+            result = {k: npz[k] for k in npz.files}
+    finally:
+        os.remove(tmp_out)
+    return result
+
+
 def run_job(job_path, out_path, capture_trace=True):
     spec = DeviceSpec.from_json(job_path)
     # M11-S4/S5: non-silicon jobs are SOLVED -- region_materials are
@@ -652,19 +726,137 @@ def run_job(job_path, out_path, capture_trace=True):
     if spec.transient is not None:
         spec.transient.validate([c.name for c in spec.contacts])
 
-    mesh_obj = build_mesh(spec.mesh)
+    # build_doping() alone is needed up front (the MPI-Schwarz gate
+    # below reads the actual doping array); build_mesh/build_device/
+    # register_contacts are deferred past that gate -- when the MPI
+    # path is taken, mpi_schwarz_runner.py rebuilds an equivalent
+    # device from scratch per rank inside its own subprocess, so
+    # building one here first would be pure wasted work that scales
+    # with mesh size, on exactly the jobs this feature targets.
     doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
-    device = build_device(spec, mesh_obj, doping, ntotal)
-    register_contacts(device, spec)
 
     # verbose=True is the v0.1 progress channel: JobRunner streams this
     # process's stdout into the console panel.  Cosmetic only -- results
     # are read from the .npz, never parsed from this text.
-    opts = NewtonOptions(verbose=True)
+    #
+    # 3D-only, size-gated iterative equilibrium solve: confirmed
+    # directly (not assumed) that bicgstab+pyamg's algebraic-multigrid
+    # preconditioner cuts the equilibrium Newton loop's wall time by
+    # 8x-44x on genuinely large 3D meshes (bjt_3d 43.4s->1.0s,
+    # pn_junction_3d 31.1s->0.8s, finfet_3d 33.1s->4.0s -- all agreeing
+    # with the direct solve to a relative error of ~1e-17), because
+    # direct sparse LU's fill-in on a 3D structured grid is the actual
+    # bottleneck there. But the SAME setting made a smaller 3D mesh
+    # slower, not faster (mosfet_3d's ~15.8k-node equilibrium: 2.1s ->
+    # 21.4s) -- AMG hierarchy setup has real per-Newton-iteration cost
+    # that only pays for itself once direct factorization is already
+    # the expensive part. 20,000 nodes sits between the two measured
+    # regimes (mosfet_3d below, bjt_3d/finfet_3d/pn_junction_3d above),
+    # so it is used as the switch rather than turning this on
+    # unconditionally. Also gated on pyamg actually being installed:
+    # bicgstab with only the weaker ILU fallback preconditioner (no
+    # pyamg) does NOT reliably converge across a full 3D equilibrium
+    # trajectory -- confirmed directly, it made bjt_3d's equilibrium
+    # solve slower (79-83s) than plain direct (41s) by repeatedly
+    # trying and failing before device3d.py's own fallback kicked in.
+    # solve_bias's block-Jacobi-preconditioned iterative path (gmres/
+    # bicgstab) is left at "direct": measured net-neutral-to-slightly-
+    # slower on every example tried (the coupled psi/n/p Jacobian
+    # doesn't converge reliably under block-Jacobi, Schur, or AMG
+    # preconditioning -- confirmed directly, not assumed), so there is
+    # no measured case for using an ITERATIVE bias solver.
+    #
+    # A DIRECT solve run on the GPU (cuSOLVER via CuPy) is a different
+    # story precisely because it sidesteps that convergence question
+    # entirely -- confirmed directly on bjt_3d's real 121,824-unknown
+    # bias Jacobian: 2.8x faster than scipy spsolve end to end (a full
+    # multi-iteration solve_bias trajectory, not one sample matrix),
+    # agreeing with the CPU result to a relative error of ~1e-17. But
+    # GPU transfer/kernel-launch overhead is a real per-call cost that
+    # a small matrix can't amortize -- measured 0.4x-0.7x (SLOWER) on
+    # resistor_3d/moscap_3d/jfet_3d's few-thousand-unknown Jacobians,
+    # ~1.1x (break-even) at mosfet_3d's 47,304, and a clear win from
+    # pn_junction_3d's 99,360 up. The same 20,000-NODE threshold
+    # already used for equilibrium happens to land in the right place
+    # for this too (mosfet_3d below it, pn_junction_3d/bjt_3d/finfet_3d
+    # above), so it is reused here rather than inventing a second
+    # unvalidated constant. Also gated on cupy actually being
+    # installed, same reasoning as pyamg above.
+    node_count = int(np.prod(spec.mesh.shape()))
+    is_large_3d = spec.mesh.dimensionality == 3 and node_count > 20_000
+    use_amg_equilibrium = is_large_3d and _HAVE_PYAMG
+    use_gpu_bias = is_large_3d and _HAVE_CUPY
+    opts = NewtonOptions(verbose=True,
+                        linsolve="bicgstab" if use_amg_equilibrium else "direct")
+    # Always explicit, never None: _solve_all only overwrites
+    # opts.linsolve when linsolve_bias is not None, so a machine with
+    # pyamg but no cupy (equilibrium fast, bias not) would otherwise
+    # leave opts.linsolve at "bicgstab" for the bias/sweep phase too --
+    # exactly the iterative method this file's own comments above
+    # document as NOT reliably convergent on the coupled Jacobian.
+    # Falling back to direct every iteration is still correct (the
+    # try/except in solve_bias catches it) but wastes a failed
+    # bicgstab attempt each time for no reason once equilibrium is done.
+    linsolve_bias = "gpu_direct" if use_gpu_bias else "direct"
+
+    # 4-rank MPI Schwarz domain decomposition (gui/services/
+    # mpi_schwarz_runner.py): confirmed directly on bjt_3d (a genuinely
+    # different geometry+contact layout than every synthetic test this
+    # file's other size-gated paths were validated on) -- 4 ranks, 2
+    # Schwarz sweeps to convergence, 31.09s vs. this same job's 158.6s
+    # single-process baseline (5.1x), exact to a relative L2 error of
+    # 1.56e-17 against the plain single-process reference. Reuses the
+    # SAME 20,000-node/3D-only gate as the equilibrium/bias paths
+    # above, but is mutually exclusive with them at the job level (it
+    # replaces the whole equilibrium+bias solve, not just one linear
+    # solve inside it) -- and v1 is scoped to equilibrium+single-bias
+    # only: a sweep or transient re-runs the Newton loop many times
+    # under conditions this hasn't been exercised for, so those keep
+    # using the plain single-process path regardless of mesh size.
+    # Gated on mpi4py AND an mpirun binary both actually being present,
+    # same "optional dep changes nothing about correctness, only which
+    # engine handles it" contract as _HAVE_PYAMG/_HAVE_CUPY above.
+    #
+    # CRITICAL, confirmed directly (not assumed): splitting along x is
+    # a REGRESSION, not a speedup, on a device whose doping actually
+    # VARIES along x -- tried on pn_junction_3d (the junction sits
+    # inside the split, unlike bjt_3d's x-independent layer stack) and
+    # a middle rank's per-sweep bias solve took 39-45s (vs. bjt_3d's
+    # ~5s), still hadn't converged after the point bjt_3d always
+    # finishes by, and was killed rather than let run to an unknown,
+    # possibly multi-minute completion -- far worse than that same
+    # job's already-working ~48s GPU/AMG single-process result. So
+    # this path is refused whenever doping varies by more than 1% of
+    # its own total range along x, checked directly on the actual
+    # array (not device-name-listed): bjt_3d's stacked layers vary
+    # only along y and pass; a lateral junction/channel profile like
+    # pn_junction_3d/mosfet_3d/finfet_3d fails and correctly falls back
+    # to the plain (already GPU/AMG-accelerated) path instead.
+    x_is_safe_split_axis = False
+    if is_large_3d:
+        # doping is (Nz,Ny,Nx) here ONLY because is_large_3d already
+        # guarantees dimensionality == 3 -- this must stay inside that
+        # guard, not run unconditionally: a 1D/2D job's doping array
+        # has no axis 2 at all (confirmed directly: an unguarded call
+        # here raised AxisError on every 1D/2D gui/tests job).
+        x_doping_variation = float(np.max(doping.max(axis=2) - doping.min(axis=2)))
+        x_doping_total_range = float(np.abs(doping).max())
+        x_is_safe_split_axis = (x_doping_total_range <= 0
+                                or x_doping_variation < 0.01 * x_doping_total_range)
+    use_mpi_schwarz = (is_large_3d and _HAVE_MPI and x_is_safe_split_axis
+                       and spec.sweep is None and spec.transient is None)
+
+    if not use_mpi_schwarz:
+        mesh_obj = build_mesh(spec.mesh)
+        device = build_device(spec, mesh_obj, doping, ntotal)
+        register_contacts(device, spec)
 
     cap = _start_capture()
     try:
-        result = _solve_all(device, spec, opts)
+        if use_mpi_schwarz:
+            result = _solve_via_mpi_schwarz(job_path)
+        else:
+            result = _solve_all(device, spec, opts, linsolve_bias=linsolve_bias)
     finally:
         # even a failed solve must hand the real stdout back -- the
         # except-handler in main() prints PYTCAD_ERROR through it
@@ -700,6 +892,16 @@ def run_job(job_path, out_path, capture_trace=True):
         result["continuation__records"] = np.array(json.dumps([
             {"index": i, "parameter": float(v), "accepted": bool(c)}
             for i, (v, c) in enumerate(zip(voltages, converged))]))
+    # `opts` reflects the equilibrium/bias linsolve CHOICE computed
+    # above, but the MPI-Schwarz path never uses that opts object at
+    # all -- mpi_schwarz_runner.py builds its own NewtonOptions(
+    # linsolve="direct") per rank internally -- so stamping asdict(opts)
+    # unconditionally would misreport which solver engine actually
+    # produced this result whenever the MPI path was taken.
+    numerics = asdict(opts)
+    if use_mpi_schwarz:
+        numerics["linsolve"] = "direct"
+        numerics["engine"] = "mpi_schwarz"
     result["record__meta"] = np.array(json.dumps({
         "schema_version": SOLVER_RESULT_SCHEMA_VERSION,
         "backend": "pytcad",
@@ -708,7 +910,7 @@ def run_job(job_path, out_path, capture_trace=True):
         "material": spec.material,
         "T": spec.T,
         "models": spec.models,
-        "numerics": asdict(opts),
+        "numerics": numerics,
         "sweep": sweep_meta,
         "transient": transient_meta,
     }))

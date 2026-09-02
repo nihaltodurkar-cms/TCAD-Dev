@@ -17,7 +17,7 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Temperature [°C]"; Layout.preferredWidth: 120 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.temperature_C != null ? parameters.temperature_C.toString() : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,
@@ -26,7 +26,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Time [s]"; Layout.preferredWidth: 120 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.time_s != null ? parameters.time_s.toString() : ""
             onEditingFinished: if (stepId) controller.setProcessStepParameters(stepId,

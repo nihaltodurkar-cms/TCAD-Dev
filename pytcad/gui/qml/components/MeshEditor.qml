@@ -8,24 +8,62 @@ ColumnLayout {
 
     Label { text: "MESH"; color: Theme.textDim; font.pixelSize: 11; font.letterSpacing: 1 }
 
+    component MeshSpinBox: SpinBox {
+        id: control
+        from: 2; to: 2000
+        background: Rectangle {
+            implicitWidth: 70
+            implicitHeight: 24
+            radius: Theme.radiusSm
+            color: control.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+            border.width: control.activeFocus ? 2 : 1
+            border.color: control.activeFocus ? Theme.focus
+                          : control.hovered ? Theme.borderStrong : Theme.border
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
+            Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+        }
+    }
+
     RowLayout {
         Label { text: "Nx"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        SpinBox { id: nxBox; objectName: "meshNxBox"; from: 2; to: 2000; value: 80 }
+        MeshSpinBox { id: nxBox; objectName: "meshNxBox"; value: 80 }
         Label { text: "Ny"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        SpinBox { id: nyBox; objectName: "meshNyBox"; from: 2; to: 2000; value: 40 }
+        MeshSpinBox { id: nyBox; objectName: "meshNyBox"; value: 40 }
         Button {
+            id: meshApplyButton
             objectName: "meshApplyButton"
             text: "Apply"
             onClicked: if (controller) controller.setMeshNxNy(nxBox.value, nyBox.value)
+            background: Rectangle {
+                radius: Theme.radiusSm
+                color: meshApplyButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
+                       : meshApplyButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
+                       : Theme.panelRaised
+                border.width: 1
+                border.color: Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
 
     RowLayout {
         Label { text: "Grading"; color: Theme.textDim; Layout.preferredWidth: 60 }
         ComboBox {
+            id: gradingBox
             objectName: "meshGradingBox"
             model: ["uniform", "graded"]
             onActivated: if (controller) controller.setMeshGrading(currentText)
+            background: Rectangle {
+                implicitWidth: 100
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: gradingBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: gradingBox.activeFocus ? 2 : 1
+                border.color: gradingBox.activeFocus ? Theme.focus
+                              : gradingBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
 

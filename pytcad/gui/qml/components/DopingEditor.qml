@@ -15,7 +15,7 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Name"; color: Theme.textDim; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: regionData ? regionData.name : ""
             onEditingFinished: if (regionId) controller.renameRegion(regionId, text)
@@ -42,32 +42,68 @@ ColumnLayout {
             onActivated: if (regionId)
                 controller.setRegionMaterial(regionId,
                                              model[currentIndex])
+            background: Rectangle {
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: materialBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: materialBox.activeFocus ? 2 : 1
+                border.color: materialBox.activeFocus ? Theme.focus
+                              : materialBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
+        }
+    }
+
+    component BoundsSpinBox: SpinBox {
+        id: control
+        from: -100000; to: 100000
+        background: Rectangle {
+            implicitWidth: 90
+            implicitHeight: 24
+            radius: Theme.radiusSm
+            color: control.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+            border.width: control.activeFocus ? 2 : 1
+            border.color: control.activeFocus ? Theme.focus
+                          : control.hovered ? Theme.borderStrong : Theme.border
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
+            Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
         }
     }
 
     RowLayout {
         Label { text: "x [um]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-        SpinBox { id: xMinBox; from: -100000; to: 100000; value: regionData ? Math.round(regionData.bounds[0]*1e7) : 0 }
+        BoundsSpinBox { id: xMinBox; value: regionData ? Math.round(regionData.bounds[0]*1e7) : 0 }
         Label { text: "to"; color: Theme.textDim }
-        SpinBox { id: xMaxBox; from: -100000; to: 100000; value: regionData ? Math.round(regionData.bounds[1]*1e7) : 0 }
+        BoundsSpinBox { id: xMaxBox; value: regionData ? Math.round(regionData.bounds[1]*1e7) : 0 }
     }
     RowLayout {
         Label { text: "y [um]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-        SpinBox { id: yMinBox; from: -100000; to: 100000; value: regionData ? Math.round(regionData.bounds[2]*1e7) : 0 }
+        BoundsSpinBox { id: yMinBox; value: regionData ? Math.round(regionData.bounds[2]*1e7) : 0 }
         Label { text: "to"; color: Theme.textDim }
-        SpinBox { id: yMaxBox; from: -100000; to: 100000; value: regionData ? Math.round(regionData.bounds[3]*1e7) : 0 }
+        BoundsSpinBox { id: yMaxBox; value: regionData ? Math.round(regionData.bounds[3]*1e7) : 0 }
     }
     Button {
+        id: applyBoundsButton
         text: "Apply bounds"
         onClicked: if (regionId) controller.setRegionBounds(
             regionId, xMinBox.value / 1e7, xMaxBox.value / 1e7,
             yMinBox.value / 1e7, yMaxBox.value / 1e7)
+        background: Rectangle {
+            radius: Theme.radiusSm
+            color: applyBoundsButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
+                   : applyBoundsButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
+                   : Theme.panelRaised
+            border.width: 1
+            border.color: Theme.border
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
+        }
     }
 
     RowLayout {
         Label { text: regionData && regionData.doping >= 0 ? "ND [cm^-3]" : "NA [cm^-3]"
                color: Theme.textDim; Layout.preferredWidth: 90 }
-        TextField {
+        ValidatedTextField {
             id: dopingField
             objectName: "regionDopingField"
             Layout.fillWidth: true
@@ -97,6 +133,16 @@ ColumnLayout {
                 sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
                 edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
                 highSideBox.currentText)
+            background: Rectangle {
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: profileBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                border.width: profileBox.activeFocus ? 2 : 1
+                border.color: profileBox.activeFocus ? Theme.focus
+                              : profileBox.hovered ? Theme.borderStrong : Theme.border
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+            }
         }
     }
 
@@ -106,7 +152,7 @@ ColumnLayout {
 
         RowLayout {
             Label { text: "Peak [cm^-3]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-            TextField {
+            ValidatedTextField {
                 id: peakField
                 objectName: "regionProfilePeakField"
                 Layout.fillWidth: true
@@ -122,7 +168,7 @@ ColumnLayout {
         }
         RowLayout {
             Label { text: "sigma_y [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-            TextField {
+            ValidatedTextField {
                 id: sigmaYField
                 objectName: "regionProfileSigmaYField"
                 Layout.fillWidth: true
@@ -139,7 +185,7 @@ ColumnLayout {
         }
         RowLayout {
             Label { text: "sigma_lat [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-            TextField {
+            ValidatedTextField {
                 id: sigmaLatField
                 objectName: "regionProfileSigmaLatField"
                 Layout.fillWidth: true
@@ -156,7 +202,7 @@ ColumnLayout {
         }
         RowLayout {
             Label { text: "edge_x [cm]"; color: Theme.textDim; Layout.preferredWidth: 90 }
-            TextField {
+            ValidatedTextField {
                 id: edgeXField
                 objectName: "regionProfileEdgeXField"
                 Layout.fillWidth: true
@@ -185,6 +231,16 @@ ColumnLayout {
                     sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
                     edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
                     model[currentIndex])
+                background: Rectangle {
+                    implicitHeight: 24
+                    radius: Theme.radiusSm
+                    color: highSideBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
+                    border.width: highSideBox.activeFocus ? 2 : 1
+                    border.color: highSideBox.activeFocus ? Theme.focus
+                                  : highSideBox.hovered ? Theme.borderStrong : Theme.border
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
+                }
             }
         }
     }

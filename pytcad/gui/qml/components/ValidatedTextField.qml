@@ -26,18 +26,25 @@ TextField {
     color: Theme.text
     font.pixelSize: Theme.fsBody
     selectionColor: Theme.selection
+    hoverEnabled: true
 
     // Visual feedback: a hairline border that eases from neutral to
-    // focused (accent) to invalid (error) rather than snapping colour.
+    // hovered to focused (accent) to invalid (error) rather than
+    // snapping colour -- hover is a quiet preview of focus, so it
+    // gets the background tint alone, one step short of the full
+    // focus border treatment.
     background: Rectangle {
         implicitWidth: 120
         implicitHeight: 24
         radius: Theme.radiusSm
-        color: Theme.sunken
+        color: root.hovered && !root.activeFocus
+               ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
         border.width: root.activeFocus || root.hasError ? 2 : 1
         border.color: root.hasError ? Theme.error
                       : root.activeFocus ? Theme.focus
+                      : root.hovered ? Theme.borderStrong
                       : Theme.border
+        Behavior on color { ColorAnimation { duration: Theme.animFast } }
         Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
         Behavior on border.width { NumberAnimation { duration: Theme.animFast } }
     }

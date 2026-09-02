@@ -36,7 +36,7 @@ ColumnLayout {
             ToolTip.visible: hLen.hovered; ToolTip.delay: 400
             ToolTip.text: "Wafer depth simulated. The 1D process domain runs from the surface (0) to this depth."
         }
-        TextField {
+        ValidatedTextField {
             objectName: "substrateLengthField"
             Layout.fillWidth: true
             text: parameters && parameters.length_cm != null ? parameters.length_cm.toExponential(3) : ""
@@ -51,7 +51,7 @@ ColumnLayout {
             ToolTip.visible: hBg.hovered; ToolTip.delay: 400
             ToolTip.text: "Uniform background doping. Negative = p-type, positive = n-type [cm^-3]."
         }
-        TextField {
+        ValidatedTextField {
             objectName: "substrateDopingField"
             Layout.fillWidth: true
             text: parameters && parameters.background_doping_cm3 != null
@@ -67,7 +67,7 @@ ColumnLayout {
             ToolTip.visible: hHmin.hovered; ToolTip.delay: 400
             ToolTip.text: "Finest spacing near junctions. Keep it around one Debye length (~10 nm at 1e17) or finer."
         }
-        TextField {
+        ValidatedTextField {
             objectName: "substrateHMinField"
             Layout.fillWidth: true
             text: parameters && parameters.mesh && parameters.mesh.h_min_cm != null
@@ -78,7 +78,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Mesh h_max [cm]"; Layout.preferredWidth: 130 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.mesh && parameters.mesh.h_max_cm != null
                   ? parameters.mesh.h_max_cm.toExponential(3) : ""
@@ -88,7 +88,7 @@ ColumnLayout {
     }
     RowLayout {
         Label { text: "Mesh ratio"; Layout.preferredWidth: 130 }
-        TextField {
+        ValidatedTextField {
             Layout.fillWidth: true
             text: parameters && parameters.mesh && parameters.mesh.ratio != null
                   ? parameters.mesh.ratio.toString() : ""

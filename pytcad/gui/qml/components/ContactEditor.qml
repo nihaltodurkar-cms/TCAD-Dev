@@ -15,7 +15,7 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "V [V]"; color: Theme.textDim; Layout.preferredWidth: 60 }
-        TextField {
+        ValidatedTextField {
             objectName: "contactVoltageField"
             Layout.fillWidth: true
             text: contactData ? contactData.voltage.toString() : "0.0"

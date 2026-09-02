@@ -2770,3 +2770,116 @@ failure.
 - `ARCHITECTURE.md`: M21 status updated throughout (top summary,
   status table, section 5 candidate-list item, gap-list entries,
   freeform-geometry vision-doc item)
+
+## STATE ADDENDUM -- M22 PHASE 3 (MPI SCHWARZ) + GPU/AMG ACCELERATION (2026-09-02)
+
+M22 phase 3 (solver-level distributed solve) LANDED, but as MPI
+Schwarz domain decomposition, not the distributed-sparse-matrix design
+the plan originally sketched -- see M22-LINSOLVE-PLAN.md section 9 for
+the full record (this section is a summary of it). Same session:
+pyamg-backed AMG for the GUI's 3D equilibrium solve, and a CUDA
+(CuPy/cuSOLVER) direct solve for the bias/sweep Newton loop. All three
+are opt-in, size-and-hardware-gated paths inside
+gui/services/solver_runner.py's run_job() -- a machine without a GPU,
+without pyamg, or without mpi4py/mpirun sees byte-identical behavior
+to before, just without the speedup; nothing in pytcad's numerical
+defaults changed.
+
+### What shipped
+1. **Equilibrium AMG** (pytcad/device3d.py, gui/services/solver_runner.py):
+   `Device3D.solve_equilibrium` now honors `opts.linsolve` (it
+   previously hardcoded "direct", ignoring the option). bicgstab+pyamg
+   cuts equilibrium wall time 8x-44x on large 3D meshes (bjt_3d 43.4s
+   -> 1.0s), but is WORSE on small ones (mosfet_3d 2.1s -> 21.4s) --
+   gated at >20,000 nodes, the measured switch. Also fixed a latent bug
+   in pyamg's own construction path (pytcad/linsolve.py): a degenerate
+   AMG hierarchy could pass construction and only surface as NaN later
+   when applied; now probed with one matvec before being returned.
+2. **GPU bias solve** (pytcad/linsolve.py's new "gpu_direct" method):
+   solve_bias's iterative preconditioners (block-Jacobi, Schur, AMG)
+   do not reliably converge on the coupled psi/n/p Jacobian -- tried
+   all three directly, none work. A DIRECT solve on the GPU sidesteps
+   that: 2.8x on bjt_3d's real 121,824-unknown bias Jacobian, full
+   multi-iteration trajectory, ~1e-17 relative error vs. CPU. Slower
+   than CPU below ~50k unknowns (GPU transfer/launch overhead) -- same
+   20,000-node gate reused.
+3. **MPI Schwarz** (new gui/services/mpi_schwarz_runner.py): splits the
+   mesh into 4 overlapping x-slabs, each rank solves its own slab with
+   the ordinary direct solve, ranks exchange one interior column of
+   state with mpi4py after each local solve, repeats until the core
+   region stops changing. Needed one new core addition,
+   `Device3D.PinnedBC` (pins psi/n/p directly to given values, for the
+   artificial Schwarz interface -- unlike `DirichletBC`, which derives
+   them from a contact voltage), and one subtler one,
+   `Device3D(..., Ns_override=...)`: the dimensionless scaling (Ns, LD,
+   J0, even the mesh coordinates) is normally derived from
+   max(|doping|) OF WHATEVER ARRAY THE DEVICE WAS BUILT WITH -- two
+   ranks seeing different doping SLICES would silently disagree on
+   units without every rank being pinned to the same, globally-computed
+   reference. Both are purely additive (default behavior unchanged).
+   MEASURED on bjt_3d: 4 ranks, 2 Schwarz sweeps, 31.09s vs. 158.6s
+   single-process baseline (5.1x) -- faster than the GPU-only result
+   too -- exact to ~1.6e-17 relative error, verified through the REAL
+   `python -m gui.services.solver_runner job.json out.npz` CLI path
+   (job_runner.py/AppController needed zero changes: run_job() spawns
+   `mpirun -np 4 ... mpi_schwarz_runner` as a subprocess and relays
+   rank 0's stdout through its own).
+
+### A real regression, found before it shipped
+bjt_3d's clean 2-sweep convergence is specific to its doping being
+CONSTANT along x, the split axis -- every rank's subdomain looks
+nearly identical. Tried the same split on pn_junction_3d, whose doping
+IS the thing varying along x (the junction itself): a middle rank's
+per-sweep bias solve took 39-45s (vs. bjt_3d's ~5s) and the run had
+not converged after 2 sweeps at the point bjt_3d always finishes by --
+killed rather than let it run to an unknown, possibly multi-minute
+completion, which would have been dramatically worse than that job's
+already-working ~34s single-process AMG+GPU result. Fix: run_job() now
+computes, directly on the real doping array (never a device-name
+list), whether doping varies by more than 1% of its own range along x,
+and refuses the MPI path otherwise -- confirmed bjt_3d still routes to
+MPI and pn_junction_3d correctly falls back to the single-process path.
+
+### A second bug, caught only by running the full suite
+The x-doping-variation check above originally called
+`doping.max(axis=2)` unconditionally, before checking dimensionality --
+broke every 1D/2D job in gui/tests (a 1D doping array has no axis 2).
+Fixed by moving the computation inside the existing `is_large_3d`
+guard. Lesson: `gui/tests -q` (all 590) after ANY change to run_job(),
+not just the 3D-specific subset that seems relevant -- this bug would
+have shipped broken for the majority of real jobs (most examples are
+1D/2D) if the full suite hadn't been run before calling it done.
+
+### Verified
+- pytcad/tests: 99 passed (M22 linsolve/continuation, M13 goldens/
+  solver, 3D validation, workbench M1)
+- gui/tests: 590 passed (after both fixes above)
+- Real CLI end-to-end runs (not just direct Python calls) for bjt_3d
+  (MPI path) and pn_junction_3d (correctly-refused fallback path),
+  each checked against a genuine single-process reference solve
+
+### Files changed
+- `pytcad/pytcad/device3d.py`: `PinnedBC` class; `Ns_override` param on
+  `Device3D.__init__`; `solve_equilibrium`/`solve_bias` both now honor
+  `opts.linsolve` with a try/fall-back-to-direct wrapper; `PinnedBC`
+  handling added to `_residual_jacobian_poisson`, `_residual_jacobian`,
+  and `solve_bias`'s initial-guess setup
+- `pytcad/pytcad/linsolve.py`: `"gpu_direct"` method (CuPy/cuSOLVER);
+  `_HAVE_CUPY` flag; AMG preconditioner now probed with one matvec
+  before being returned (catches a degenerate hierarchy that would
+  otherwise only surface as NaN later)
+- `pytcad/gui/services/solver_runner.py`: `_HAVE_MPI`/`_HAVE_CUPY`
+  flags; node-count + doping-variation gating; `_solve_via_mpi_schwarz`
+  (spawns and relays the MPI subprocess); `_solve_all` gained an
+  `linsolve_bias` override param
+- `pytcad/gui/services/mpi_schwarz_runner.py`: new file, the MPI
+  Schwarz worker (one process per rank)
+- `pytcad/requirements.txt`: `pyamg` added (plain optional dep, same
+  pattern as gmsh/devsim/mpmath); `cupy`/`mpi4py` documented as
+  install-separately optional deps (CUDA-toolkit-version-specific
+  package name, so never an unconditional line `pip install -r` must
+  survive without a matching wheel)
+- `M22-LINSOLVE-PLAN.md`: status line and PHASE 3 section updated;
+  new section 9 with the full record
+- `ARCHITECTURE.md`: M22 status-table entry updated; the GPU/MPI
+  vision-doc gap-list item updated from "not started" to landed
