@@ -193,7 +193,8 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
 def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
               trans_geom, C_phys, contacts, bias, material=SILICON,
               T=300.0, opts=None, srh=True, auger=False,
-              doping_mobility=False, Ntot_phys=None, materials_per_node=None):
+              doping_mobility=False, Ntot_phys=None, materials_per_node=None,
+              init=None, return_diagnostics=False):
     """Newton-solve the coupled unstructured drift-diffusion system at
     an applied bias.
 
@@ -216,10 +217,27 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     constants (Ns/LD/VT normalization reference), matching device2d.py's
     "first material is the scaling reference" convention.
 
-    Returns (psi, n, p) [all scaled, dimensionless] plus the scaling
-    dict (Ns, LD, VT, nie, eps, R0) and a per-contact terminal current
-    dict [A/cm, matching Device2D.terminal_current's 2D convention --
-    this is a 2D unstructured mesh, same physical units].
+    init: OPTIONAL {"psi": (N,), "n": (N,), "p": (N,)} SCALED initial
+    guess (same node ordering/count as `nodes`), used INSTEAD of the
+    default equilibrium (V=0 Boltzmann) cold-start guess -- M21
+    adaptive-refinement follow-up (adapt_unstructured.py), warm-starting
+    a refined mesh's Newton solve from a coarser mesh's converged state
+    interpolated onto the new nodes. Contact nodes are still overwritten
+    with their exact Dirichlet (psi0, n0, p0) values regardless of
+    `init`, exactly as the cold-start path already does. None (default)
+    reproduces the ORIGINAL cold-start behavior bit-for-bit -- this is a
+    pure opt-in addition, not a default-behavior change.
+
+    return_diagnostics: if True, ALSO return a 6th tuple element, a
+    dict {"n_iter": int, "residual_node_history": (n_iter, N) float},
+    where residual_node_history[k] is the per-node L2 norm of the
+    [F_psi, F_n, F_p] residual triple BEFORE Newton step k's update is
+    applied (i.e. the residual the solver was working to drive down
+    that iteration) -- a genuinely solver-aware signal (which nodes'
+    residual stays large longest through the Newton iteration) distinct
+    from any post-hoc, converged-solution-only physical indicator.
+    Default False preserves the ORIGINAL 5-tuple return signature
+    exactly -- existing callers are unaffected.
     """
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
@@ -279,16 +297,29 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
                                  contact_V, VT)
 
     # warm start: equilibrium first (V=0 everywhere), matching
-    # Device1D/Device2D.solve_bias's own convention
-    psi = np.arcsinh(C_s / (2.0 * nie_s))
-    n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
-                nie_s ** 2 / np.maximum(
-                    0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
-    p = nie_s ** 2 / np.maximum(n, 1e-300)
+    # Device1D/Device2D.solve_bias's own convention -- UNLESS `init`
+    # supplies an explicit (already-scaled) guess (adaptive-refinement
+    # warm start from a coarser mesh's converged solution).
+    if init is None:
+        psi = np.arcsinh(C_s / (2.0 * nie_s))
+        n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
+                    nie_s ** 2 / np.maximum(
+                        0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
+        p = nie_s ** 2 / np.maximum(n, 1e-300)
+    else:
+        psi = np.array(init["psi"], dtype=float, copy=True)
+        n = np.array(init["n"], dtype=float, copy=True)
+        p = np.array(init["p"], dtype=float, copy=True)
+        if psi.shape != C_s.shape:
+            raise ValueError(
+                f"init arrays have shape {psi.shape}, expected {C_s.shape} "
+                "(one value per node of THIS mesh)")
     psi[contact_idx], n[contact_idx], p[contact_idx] = psi0, n0, p0
 
     N = psi.shape[0]
     last_converged = False
+    n_iter_used = 0
+    residual_node_history = [] if return_diagnostics else None
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian(
             psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
@@ -298,6 +329,10 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
         F3[contact_idx, 2] = p[contact_idx] - p0
+
+        if return_diagnostics:
+            residual_node_history.append(
+                np.linalg.norm(F3, axis=1).astype(float))
 
         Jl = J.tolil()
         for comp in range(3):
@@ -317,6 +352,7 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
         rel_n = np.abs(n / np.maximum(n_old, 1e-300) - 1.0).max()
         rel_p = np.abs(p / np.maximum(p_old, 1e-300) - 1.0).max()
         err = max(float(np.abs(dpsi).max()), float(rel_n), float(rel_p))
+        n_iter_used = it + 1
         if opts.verbose:
             print(f"    unstructured-dd it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}"
                  f"  |dn/n|={rel_n:.3e}")
@@ -352,4 +388,11 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
 
     scale = dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps, R0=R0,
                 last_converged=last_converged)
+    if return_diagnostics:
+        diagnostics = dict(
+            n_iter=n_iter_used,
+            residual_node_history=(np.array(residual_node_history)
+                                   if residual_node_history else
+                                   np.zeros((0, N))))
+        return psi, n, p, scale, terminal_current, diagnostics
     return psi, n, p, scale, terminal_current

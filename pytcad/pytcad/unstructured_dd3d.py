@@ -293,7 +293,8 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
 
 def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
                  bias, material=SILICON, T=300.0, opts=None, srh=True,
-                 auger=False, doping_mobility=False, Ntot_phys=None):
+                 auger=False, doping_mobility=False, Ntot_phys=None,
+                 init=None, return_diagnostics=False):
     """Newton-solve the coupled 3D tet-mesh drift-diffusion system at
     an applied bias. 3D analogue of unstructured_dd.solve_bias.
 
@@ -302,10 +303,16 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     unstructured_dd.solve_bias (harmonic edge mean); NO heterojunction
     support here (see module docstring).
 
+    init / return_diagnostics: same M21 adaptive-refinement warm-start /
+    per-node Newton-residual-history opt-ins as unstructured_dd.
+    solve_bias -- see that function's docstring. Default behavior
+    (init=None, return_diagnostics=False) is unchanged.
+
     Returns (psi, n, p) [scaled] plus the scaling dict and a per-
     contact terminal current dict [A, NOT A/cm -- this is a genuine 3D
     mesh with no translational-invariance axis to divide out, unlike
-    the 2D module's A/cm convention].
+    the 2D module's A/cm convention]. With return_diagnostics=True, a
+    7th element {"n_iter", "residual_node_history"} is appended.
     """
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
@@ -351,14 +358,25 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     contact_V = np.array([contact_node_bias[k] for k in contact_idx])
     psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_s, contact_V, VT)
 
-    psi = np.arcsinh(C_s / (2.0 * nie_s))
-    n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
-                nie_s ** 2 / np.maximum(
-                    0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
-    p = nie_s ** 2 / np.maximum(n, 1e-300)
+    if init is None:
+        psi = np.arcsinh(C_s / (2.0 * nie_s))
+        n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
+                    nie_s ** 2 / np.maximum(
+                        0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
+        p = nie_s ** 2 / np.maximum(n, 1e-300)
+    else:
+        psi = np.array(init["psi"], dtype=float, copy=True)
+        n = np.array(init["n"], dtype=float, copy=True)
+        p = np.array(init["p"], dtype=float, copy=True)
+        if psi.shape != C_s.shape:
+            raise ValueError(
+                f"init arrays have shape {psi.shape}, expected {C_s.shape} "
+                "(one value per node of THIS mesh)")
     psi[contact_idx], n[contact_idx], p[contact_idx] = psi0, n0, p0
 
     last_converged = False
+    n_iter_used = 0
+    residual_node_history = [] if return_diagnostics else None
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian_dd3d(
             psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
@@ -367,6 +385,10 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
         F3[contact_idx, 2] = p[contact_idx] - p0
+
+        if return_diagnostics:
+            residual_node_history.append(
+                np.linalg.norm(F3, axis=1).astype(float))
 
         Jl = J.tolil()
         for comp in range(3):
@@ -386,6 +408,7 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
         rel_n = np.abs(n / np.maximum(n_old, 1e-300) - 1.0).max()
         rel_p = np.abs(p / np.maximum(p_old, 1e-300) - 1.0).max()
         err = max(float(np.abs(dpsi).max()), float(rel_n), float(rel_p))
+        n_iter_used = it + 1
         if opts.verbose:
             print(f"    unstructured3d-dd it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}"
                  f"  |dn/n|={rel_n:.3e}")
@@ -424,4 +447,11 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
 
     scale = dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps, R0=R0,
                 last_converged=last_converged)
+    if return_diagnostics:
+        diagnostics = dict(
+            n_iter=n_iter_used,
+            residual_node_history=(np.array(residual_node_history)
+                                   if residual_node_history else
+                                   np.zeros((0, N))))
+        return psi, n, p, scale, terminal_current, diagnostics
     return psi, n, p, scale, terminal_current
