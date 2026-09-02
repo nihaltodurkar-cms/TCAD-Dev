@@ -301,7 +301,16 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
               the pre-sweep equilibrium snapshot here so a fully-diverged
               sweep can never present a diverged state as a biased result;
       series  flat npz keys: sweep__voltage, sweep__converged,
-              sweep__current__<channel>, unit__sweep_current, sweep__meta.
+              sweep__current__<channel>, unit__sweep_current, sweep__meta,
+              plus (3D only) sweep__snapshot__voltages and
+              sweep__snapshot__field__<name>__<idx> for every CONVERGED
+              point -- the per-point field data gui/services/viewer3d.py's
+              sweep-playback dock (ResultStore.sweep_snapshots()) needs
+              to animate a bias sweep. 1D/2D never write these: neither
+              has a 3D viewer to play them back in, and a 2D sweep's
+              field history was already exercised via the plain
+              per-point series above long before Phase 4 added 3D
+              playback, so there is nothing to retrofit there.
 
     Channels are the ohmic terminal currents at 2D/3D (A/cm and A) and
     the single total current density at 1D (A/cm^2), matching
@@ -316,6 +325,20 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
         channels = ["device"]        # Device1D has no terminal registry
     else:
         channels = [c.name for c in spec.contacts if c.kind == "ohmic"]
+
+    # Phase 4 (retrofit): 3D snapshot fields for animation playback.
+    # Only the bias-dependent scalars -- doping never changes across a
+    # sweep, so re-storing it at every point would just bloat the
+    # result file for no playback benefit; the static (non-sweep)
+    # field__doping written elsewhere already covers it.
+    snapshot_field_names = ("potential", "electron_density", "hole_density")
+    snapshot_accessors = {
+        "potential": lambda dev: dev.psi_V,
+        "electron_density": lambda dev: dev.n_cm3,
+        "hole_density": lambda dev: dev.p_cm3,
+    }
+    snapshot_voltages = []
+    snapshot_fields = {name: [] for name in snapshot_field_names}
 
     currents = {name: [] for name in channels}
     converged_flags = []
@@ -352,6 +375,12 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
         # nonphysical state.
         if ok:
             fields = extract_result(device, spec, solved_bias=True)
+            if d == 3:
+                snapshot_voltages.append(float(V))
+                for name in snapshot_field_names:
+                    snapshot_fields[name].append(
+                        np.asarray(snapshot_accessors[name](device),
+                                  dtype=float))
 
     series = {
         "sweep__voltage": np.asarray(voltages, dtype=float),
@@ -364,6 +393,14 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
     }
     for name, vals in currents.items():
         series[f"sweep__current__{name}"] = np.asarray(vals, dtype=float)
+
+    if d == 3 and snapshot_voltages:
+        series["sweep__snapshot__voltages"] = np.array(
+            json.dumps(snapshot_voltages))
+        for name, arrs in snapshot_fields.items():
+            for idx, arr in enumerate(arrs):
+                series[f"sweep__snapshot__field__{name}__{idx}"] = arr
+
     return fields if fields is not None else fallback_fields, series
 
 

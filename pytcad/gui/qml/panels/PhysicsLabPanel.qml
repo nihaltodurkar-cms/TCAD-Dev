@@ -216,9 +216,10 @@ Rectangle {
                 }
                 Label {
                     text: model.accepted ? "✓" : "✗"
-                    color: model.accepted ? Theme.success : Theme.running
+                    color: model.accepted ? Theme.ok : Theme.running
                     font.pixelSize: 10
                     font.bold: true
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
             }
         }

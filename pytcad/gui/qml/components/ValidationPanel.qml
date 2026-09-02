@@ -22,6 +22,7 @@ ColumnLayout {
         Label {
             text: errors.length === 0 ? "OK" : "FAILED"
             color: errors.length === 0 ? Theme.ok : Theme.error
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
         }
     }
 

@@ -69,6 +69,7 @@ Rectangle {
                 height: 30
                 background: Rectangle {
                     color: hovered ? Theme.panelAlt : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
                 contentItem: RowLayout {
                     spacing: Theme.pad

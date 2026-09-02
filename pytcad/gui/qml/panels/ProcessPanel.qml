@@ -282,7 +282,10 @@ Rectangle {
                         onClicked: controller.removeProcessStep(model.stepId)
                     }
                 }
-                background: Rectangle { color: highlighted ? Theme.panelAlt : "transparent" }
+                background: Rectangle {
+                        color: highlighted ? Theme.panelAlt : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    }
             }
         }
 

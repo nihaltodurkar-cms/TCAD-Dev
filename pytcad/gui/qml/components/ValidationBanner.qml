@@ -17,8 +17,8 @@ Rectangle {
 
     visible: height > 0
 
-    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-    Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+    Behavior on height { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
+    Behavior on opacity { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
 
     RowLayout {
         anchors.fill: parent
@@ -31,6 +31,13 @@ Rectangle {
             font.pixelSize: Theme.fsBody
             Layout.preferredWidth: 20
             Layout.alignment: Qt.AlignVCenter
+
+            SequentialAnimation on opacity {
+                running: root.visible
+                loops: Animation.Infinite
+                NumberAnimation { to: 0.5; duration: 700; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
+            }
         }
 
         ListView {

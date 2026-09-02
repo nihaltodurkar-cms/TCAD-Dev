@@ -268,11 +268,439 @@ def mosfet_3d_example_spec():
         bias={"source": 0.0, "drain": 0.0, "body": 0.0, "gate": 0.0})
 
 
+def finfet_3d_example_spec():
+    """3D tri-gate FinFET: gate wraps around top and two sides of a narrow fin.
+
+    Geometry:
+    - Lg=30 nm gate, Lsd=20 nm source/drain extensions
+    - Hfin=30 nm fin height, Wfin=20 nm fin width
+    - tox=2 nm gate oxide, n+ poly gate
+    - Na=1e17 cm^-3 p-type body/channel
+    - Nsd=1e19 cm^-3 n+ source/drain
+
+    Tri-gate: top (j=0, normal_axis='y') + two sides (k=0 and k=Nz-1,
+    normal_axis='z').  Corner nodes belong exclusively to the top gate
+    to avoid double-counting the oxide capacitance.
+
+    NX/NY/NZ=10/6/6 only set graded_mesh's h_min/h_max targets, not the
+    final node count directly: graded_mesh's arc-length construction
+    (see pytcad/mesh.py) realises however many nodes the requested
+    grading ratio actually needs, which for three independently graded
+    axes comes out much denser than the naive NX*NY*NZ=360 -- ~39,000
+    nodes measured directly. Still constructs and solves on the UI
+    thread in well under a second; the equilibrium+bias Newton solve
+    itself is the slow part (tens of seconds), not construction.
+    """
+    from pytcad.mesh import graded_mesh
+    from pytcad.mesh2d import Mesh2D
+    from pytcad.mosfet import mosfet_doping
+    from pytcad.moscap import flatband_voltage
+    from pytcad.materials import SILICON
+
+    Lg = 3e-6
+    Lsd = 2e-6
+    Hfin = 3e-6
+    Wfin = 2e-6
+    tox_cm = 2e-7
+    Na = 1e17
+    Nsd_peak = 1e19
+    sigma_y = 5e-7
+    sigma_lat = 2e-7
+
+    NX, NY, NZ = 10, 6, 6
+    L = 2 * Lsd + Lg
+
+    x = graded_mesh(L, [Lsd, Lsd + Lg],
+                    h_min=L / (NX * 20), h_max=L / NX, ratio=1.15)
+    y = graded_mesh(Hfin, [0.0],
+                    h_min=Hfin / (NY * 20), h_max=Hfin / NY, ratio=1.15)
+    # Focused at the two gated sidewalls (z=0, z=Wfin), not the fin
+    # centre: that's where the side-gate Robin BCs actually sit and
+    # where the accumulation/depletion charge gradient is steepest,
+    # mirroring the y-axis's own focus at y=0 for the top gate.
+    z = graded_mesh(Wfin, [0.0, Wfin],
+                    h_min=Wfin / (NZ * 20), h_max=Wfin / NZ, ratio=1.15)
+    nz = z.size
+
+    mesh2 = Mesh2D(x, y)
+    dop2d, ntot2d = mosfet_doping(mesh2, Lsd, Lg, Na, Nsd_peak,
+                                   sigma_y, sigma_lat)
+    doping = np.tile(dop2d, (nz, 1, 1))
+    ntotal = np.tile(ntot2d, (nz, 1, 1))
+
+    i_src = np.where(x <= Lsd)[0].tolist()
+    i_drn = np.where(x >= Lsd + Lg)[0].tolist()
+    i_gate = np.where((x > Lsd) & (x < Lsd + Lg))[0].tolist()
+    Vfb = flatband_voltage(-Na, tox_cm, "n+poly", 0.0, 300.0, SILICON)
+
+    top_gate = _top_face_node_indices(i_gate, nz)
+
+    left_i, left_j, left_k = [], [], []
+    for i_idx in i_gate:
+        for j_idx in range(1, y.size):
+            left_i.append(i_idx)
+            left_j.append(j_idx)
+            left_k.append(0)
+    left_gate = {"i": left_i, "j": left_j, "k": left_k}
+
+    right_i, right_j, right_k = [], [], []
+    for i_idx in i_gate:
+        for j_idx in range(1, y.size):
+            right_i.append(i_idx)
+            right_j.append(j_idx)
+            right_k.append(nz - 1)
+    right_gate = {"i": right_i, "j": right_j, "k": right_k}
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist(),
+                          ntotal=ntotal.tolist()),
+        contacts=[
+            ContactSpec(name="source", kind="ohmic",
+                        nodes=_top_face_node_indices(i_src, nz), V=0.0),
+            ContactSpec(name="drain", kind="ohmic",
+                        nodes=_top_face_node_indices(i_drn, nz), V=0.0),
+            ContactSpec(name="body", kind="ohmic",
+                        nodes=_bottom_face_node_indices(x.size, y.size, nz),
+                        V=0.0),
+            ContactSpec(name="gate_top", kind="gate",
+                        nodes=top_gate,
+                        V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="y"),
+            ContactSpec(name="gate_left", kind="gate",
+                        nodes=left_gate,
+                        V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="z"),
+            ContactSpec(name="gate_right", kind="gate",
+                        nodes=right_gate,
+                        V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="z"),
+        ],
+        bias={"source": 0.0, "drain": 0.0, "body": 0.0,
+              "gate_top": 0.0, "gate_left": 0.0, "gate_right": 0.0})
+
+
+def pn_junction_3d_example_spec():
+    """3D asymmetric PN junction diode with Gaussian-graded junction.
+
+    - p-side: Na=1e16 cm^-3 (light doping, wide depletion)
+    - n-side: Nd=1e19 cm^-3 (heavy doping, narrow depletion)
+    - Junction at x=800 nm, Gaussian grading sigma=10 nm
+    - Domain: 2000 nm x 1000 nm x 500 nm (2 um x 1 um x 0.5 um)
+
+    Shows the 3D depletion region and I-V characteristics.  The heavy
+    asymmetry (1e19/1e16 = 1000:1) makes the depletion region extend
+    almost entirely into the lightly-doped p-side -- a realistic,
+    well-understood TCAD benchmark. The p-side must be wide enough to
+    hold that depletion region: at this doping the one-sided depletion
+    width is W = sqrt(2*eps_s*Vbi/(q*Na)) ~ 340 nm, so the 800 nm p-side
+    here leaves headroom before the anode contact; a domain scaled down
+    to ~80 nm (an earlier draft of this docstring) would have put the
+    contact inside the depletion region itself.
+
+    NX/NY/NZ=16/8/6 are graded_mesh's h_min/h_max targets, not the
+    final node count (see finfet_3d_example_spec()'s docstring above
+    for why those differ) -- ~33,000 nodes measured directly, not the
+    naive 16*8*6=768.
+    """
+    from pytcad.mesh import graded_mesh
+    from pytcad.materials import SILICON
+    from scipy.special import erf
+
+    L = 2e-4
+    H = 1e-4
+    W = 5e-5
+    x_junc = 8e-5
+    Na = 1e16
+    Nd = 1e19
+    sigma = 1e-6
+
+    NX, NY, NZ = 16, 8, 6
+
+    x = graded_mesh(L, [x_junc],
+                    h_min=L / (NX * 20), h_max=L / NX, ratio=1.15)
+    y = graded_mesh(H, [0.0],
+                    h_min=H / (NY * 20), h_max=H / NY, ratio=1.15)
+    z = graded_mesh(W, [W / 2],
+                    h_min=W / (NZ * 20), h_max=W / NZ, ratio=1.15)
+
+    doping_1d = (Nd * (1 + erf((x - x_junc) / sigma)) / 2
+                 - Na * (1 - erf((x - x_junc) / sigma)) / 2)
+    doping = np.tile(doping_1d, (z.size, y.size, 1))
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="anode", kind="ohmic",
+                        nodes=_x_face_node_indices(0, y.size, z.size),
+                        V=0.0),
+            ContactSpec(name="cathode", kind="ohmic",
+                        nodes=_x_face_node_indices(x.size - 1, y.size,
+                                                    z.size),
+                        V=0.0),
+        ],
+        bias={"anode": 0.0, "cathode": 0.0})
+
+
+def bjt_3d_example_spec():
+    """3D vertical NPN bipolar junction transistor.
+
+    All three regions are plain SILICON -- doping type/level is the only
+    thing that changes across the emitter/base/collector junctions, so
+    this is a homojunction BJT, not a heterojunction one. (A true HBT
+    needs a bandgap-engineered material change, e.g. a SiGe base or an
+    AlGaAs/GaAs emitter-base junction -- see workbench/core/templates.py
+    for that device, built from actual heterostructure materials. This
+    function models the ordinary silicon case and is named accordingly.)
+
+    Structure (top to bottom):
+    - Emitter: n+ Nd=1e19, ~300 nm thick
+    - Base:    p  Na=5e17, ~400 nm thick
+    - Collector: n Nd=5e16, ~800 nm thick
+
+    Contacts:
+    - Emitter:  top face (j=0), full x-z extent
+    - Base:     left side face (k=0), j range within the base only
+    - Collector: bottom face (j=Ny-1), full x-z extent
+
+    Shows 3D bipolar carrier transport with vertical current flow.
+    The base contact on a side face exercises a contact topology
+    different from the MOSFET's top-surface-only pattern.
+
+    NX/NY/NZ=6/7/4 are graded_mesh's h_min/h_max targets, not the final
+    node count (see finfet_3d_example_spec()'s docstring above for why
+    those differ) -- ~40,600 nodes measured directly, not the naive
+    6*7*4=168. Measured directly end to end (equilibrium + bias, both
+    converging cleanly): ~150 s, the slowest of the 3D examples here
+    despite having the fewest input NX/NY/NZ -- pytcad's Device3D solve
+    cost is dominated by the REALISED node count, not that nominal
+    input. (An earlier NX/NY/NZ=10/12/6 draft realised ~72,000 nodes
+    and did not finish an equilibrium solve in over 30 minutes; this is
+    the first parameter choice confirmed to actually complete.)
+    """
+    from pytcad.mesh import graded_mesh
+    from pytcad.materials import SILICON
+
+    L = 2e-4
+    H = 1.5e-4
+    W = 5e-5
+    H_emit = 3e-5
+    H_base = 4e-5
+
+    Nd_emit = 1e19
+    Na_base = 5e17
+    Nd_coll = 5e16
+
+    NX, NY, NZ = 6, 7, 4
+
+    x = graded_mesh(L, [L / 2],
+                    h_min=L / (NX * 20), h_max=L / NX, ratio=1.15)
+    y = graded_mesh(H, [H_emit, H_emit + H_base],
+                    h_min=H / (NY * 20), h_max=H / NY, ratio=1.15)
+    z = graded_mesh(W, [W / 2],
+                    h_min=W / (NZ * 20), h_max=W / NZ, ratio=1.15)
+
+    doping = np.zeros((z.size, y.size, x.size))
+    for j in range(y.size):
+        if y[j] < H_emit:
+            doping[:, j, :] = Nd_emit
+        elif y[j] < H_emit + H_base:
+            doping[:, j, :] = -Na_base
+        else:
+            doping[:, j, :] = Nd_coll
+
+    ii, kk = np.meshgrid(np.arange(x.size), np.arange(z.size),
+                          indexing="ij")
+    ii, kk = ii.ravel().tolist(), kk.ravel().tolist()
+
+    j_base = [j for j in range(y.size)
+              if H_emit <= y[j] < H_emit + H_base]
+    bi, bj, bk = [], [], []
+    for i_idx in range(x.size):
+        for j_idx in j_base:
+            bi.append(i_idx)
+            bj.append(j_idx)
+            bk.append(0)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="emitter", kind="ohmic",
+                        nodes={"i": ii, "j": [0] * len(ii), "k": kk},
+                        V=0.0),
+            ContactSpec(name="base", kind="ohmic",
+                        nodes={"i": bi, "j": bj, "k": bk},
+                        V=0.0),
+            ContactSpec(name="collector", kind="ohmic",
+                        nodes={"i": ii,
+                               "j": [y.size - 1] * len(ii), "k": kk},
+                        V=0.0),
+        ],
+        bias={"emitter": 0.0, "base": 0.0, "collector": 0.0})
+
+
+def moscap_3d_example_spec():
+    """3D MOS capacitor: a single gate over a uniformly doped p-type
+    substrate, with one ohmic body contact on the back face -- no
+    source/drain, no lateral variation at all along x or z. The
+    simplest possible 3D gated structure: isolates the gate Robin BC
+    and its C-V behaviour from mosfet_3d's smooth doping profile and
+    extra ohmic contacts, and a natural target for a gate-voltage
+    sweep to see a textbook C-V curve.
+
+    - Substrate: p-type, Na=1e17 cm^-3, uniform
+    - tox=5 nm, n+ poly gate (same tox/gate-type as mosfet_3d, so the
+      two share a directly comparable flatband voltage)
+    - Domain: 500 nm x 300 nm deep x 500 nm
+
+    Mesh: ~10x10x10 = 1000 nodes, graded toward the gated surface
+    (y=0) where the depletion/inversion physics happens -- the same
+    y-axis convention mosfet_3d and finfet_3d use for their top gate.
+    """
+    from pytcad.mesh import graded_mesh, uniform_mesh
+    from pytcad.moscap import flatband_voltage
+    from pytcad.materials import SILICON
+
+    L = 5e-5
+    W = 5e-5
+    depth = 3e-5
+    Na = 1e17
+    tox_cm = 5e-7
+
+    NX, NY, NZ = 10, 10, 10
+
+    x = uniform_mesh(L, NX)
+    y = graded_mesh(depth, [0.0],
+                    h_min=depth / (NY * 20), h_max=depth / NY, ratio=1.15)
+    z = uniform_mesh(W, NZ)
+    nz = z.size
+
+    doping = np.full((nz, y.size, x.size), -Na)
+    Vfb = flatband_voltage(-Na, tox_cm, "n+poly", 0.0, 300.0, SILICON)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="gate", kind="gate",
+                        nodes=_top_face_node_indices(
+                            list(range(x.size)), nz),
+                        V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="y"),
+            ContactSpec(name="body", kind="ohmic",
+                        nodes=_bottom_face_node_indices(x.size, y.size, nz),
+                        V=0.0),
+        ],
+        bias={"gate": 0.0, "body": 0.0})
+
+
+def _x_face_node_indices_jrange(i, j_list, nz):
+    """Every (i, j, k) node at x-index `i`, restricted to the y-indices
+    in j_list, as the flat {"i", "j", "k"} lists ContactSpec.nodes
+    expects. Used by jfet_3d_example_spec() below: its source/drain
+    contacts sit only on the n-channel portion of the x=0/x=L end
+    faces, not on the p+ gate region underneath -- unlike
+    _x_face_node_indices()'s full-face contacts (resistor_3d,
+    pn_junction_3d), where the whole end face is one uniform region."""
+    jj, kk = np.meshgrid(np.asarray(j_list, dtype=int), np.arange(nz),
+                         indexing="ij")
+    jj, kk = jj.ravel().tolist(), kk.ravel().tolist()
+    return {"i": [i] * len(jj), "j": jj, "k": kk}
+
+
+def jfet_3d_example_spec():
+    """3D n-channel junction field-effect transistor (JFET).
+
+    A single p+ gate diffusion sits BELOW an n-type channel (a
+    "buried-channel"/MESA JFET geometry): the gate-channel p-n
+    junction's depletion region -- reverse-biased by Vgs -- eats into
+    the lightly-doped n-channel from below and pinches it off, the
+    textbook JFET mechanism (Sze & Ng ch. 6), in contrast to mosfet_3d
+    and finfet_3d's MOS (oxide-isolated Robin BC) gates: this gate is
+    an actual ohmic contact on a real p-n junction, no Robin BC at all.
+
+    - Channel: n-type, Nd=1e16 cm^-3, 600 nm thick
+    - Gate: p+, Na=1e18 cm^-3, 200 nm thick (below the channel)
+    - Gaussian(erf)-graded gate-channel junction, sigma=10 nm
+    - Channel length 1 um, width 500 nm
+
+    At Vgs=0 the built-in potential alone (Vbi ~= 0.83 V for this
+    doping pair) already depletes ~330 nm of the 600 nm channel from
+    the gate junction (one-sided depletion width
+    W = sqrt(2*eps_s*Vbi/(q*Nd)) with Na >> Nd putting nearly all of
+    it on the channel side), leaving a ~270 nm conducting channel open
+    -- normally-on depletion-mode behaviour, closing further as a
+    reverse Vgs is applied via the Sweeps panel.
+
+    Source and drain are ohmic contacts on the n-channel ends only
+    (not the gate underneath); the gate contact sits on the p+
+    region's far face, reusing _bottom_face_node_indices() exactly as
+    bjt_3d_example_spec()'s collector does.
+
+    Mesh: ~12x10x6 = 720 nodes.
+    """
+    from pytcad.mesh import graded_mesh, uniform_mesh
+    from scipy.special import erf
+
+    L = 1e-4
+    W = 5e-5
+    Hch = 6e-5
+    Hgate = 2e-5
+    H = Hch + Hgate
+    Nd_ch = 1e16
+    Na_gate = 1e18
+    sigma = 1e-6
+
+    NX, NY, NZ = 12, 10, 6
+
+    x = uniform_mesh(L, NX)
+    y = graded_mesh(H, [Hch],
+                    h_min=H / (NY * 20), h_max=H / NY, ratio=1.15)
+    z = uniform_mesh(W, NZ)
+    nz = z.size
+
+    doping_1d = (Nd_ch * (1 - erf((y - Hch) / sigma)) / 2
+                 - Na_gate * (1 + erf((y - Hch) / sigma)) / 2)
+    doping = np.tile(doping_1d[None, :, None], (nz, 1, x.size))
+
+    j_channel = np.where(y <= Hch)[0].tolist()
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(),
+                            "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="source", kind="ohmic",
+                        nodes=_x_face_node_indices_jrange(0, j_channel, nz),
+                        V=0.0),
+            ContactSpec(name="drain", kind="ohmic",
+                        nodes=_x_face_node_indices_jrange(
+                            x.size - 1, j_channel, nz),
+                        V=0.0),
+            ContactSpec(name="gate", kind="ohmic",
+                        nodes=_bottom_face_node_indices(x.size, y.size, nz),
+                        V=0.0),
+        ],
+        bias={"source": 0.0, "drain": 0.0, "gate": 0.0})
+
+
 EXAMPLES = {"mosfet_2d": mosfet_example_spec,
            "diode_1d": diode_1d_example_spec,
            "resistor_2d": resistor_2d_example_spec,
            "resistor_3d": resistor_3d_example_spec,
-           "mosfet_3d": mosfet_3d_example_spec}
+           "mosfet_3d": mosfet_3d_example_spec,
+           "finfet_3d": finfet_3d_example_spec,
+           "pn_junction_3d": pn_junction_3d_example_spec,
+           "bjt_3d": bjt_3d_example_spec,
+           "moscap_3d": moscap_3d_example_spec,
+           "jfet_3d": jfet_3d_example_spec}
 
 
 from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel

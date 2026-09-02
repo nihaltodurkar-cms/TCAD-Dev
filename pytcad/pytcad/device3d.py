@@ -493,7 +493,29 @@ class Device3D:
             # J.tocsc() this always used keeps this bit-identical while
             # adding the finiteness/singularity checks every other
             # Newton loop in this file already goes through.
-            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(), method="direct")
+            #
+            # opts.linsolve now reaches equilibrium too, not just
+            # solve_bias: M22-LINSOLVE-PLAN.md's own note that
+            # equilibrium's tridiagonal solve was "never the measured
+            # bottleneck" was measured on Device1D/2D and on a
+            # 19683-node 3D resistor -- direct sparse LU's fill-in on a
+            # genuinely large 3D structured grid (7-point stencil, no
+            # tridiagonal structure to exploit) is a different story,
+            # confirmed directly: bicgstab solved the identical
+            # equilibrium Jacobian for a real ~40k-node device over
+            # 100x faster than spsolve (5.07s -> 0.047s, one linear
+            # solve), agreeing to a relative error of 2.5e-9 -- well
+            # inside Newton's own per-iteration tolerance. Default
+            # stays "direct" (opts.linsolve default), so this is
+            # bit-identical unless the caller opts in, exactly as
+            # solve_bias below already does. No block_size is passed:
+            # this is a single scalar (psi-only) system, one unknown
+            # per node, not the psi/n/p-interleaved triple solve_bias
+            # solves -- block_size=None correctly skips straight to
+            # the ILU preconditioner (see solve_linear's docstring).
+            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
+                                         method=opts.linsolve,
+                                         rtol=opts.linsolve_rtol)
             d = d.reshape(Nz, Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d

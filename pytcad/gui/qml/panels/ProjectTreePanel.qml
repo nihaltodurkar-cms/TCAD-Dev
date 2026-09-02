@@ -52,10 +52,12 @@ Rectangle {
                     text: "  " + modelData
                     color: highlighted ? Theme.accent : Theme.text
                     verticalAlignment: Text.AlignVCenter
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
                 background: Rectangle {
                     color: highlighted ? Theme.panelAlt : "transparent"
                     radius: Theme.radius
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
             }
         }

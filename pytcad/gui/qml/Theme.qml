@@ -61,5 +61,22 @@ QtObject {
     readonly property string mono: '"DejaVu Sans Mono", "Consolas", monospace'
     readonly property string family: '"Inter", "Segoe UI", "Ubuntu", "Cantarell", sans-serif'
 
+    // ---- motion ----------------------------------------------------------
+    // A single shared timing scale keeps every hover/press/collapse
+    // transition in the app feeling like one consistent instrument
+    // rather than a pile of ad-hoc durations.
+    readonly property int animFast: 110
+    readonly property int animMed:  200
+    readonly property int animSlow: 360
+    readonly property int easeOut:  Easing.OutCubic
+    readonly property int easeInOut: Easing.InOutQuad
+
+    // ---- depth & glow ------------------------------------------------------
+    readonly property color hoverOverlay: dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.045)
+    readonly property color pressOverlay: dark ? Qt.rgba(1, 1, 1, 0.11) : Qt.rgba(0, 0, 0, 0.08)
+    readonly property color shadow:       dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(0, 0, 0, 0.18)
+    readonly property color accentGlow:   dark ? Qt.rgba(0.345, 0.651, 1.0, 0.35)
+                                                : Qt.rgba(0.184, 0.498, 0.831, 0.30)
+
     function toggle() { theme.dark = !theme.dark }
 }

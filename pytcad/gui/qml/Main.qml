@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtQuick.Effects
 import "panels"
 import "components"
 
@@ -45,6 +46,16 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("resistor_3d") }
             MenuItem { text: "Load 3D MOSFET example"
                        onTriggered: appController.loadExample("mosfet_3d") }
+            MenuItem { text: "Load 3D FinFET (tri-gate)"
+                       onTriggered: appController.loadExample("finfet_3d") }
+            MenuItem { text: "Load 3D PN junction"
+                       onTriggered: appController.loadExample("pn_junction_3d") }
+            MenuItem { text: "Load 3D BJT (NPN)"
+                       onTriggered: appController.loadExample("bjt_3d") }
+            MenuItem { text: "Load 3D MOS capacitor"
+                       onTriggered: appController.loadExample("moscap_3d") }
+            MenuItem { text: "Load 3D JFET"
+                       onTriggered: appController.loadExample("jfet_3d") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }
@@ -79,7 +90,23 @@ ApplicationWindow {
     }
 
     header: ToolBar {
+        id: mainToolBar
         objectName: "mainToolBar"
+
+        // Faint drop shadow to lift the toolbar above the workbench --
+        // a small depth cue that makes the chrome read as "above" the
+        // content instead of flush with it.
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.bottom
+            height: 6
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: Theme.shadow }
+                GradientStop { position: 1.0; color: "transparent" }
+            }
+        }
+
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: Theme.padLg
@@ -87,6 +114,7 @@ ApplicationWindow {
             spacing: Theme.padSm
 
             Button {
+                id: runButton
                 display: AbstractButton.IconOnly
                 text: "▶"
                 ToolTip.visible: hovered
@@ -94,8 +122,24 @@ ApplicationWindow {
                 ToolTip.text: "Solve the current device"
                 enabled: !appController.busy
                 onClicked: appController.run()
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: !runButton.enabled ? "transparent"
+                           : runButton.pressed ? Qt.darker(Theme.ok, 1.15)
+                           : runButton.hovered ? Theme.ok : Qt.rgba(Theme.ok.r, Theme.ok.g, Theme.ok.b, 0.85)
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    scale: runButton.pressed ? 0.92 : 1.0
+                    Behavior on scale { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic } }
+                }
+                contentItem: Text {
+                    text: runButton.text
+                    color: runButton.enabled ? "#ffffff" : Theme.textFaint
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
             Button {
+                id: stopButton
                 display: AbstractButton.IconOnly
                 text: "■"
                 enabled: appController.busy
@@ -103,6 +147,21 @@ ApplicationWindow {
                 ToolTip.delay: 500
                 ToolTip.text: "Cancel the running solve"
                 onClicked: appController.cancel()
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: !stopButton.enabled ? "transparent"
+                           : stopButton.pressed ? Qt.darker(Theme.error, 1.15)
+                           : stopButton.hovered ? Theme.error : Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.85)
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    scale: stopButton.pressed ? 0.92 : 1.0
+                    Behavior on scale { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic } }
+                }
+                contentItem: Text {
+                    text: stopButton.text
+                    color: stopButton.enabled ? "#ffffff" : Theme.textFaint
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
             ComboBox {
                 id: backendBox
@@ -135,6 +194,7 @@ ApplicationWindow {
             }
             ToolSeparator {}
             Button {
+                id: undoButton
                 display: AbstractButton.IconOnly
                 text: "↶"
                 enabled: appController.canUndo
@@ -142,8 +202,21 @@ ApplicationWindow {
                 ToolTip.delay: 500
                 ToolTip.text: "Undo (Ctrl+Z)"
                 onClicked: appController.undo()
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: undoButton.pressed ? Theme.pressOverlay
+                           : undoButton.hovered ? Theme.hoverOverlay : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                }
+                contentItem: Text {
+                    text: undoButton.text
+                    color: undoButton.enabled ? Theme.text : Theme.textFaint
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
             Button {
+                id: redoButton
                 display: AbstractButton.IconOnly
                 text: "↷"
                 enabled: appController.canRedo
@@ -151,6 +224,18 @@ ApplicationWindow {
                 ToolTip.delay: 500
                 ToolTip.text: "Redo (Ctrl+Y)"
                 onClicked: appController.redo()
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: redoButton.pressed ? Theme.pressOverlay
+                           : redoButton.hovered ? Theme.hoverOverlay : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                }
+                contentItem: Text {
+                    text: redoButton.text
+                    color: redoButton.enabled ? Theme.text : Theme.textFaint
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
             ToolSeparator {}
             ComboBox {
@@ -192,11 +277,31 @@ ApplicationWindow {
             }
             ToolSeparator {}
             ToolButton {
+                id: themeButton
                 text: Theme.dark ? "☀" : "🌙"
                 ToolTip.visible: hovered
                 ToolTip.delay: 500
                 ToolTip.text: "Toggle light/dark (Ctrl+D)"
-                onClicked: { Theme.toggle(); viewport.syncTheme() }
+                onClicked: { spin.start(); Theme.toggle(); viewport.syncTheme() }
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: themeButton.pressed ? Theme.pressOverlay
+                           : themeButton.hovered ? Theme.hoverOverlay : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                }
+                contentItem: Text {
+                    text: themeButton.text
+                    color: Theme.text
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    rotation: 0
+                    RotationAnimation on rotation {
+                        id: spin
+                        from: 0; to: 360
+                        duration: Theme.animSlow
+                        easing.type: Easing.OutCubic
+                    }
+                }
             }
         }
     }
@@ -242,11 +347,42 @@ ApplicationWindow {
                                 { "label": "Builder",   "icon": "✎" }
                             ]
                             delegate: TabButton {
+                                id: tabDelegate
                                 required property var modelData
                                 text: modelData.icon + "\u2009" + modelData.label
                                 width: Math.max(implicitWidth, 44)
                                 font.pixelSize: Theme.fsSmall
+                                contentItem: Text {
+                                    text: tabDelegate.text
+                                    font: tabDelegate.font
+                                    color: tabDelegate.checked ? Theme.accent
+                                           : tabDelegate.activeFocus ? Theme.focus : Theme.text
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                                }
+                                background: Rectangle {
+                                    color: tabDelegate.hovered && !tabDelegate.checked
+                                           ? Theme.hoverOverlay : "transparent"
+                                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                                }
                             }
+                        }
+
+                        // Accent bar that glides beneath the active tab
+                        // instead of snapping there, tying tab selection
+                        // to a single continuous piece of motion.
+                        Rectangle {
+                            id: tabIndicator
+                            height: 2
+                            radius: 1
+                            color: Theme.accent
+                            y: workbenchTabs.height - height
+                            x: workbenchTabs.currentItem ? workbenchTabs.currentItem.x : 0
+                            width: workbenchTabs.currentItem ? workbenchTabs.currentItem.width : 0
+                            Behavior on x { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
+                            Behavior on width { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
                         }
                     }
 

@@ -105,7 +105,10 @@ ColumnLayout {
                     onClicked: controller.removeRegion(model.regionId)
                 }
             }
-            background: Rectangle { color: highlighted ? Theme.panelAlt : "transparent" }
+            background: Rectangle {
+                        color: highlighted ? Theme.panelAlt : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    }
         }
     }
 }
