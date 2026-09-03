@@ -2997,3 +2997,20 @@ portable, and must be regenerated (not copied) per machine.
 - `AppController` smoke-test: all three new controllers
   (`probeStation`/`solverTelemetry`/`bandDiagram`) construct and wire
   up cleanly via a real `QApplication` instance (offscreen platform)
+
+### STATE ADDENDUM -- MPI SCHWARZ SWEEP SUPPORT VERIFIED (2026-09-04)
+
+Phase 1a (MPI Schwarz extended to voltage sweeps, implemented earlier
+this session but interrupted before its end-to-end verification could
+complete) was resumed and verified through the real CLI: a 3-point
+bjt_3d collector sweep (0.0/0.1/0.2 V, base held at 0V) ran in 258.1s
+via MPI Schwarz vs. 699.3s single-process (2.7x). sweep__voltage and
+sweep__converged match exactly; the 3D snapshot fields (potential/
+electron_density/hole_density) driving the sweep-playback dock agree
+to ~1.1e-16 absolute across all 3 points -- machine precision. Terminal
+collector current showed a large RELATIVE error at V=0.0 (158%), but
+the absolute difference was 5.4e-21 A: both values are sub-attoamp
+noise-floor numbers for an unbiased base junction, not a correctness
+signal -- relative error is meaningless when the true value is ~0. At
+V=0.2 the values agree to 1.4e-5 relative error. See
+M22-LINSOLVE-PLAN.md section 11 for the full record.

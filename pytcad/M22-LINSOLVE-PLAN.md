@@ -612,3 +612,49 @@ standalone script:
 Full regression check: tests/ (365 passed, 1 xfailed -- pre-existing,
 unrelated) and gui/tests (590 passed) both green after this change,
 same totals as section 9C's own verification.
+
+------------------------------------------------------------------------
+11. MPI SCHWARZ SWEEP SUPPORT LANDED (2026-09-04)
+------------------------------------------------------------------------
+Section 9C's MPI Schwarz path was v1-scoped to equilibrium + a single
+bias point only; a voltage sweep always fell back to the plain single-
+process path regardless of mesh size. Extended run_job()'s gate to also
+route a sweep through MPI Schwarz (transient remains excluded --
+Device3D has no transient module at all, so there is nothing to
+parallelize there).
+
+DESIGN: gui/services/mpi_schwarz_runner.py's per-rank exchange/
+convergence loop was factored into a reusable _schwarz_loop(solve_fn)
+helper (byte-identical behavior verified on bjt_3d's single-bias-point
+path both before and after this refactor -- 0.0 diff, same 32.5s wall
+time), then reused for a new _run_sweep(): a pure-equilibrium Schwarz
+solve establishes the warm-start baseline, then each sweep point re-
+runs the Schwarz loop with a bias-only solve_fn that SKIPS
+solve_equilibrium entirely and starts Newton from the PREVIOUS point's
+converged per-rank psi/n/p (Device3D.solve_bias already warm-starts
+from self.psi/n/p when set) -- the same warm-started-ramp idea
+solver_runner.run_sweep()'s single-process path already uses, just
+applied per rank. Terminal currents and 3D snapshot fields (the sweep-
+playback dock) are computed per point via the SAME reassemble-to-one-
+global-Device3D-and-call-extract_result() design the single-bias-point
+path always used -- no new current-summation logic to audit.
+
+MEASURED on bjt_3d (a 3-point collector sweep, 0.0/0.1/0.2 V, base held
+at 0V, x-split -- the same geometry section 9C validated), through the
+real CLI end to end: MPI Schwarz sweep 258.1s vs. a 699.3s single-
+process reference (2.7x). Correctness: sweep__voltage and
+sweep__converged (all 3 points) match exactly; 3D snapshot fields
+(potential/electron_density/hole_density) for ALL THREE points agree
+to ~1.1e-16 absolute (machine precision) between the two paths.
+Terminal collector current shows large RELATIVE error at low bias
+(158% at V=0.0) but the absolute difference is 5.4e-21 A -- both
+values are sub-attoamp noise-floor numbers, expected physics for an
+unbiased base junction, not a correctness signal; relative error on a
+quantity whose true value is ~0 is not a meaningful metric. At V=0.2
+(the largest current in this sweep) the values agree to 1.4e-5
+relative error.
+
+No automated regression test exists for this path specifically (same
+as section 9C's single-bias-point path) -- verified the same way that
+one was, by direct comparison through the real CLI against a genuine
+single-process reference, not just inspection.

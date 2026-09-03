@@ -1408,11 +1408,14 @@ recorded here so they are tracked rather than silently absent):
   (x/y/z) a device is actually safe to split along, instead of an
   x-only check: pn_junction_3d, refused outright before, now qualifies
   via a z-split (1.5x over its single-process AMG+GPU baseline, exact
-  to ~1e-17).  Both GPU and MPI are size-and-hardware-gated opt-in
-  paths -- a machine without a GPU or without mpi4py/mpirun sees
-  identical behavior to before, just without the speedup.  SYCL has no
-  native Python path (oneAPI dpnp is the nearest binding) and was not
-  pursued for that reason.
+  to ~1e-17).  EXTENDED to voltage sweeps (M22-LINSOLVE-PLAN.md section
+  11, 2026-09-04): a 3-point bjt_3d sweep ran 2.7x faster via MPI
+  Schwarz than single-process, with sweep-playback snapshot fields
+  agreeing to machine precision across every point.  Both GPU and MPI
+  are size-and-hardware-gated opt-in paths -- a machine without a GPU
+  or without mpi4py/mpirun sees identical behavior to before, just
+  without the speedup.  SYCL has no native Python path (oneAPI dpnp is
+  the nearest binding) and was not pursued for that reason.
 - Cross-backend GUI comparison. workbench/solvers/{base,devsim_backend}.py
   implement the SolverBackend protocol and a working DEVSIM backend, but
   the GUI does not expose backend selection or a side-by-side compare
