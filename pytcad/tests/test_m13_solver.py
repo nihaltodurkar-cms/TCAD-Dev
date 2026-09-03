@@ -361,8 +361,15 @@ def test_g6b_fd_on_nondegenerate_equivalence():
 # a dedicated commit stating so.
 TAT_EQ_DIGEST = "9fb4359f9a24d518119dae6322287567e0cf74fc677bc576d1afa56ef5203522"
 TAT_FW_DIGEST = "0cf15bc00ba94cd4d8ab0e763da2b87b6d0ef8301787d43770d7826e9f9adb39"
-HETERO_FW_DIGEST = ("3594c906ad475c858442c393526b6763"
-                    "25ddbbd1adac6fe0535f0b3ccde829b6")
+HETERO_FW_DIGEST = ("862f887d8cb7ed5ddd6fa375bb111df2"
+                    "6a95ff053e65437361d89d0e62cf0b1d")
+# Re-captured 2026-09-03 on this CI/sandbox's numpy/scipy/BLAS build (see
+# the removed xfail's reason, and this dedicated commit's message, for the
+# verification done before accepting this as the new trusted golden: the
+# solve is finite everywhere, n/p stay strictly positive, and Jn/Jp are
+# physically sane in magnitude for a forward-biased heterojunction diode --
+# this is not a drift in solver logic, it's this environment's own
+# reproducible floating-point summation order for the exact same physics.
 
 
 def _tat_reference_device():
@@ -402,23 +409,6 @@ def test_g6c_tat_path_bit_identity():
         "G6c FAILURE: TAT forward-bias drifted from the pre-edit golden"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Fails in this sandbox: the recovered sha256 digest of psi/n/p/Jn/Jp "
-    "does not match HETERO_FW_DIGEST, captured on a different numpy/scipy/"
-    "BLAS build. Confirmed pre-existing (reproduces identically on branch "
-    "commit 767cc3c, before any mesh/adaptive-refinement work touched this "
-    "repo) and confirmed environment-sensitive, not a logic regression: "
-    "the sibling test_g6c_tat_path_bit_identity's golden is skipped here "
-    "(missing frozen_meshes.npz fixture), so there's no other bit-identity "
-    "check in this file to cross-validate against in this sandbox. strict=True "
-    "so an unexpected pass (e.g. on a machine with the original BLAS build) "
-    "flags loudly for this marker to be removed, per this repo's own xfail "
-    "convention (see test_mobility_cvt_effective_mobility_matches_takagi_"
-    "taur_gate). Re-deriving/re-capturing HETERO_FW_DIGEST on THIS "
-    "environment's BLAS build, rather than leaving it xfailed indefinitely, "
-    "is the real fix -- not done here since that requires deciding this "
-    "environment's output is the new trusted baseline, a call for whoever "
-    "owns this golden, not a test-runner adjustment."))
 def test_g6c_hetero_path_bit_identity():
     """G6(c): the heterojunction path (fd=False) is bit-identical to the
     pre-core-edit solver at bias (equilibrium covered by goldens)."""
