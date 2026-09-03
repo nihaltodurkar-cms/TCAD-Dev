@@ -49,13 +49,19 @@ HONEST SCOPE LIMITS, stated per this task's own instructions:
     inherently a fresh triangulation each pass -- but a real behavioral
     difference from adapt.py's bisection convergence guarantees, so it
     is stated rather than silently assumed away.
-  - Doping (and hence the Debye-length mesh-adequacy check adapt.py's
-    own adapt_solve_2d performs before its error-indicator marking) is
-    re-evaluated fresh each pass via evaluate_doping_at_nodes on the
-    new mesh, but NO Debye-adequacy gate is implemented here -- only
-    the error-indicator-driven Doerfler marking. A future session
-    wanting exact parity with adapt_solve_2d's two-stage (Debye-first,
-    then error-indicator) marking should add it the same way.
+  - Doping is re-evaluated fresh each pass via evaluate_doping_at_nodes
+    on the new mesh. A Debye-length mesh-adequacy indicator (`"debye"`
+    in INDICATOR_REGISTRY, backed by `debye_ratio_tri`/
+    `check_debye_adequacy_tri`) IS now implemented (2026-09-03), mirror-
+    ing adapt.py's own `indicator_debye`/`debye_target` convention --
+    it is opt-in (pass kinds=(..., "debye")), non-blocking (warns via
+    `check_debye_adequacy_tri`, never raises), and funnels through the
+    same `combine()`/`mark_dorfler()` machinery as every other named
+    indicator rather than being a separate two-stage gate. A future
+    session wanting exact parity with adapt_solve_2d's two-stage
+    (Debye-first, hard-gated, THEN error-indicator) marking would still
+    need to add that as a distinct pre-check -- this module folds Debye
+    adequacy into the same weighted-union marking as everything else.
 """
 import warnings
 
@@ -299,6 +305,103 @@ def indicator_solver_residual_tri(mesh, residual_node_history, tail_frac=0.5):
     return per_tri / peak
 
 
+def debye_ratio_tri(mesh, C, eps_r=11.7, T=300.0):
+    """Per-triangle raw (UN-normalised) spacing-to-Debye-length ratio
+    h_K / L_D, the unstructured-2D analogue of mesh.check_mesh /
+    adapt.indicator_debye's h/L_D convention, ported to a triangle
+    mesh (see this module's docstring's "out of scope" note this
+    function fills in).
+
+    Local Debye length: L_D = sqrt(eps_r*eps0*kB*T / (q^2 * N)) via
+    mesh.debye_length(N), N = |C| (net doping magnitude) evaluated at
+    each mesh NODE -- exactly `mesh.debye_length`'s own convention
+    (see mesh.py's module docstring), not re-derived.
+
+    h_K: the triangle's LONGEST edge (worst-case cell size, same
+    "max over the triangle's 3 edges" reduction indicator_curvature_tri
+    already uses for turning a per-edge quantity into a per-triangle
+    one).
+
+    L_D at the triangle: the MINIMUM of its 3 vertices' local L_D
+    (worst case -- the smallest Debye length anywhere in the triangle
+    is the one that actually needs resolving, same "min over the two
+    endpoints" convention mesh.check_mesh uses per 1D cell).
+
+    Returns (n_tri,) ratio array. A ratio > 1 means the triangle's
+    largest edge is bigger than the local Debye length; adequately
+    resolving a junction/depletion region wants this well below 1 (see
+    `check_debye_adequacy_tri`'s `ratio_max` threshold).
+    """
+    from .mesh import debye_length as _debye_length
+    nodes_xy = np.asarray(mesh.nodes, dtype=float)[:, :2]
+    tri = np.asarray(mesh.triangles, dtype=int)
+    LD_node = _debye_length(np.abs(np.asarray(C, dtype=float)), eps_r, T)
+    out = np.zeros(tri.shape[0])
+    for k, (a, b, c) in enumerate(tri):
+        h = max(np.linalg.norm(nodes_xy[j] - nodes_xy[i])
+                for i, j in ((a, b), (b, c), (c, a)))
+        ld_min = min(LD_node[a], LD_node[b], LD_node[c])
+        out[k] = h / max(ld_min, 1e-300)
+    return out
+
+
+def indicator_debye_tri(mesh, C, eps_r=11.7, T=300.0):
+    """DEBYE indicator: `debye_ratio_tri`, peak-normalised the same way
+    every other named indicator in INDICATOR_REGISTRY is, so it combines
+    on equal footing via `combine()`/`mark_dorfler` -- large exactly
+    where a triangle is under-resolved relative to the local Debye
+    length (e.g. a depletion edge whose mesh is coarser than physically
+    warranted), independent of the field/doping/current/residual
+    indicators above (which can all be flat while this one is not, and
+    vice versa: a mesh can be doping-gradient-adequate yet still coarser
+    than L_D, or the reverse).
+
+    SCOPE: this is the estimate `check_debye_adequacy_tri` also uses --
+    kept as a separate un-normalised primitive (`debye_ratio_tri`) so
+    the two never drift apart, same relationship adapt.py's own
+    indicator_debye has to mesh.check_mesh (see indicator_debye's
+    docstring)."""
+    ratio = debye_ratio_tri(mesh, C, eps_r, T)
+    peak = max(float(np.max(ratio)), 1e-300)
+    return ratio / peak
+
+
+def check_debye_adequacy_tri(mesh, C, eps_r=11.7, T=300.0, ratio_max=1.0):
+    """Non-blocking Debye-length mesh-adequacy check for a 2D
+    unstructured triangle mesh -- the unstructured analogue of
+    mesh.check_mesh / mesh2d.check_mesh2d, following the SAME "aim for
+    < ~1" threshold convention (`ratio_max` default 1.0) those use.
+
+    Unlike mesh.check_mesh (which only PRINTS/returns the ratio array),
+    this WARNS (via warnings.warn, matching this repo's own convention
+    -- see mesh.py's dense-sampling-cap warning and adapt.py's node-
+    budget warning) when the worst triangle exceeds `ratio_max`, since
+    unstructured refinement callers do not typically inspect a returned
+    array the way a script calling check_mesh interactively would.
+    Non-blocking / opt-in by construction: it never raises, so a caller
+    with a legitimate reason to accept a coarser mesh (e.g. deliberately
+    profiling a coarse pass) is never broken by calling it, and nothing
+    calls it automatically unless `adapt_solve_unstructured_2d` is asked
+    to include "debye" in its indicator kinds (see that function).
+
+    Returns the raw (n_tri,) ratio array (debye_ratio_tri's own return),
+    so a caller can act on it beyond the pass/fail warning.
+    """
+    ratio = debye_ratio_tri(mesh, C, eps_r, T)
+    worst = float(ratio.max()) if ratio.size else 0.0
+    if worst > ratio_max:
+        n_bad = int(np.count_nonzero(ratio > ratio_max))
+        warnings.warn(
+            f"Debye-length mesh adequacy: {n_bad}/{ratio.size} triangles "
+            f"have h/L_D > {ratio_max:g} (worst {worst:.2f}) -- the mesh "
+            f"under-resolves the local Debye length in a high-field/high-"
+            f"doping-gradient region; consider refining there (e.g. via "
+            f"the 'debye' indicator kind) before trusting fine physical "
+            f"detail (oscillations, charge non-conservation) from those "
+            f"cells")
+    return ratio
+
+
 # Named indicator kinds -> callable(mesh, solve_state) -> (n_tri,) array.
 # `solve_state` carries whatever each indicator needs; see
 # `compute_indicator`'s docstring for the full key list.
@@ -310,6 +413,7 @@ INDICATOR_REGISTRY = {
     "current": lambda mesh, s: indicator_current_tri(mesh, s),
     "solver_residual": lambda mesh, s: indicator_solver_residual_tri(
         mesh, s["residual_node_history"]),
+    "debye": lambda mesh, s: indicator_debye_tri(mesh, s["C"]),
 }
 
 

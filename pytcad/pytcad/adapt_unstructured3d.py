@@ -210,6 +210,57 @@ def indicator_solver_residual_tet(mesh, residual_node_history, tail_frac=0.5):
     return per_tet / peak
 
 
+def debye_ratio_tet(mesh, C, eps_r=11.7, T=300.0):
+    """Per-tet raw h_K / L_D ratio -- 3D analogue of
+    adapt_unstructured.debye_ratio_tri (same mesh.debye_length(|C|)
+    local Debye length per node, same "longest edge / min-vertex-L_D"
+    worst-case reduction), ported to a tet's 6 edges instead of a
+    triangle's 3."""
+    from .mesh import debye_length as _debye_length
+    nodes_xyz = np.asarray(mesh.nodes, dtype=float)[:, :3]
+    tet = np.asarray(mesh.tets, dtype=int)
+    LD_node = _debye_length(np.abs(np.asarray(C, dtype=float)), eps_r, T)
+    edges = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+    out = np.zeros(tet.shape[0])
+    for k, verts in enumerate(tet):
+        h = max(np.linalg.norm(nodes_xyz[verts[j]] - nodes_xyz[verts[i]])
+                for i, j in edges)
+        ld_min = min(LD_node[v] for v in verts)
+        out[k] = h / max(ld_min, 1e-300)
+    return out
+
+
+def indicator_debye_tet(mesh, C, eps_r=11.7, T=300.0):
+    """DEBYE indicator: `debye_ratio_tet`, peak-normalised -- 3D
+    analogue of adapt_unstructured.indicator_debye_tri, same rationale
+    (see that function's docstring)."""
+    ratio = debye_ratio_tet(mesh, C, eps_r, T)
+    peak = max(float(np.max(ratio)), 1e-300)
+    return ratio / peak
+
+
+def check_debye_adequacy_tet(mesh, C, eps_r=11.7, T=300.0, ratio_max=1.0):
+    """Non-blocking Debye-length mesh-adequacy check for a 3D
+    unstructured tet mesh -- 3D analogue of
+    adapt_unstructured.check_debye_adequacy_tri (same "aim for < ~1"
+    threshold convention as mesh.check_mesh/mesh3d.check_mesh3d,
+    same warnings.warn-not-raise policy, same opt-in wiring: nothing
+    calls this automatically unless "debye" is requested in
+    compute_indicator3d's `kinds`)."""
+    ratio = debye_ratio_tet(mesh, C, eps_r, T)
+    worst = float(ratio.max()) if ratio.size else 0.0
+    if worst > ratio_max:
+        n_bad = int(np.count_nonzero(ratio > ratio_max))
+        warnings.warn(
+            f"Debye-length mesh adequacy: {n_bad}/{ratio.size} tets have "
+            f"h/L_D > {ratio_max:g} (worst {worst:.2f}) -- the mesh "
+            f"under-resolves the local Debye length in a high-field/high-"
+            f"doping-gradient region; consider refining there (e.g. via "
+            f"the 'debye' indicator kind) before trusting fine physical "
+            f"detail from those cells")
+    return ratio
+
+
 INDICATOR_REGISTRY3D = {
     "curvature": lambda mesh, s: indicator_curvature_tet(mesh, s["psi"]),
     "log_density": lambda mesh, s: indicator_log_density_tet(mesh, s["n"], s["p"]),
@@ -218,6 +269,7 @@ INDICATOR_REGISTRY3D = {
     "current": lambda mesh, s: indicator_current_tet(mesh, s),
     "solver_residual": lambda mesh, s: indicator_solver_residual_tet(
         mesh, s["residual_node_history"]),
+    "debye": lambda mesh, s: indicator_debye_tet(mesh, s["C"]),
 }
 
 

@@ -21,7 +21,8 @@ from pytcad.adapt_unstructured3d import (
     indicator_curvature_tet, indicator_log_density_tet,
     indicator_field_tet, indicator_doping_tet, indicator_current_tet,
     indicator_solver_residual_tet, compute_indicator3d, default_indicator_unstructured3d,
-    adapt_solve_unstructured_3d,
+    adapt_solve_unstructured_3d, INDICATOR_REGISTRY3D,
+    debye_ratio_tet, indicator_debye_tet, check_debye_adequacy_tet,
 )
 from pytcad.adapt import mark_dorfler
 from pytcad.materials import SILICON
@@ -190,3 +191,109 @@ def test_adaptive_loop_3d_with_indicator_kinds_and_residual():
         indicator_kinds=("field", "doping", "solver_residual"))
     assert len(history) <= 2
     assert history[0]["n_newton_iter"] is not None
+
+
+# ----------------------------------------------------------------------
+#  Debye-length mesh-adequacy indicator/check (3D)
+# ----------------------------------------------------------------------
+class _FakeTetMesh:
+    """3D sibling of test_adapt_unstructured._FakeTriMesh -- exposes
+    exactly what debye_ratio_tet/indicator_debye_tet/
+    check_debye_adequacy_tet read (`.nodes`, `.tets`)."""
+    def __init__(self, nodes, tets):
+        self.nodes = np.asarray(nodes, dtype=float)
+        self.tets = np.asarray(tets, dtype=int)
+
+    def n_tets(self):
+        return self.tets.shape[0]
+
+
+def test_debye_check_warns_on_under_resolved_tet_mesh():
+    """One tet with a 1e-4 cm edge next to N=1e18 cm^-3 doping:
+    L_D(1e18) ~= 4.1e-7 cm, so h/L_D ~= 240 -- grossly under-resolved
+    by construction. Must warn (default ratio_max=1.0)."""
+    nodes = np.array([[0.0, 0.0, 0.0], [1.0e-4, 0.0, 0.0],
+                      [0.0, 1.0e-4, 0.0], [0.0, 0.0, 1.0e-4]])
+    tet = np.array([[0, 1, 2, 3]])
+    mesh = _FakeTetMesh(nodes, tet)
+    C = np.array([1e18, 1e18, 1e18, 1e18])
+    with pytest.warns(UserWarning, match="Debye"):
+        ratio = check_debye_adequacy_tet(mesh, C)
+    assert ratio[0] > 1.0
+    assert ratio[0] == pytest.approx(debye_ratio_tet(mesh, C)[0])
+
+
+def test_debye_check_silent_on_adequately_resolved_tet_mesh():
+    from pytcad.mesh import debye_length
+    LD = float(debye_length(1e18))
+    h = 0.05 * LD
+    nodes = np.array([[0.0, 0.0, 0.0], [h, 0.0, 0.0],
+                      [0.0, h, 0.0], [0.0, 0.0, h]])
+    tet = np.array([[0, 1, 2, 3]])
+    mesh = _FakeTetMesh(nodes, tet)
+    C = np.array([1e18, 1e18, 1e18, 1e18])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ratio = check_debye_adequacy_tet(mesh, C)
+    assert ratio[0] < 1.0
+
+
+def test_debye_indicator_registered_and_peak_normalised_3d():
+    assert "debye" in INDICATOR_REGISTRY3D
+    nodes = np.array([[0.0, 0.0, 0.0], [1.0e-4, 0.0, 0.0],
+                      [0.0, 1.0e-4, 0.0], [0.0, 0.0, 1.0e-4],
+                      [1.0e-4, 1.0e-4, 1.0e-4]])
+    tet = np.array([[0, 1, 2, 3], [1, 2, 3, 4]])
+    mesh = _FakeTetMesh(nodes, tet)
+    C = np.array([1e18, 1e15, 1e18, 1e15, 1e15])
+    eta = compute_indicator3d(mesh, {"C": C}, kinds=("debye",))
+    assert eta.shape == (2,)
+    assert np.isclose(eta.max(), 1.0)
+    assert np.allclose(eta, indicator_debye_tet(mesh, C))
+
+
+@pytest.mark.slow
+def test_debye_indicator_drives_actual_refinement_on_under_resolved_3d_diode():
+    """Same idea as the 2D sibling test: mesh sized for a coarser
+    Nd_scale than the actual +-1e17 doping regions, so the fixture is
+    genuinely under-resolved; the "debye" indicator must flag a real
+    minority of tets and driving one refinement pass with it must
+    reduce the worst h/L_D ratio."""
+    doping = {"p_region": -1e17, "n_region": 1e17}
+    mesh = build_diode_mesh3d(Nd_scale=1e15, **GEOM)
+    region_of_tet = np.empty(mesh.n_tets(), dtype=object)
+    for name, idx in mesh.volume_tags.items():
+        region_of_tet[idx] = name
+    C = evaluate_doping_at_nodes3d(mesh.nodes, mesh.tets, region_of_tet,
+                                   doping)
+    with pytest.warns(UserWarning, match="Debye"):
+        ratio0 = check_debye_adequacy_tet(mesh, C)
+    assert (ratio0 > 1.0).sum() > 0, "fixture is not actually under-resolved"
+    eta = compute_indicator3d(mesh, {"C": C}, kinds=("debye",))
+    marked = mark_dorfler(eta, theta=0.3)
+    assert 0 < marked.size < mesh.n_tets()
+
+    psi, n, p, scale, I, mesh2, history = adapt_solve_unstructured_3d(
+        doping_by_region=doping,
+        bias={"left_contact": 0.3, "right_contact": 0.0},
+        indicator_kinds=("debye",), max_passes=2, tol=1e-9, theta=0.3,
+        Nd_scale=1e15, **GEOM)
+    # A single gmsh remesh pass embeds extra resolution AT the marked
+    # centroids, not uniformly everywhere, and this fixture's small
+    # geometry means the GLOBAL worst h/L_D ratio can sit in an
+    # untouched far-bulk tet whose size is capped at the base mesh's
+    # own SizeMax regardless of one pass -- so this checks the claim
+    # this indicator actually makes (marking is real and drives the
+    # outer loop to add resolution), not a specific local-ratio number
+    # that a single small-scale gmsh remesh pass isn't guaranteed to
+    # deliver deterministically at this tiny node count.
+    # entry["marked"] records the PRIOR pass's marking (used to build
+    # THIS pass's mesh) -- same convention test_adaptive_loop_3d_
+    # terminates_and_refines already relies on -- so it only appears
+    # from history[1] onward.
+    assert len(history) > 1 and history[1]["marked"] > 0, (
+        "the debye indicator produced no marked tets on a fixture "
+        "already confirmed under-resolved")
+    assert history[-1]["nodes"] > history[0]["nodes"], (
+        "the debye indicator did not actually drive mesh refinement "
+        "(node count never grew)")

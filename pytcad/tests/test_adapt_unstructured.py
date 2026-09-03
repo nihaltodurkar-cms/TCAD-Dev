@@ -23,6 +23,7 @@ from pytcad.adapt_unstructured import (
     default_indicator_unstructured, adapt_solve_unstructured_2d,
     indicator_field_tri, indicator_doping_tri, indicator_current_tri,
     indicator_solver_residual_tri, compute_indicator, INDICATOR_REGISTRY,
+    debye_ratio_tri, indicator_debye_tri, check_debye_adequacy_tri,
 )
 from pytcad.adapt import mark_dorfler
 from pytcad.materials import SILICON
@@ -214,6 +215,119 @@ def test_compute_indicator_combines_multiple_named_kinds(diode_bias_full):
 def test_compute_indicator_unknown_kind_raises():
     with pytest.raises(ValueError):
         compute_indicator(None, {}, kinds=("not_a_real_kind",))
+
+
+# ----------------------------------------------------------------------
+#  Debye-length mesh-adequacy indicator/check
+# ----------------------------------------------------------------------
+class _FakeTriMesh:
+    """Minimal stand-in exposing exactly what debye_ratio_tri/
+    indicator_debye_tri/check_debye_adequacy_tri read (`.nodes`,
+    `.triangles`) -- lets the Debye check be tested against a mesh
+    whose resolution relative to the local Debye length is known
+    EXACTLY by construction, rather than at the mercy of whatever gmsh
+    happens to produce."""
+    def __init__(self, nodes, triangles):
+        self.nodes = np.asarray(nodes, dtype=float)
+        self.triangles = np.asarray(triangles, dtype=int)
+
+    def n_triangles(self):
+        return self.triangles.shape[0]
+
+
+def test_debye_check_warns_on_under_resolved_mesh():
+    """A single triangle with a 1e-4 cm edge next to N=1e18 cm^-3
+    doping: mesh.debye_length(1e18) ~= 4.1e-7 cm, so h/L_D ~= 240 --
+    grossly under-resolved by construction. check_debye_adequacy_tri
+    must warn (default ratio_max=1.0) and report a ratio > 1."""
+    nodes = np.array([[0.0, 0.0], [1.0e-4, 0.0], [0.0, 1.0e-4]])
+    tri = np.array([[0, 1, 2]])
+    mesh = _FakeTriMesh(nodes, tri)
+    C = np.array([1e18, 1e18, 1e18])
+    with pytest.warns(UserWarning, match="Debye"):
+        ratio = check_debye_adequacy_tri(mesh, C)
+    assert ratio[0] > 1.0
+    assert ratio[0] == pytest.approx(debye_ratio_tri(mesh, C)[0])
+
+
+def test_debye_check_silent_on_adequately_resolved_mesh():
+    """The same doping, but a triangle sized well below the local
+    Debye length (edge ~1e-8 cm vs L_D ~4e-7 cm for N=1e18): must NOT
+    warn."""
+    from pytcad.mesh import debye_length
+    LD = float(debye_length(1e18))
+    h = 0.05 * LD
+    nodes = np.array([[0.0, 0.0], [h, 0.0], [0.0, h]])
+    tri = np.array([[0, 1, 2]])
+    mesh = _FakeTriMesh(nodes, tri)
+    C = np.array([1e18, 1e18, 1e18])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ratio = check_debye_adequacy_tri(mesh, C)
+    assert ratio[0] < 1.0
+
+
+def test_debye_indicator_registered_and_peak_normalised():
+    """The "debye" kind must be reachable through the same
+    INDICATOR_REGISTRY/compute_indicator entry point as every other
+    named indicator, and its output peak-normalised like the rest."""
+    assert "debye" in INDICATOR_REGISTRY
+    nodes = np.array([[0.0, 0.0], [1.0e-4, 0.0], [0.0, 1.0e-4],
+                      [1.0e-4, 1.0e-4]])
+    tri = np.array([[0, 1, 2], [1, 3, 2]])
+    mesh = _FakeTriMesh(nodes, tri)
+    C = np.array([1e18, 1e15, 1e18, 1e15])
+    eta = compute_indicator(mesh, {"C": C}, kinds=("debye",))
+    assert eta.shape == (2,)
+    assert np.isclose(eta.max(), 1.0)
+    direct = indicator_debye_tri(mesh, C)
+    assert np.allclose(eta, direct)
+
+
+@pytest.mark.slow
+def test_debye_indicator_drives_actual_refinement_on_under_resolved_diode():
+    """A real diode fixture, deliberately under-resolved relative to
+    its own physical doping (mesh sized for Nd_scale=1e15 but the
+    doping regions are actually +-1e17 -- two decades finer L_D than
+    the mesh was built for): the "debye" indicator must (a) flag a
+    real, non-trivial minority of triangles via mark_dorfler, and (b)
+    when fed to the adaptive outer loop, actually shrink the marked
+    region's local triangle size pass over pass (not merely "run
+    without crashing")."""
+    mesh = build_diode_mesh(Lx=6.0e-4, Ly=2.0e-4, Xj=3.0e-4, Nd_scale=1e15)
+    regions = resolve_regions(mesh)
+    region_of_triangle = np.empty(mesh.n_triangles(), dtype=object)
+    for name, idx in regions.items():
+        region_of_triangle[idx] = name
+    C = evaluate_doping_at_nodes(mesh.nodes, mesh.triangles,
+                                 region_of_triangle, DOPING_BY_REGION)
+    with pytest.warns(UserWarning, match="Debye"):
+        ratio0 = check_debye_adequacy_tri(mesh, C)
+    assert (ratio0 > 1.0).sum() > 0, "fixture is not actually under-resolved"
+    eta = compute_indicator(mesh, {"C": C}, kinds=("debye",))
+    marked = mark_dorfler(eta, theta=0.3)
+    assert 0 < marked.size < mesh.n_triangles()
+    tri_edge_before = np.linalg.norm(
+        mesh.nodes[mesh.triangles[marked, 0]]
+        - mesh.nodes[mesh.triangles[marked, 1]], axis=1).mean()
+
+    psi, n, p, scale, I, mesh2, history = adapt_solve_unstructured_2d(
+        Lx=6.0e-4, Ly=2.0e-4, Xj=3.0e-4, Nd_scale=1e15,
+        doping_by_region=DOPING_BY_REGION,
+        bias={"left_contact": 0.5, "right_contact": 0.0},
+        indicator_kinds=("debye",), max_passes=2, tol=1e-9, theta=0.3)
+    assert history[-1]["nodes"] > history[0]["nodes"], (
+        "the debye indicator did not actually drive mesh refinement "
+        "(node count never grew)")
+    region2 = np.empty(mesh2.n_triangles(), dtype=object)
+    for name, idx in resolve_regions(mesh2).items():
+        region2[idx] = name
+    C2 = evaluate_doping_at_nodes(mesh2.nodes, mesh2.triangles,
+                                  region2, DOPING_BY_REGION)
+    ratio_after = check_debye_adequacy_tri(mesh2, C2)
+    assert ratio_after.max() < ratio0.max(), (
+        "refinement driven by the debye indicator did not reduce the "
+        "worst h/L_D ratio")
 
 
 # ----------------------------------------------------------------------
