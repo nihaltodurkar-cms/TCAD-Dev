@@ -3,9 +3,12 @@
 # Formal milestone spec
 
 Status: **COMPLETE, ALL GATES GREEN, 2026-08-31** (coupled-Newton
-reformulation -- section 7). `tests/test_m20_dg.py`: 20/20 pass
-(1 pre-existing, unrelated flaky test in the S-P reference solver's
-`eigsh` Lanczos nondeterminism excluded -- see section 7). The
+reformulation -- section 7). `tests/test_m20_dg.py`: 20/20 pass.
+**2026-09-04 UPDATE:** the S-P reference solver's `eigsh` Lanczos
+nondeterminism (section 7.6's own open item, flagged there as needing
+"a future session to switch to a deterministic eigensolver path") is
+FIXED -- `dg.schrodinger_poisson` no longer calls `eigsh` at all; see
+the note at the end of section 7.6. The
 previously-open G-C/G-D gates (`test_gc_dg_centroid_within_factor2_
 of_sp`, `test_gc_classical_centroid_is_the_sub_debye_tail`,
 `test_gd_dg_changes_the_physics_in_every_required_direction`) now pass
@@ -477,10 +480,29 @@ gates this section closes).
   consistent (coupled Newton, no more lagged pathology) and FD-
   Jacobian-verified independently.
 - `test_gc_sp_centroid_in_literature_band`'s pre-existing flakiness
-  (the S-P REFERENCE solver's own `eigsh` nondeterminism) was found,
-  not fixed -- out of scope for this DG-coupling work; a future
-  session should pin an explicit RNG seed or switch to a deterministic
-  eigensolver path in `dg.schrodinger_poisson` if this needs to stop
-  being flaky.
+  (the S-P REFERENCE solver's own `eigsh` nondeterminism) was found
+  but explicitly left NOT FIXED here, deferred to a future session.
 - DG remains EQUILIBRIUM-ONLY (`solve_bias(dg=True)` still refuses);
   full DG transport is unchanged, out of scope, same as before.
+
+**FIXED 2026-09-04** (a later session, discovered as an existing fix
+when a parallel development branch was merged in): root cause was
+DEEPER than an unseeded Lanczos start -- the assembled Hamiltonian on
+a non-uniform mesh was never actually Hermitian in the first place
+(dividing each row by its OWN control-volume width, per the naive
+finite-volume residual, makes `H[i,i+1] != H[i+1,i]`), so `eigsh`'s
+Lanczos iteration was iterating on a genuinely non-symmetric operator
+-- which off-diagonal array it happened to trust first varied run to
+run, and the two choices disagreed by up to 10x. Fixed by solving the
+SIMILARITY-TRANSFORMED problem `(D^-1 K D^-1) phi = E phi` (D =
+diag(sqrt(control-volume widths))), which is exactly tridiagonal,
+genuinely symmetric by construction, and has identical eigenvalues to
+the original problem -- then switching the solve itself from the
+iterative sparse `eigsh` to the DIRECT tridiagonal LAPACK routine
+`scipy.linalg.eigh_tridiagonal` (no iterative convergence or seed to
+worry about at all, now that the matrix is provably symmetric).
+Verified: bit-for-bit identical `centroid_cm`/`sheet` output across 10
+independent fresh-subprocess runs (not just "passes" -- the exact same
+float64 bytes every time), and `test_gc_sp_centroid_in_literature_band`
+30/30 passed in a repeated-run check. See `pytcad/dg.py`'s
+`schrodinger_poisson()` docstring for the full derivation.

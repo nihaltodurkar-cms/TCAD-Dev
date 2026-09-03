@@ -16,6 +16,14 @@ generalizes to arbitrary contact shapes with no per-shape logic -- see
 open: Newton convergence for this Robin BC can be non-monotonic for a
 DEEP MINORITY-carrier contact under reverse bias (majority-carrier
 convergence is clean); see that section for the full investigation.
+2026-09-04 FOLLOW-UP: re-investigated systematically; the original
+density-floor-masking explanation was disproven (residual is already
+tiny at the declared-converged point), along with two further
+hypotheses (cold-start trapping, recombination contamination) -- see
+"G-C, DEVICE2D, TAKE 2"'s follow-up paragraph. Root cause narrowed but
+STILL NOT FIXED (leading candidate: 2D-specific lateral current
+coupling with no 1D analog); still an open, now more precisely
+characterized, limitation.
 Owner: session handoff via history.md
 
 RESUMED-SESSION NOTE: the prior session crashed after writing
@@ -529,6 +537,50 @@ multi-edge corner, and fd=True combinations), majority-carrier
 monotonic convergence, and combination with bgn/auger/surface_mobility
 -- NOT a minority-carrier monotonic-convergence gate, which would be
 gating something not actually reliable yet.
+
+**FOLLOW-UP INVESTIGATION (2026-09-04): the mechanism above is
+INCOMPLETE.** A later session's systematic re-investigation reproduced
+the collapse (confirmed: `S_n=S_p` swept 1e-2..1e10 at a reverse-biased
+p-side contact, `n[left]` plateaus near 1e-19..1e-20 for S in
+[1e1, 1e5] before recovering to the correct ~1.14e-14 Dirichlet-limit
+value at S>=1e6) and tested the density-floor-masking explanation
+above directly by instrumenting the residual at the declared-converged
+point: `max(|F|)` is already ~1e-12 to 1e-17 there, i.e. genuinely
+tiny by any reasonable absolute standard -- NOT merely "small because
+the update-criterion floor stopped counting it." That rules out the
+convergence-CHECK being the proximate cause. Two further hypotheses
+were tested and also ruled out:
+  - Cold-start trapping (Newton's per-iteration 0.1x/10x multiplicative
+    clamp getting stuck traversing many decades from a fresh
+    equilibrium guess): warm-starting each S from the previous
+    (smaller) S's converged state produces the IDENTICAL collapse --
+    not a starting-point artifact.
+  - SRH/Auger recombination contamination (2D's box-residual-reuse
+    design pulls the full nodal G-R term into the Robin-BC row, unlike
+    1D's boundary treatment which is PURELY `Jn[edge] + S_n_s*(n-n0)`
+    with no recombination term at all -- see device.py's own boundary
+    block): running the identical sweep with `srh=False, auger=False`
+    reproduces the SAME collapse to within roundoff. Recombination is
+    not the differentiator either.
+The sharpest new evidence: re-solving the pathological case
+(S_n=S_p=1e3) with `tol_update` tightened from 1e-8 down to 1e-16 does
+NOT converge more precisely to a stable value -- `n[left]` keeps
+shrinking (1.07e-19 -> 1.07e-23 -> 1.07e-25 -> underflow and
+divergence). This is not Newton settling on a stable-but-wrong root;
+the computed Newton step for this one unknown behaves like noise, with
+apparently NO genuine nearby fixed point for intermediate S. The
+remaining, untested candidate: Device2D's box residual at this node
+also carries LATERAL (y-direction) current-divergence terms coupling
+to neighboring nodes along the contact face (visible directly in the
+assembled Jacobian row: an off-diagonal entry of magnitude ~79,
+compatible with a y-neighbor coupling) that 1D's two-fixed-endpoint
+boundary treatment structurally cannot have at all, since 1D has no
+lateral dimension. This was flagged, not confirmed -- pinning it down
+and designing a fix (if one exists that doesn't touch the M11-S5 floor
+globally) is real numerical-methods work, not a quick patch, and was
+deferred rather than attempted speculatively against gated physics
+code. Still an honest, investigated (now MORE precisely than before)
+limitation, not a fix.
 
 ### Files changed:
 - `pytcad/pytcad/device2d.py`: removed the S_n/S_p `NotImplementedError`

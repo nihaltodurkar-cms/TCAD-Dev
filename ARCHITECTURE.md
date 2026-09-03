@@ -693,10 +693,13 @@ M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
     the coupled-Newton assembly cannot drift from this formula),
     airy_triangular_well (closed-form Airy reference),
     schrodinger_poisson + schrodinger_poisson_mos (the self-consistent
-    published-value reference solver, eigsh + 2D-DOS Boltzmann
-    occupations -- eigsh is KNOWN NONDETERMINISTIC run-to-run on this
-    problem, pre-existing, not fixed this session; see
-    M20-DENSITY-GRADIENT-PLAN.md section 7.6).
+    published-value reference solver, 2D-DOS Boltzmann occupations --
+    FIXED 2026-09-04: the assembled Hamiltonian was never actually
+    Hermitian on a non-uniform mesh, which is why the old iterative
+    `eigsh` solve was nondeterministic run-to-run; a similarity-
+    transformed symmetric formulation plus a switch to the direct
+    `eigh_tridiagonal` LAPACK solve made it bit-for-bit reproducible --
+    see M20-DENSITY-GRADIENT-PLAN.md section 7.6).
   - MOSCapacitor(dg=False, dg_gamma=1.0): coupled-Newton
     _dg_residual_jacobian/_dg_newton_solve/_solve_psi_dg_coupled, hard-
     wall interface boundary; inversion_centroid(Vg) accessor; dg+fd
@@ -1327,9 +1330,14 @@ Independent candidates for the next milestone (any order):
    constants, blocked on a paywalled source, re-searched 2026-08-31
    with no new result) remains open. One honest limitation found in
    the 2D S_n/S_p work: Newton convergence for a deep minority-carrier
-   contact under reverse bias can be non-monotonic, traced to an
-   interaction with M11-S5's density-floor safeguard, not fixed this
-   pass. See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+   contact under reverse bias can be non-monotonic. RE-INVESTIGATED
+   2026-09-04: the originally-suspected cause (M11-S5's density-floor
+   safeguard masking the update criterion) was disproven by direct
+   instrumentation, along with two further hypotheses (cold-start
+   trapping, SRH/Auger recombination contamination) -- root cause
+   narrowed to a likely 2D-specific lateral current-coupling term with
+   no 1D analog, but still not fixed (real numerical-methods work, not
+   a quick patch). See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
 
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET

@@ -14,9 +14,11 @@ Three pure pieces, no solver imports:
 3. schrodinger_poisson(x, psi_band, ...):
    self-consistent 1D Schroedinger-Poisson inversion-layer solver (the
    milestone's required published-value gate): finite-difference
-   Hamiltonian on the (non-uniform) mesh, lowest eigenstates via
-   scipy eigsh, 2D-DOS Boltzmann subband occupations, outer Poisson
-   fixed point.
+   Hamiltonian on the (non-uniform) mesh, lowest eigenstates via a
+   direct tridiagonal LAPACK solve (scipy.linalg.eigh_tridiagonal --
+   NOT the iterative sparse eigsh; see schrodinger_poisson()'s own
+   docstring for why that switch was needed), 2D-DOS Boltzmann subband
+   occupations, outer Poisson fixed point.
 
 Provenance: Ancona & Stafford, IEEE Trans. Electron Devices 46, 1799
 (1999); Ancona, Superlattices & Microstructures 27, 457 (2000).  See
