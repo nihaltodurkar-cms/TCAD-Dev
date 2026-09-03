@@ -3064,3 +3064,19 @@ sweep-type error path, and both real-backend dispatch points
 through `errorRaised` rather than crashing or fabricating data.
 
 gui/tests: 624 passed (608 + 16 new), no regressions.
+
+### STATE ADDENDUM -- GATE-AXIS FIX VERIFIED ON mosfet_3d/moscap_3d TOO (2026-09-04)
+
+Section 12's finfet_3d fix generalizes correctly: built enlarged one-
+off variants of mosfet_3d (NZ 8->16, 29,784 nodes) and moscap_3d
+(NX/NZ 10->32, 27,225 nodes) -- neither shipped example crosses the
+20,000-node MPI gate at its normal size -- to exercise the fix end to
+end on other gated devices, not just the one it was found on. Both
+correctly pick z (their gate's normal_axis="y" is excluded; x fails
+mosfet_3d's own doping-variation test as always). Real CLI results:
+mosfet3d_large 22.4s MPI vs. 94.4s single-process (4.2x), exact to
+~1e-17; moscap3d_large 17.2s MPI vs. 31.9s single-process (1.9x),
+exact to ~1e-17/1e-15 -- both at the SAME machine-precision confidence
+finfet_3d's pre-fix result was 1.4e-3 away from. No code changed (test
+fixtures only, not shipped as EXAMPLES entries); gui/tests 624 passed,
+unchanged. Full record in M22-LINSOLVE-PLAN.md section 13.

@@ -718,3 +718,39 @@ logic specifically): a safety gate built from ONE physical mechanism
 mechanism that happens to correlate with the same axis (here, gate
 electrostatics) -- each new hazard needs its own explicit check, not
 an assumption that the existing one already covers it.
+
+------------------------------------------------------------------------
+13. GATE-AXIS FIX VERIFIED END TO END ON mosfet_3d/moscap_3d (2026-09-04)
+------------------------------------------------------------------------
+Section 12's fix was verified directly on finfet_3d, but mosfet_3d
+(15,768 nodes) and moscap_3d (3,025 nodes) both sit below the 20,000-
+node is_large_3d gate at their shipped example sizes, so the fix's
+effect on THEIR gate geometry (both have a normal_axis="y" top gate,
+same shape as finfet_3d's top gate but WITHOUT finfet_3d's additional
+z-normal side gates) was only checked via _pick_mpi_split_axis()
+directly, never run end to end.
+
+Built enlarged one-off variants (not shipped as new EXAMPLES entries --
+purely local test fixtures) by bumping the doping-uniform tiled/
+uniform axis each device already has: mosfet_3d's NZ 8->16 (29,784
+nodes, tiled-uniform along z, unchanged 2D channel cross-section) and
+moscap_3d's NX/NZ 10->32 (27,225 nodes, both fully doping-uniform
+already). Both now cross the MPI gate and both correctly pick z (the
+only candidate: y is excluded by the gate's own normal_axis, and for
+mosfet_3d x fails the doping-variation test on the source/drain/
+channel profile the same way it always did).
+
+MEASURED, real CLI end to end: mosfet3d_large MPI Schwarz 22.4s vs.
+94.4s single-process (AMG+GPU) reference (4.2x), exact to a relative
+L2 error of 2.2e-17 (potential) / 2.7e-17 (electrons) / 2.0e-17
+(holes). moscap3d_large MPI Schwarz 17.2s vs. 31.9s single-process
+reference (1.9x), exact to 5.8e-17 / 1.3e-15 / 4.0e-17. Both match the
+~1e-17 machine-precision confidence level of bjt_3d/pn_junction_3d's
+originally-verified paths, not finfet_3d's pre-fix 1.4e-3 divergence --
+confirming the section 12 fix generalizes correctly to OTHER gated
+devices, not just the one it was found on.
+
+gui/tests: 624 passed, unchanged (no code touched in this
+verification pass -- test fixtures only, not committed as new
+EXAMPLES entries since bumping shipped example sizes has its own
+interactive-runtime cost this pass did not need to pay).
