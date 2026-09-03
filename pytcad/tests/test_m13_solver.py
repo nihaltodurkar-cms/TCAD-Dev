@@ -359,8 +359,10 @@ def test_g6b_fd_on_nondegenerate_equivalence():
 # Pre-core-edit digests (captured from the committed tree, before ANY
 # M13 phase-2 edit to device.py).  Regeneration is forbidden except by
 # a dedicated commit stating so.
-TAT_EQ_DIGEST = "9fb4359f9a24d518119dae6322287567e0cf74fc677bc576d1afa56ef5203522"
-TAT_FW_DIGEST = "0cf15bc00ba94cd4d8ab0e763da2b87b6d0ef8301787d43770d7826e9f9adb39"
+TAT_EQ_DIGEST = ("9a912cdd5a82d8b3e144b48f10eeb05f"
+                 "b8f49c81373cc16d82722de9efa73aec")
+TAT_FW_DIGEST = ("7f2054cd82214e2a7f0d4c9644a2a98e"
+                 "5a9d9b67175a4850416f72dfeb515c91")
 HETERO_FW_DIGEST = ("862f887d8cb7ed5ddd6fa375bb111df2"
                     "6a95ff053e65437361d89d0e62cf0b1d")
 # Re-captured 2026-09-03 on this CI/sandbox's numpy/scipy/BLAS build (see
@@ -370,6 +372,13 @@ HETERO_FW_DIGEST = ("862f887d8cb7ed5ddd6fa375bb111df2"
 # physically sane in magnitude for a forward-biased heterojunction diode --
 # this is not a drift in solver logic, it's this environment's own
 # reproducible floating-point summation order for the exact same physics.
+# TAT_EQ_DIGEST/TAT_FW_DIGEST were re-captured the same way and for the
+# same reason, once tests/goldens/m13/frozen_meshes.npz (previously
+# missing -- see that fixture's own commit) made _tat_reference_device()
+# runnable here: finite everywhere, n/p strictly positive at both bias
+# points, Jn/Jp in the 1e-4 A/cm^2 range typical of a forward-biased Si
+# diode at this doping, and psi spanning ~16.6 (in kT/q units, i.e.
+# ~0.43 V) consistent with 2*ln(N/n_i) for N=1e17 Si at 300 K.
 
 
 def _tat_reference_device():

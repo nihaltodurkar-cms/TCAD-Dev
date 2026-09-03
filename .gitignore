@@ -27,4 +27,7 @@ env/
 # output, never checked in
 *.png
 *.npz
+# ...except checked-in golden test fixtures, which ARE source (frozen
+# meshes/results the M13/M22 bit-identity gates compare against).
+!pytcad/tests/goldens/**/*.npz
 

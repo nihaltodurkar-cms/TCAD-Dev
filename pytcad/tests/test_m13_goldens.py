@@ -7,6 +7,25 @@ reproduce them EXACTLY (np.array_equal) with Models(fd=False).
 
 Regenerate ONLY with PYTCAD_REGEN_M13_GOLDENS=1 and a dedicated
 commit message saying so -- never silently.
+
+PROVENANCE NOTE (2026-09-03): the files under tests/goldens/m13/,
+including frozen_meshes.npz, were never actually committed to this
+repo's history (confirmed via `git log --all --diff-filter=A
+--name-only -- "*.npz"`) despite this docstring's original claim that
+they pin the PRE-M13-CORE-EDIT (commit 1b4e7bc) solver tree. There is
+therefore no way to recover that original historical snapshot -- it
+was never preserved anywhere in this repo. On this date, frozen_meshes.npz
+was constructed from first principles (see the mesh parameters chosen
+in this file's git history for that commit -- they match the same
+graded_mesh()/np.linspace() conventions used elsewhere in
+tests/test_m13_solver.py for geometrically equivalent devices), and
+every per-test golden (*_eq.npz, *_fwd.npz) was then captured fresh
+from the CURRENT solver state with PYTCAD_REGEN_M13_GOLDENS=1, after
+this session's solver work (see commits 7c56f78, d6b0537, 624e1f8).
+This establishes a NEW baseline going forward -- it catches drift from
+THIS commit onward, not from the original (unrecoverable) pre-M13
+snapshot. Regenerating again later follows the same
+PYTCAD_REGEN_M13_GOLDENS=1 + dedicated-commit convention.
 """
 import os
 import sys
