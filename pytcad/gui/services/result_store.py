@@ -219,6 +219,18 @@ class ResultStore(ABC):
     def transient_result(self):
         raise KeyError("this store carries no executed transient run")
 
+    def has_band_diagram(self):
+        """True only when this store carries band-diagram arrays (Band
+        Diagram Viewer). 1D-only today -- Device2D/Device3D have no
+        band_diagram() method for solver_runner.extract_result() to
+        call (see its own comment), so every non-1D store, and any
+        older result file predating this field, honestly reports
+        False rather than fabricating data."""
+        return False
+
+    def band_diagram(self):
+        raise KeyError("this store carries no band-diagram data")
+
 
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
@@ -267,6 +279,24 @@ class NpzResultStore(ResultStore):
     def available_terminals(self):
         return sorted(k[len("terminal__"):-len("__value")] for k in self._d.files
                       if k.startswith("terminal__") and k.endswith("__value"))
+
+    def has_band_diagram(self):
+        if "band__available" not in self._d.files:
+            return False
+        return bool(self._d["band__available"])
+
+    def band_diagram(self):
+        """(x, Ec, Ev, EFn, EFp) [cm]/[eV], as stamped by
+        solver_runner.extract_result() from the live Device1D's own
+        band_diagram(). Raises KeyError if has_band_diagram() is
+        False -- callers must check first, same convention as
+        sweep_result()/transient_result() above."""
+        if not self.has_band_diagram():
+            raise KeyError(f"no band-diagram data in {self.path}")
+        d = int(self._d["dimensionality"])
+        x = self._d["axis_x"] if d == 1 else None
+        return (x, self._d["band__Ec"], self._d["band__Ev"],
+                self._d["band__EFn"], self._d["band__EFp"])
 
     def terminal_current(self, name):
         key = f"terminal__{name}__value"

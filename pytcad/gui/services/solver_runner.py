@@ -265,6 +265,27 @@ def extract_result(device, spec, solved_bias):
         out[f"field__{name}"] = np.asarray(arr, dtype=float)
         out[f"unit__{name}"] = np.array(unit)
 
+    # Band diagram (GUI Band Diagram Viewer): Device1D.band_diagram()
+    # returns (Ec, Ev, EFn, EFp) [eV], already heterojunction- and
+    # Fermi-Dirac-aware -- computed HERE, in the subprocess where the
+    # real solved Device1D object lives, and stamped into the .npz so
+    # the GUI process (which only ever sees a NpzResultStore, never a
+    # live Device object -- see job_runner.py's module docstring for
+    # why the solve runs out-of-process at all) can read it back
+    # without reimplementing the formula. Device2D/Device3D have no
+    # equivalent method yet (confirmed: grep turns up nothing), so
+    # band__available is False for d in (2, 3) and the GUI must show an
+    # honest "not available" state rather than fabricate one.
+    if d == 1 and hasattr(device, "band_diagram"):
+        Ec, Ev, EFn, EFp = device.band_diagram()
+        out["band__Ec"] = np.asarray(Ec, dtype=float)
+        out["band__Ev"] = np.asarray(Ev, dtype=float)
+        out["band__EFn"] = np.asarray(EFn, dtype=float)
+        out["band__EFp"] = np.asarray(EFp, dtype=float)
+        out["band__available"] = np.array(True)
+    else:
+        out["band__available"] = np.array(False)
+
     if solved_bias:
         # Total current density Jn + Jp, per axis, moved onto nodes.
         # 1D: .Jn/.Jp (no suffix).  2D: _x,_y.  3D: _x,_y,_z.
