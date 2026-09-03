@@ -607,6 +607,13 @@ ApplicationWindow {
                 font.pixelSize: Theme.fsSmall
             }
             Label {
+                objectName: "solverEngineLabel"
+                visible: appController.hasResult && text.length > 0
+                text: appController.solverEngineLabel
+                color: Theme.textFaint
+                font.pixelSize: Theme.fsTiny
+            }
+            Label {
                 text: Theme.dark ? "dark" : "light"
                 color: Theme.textFaint
                 font.pixelSize: Theme.fsTiny

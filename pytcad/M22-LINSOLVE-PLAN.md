@@ -658,3 +658,63 @@ No automated regression test exists for this path specifically (same
 as section 9C's single-bias-point path) -- verified the same way that
 one was, by direct comparison through the real CLI against a genuine
 single-process reference, not just inspection.
+
+------------------------------------------------------------------------
+12. A GENUINE CORRECTNESS BUG FOUND BY EXERCISING THE LATENT AXIS
+    CHOICES END TO END (2026-09-04)
+------------------------------------------------------------------------
+Section 10 noted finfet_3d/mosfet_3d/moscap_3d/jfet_3d all now produce
+a valid non-x split-axis choice but were never run end to end -- only
+checked via _pick_mpi_split_axis() directly. finfet_3d actually sits
+ABOVE the 20,000-node is_large_3d gate (38,976 nodes; the earlier
+section 10 note that it "sits below" the gate was WRONG -- corrected
+here), so it was ALREADY silently routing through MPI Schwarz in
+production, unverified, via a z-split.
+
+Ran it end to end through the real CLI: MPI Schwarz took 157s vs. a
+38.3s single-process (AMG+GPU) reference -- a REAL REGRESSION (4.1x
+SLOWER), not just unverified. Worse: the result was also WRONG, not
+merely slow -- 1.4e-3 relative L2 error on potential, 7.1e-4 on
+electron density, vs. the ~1e-17 machine-precision agreement bjt_3d/
+pn_junction_3d's verified MPI paths always show. This would have
+shipped a silently-wrong, silently-slower result for any FinFET-shaped
+device above the size gate.
+
+ROOT CAUSE, confirmed directly: finfet_3d's side gates have
+`normal_axis="z"` -- the exact axis _pick_mpi_split_axis() chose,
+because that axis genuinely passed the DOPING-uniformity test (the
+device really is doping-uniform along z). But a GateBC's Robin/oxide-
+coupling term runs along its own normal_axis regardless of doping --
+this is a field-curvature mechanism from geometric/electrostatic gate
+confinement, structurally different from a doping gradient, and the
+doping-only check has no way to see it. bjt_3d/pn_junction_3d have no
+gates at all, which is why their MPI paths were never exposed to this
+failure mode.
+
+FIX: _pick_mpi_split_axis(doping, spec) now also excludes any axis
+matching a registered GateBC's normal_axis, regardless of that axis's
+doping-variation score. Re-checked every 3D example after the fix:
+bjt_3d still picks x (no gates, unaffected, still 30.3s/exact match),
+pn_junction_3d still picks z (no gates, unaffected), finfet_3d now
+correctly returns (None, None) -- gate normal_axes {y, z} exclude two
+candidates outright and x fails the doping-variation test on its own,
+leaving no safe axis -- and falls back to the single-process AMG+GPU
+path: re-run end to end, 43.3s, EXACT match (0.0 max abs diff) against
+the single-process reference. mosfet_3d/moscap_3d (both have a y-axis
+gate) and jfet_3d (its "gate" is modeled as a plain ohmic contact, no
+GateBC, so unaffected by this fix) all re-checked directly via
+_pick_mpi_split_axis() too, though none currently cross the 20,000-
+node gate at their example sizes so this is not exercised end to end
+for them.
+
+Full regression check: gui/tests 608 passed (unchanged from before
+this fix) -- the fix only removes candidate axes, it adds no new code
+path any existing test could have exercised differently.
+
+Lesson generalized into this section's own record (not yet promoted to
+AGENTS.md, since this is still local to MPI Schwarz's axis-selection
+logic specifically): a safety gate built from ONE physical mechanism
+(here, doping gradients) does not automatically cover a DIFFERENT
+mechanism that happens to correlate with the same axis (here, gate
+electrostatics) -- each new hazard needs its own explicit check, not
+an assumption that the existing one already covers it.

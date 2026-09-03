@@ -687,7 +687,7 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
     return result
 
 
-def _pick_mpi_split_axis(doping):
+def _pick_mpi_split_axis(doping, spec):
     """Return (axis_name, array_axis) for the safest axis to Schwarz-
     split a 3D job along, or (None, None) if none qualifies.
 
@@ -702,23 +702,41 @@ def _pick_mpi_split_axis(doping):
     those devices take the MPI path along z instead of being refused
     outright the way an x-only check would.
 
+    A SECOND, DISTINCT hazard the doping check alone does NOT catch,
+    confirmed directly (not assumed) on finfet_3d: a GateBC's Robin/
+    oxide-coupling term runs along its own `normal_axis` regardless of
+    whether doping varies there at all -- finfet_3d's side gates have
+    normal_axis="z", which passed the doping-uniformity test (the
+    device IS doping-uniform along z) but produced a 1.4e-3 relative
+    field error against the single-process reference when split along
+    z anyway (vs. ~1e-17 for bjt_3d/pn_junction_3d's gate-free
+    geometries) -- a genuine field-curvature mechanism from geometric/
+    electrostatic confinement, not a doping gradient, that a doping-
+    only check has no way to see. So any axis matching a registered
+    gate's normal_axis is excluded as a candidate outright, regardless
+    of its doping-variation score.
+
     `doping` is (Nz, Ny, Nx) -- array axis 2 is x, 1 is y, 0 is z.
     Candidates need at least 2 nodes per rank to split at all; among
-    the axes that pass the <=1%-of-range variation test, the one with
-    the most nodes is chosen (best parallelization headroom).
+    the axes that pass both the <=1%-of-range variation test and the
+    gate-normal-axis exclusion, the one with the most nodes is chosen
+    (best parallelization headroom).
     """
+    gate_axes = {c.normal_axis for c in spec.contacts if c.kind == "gate"}
     total_range = float(np.abs(doping).max())
-    if total_range <= 0:
-        return "x", 2      # perfectly uniform: any axis is safe, x is
-                           # the most-tested path
+    if total_range <= 0 and not gate_axes:
+        return "x", 2      # perfectly uniform, no gates at all: any
+                           # axis is safe, x is the most-tested path
     candidates = []
     for axis_name, array_axis in (("x", 2), ("y", 1), ("z", 0)):
+        if axis_name in gate_axes:
+            continue
         n = doping.shape[array_axis]
         if n < 2 * MPI_SCHWARZ_RANKS:
             continue
         variation = float(np.max(doping.max(axis=array_axis)
                                  - doping.min(axis=array_axis)))
-        if variation < 0.01 * total_range:
+        if total_range <= 0 or variation < 0.01 * total_range:
             candidates.append((n, axis_name, array_axis))
     if not candidates:
         return None, None
@@ -910,7 +928,7 @@ def run_job(job_path, out_path, capture_trace=True):
     # take the MPI path split along z instead of being refused
     # outright -- see _pick_mpi_split_axis()'s own docstring.
     split_axis, split_array_axis = ((None, None) if not is_large_3d else
-                                    _pick_mpi_split_axis(doping))
+                                    _pick_mpi_split_axis(doping, spec))
     use_mpi_schwarz = (is_large_3d and _HAVE_MPI and split_axis is not None
                        and spec.transient is None)
 

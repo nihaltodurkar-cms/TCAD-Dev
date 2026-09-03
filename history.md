@@ -3014,3 +3014,33 @@ noise-floor numbers for an unbiased base junction, not a correctness
 signal -- relative error is meaningless when the true value is ~0. At
 V=0.2 the values agree to 1.4e-5 relative error. See
 M22-LINSOLVE-PLAN.md section 11 for the full record.
+
+### STATE ADDENDUM -- REAL MPI-SCHWARZ CORRECTNESS BUG FOUND AND FIXED (2026-09-04)
+
+Phase 1b (exercise the axis choices section 10 left unverified) found
+a genuine bug, not just a gap: finfet_3d (38,976 nodes, ABOVE the
+20,000-node MPI gate -- section 10's note that it sat below the gate
+was wrong) was silently routing through MPI Schwarz via a z-split in
+production. Run end to end: 157s vs. a 38.3s single-process (AMG+GPU)
+reference (4.1x SLOWER), AND wrong -- 1.4e-3 relative L2 error on
+potential vs. the ~1e-17 machine-precision agreement bjt_3d/
+pn_junction_3d's verified paths show. Root cause: finfet_3d's side
+gates have `normal_axis="z"`, the exact axis the doping-only safety
+check picked as safe -- a GateBC's oxide-coupling term runs along its
+own normal_axis regardless of doping uniformity, a hazard the doping
+check has no way to see. Fixed by excluding any axis matching a
+registered gate's normal_axis in `_pick_mpi_split_axis()`, independent
+of its doping score. Re-verified: bjt_3d/pn_junction_3d unaffected
+(no gates), finfet_3d now correctly falls back to the single-process
+path (43.3s, EXACT match, 0.0 diff). gui/tests: 608 passed, unchanged.
+Full record in M22-LINSOLVE-PLAN.md section 12; generalized into an
+AGENTS.md gotcha about one safety check not covering a different
+hazard mechanism.
+
+Also landed (Phase 1c): a `solverEngineLabel` property on
+AppController, read from `record__meta.numerics` (already stamped by
+run_job()), surfacing which engine actually produced the current
+result -- "Direct" / "GPU direct" / "AMG (bicgstab)" / "MPI Schwarz
+(x-split, 4 ranks)" -- in a small status-bar label next to the
+existing "results loaded" indicator in Main.qml. Previously this
+choice was completely invisible to the user.

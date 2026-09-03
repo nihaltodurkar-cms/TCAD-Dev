@@ -1411,11 +1411,23 @@ recorded here so they are tracked rather than silently absent):
   to ~1e-17).  EXTENDED to voltage sweeps (M22-LINSOLVE-PLAN.md section
   11, 2026-09-04): a 3-point bjt_3d sweep ran 2.7x faster via MPI
   Schwarz than single-process, with sweep-playback snapshot fields
-  agreeing to machine precision across every point.  Both GPU and MPI
-  are size-and-hardware-gated opt-in paths -- a machine without a GPU
-  or without mpi4py/mpirun sees identical behavior to before, just
-  without the speedup.  SYCL has no native Python path (oneAPI dpnp is
-  the nearest binding) and was not pursued for that reason.
+  agreeing to machine precision across every point.  A REAL
+  CORRECTNESS BUG was found and fixed the same day exercising the
+  latent axis choices end to end (M22-LINSOLVE-PLAN.md section 12):
+  finfet_3d's doping-uniform z-axis also carries a GateBC's oxide-
+  coupling term (normal_axis="z"), a field-curvature hazard the
+  doping-only safety check couldn't see -- it silently produced a
+  wrong (1.4e-3 relative error) AND slower (4.1x) result before the
+  fix excluded any axis matching a registered gate's normal_axis.
+  Re-verified exact/unaffected on bjt_3d and pn_junction_3d, and
+  finfet_3d now correctly falls back to its single-process path.  Both
+  GPU and MPI are size-and-hardware-gated opt-in paths -- a machine
+  without a GPU or without mpi4py/mpirun sees identical behavior to
+  before, just without the speedup.  SYCL has no native Python path
+  (oneAPI dpnp is the nearest binding) and was not pursued for that
+  reason.  Which engine actually ran is now surfaced to the user via
+  AppController.solverEngineLabel (Main.qml status bar), rather than
+  being a silent internal choice.
 - Cross-backend GUI comparison. workbench/solvers/{base,devsim_backend}.py
   implement the SolverBackend protocol and a working DEVSIM backend, but
   the GUI does not expose backend selection or a side-by-side compare

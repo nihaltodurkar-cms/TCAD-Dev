@@ -261,6 +261,24 @@ precedent).
   hex-string ones), verify physical sanity (finite, correct sign/
   magnitude/positivity) before trusting the new value, never copy
   golden bytes or digest strings between machines/sandboxes.
+- a safety gate built from ONE physical hazard does not automatically
+  cover a DIFFERENT hazard that happens to correlate with the same
+  axis/parameter. Confirmed directly 2026-09-04: gui/services/
+  solver_runner.py's MPI-Schwarz split-axis picker checked only
+  doping-gradient safety, which correctly judged finfet_3d's z-axis
+  doping-uniform -- but a GateBC's Robin/oxide-coupling term runs
+  along its own `normal_axis` (z, for finfet_3d's side gates)
+  regardless of doping, a geometric/electrostatic confinement
+  mechanism the doping check has no way to see. Result: a silently
+  WRONG (1.4e-3 relative field error, vs. ~1e-17 for the gate-free
+  devices the path was validated on) AND SLOWER (4.1x) production
+  result for any gated 3D device above the size gate, caught only by
+  actually exercising a "should be safe by the existing check" case
+  end to end rather than trusting the check's own reasoning. Fix was a
+  SECOND, independent exclusion (any axis matching a registered gate's
+  normal_axis), not a tweak to the first. When adding a safety/gating
+  heuristic, ask what OTHER mechanisms could break the same invariant
+  before trusting one check to cover the whole risk.
 
 **Physics/model conventions (empirically established)**
 - Device3D's ENTIRE dimensionless scaling (Ns, LD, J0, and even the

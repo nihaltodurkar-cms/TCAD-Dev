@@ -258,6 +258,32 @@ class AppController(QObject):
         except Exception:
             return None
 
+    @Property(str, notify=resultChanged)
+    def solverEngineLabel(self):
+        """Human-readable summary of which numerical engine actually
+        produced the CURRENT result -- plain direct solve, AMG/GPU-
+        accelerated, or MPI Schwarz domain decomposition -- so a
+        multi-second speedup from an opt-in backend (pyamg/cupy/
+        mpi4py, see M22-LINSOLVE-PLAN.md sections 9-11) is visible to
+        the user instead of being a silent internal choice. Read
+        directly from record__meta.numerics (stamped by
+        gui/services/solver_runner.py's run_job()), never re-derived
+        or guessed -- empty string when there is no result or no
+        provenance record (pre-v2 result files)."""
+        store = self._store
+        if store is None or not store.has_record():
+            return ""
+        record = store.run_record()
+        if record is None:
+            return ""
+        numerics = record.numerics or {}
+        if numerics.get("engine") == "mpi_schwarz":
+            axis = numerics.get("mpi_split_axis", "?")
+            return f"MPI Schwarz ({axis}-split, 4 ranks)"
+        labels = {"direct": "Direct", "gpu_direct": "GPU direct",
+                 "bicgstab": "AMG (bicgstab)", "gmres": "AMG (gmres)"}
+        return labels.get(numerics.get("linsolve", "direct"), "")
+
     @Slot()
     def openViewer3d(self):
         """3D-VISUALIZATION-PLAN.md Phase 1/2: open the PyVista/VTK 3D
