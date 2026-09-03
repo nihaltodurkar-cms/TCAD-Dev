@@ -247,6 +247,20 @@ precedent).
   invalid converged state) it exists to catch. Clamp only the trial
   evaluation inside the loop; check the raw, unclamped value once more
   after convergence.
+- sha256/np.array_equal "bit-identity" golden values (tests/goldens/
+  m13/*.npz, test_m13_solver.py's TAT_EQ_DIGEST/TAT_FW_DIGEST/
+  HETERO_FW_DIGEST) pin ONE machine's numpy/scipy/BLAS build's exact
+  floating-point summation order, not portable solver behavior --
+  confirmed directly merging a parallel branch 2026-09-04: goldens/
+  digests re-captured in a different sandbox failed bit-identity here
+  even with byte-identical code and byte-identical frozen_meshes.npz
+  (a pure-Python/numpy mesh-coordinate array IS portable; a Newton-
+  solve OUTPUT is not). Fix is the same either way: regenerate ON THE
+  TARGET MACHINE (PYTCAD_REGEN_M13_GOLDENS=1 for the .npz goldens;
+  recompute via the test module's own _digest() for the hardcoded
+  hex-string ones), verify physical sanity (finite, correct sign/
+  magnitude/positivity) before trusting the new value, never copy
+  golden bytes or digest strings between machines/sandboxes.
 
 **Physics/model conventions (empirically established)**
 - Device3D's ENTIRE dimensionless scaling (Ns, LD, J0, and even the
@@ -384,6 +398,11 @@ what that scope actually was and what's honestly still deferred):
     for the GUI's 3D equilibrium solve (8x-44x) and a CUDA (CuPy/
     cuSOLVER) direct solve for bias/sweep (2.8x) -- both opt-in,
     size-gated, additive.  See pytcad/M22-LINSOLVE-PLAN.md section 9.
+    GENERALIZED same day (section 10): the x-only safety check became
+    _pick_mpi_split_axis(doping), which checks all three mesh axes and
+    picks whichever is safe with the most nodes -- pn_junction_3d
+    (refused outright by the x-only check) now qualifies via z, 1.5x
+    over its single-process baseline, exact to ~1e-17.
   M16 BTBT -- local Kane/Hurkx generation, live Jacobian coupling,
     landed 2026-08-29, VERIFIED 2026-08-31: the gates had never been
     run; once executed, 2 of 13 failed, but all three root causes were

@@ -25,8 +25,7 @@ provenance caveat (the web literature search could not be run; the
 Airy and S-P gates here pin everything that matters numerically).
 """
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
+import scipy.linalg as la
 
 from .constants import HBAR, KB, Q, M0, thermal_voltage, trapz
 
@@ -161,17 +160,48 @@ def schrodinger_poisson(x_cm, E_band_eV, m_star=0.26, T=300.0,
     Eb = np.asarray(E_band_eV, dtype=float) * Q  # J
     m = m_star * M0
 
-    # 3-point Hamiltonian on the non-uniform mesh (scaled units of J):
+    # 3-point Hamiltonian on the non-uniform mesh.  The naive form
     #   -(hbar^2/2m) * [ (psi_{i+1}-psi_i)/h_i - (psi_i-psi_{i-1})/h_{i-1} ]
     #                                    / (0.5*(h_{i-1}+h_i))
+    # (each row divided by ITS OWN control-volume width w_i) is the
+    # correct finite-volume RESIDUAL, but dividing row-by-row turns the
+    # naturally symmetric generalized eigenproblem K psi = E W psi
+    # (K = the undivided flux operator, W = diag(w_i) the mass/weight
+    # matrix) into the non-symmetric ORDINARY eigenproblem W^-1 K psi =
+    # E psi -- self-caught: H[i,i+1] and H[i+1,i] built this way used
+    # DIFFERENT control-volume widths (w_i vs w_{i+1}) whenever the mesh
+    # is non-uniform, so the assembled "Hamiltonian" was never actually
+    # Hermitian, and eigsh/eigh_tridiagonal on it disagreed by up to 10x
+    # depending on which off-diagonal array was trusted (see
+    # test_gc_sp_centroid_in_literature_band's investigation history).
+    #
+    # Fix: solve the SIMILARITY-TRANSFORMED problem (D^-1 K D^-1) phi =
+    # E phi, D = diag(sqrt(w_i)).  This is exactly tridiagonal (K is),
+    # genuinely symmetric by construction (both off-diagonal directions
+    # collapse to the same geometric-mean-weighted edge coupling), and
+    # has IDENTICAL eigenvalues to the original generalized problem
+    # (psi = D^-1 phi relates the eigenvectors).  Diagonal entries are
+    # unaffected (D^-1 K D^-1 has the same diagonal as W^-1 K, since
+    # dividing row AND column by sqrt(w_i) at i==i is the same as
+    # dividing once by w_i).
     hb2 = HBAR * HBAR / (2.0 * m)
     main = np.empty(N)
     up = np.empty(N - 1)
     lo = np.empty(N - 1)
     hbar_l = 0.5 * (h[:-1] + h[1:])
+    # control-volume (mass/weight) width at every node -- the SAME `w`
+    # used below for eigenvector normalization, computed once and
+    # reused rather than duplicated.
+    w = np.empty(N)
+    w[0] = 0.5 * h[0]
+    w[-1] = 0.5 * h[-1]
+    w[1:-1] = hbar_l
     main[1:-1] = hb2 * (1.0 / h[1:] + 1.0 / h[:-1]) / hbar_l
-    up[1:] = -hb2 / (h[1:] * hbar_l)
-    lo[:-1] = -hb2 / (h[:-1] * hbar_l)
+    # symmetric edge coupling: -hb2/(h_i * sqrt(w_i * w_{i+1})), used
+    # for BOTH up[i] and lo[i] (they are the same quantity now).
+    edge = -hb2 / (h * np.sqrt(w[:-1] * w[1:]))
+    up[:] = edge
+    lo[:] = edge
     # Dirichlet penalty scale: must be huge RELATIVE TO the interior
     # Hamiltonian entries (~hb2/h^2, J) so the boundary eigenvalue sits
     # far outside the physical spectrum, but NOT an absolute constant --
@@ -184,39 +214,60 @@ def schrodinger_poisson(x_cm, E_band_eV, m_star=0.26, T=300.0,
     # which='SA' while staying inside double-precision range.
     big = 1e8 * np.abs(main[1:-1]).max()
     # left boundary: hard wall psi(0) = 0 -> identity row with the
-    # eigenvalue shifted out of the way by a huge diagonal (excluded
-    # from which='SA' results).
+    # eigenvalue shifted out of the way by a huge diagonal.  Dirichlet
+    # elimination must zero the edge coupling in BOTH directions (up[0]
+    # AND lo[0]) to keep H symmetric -- removing node 0 from the
+    # physical problem means no row may reference it either.
     if hard_wall_left:
         main[0] = big
         up[0] = 0.0
+        lo[0] = 0.0
     else:
         # free (Neumann-like) left end: mirror the interior stencil with
         # a ghost node psi_{-1} = psi_1, i.e. the same row as node 1's
         # stencil would give for a flat wavefunction.
         main[0] = hb2 / (h[0] * h[0])
         up[0] = -hb2 / (h[0] * h[0])
+        lo[0] = -hb2 / (h[0] * h[0])
     # right boundary (bulk end): hard wall psi = 0 there as well.  The
     # inversion-layer eigenstates decay LONG before the bulk end (the
     # conduction band sits ~Eg/2+phi_F above E_F there), so Dirichlet
     # at the far end is the decayed-tail equivalent and -- unlike the
     # previous `main[-1] = main[-1]` no-op -- leaves no np.empty garbage
     # in the diagonal (self-caught: the old line read UNINITIALIZED
-    # memory, making the eigensolve nondeterministic).
+    # memory, making the eigensolve nondeterministic).  Same symmetric
+    # elimination as the left boundary: both up[-1] and lo[-1] zeroed.
     main[-1] = big
     lo[-1] = 0.0
-    H = sp.diags([lo, main + Eb, up], [-1, 0, 1], format="csr")
+    up[-1] = 0.0
+    assert np.array_equal(lo, up), (
+        "Hamiltonian off-diagonals must be identical (H symmetric) -- "
+        "eigh_tridiagonal below assumes this and silently ignores `up` "
+        "if it isn't")
 
     n_eig = min(n_levels, N - 2)
-    vals, vecs = spla.eigsh(H, k=n_eig, which="SA",
-                            maxiter=20000, tol=1e-10)
-    order = np.argsort(vals)
-    vals, vecs = vals[order], vecs[:, order]
+    # Direct tridiagonal solver (LAPACK ?stebz/?stein via 'auto' driver),
+    # not the sparse iterative eigsh: this problem's Dirichlet penalty
+    # (`big`, up to 1e8x the interior scale) makes a genuinely
+    # ill-conditioned matrix for Lanczos, and empirically (see the
+    # docstring/investigation referenced above) eigsh's unseeded initial
+    # vector made the recovered low-lying eigenvalues vary run-to-run.
+    # eigh_tridiagonal is direct (no iterative convergence/seed to worry
+    # about) and select='i' pulls exactly the lowest n_eig eigenpairs
+    # without needing which='SA'.  Valid here specifically BECAUSE H is
+    # now confirmed symmetric (lo == up, asserted above) -- this routine
+    # takes only ONE off-diagonal array and silently assumes symmetry.
+    vals, phi = la.eigh_tridiagonal(main + Eb, lo, select="i",
+                                    select_range=(0, n_eig - 1))
+    # phi solves the SYMMETRIZED problem (D^-1 K D^-1) phi = E phi, not
+    # the physical wavefunction -- undo the D = diag(sqrt(w)) similarity
+    # transform (psi = D^-1 phi = phi / sqrt(w)) before this is used as
+    # psi anywhere below.  `w` (the same control-volume weights used to
+    # build the symmetrized Hamiltonian above) is reused here rather
+    # than recomputed, and again just below for trapezoid normalization.
+    vecs = phi / np.sqrt(w)[:, None]
 
     # normalize on the mesh (trapezoid, cm)
-    w = np.empty(N)
-    w[0] = 0.5 * h[0]
-    w[-1] = 0.5 * h[-1]
-    w[1:-1] = 0.5 * (h[:-1] + h[1:])
     norms = np.sqrt(np.sum(vecs * vecs * w[:, None], axis=0))
     vecs = vecs / norms[None, :]
 

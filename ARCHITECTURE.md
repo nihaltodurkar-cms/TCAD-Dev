@@ -985,7 +985,13 @@ for what has actually landed)
   M18 small-signal AC                            PHASE 1 (1D) LANDED
                                                   2026-08-31; see
                                                   pytcad/M18-AC-PLAN.md;
-                                                  2D/GUI not started
+                                                  PHASE 2 (multi-terminal
+                                                  Y-parameter extraction +
+                                                  fT) merged in from a
+                                                  parallel branch
+                                                  2026-09-04, additive to
+                                                  ac_sweep(); 2D/GUI not
+                                                  started
   M19 self-heating                               PHASE 1 (1D
                                                   steady-state) LANDED
                                                   2026-08-31; see
@@ -999,14 +1005,37 @@ for what has actually landed)
                                                   reformulation, see
                                                   M20-DENSITY-
                                                   GRADIENT-PLAN.md
-                                                  section 7
+                                                  section 7. A real
+                                                  correctness bug found
+                                                  and fixed in a parallel
+                                                  branch (merged in
+                                                  2026-09-04): the
+                                                  discretized Hamiltonian
+                                                  was not actually
+                                                  Hermitian on a non-
+                                                  uniform mesh (row/
+                                                  column control-volume
+                                                  widths differed) --
+                                                  fixed via a similarity-
+                                                  transformed symmetric
+                                                  formulation, same
+                                                  eigenvalues
   M21 general 2D meshing + FV assembly           PHASES 1-2 (1D/2D/3D
                                                   adaptive h-refinement)
                                                   SHIPPED; PHASE 3
                                                   (3a-3d) COMPLETE
                                                   2026-08-31, see
                                                   M21-PHASE3-MESHING-
-                                                  PLAN.md
+                                                  PLAN.md. Phase 3d's
+                                                  unstructured DD wrapper
+                                                  extended to 3D (new
+                                                  gmsh_mesh3d.py,
+                                                  adapt_unstructured3d.py,
+                                                  unstructured_assembly3d.py,
+                                                  unstructured_dd3d.py) in
+                                                  a parallel branch,
+                                                  merged in 2026-09-04
+                                                  (27 tests passing)
   M22 linear solver + continuation               PHASE 1 (Krylov+ILU+
                                                   block-Jacobi) SHIPPED,
                                                   3D-scaling gate GREEN;
@@ -1050,7 +1079,23 @@ for what has actually landed)
                                                   Jacobian) -- see
                                                   M22-LINSOLVE-PLAN.md
                                                   section 9 for the
-                                                  full record
+                                                  full record.
+                                                  GENERALIZED same day
+                                                  (section 10) from an
+                                                  x-only split to
+                                                  picking whichever
+                                                  axis (x/y/z) is
+                                                  actually safe per
+                                                  device -- this is
+                                                  what brought
+                                                  pn_junction_3d
+                                                  (refused outright by
+                                                  the x-only check)
+                                                  onto the MPI path via
+                                                  a z-split, 1.5x over
+                                                  its single-process
+                                                  AMG+GPU baseline,
+                                                  exact to ~1e-17
   M23 2D process geometry engine                 not started
   M24 pair diffusion/segregation/clustering      not started
   M25 Monte-Carlo implantation (BCA)             not started
@@ -1358,11 +1403,16 @@ recorded here so they are tracked rather than silently absent):
   distributed-matrix design this bullet originally anticipated -- see
   M22-LINSOLVE-PLAN.md section 9), 5.1x on bjt_3d, gated off for any
   device whose doping varies along the split axis after that
-  regression was found and reproduced directly (pn_junction_3d).  Both
-  are size-and-hardware-gated opt-in paths -- a machine without a GPU
-  or without mpi4py/mpirun sees identical behavior to before, just
-  without the speedup.  SYCL has no native Python path (oneAPI dpnp is
-  the nearest binding) and was not pursued for that reason.
+  regression was found and reproduced directly (pn_junction_3d).
+  GENERALIZED same day (section 10) to pick whichever mesh axis
+  (x/y/z) a device is actually safe to split along, instead of an
+  x-only check: pn_junction_3d, refused outright before, now qualifies
+  via a z-split (1.5x over its single-process AMG+GPU baseline, exact
+  to ~1e-17).  Both GPU and MPI are size-and-hardware-gated opt-in
+  paths -- a machine without a GPU or without mpi4py/mpirun sees
+  identical behavior to before, just without the speedup.  SYCL has no
+  native Python path (oneAPI dpnp is the nearest binding) and was not
+  pursued for that reason.
 - Cross-backend GUI comparison. workbench/solvers/{base,devsim_backend}.py
   implement the SolverBackend protocol and a working DEVSIM backend, but
   the GUI does not expose backend selection or a side-by-side compare

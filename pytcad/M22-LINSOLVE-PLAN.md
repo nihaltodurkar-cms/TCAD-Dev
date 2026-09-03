@@ -20,7 +20,11 @@ including a real regression found and gated against before it shipped)
 -- plus, in the same session, two GPU/CPU preconditioner wins for the
 GUI's own 3D solve path that section 9 also covers: pyamg-backed AMG
 for the equilibrium Poisson solve, and a CUDA (CuPy/cuSOLVER) direct
-solve for the bias/sweep Newton loop.
+solve for the bias/sweep Newton loop. **GENERALIZED 2026-09-02** (same
+day, section 10) from an x-only split to picking whichever mesh axis
+(x/y/z) a device's doping is actually safe to split along -- this is
+what brought pn_junction_3d (previously refused outright) onto the
+MPI path via a z-split, 1.5x over its single-process AMG+GPU baseline.
 
 Roadmap slot: ARCHITECTURE.md section 4b.2, "M22 LINEAR SOLVER
 MODERNIZATION + CONTINUATION [L]".
@@ -548,3 +552,63 @@ C. PHASE 3 ITSELF: MPI Schwarz domain decomposition
    after the fix (none passed silently-wrong before it -- the bug
    crashed every affected job outright, which is why it surfaced
    immediately rather than needing separate scrutiny).
+
+------------------------------------------------------------------------
+10. PHASE 3 GENERALIZED PAST X-ONLY: PICK THE SAFE AXIS (2026-09-02)
+------------------------------------------------------------------------
+Section 9C's safety check refused the WHOLE MPI path for any device
+whose doping varies along x -- correct as a safety gate, but it meant
+mosfet_3d/finfet_3d (S/D/gate localized along x) and, worse,
+pn_junction_3d (the junction itself sits on x) got NO speedup at all,
+even though several of these devices are perfectly uniform along a
+DIFFERENT axis (device width, typically z or y). Generalized rather
+than hard-coded to x:
+
+- solver_runner.py's new _pick_mpi_split_axis(doping) checks all
+  three array axes (x=2, y=1, z=0) with the SAME <=1%-of-range
+  variation test section 9C already validated, and a minimum-node-
+  count floor (2 per rank) so a degenerate axis can't be picked just
+  because it happens to be flat. Among the axes that pass, picks the
+  one with the most nodes (best parallelization headroom). Returns
+  (None, None) -- same as before -- when no axis is safe.
+- The chosen axis name is threaded through as a THIRD CLI arg to
+  mpi_schwarz_runner.py (`... job.json out.npz <axis>`), rather than
+  re-derived per rank: every rank must agree on the same choice, and
+  _pick_mpi_split_axis's node-count tie-break must run exactly once.
+- mpi_schwarz_runner.py's split/exchange/reassembly logic (previously
+  hard-coded to array axis 2 / contact key "i") is now parameterized
+  on (array_axis, key): _split_x -> _split_axis_range, _face_nodes and
+  the psi/n/p exchange use a generic _take(arr, axis, index) helper,
+  and _build_local_device slices whichever mesh axis (x/y/z) and
+  ContactSpec node key (i/j/k) the chosen split axis corresponds to.
+  record__meta.numerics now also carries "mpi_split_axis".
+
+MEASURED, both regression and new-capability checks, through the real
+CLI (`python -m gui.services.solver_runner job.json out.npz`), not a
+standalone script:
+
+- bjt_3d (still picks x, same as section 9C): unchanged, 32.5s,
+  identical result -- confirms the generalization is a no-op for the
+  one case already shipped.
+- pn_junction_3d: _pick_mpi_split_axis now finds z safe (the junction
+  varies along x and y, but this device's mesh is uniform along z) --
+  previously REFUSED entirely by the x-only check. MPI z-split: 21.8s
+  vs. a 32.6s single-process (AMG+GPU) reference, 1.5x, agreeing to a
+  relative L2 error of 5.0e-18 (potential), 2.9e-19 (electrons),
+  4.6e-17 (holes) -- no runaway convergence like the x-split attempt
+  in section 9C, because z genuinely has none of the doping gradient
+  the junction sits on.
+- finfet_3d also newly qualifies (z-safe) at its current mesh size,
+  though it sits below the 20,000-node is_large_3d gate at the
+  reduced example size chosen for interactive runtime, so it does not
+  currently route through MPI at all regardless of axis -- checked via
+  _pick_mpi_split_axis directly, not run end-to-end.
+- mosfet_3d/moscap_3d/jfet_3d also produce a valid split-axis choice
+  (moscap_3d: y; jfet_3d: x; mosfet_3d: z) but all three sit below the
+  20,000-node gate at their current example sizes, so this is a
+  latent capability (correct if/when a larger mesh crosses that
+  threshold), not something exercised end-to-end here.
+
+Full regression check: tests/ (365 passed, 1 xfailed -- pre-existing,
+unrelated) and gui/tests (590 passed) both green after this change,
+same totals as section 9C's own verification.

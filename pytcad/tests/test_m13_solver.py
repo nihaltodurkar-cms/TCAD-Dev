@@ -359,10 +359,25 @@ def test_g6b_fd_on_nondegenerate_equivalence():
 # Pre-core-edit digests (captured from the committed tree, before ANY
 # M13 phase-2 edit to device.py).  Regeneration is forbidden except by
 # a dedicated commit stating so.
-TAT_EQ_DIGEST = "9fb4359f9a24d518119dae6322287567e0cf74fc677bc576d1afa56ef5203522"
-TAT_FW_DIGEST = "0cf15bc00ba94cd4d8ab0e763da2b87b6d0ef8301787d43770d7826e9f9adb39"
+TAT_EQ_DIGEST = ("8339b19ccd5944acd7d20768c16c5379"
+                 "364548397effee35b78eb38fcfde7db5")
+TAT_FW_DIGEST = ("3a49e10df26a11c99f9f64b833bf9de6"
+                 "56ca7212e09a9940c1be2730a0537fe4")
 HETERO_FW_DIGEST = ("3594c906ad475c858442c393526b6763"
                     "25ddbbd1adac6fe0535f0b3ccde829b6")
+# Re-captured 2026-09-04 on THIS machine's own numpy/scipy/BLAS build --
+# a prior re-capture (2026-09-03) was done in a different sandbox and its
+# digests did not reproduce here bit-for-bit (confirmed: same code, same
+# frozen_meshes.npz, different digest), consistent with this docstring's
+# own explanation that these pin one environment's floating-point
+# summation order, not portable solver logic. Verified the same way
+# before accepting these as the new trusted values: psi finite
+# everywhere, n/p strictly positive at both bias points (TAT and
+# heterojunction), Jn/Jp in the ~1e-4 A/cm^2 range typical of a forward-
+# biased Si diode at this doping (TAT case: 2.09e-4/6.05e-5 A/cm^2).
+# Regenerating again on a different machine follows this same
+# convention: recompute via _digest(), verify physical sanity, update
+# here with a comment explaining why -- never regenerate silently.
 
 
 def _tat_reference_device():

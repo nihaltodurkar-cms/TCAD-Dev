@@ -342,6 +342,9 @@ ApplicationWindow {
                                 { "label": "Mesh",      "icon": "▦" },
                                 { "label": "Process",   "icon": "⚗" },
                                 { "label": "Sweeps",    "icon": "∿" },
+                                { "label": "Probe Station", "icon": "⎍" },
+                                { "label": "Telemetry", "icon": "◈" },
+                                { "label": "Bands", "icon": "≡" },
                                 { "label": "Transient", "icon": "⏱" },
                                 { "label": "Physics Lab", "icon": "⚛" },
                                 { "label": "Builder",   "icon": "✎" }
@@ -425,6 +428,22 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             controller: appController
+                        }
+                        ProbeStationPanel {
+                            objectName: "probeStationPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            controller: appController.probeStation
+                        }
+                        SolverTelemetryPanel {
+                            objectName: "solverTelemetryPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+                        BandDiagramPanel {
+                            objectName: "bandDiagramPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
                         }
                         TransientPanel {
                             objectName: "transientPanel"

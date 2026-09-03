@@ -62,6 +62,31 @@ def test_successful_run_emits_finished_with_loadable_result(qapp, tmp_path):
     assert not runner.running
 
 
+def test_real_solve_emits_live_residual_telemetry(qapp, tmp_path):
+    """Solver Telemetry panel data source: JobRunner.residualChanged
+    must fire from the REAL subprocess's own NewtonOptions(verbose=True)
+    stdout, not just in demo mode, and the .npz it produces must carry
+    the band-diagram arrays extract_result() stamps for a 1D result."""
+    runner = JobRunner(work_dir=str(tmp_path))
+    residuals, iterations = [], []
+    runner.residualChanged.connect(residuals.append)
+    runner.iterationChanged.connect(iterations.append)
+
+    outcome = _run_to_completion(runner, _tiny_1d_spec())
+
+    assert outcome.get("kind") == "finished", outcome
+    assert residuals, "no |dpsi| residual was scraped from solver stdout"
+    assert all(v >= 0 for v in residuals)
+    assert iterations, "no iteration number was scraped from solver stdout"
+
+    store = NpzResultStore(outcome["path"])
+    assert store.has_band_diagram()
+    x, Ec, Ev, EFn, EFp = store.band_diagram()
+    for arr in (x, Ec, Ev, EFn, EFp):
+        assert arr.shape == (30,)
+    assert (Ev <= Ec).all(), "valence edge must not sit above conduction edge"
+
+
 def test_failure_is_reported_not_crashed(qapp, tmp_path):
     spec = _tiny_1d_spec()
     spec.doping.values = "not an array"        # provokes a backend exception

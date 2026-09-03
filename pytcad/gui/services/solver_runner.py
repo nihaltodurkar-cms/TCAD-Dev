@@ -291,6 +291,28 @@ def extract_result(device, spec, solved_bias):
                 out[f"terminal__{c.name}__value"] = np.array(
                     float(device.terminal_current(c.name)))
                 out[f"terminal__{c.name}__unit"] = np.array(unit)
+
+    # Band diagram (GUI Band Diagram Viewer): Device1D.band_diagram()
+    # returns (Ec, Ev, EFn, EFp) [eV], already heterojunction- and
+    # Fermi-Dirac-aware -- computed HERE, in the subprocess where the
+    # real solved Device1D object lives, and stamped into the .npz so
+    # the GUI process (which only ever sees a NpzResultStore, never a
+    # live Device object -- see job_runner.py's module docstring for
+    # why the solve runs out-of-process at all) can read it back
+    # without reimplementing the formula. Device2D/Device3D have no
+    # equivalent method yet (confirmed: grep turns up nothing), so
+    # band__available is False for d in (2, 3) and the GUI must show an
+    # honest "not available" state rather than fabricate one.
+    if d == 1 and hasattr(device, "band_diagram"):
+        Ec, Ev, EFn, EFp = device.band_diagram()
+        out["band__Ec"] = np.asarray(Ec, dtype=float)
+        out["band__Ev"] = np.asarray(Ev, dtype=float)
+        out["band__EFn"] = np.asarray(EFn, dtype=float)
+        out["band__EFp"] = np.asarray(EFp, dtype=float)
+        out["band__available"] = np.array(True)
+    else:
+        out["band__available"] = np.array(False)
+
     return out
 
 
@@ -665,27 +687,74 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
     return result
 
 
-def _solve_via_mpi_schwarz(job_path):
+def _pick_mpi_split_axis(doping):
+    """Return (axis_name, array_axis) for the safest axis to Schwarz-
+    split a 3D job along, or (None, None) if none qualifies.
+
+    Generalizes the x-only check this file used to hard-code: a middle
+    rank sitting on a real doping gradient converges an order of
+    magnitude slower per Schwarz sweep than a rank whose slab is
+    doping-invariant (confirmed directly on pn_junction_3d -- see
+    mpi_schwarz_runner.py's module docstring). That risk is per-AXIS,
+    not specific to x: mosfet_3d/finfet_3d localize their S/D/gate
+    contacts along x (unsafe there) but are typically extruded
+    uniformly along z (the device width), so checking every axis lets
+    those devices take the MPI path along z instead of being refused
+    outright the way an x-only check would.
+
+    `doping` is (Nz, Ny, Nx) -- array axis 2 is x, 1 is y, 0 is z.
+    Candidates need at least 2 nodes per rank to split at all; among
+    the axes that pass the <=1%-of-range variation test, the one with
+    the most nodes is chosen (best parallelization headroom).
+    """
+    total_range = float(np.abs(doping).max())
+    if total_range <= 0:
+        return "x", 2      # perfectly uniform: any axis is safe, x is
+                           # the most-tested path
+    candidates = []
+    for axis_name, array_axis in (("x", 2), ("y", 1), ("z", 0)):
+        n = doping.shape[array_axis]
+        if n < 2 * MPI_SCHWARZ_RANKS:
+            continue
+        variation = float(np.max(doping.max(axis=array_axis)
+                                 - doping.min(axis=array_axis)))
+        if variation < 0.01 * total_range:
+            candidates.append((n, axis_name, array_axis))
+    if not candidates:
+        return None, None
+    candidates.sort(reverse=True)
+    _, axis_name, array_axis = candidates[0]
+    return axis_name, array_axis
+
+
+def _solve_via_mpi_schwarz(job_path, split_axis):
     """Run gui/services/mpi_schwarz_runner.py under mpirun and return
     the SAME result-dict shape _solve_all() returns, so run_job()'s
     surrounding stamping/atomic-write logic below needs no branching
     of its own -- MPI Schwarz is a drop-in alternative "engine" for
     producing that dict, not a separate output format.
 
-    v1 scope: equilibrium (+ optional single bias point) only -- the
-    caller only reaches here when spec.sweep/transient are both None
-    (mpi_schwarz_runner.py itself also refuses otherwise, as a second
+    Scope: equilibrium, a single bias point, or a voltage sweep (Phase
+    1a) -- transient is NOT, since Device3D has no transient module at
+    all; the caller only reaches here when spec.transient is None
+    (mpi_schwarz_runner.py itself also refuses transient, as a second
     check). Relays the worker's rank-0 stdout through this process's
     own stdout AS IT ARRIVES, so JobRunner's existing PYTCAD_STAGE
     regex parsing (gui/services/job_runner.py) sees the same markers
     live, exactly as it would from the plain single-process path --
     JobRunner and AppController stay completely unaware MPI is
     involved at all.
+
+    split_axis ("x"/"y"/"z") is passed as a positional CLI arg -- the
+    one piece of the gating decision above that the worker cannot
+    re-derive on its own (every rank would need the SAME choice, and
+    _pick_mpi_split_axis's tie-breaking by node count must only run
+    once, not independently per rank).
     """
     tmp_out = job_path + ".schwarz_result.npz"
     cmd = ["mpirun", "--allow-run-as-root", "-np", str(MPI_SCHWARZ_RANKS),
            sys.executable, "-m", "gui.services.mpi_schwarz_runner",
-           job_path, tmp_out]
+           job_path, tmp_out, split_axis]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1,
                             cwd=os.path.dirname(os.path.dirname(
@@ -809,42 +878,41 @@ def run_job(job_path, out_path, capture_trace=True):
     # SAME 20,000-node/3D-only gate as the equilibrium/bias paths
     # above, but is mutually exclusive with them at the job level (it
     # replaces the whole equilibrium+bias solve, not just one linear
-    # solve inside it) -- and v1 is scoped to equilibrium+single-bias
-    # only: a sweep or transient re-runs the Newton loop many times
-    # under conditions this hasn't been exercised for, so those keep
-    # using the plain single-process path regardless of mesh size.
-    # Gated on mpi4py AND an mpirun binary both actually being present,
+    # solve inside it). A voltage sweep is ALSO routed here as of
+    # Phase 1a (gui/services/mpi_schwarz_runner.py's _run_sweep --
+    # warm-started per rank exactly like the single-process run_sweep()
+    # is, just with an extra per-point Schwarz reconvergence in between
+    # points). Transient still is NOT: Device3D has no transient module
+    # at all (run_transient() raises outright for d==3), so there is
+    # nothing for this path to parallelize there regardless of mesh
+    # size. Gated on mpi4py AND an mpirun binary both actually being present,
     # same "optional dep changes nothing about correctness, only which
     # engine handles it" contract as _HAVE_PYAMG/_HAVE_CUPY above.
     #
-    # CRITICAL, confirmed directly (not assumed): splitting along x is
-    # a REGRESSION, not a speedup, on a device whose doping actually
-    # VARIES along x -- tried on pn_junction_3d (the junction sits
-    # inside the split, unlike bjt_3d's x-independent layer stack) and
-    # a middle rank's per-sweep bias solve took 39-45s (vs. bjt_3d's
+    # CRITICAL, confirmed directly (not assumed): splitting along an
+    # axis a device's doping actually VARIES along is a REGRESSION, not
+    # a speedup -- tried splitting pn_junction_3d along x (the junction
+    # sits inside the split, unlike bjt_3d's x-independent layer stack)
+    # and a middle rank's per-sweep bias solve took 39-45s (vs. bjt_3d's
     # ~5s), still hadn't converged after the point bjt_3d always
     # finishes by, and was killed rather than let run to an unknown,
     # possibly multi-minute completion -- far worse than that same
     # job's already-working ~48s GPU/AMG single-process result. So
-    # this path is refused whenever doping varies by more than 1% of
-    # its own total range along x, checked directly on the actual
-    # array (not device-name-listed): bjt_3d's stacked layers vary
-    # only along y and pass; a lateral junction/channel profile like
-    # pn_junction_3d/mosfet_3d/finfet_3d fails and correctly falls back
-    # to the plain (already GPU/AMG-accelerated) path instead.
-    x_is_safe_split_axis = False
-    if is_large_3d:
-        # doping is (Nz,Ny,Nx) here ONLY because is_large_3d already
-        # guarantees dimensionality == 3 -- this must stay inside that
-        # guard, not run unconditionally: a 1D/2D job's doping array
-        # has no axis 2 at all (confirmed directly: an unguarded call
-        # here raised AxisError on every 1D/2D gui/tests job).
-        x_doping_variation = float(np.max(doping.max(axis=2) - doping.min(axis=2)))
-        x_doping_total_range = float(np.abs(doping).max())
-        x_is_safe_split_axis = (x_doping_total_range <= 0
-                                or x_doping_variation < 0.01 * x_doping_total_range)
-    use_mpi_schwarz = (is_large_3d and _HAVE_MPI and x_is_safe_split_axis
-                       and spec.sweep is None and spec.transient is None)
+    # _pick_mpi_split_axis() (above) refuses any axis whose doping
+    # varies by more than 1% of the array's total range, checked
+    # directly on the actual array (not device-name-listed) --
+    # bjt_3d's stacked layers vary only along y so x (or z) passes;
+    # a lateral junction/channel profile fails on every axis it
+    # actually varies along and correctly falls back to the plain
+    # (already GPU/AMG-accelerated) path instead. Generalized past a
+    # single hard-coded x check so a device localized along x (like
+    # mosfet_3d/finfet_3d's S/D/gate) but uniform along z can still
+    # take the MPI path split along z instead of being refused
+    # outright -- see _pick_mpi_split_axis()'s own docstring.
+    split_axis, split_array_axis = ((None, None) if not is_large_3d else
+                                    _pick_mpi_split_axis(doping))
+    use_mpi_schwarz = (is_large_3d and _HAVE_MPI and split_axis is not None
+                       and spec.transient is None)
 
     if not use_mpi_schwarz:
         mesh_obj = build_mesh(spec.mesh)
@@ -854,7 +922,7 @@ def run_job(job_path, out_path, capture_trace=True):
     cap = _start_capture()
     try:
         if use_mpi_schwarz:
-            result = _solve_via_mpi_schwarz(job_path)
+            result = _solve_via_mpi_schwarz(job_path, split_axis)
         else:
             result = _solve_all(device, spec, opts, linsolve_bias=linsolve_bias)
     finally:
@@ -902,6 +970,7 @@ def run_job(job_path, out_path, capture_trace=True):
     if use_mpi_schwarz:
         numerics["linsolve"] = "direct"
         numerics["engine"] = "mpi_schwarz"
+        numerics["mpi_split_axis"] = split_axis
     result["record__meta"] = np.array(json.dumps({
         "schema_version": SOLVER_RESULT_SCHEMA_VERSION,
         "backend": "pytcad",

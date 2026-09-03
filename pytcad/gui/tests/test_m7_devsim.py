@@ -15,8 +15,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pytest
 
-devsim_spec = pytest.importorskip(
-    "devsim", reason="optional devsim dependency not installed")
+try:
+    import devsim  # noqa: F401
+except ImportError:
+    pytest.skip("optional devsim dependency not installed", allow_module_level=True)
+except RuntimeError as exc:
+    # devsim's own __init__ raises RuntimeError (not ImportError) when its
+    # native BLAS/LAPACK libraries are missing, so plain importorskip lets
+    # that abort collection for this whole file instead of skipping it --
+    # see the identical fix in gui/tests/test_solver_runner.py.
+    pytest.skip(f"devsim installed but failed to initialize: {exc}",
+                allow_module_level=True)
 
 from gui.services.solver_backend import validate_result
 from workbench.solvers.base import backend_ids, get_backend

@@ -2883,3 +2883,117 @@ have shipped broken for the majority of real jobs (most examples are
   new section 9 with the full record
 - `ARCHITECTURE.md`: M22 status-table entry updated; the GPU/MPI
   vision-doc gap-list item updated from "not started" to landed
+
+### STATE ADDENDUM -- MPI SCHWARZ GENERALIZED PAST X-ONLY SPLIT (same day, 2026-09-02)
+
+Follow-up in the same session: section 9's safety gate above refused
+the MPI path entirely for any device whose doping varies along x --
+correct, but it meant pn_junction_3d (the junction sits on x) got NO
+speedup at all, even though it's uniform along z. Generalized
+`solver_runner.py`'s gate into `_pick_mpi_split_axis(doping)`, which
+checks all three mesh axes with the same <=1%-of-range test and picks
+whichever safe axis has the most nodes; the chosen axis is passed to
+`mpi_schwarz_runner.py` as a third CLI argument (every rank must agree
+on the same choice, so it's computed once by the caller, not re-
+derived per rank). `mpi_schwarz_runner.py`'s split/exchange/reassembly
+logic, previously hard-coded to array axis 2 ("x"/"i"), is now
+parameterized on (array_axis, ContactSpec node key).
+
+Verified through the real CLI: bjt_3d unchanged (still picks x, 32.5s,
+identical result -- the generalization is a no-op for the case already
+shipped). pn_junction_3d now qualifies via z and actually converges:
+21.8s vs. its 32.6s single-process (AMG+GPU) reference, 1.5x, agreeing
+to a relative L2 error of 5.0e-18 (potential) / 4.6e-17 (holes) -- no
+runaway convergence like the x-split attempt in section 9, because z
+genuinely carries none of the junction's doping gradient.
+finfet_3d/mosfet_3d/moscap_3d/jfet_3d all now find a valid non-x split
+axis too, but sit below the 20,000-node MPI gate at their current
+example sizes, so this is a latent (not yet end-to-end exercised)
+capability for those four. Full suite re-run: tests/ 365 passed (1
+pre-existing xfailed), gui/tests 590 passed -- no regressions.
+
+Files changed: `pytcad/gui/services/solver_runner.py`
+(`_pick_mpi_split_axis`, updated gating and `_solve_via_mpi_schwarz`
+signature), `pytcad/gui/services/mpi_schwarz_runner.py` (axis-generic
+rewrite), `M22-LINSOLVE-PLAN.md` (new section 10), `ARCHITECTURE.md`
+(both M22 mentions updated).
+
+### STATE ADDENDUM -- MERGED A PARALLEL DEVELOPMENT BRANCH (2026-09-04)
+
+A folder named "Merge this" appeared in the repo root (untracked, not
+its own git checkout) -- a snapshot of a DIFFERENT session that had
+diverged from this repo at the same base as the MPI Schwarz/AMG/GPU
+work above (2026-09-02), then continued independently through
+2026-09-03 doing unrelated work while this session did the axis-
+generalization + sweep support above. Investigated file-by-file before
+touching anything (diffed every shared file, ran the new branch's own
+tests standalone to confirm they passed on its own code) rather than
+blindly copying the folder over.
+
+What it contained, verified genuinely new and independent of this
+session's MPI work:
+- M21 phase 3d's unstructured-mesh DD wrapper extended to 3D: new
+  `gmsh_mesh3d.py`, `adapt_unstructured.py`, `adapt_unstructured3d.py`,
+  `unstructured_assembly3d.py`, `unstructured_dd3d.py` (27 tests,
+  confirmed passing standalone before merging)
+- A real M13 golden-provenance fix: `tests/goldens/m13/*.npz` had
+  never actually been committed anywhere in this repo's history
+  (confirmed via `git log --diff-filter=A`) despite claiming to pin a
+  specific historical commit -- regenerated from first principles with
+  documented physical-sanity verification
+- M18 phase 2: multi-terminal Y-parameter extraction + fT (`ac.py`)
+- A real M20 correctness fix: the discretized DG Hamiltonian was not
+  actually Hermitian on a non-uniform mesh (`dg.py`) -- fixed via a
+  similarity-transformed symmetric formulation
+- `unstructured_dd.py`: doping-dependent mobility + heterojunction
+  (Anderson band-offset) support added to the 2D unstructured DD core
+- `linsolve.py`: a Schur-preconditioner branch added to the block-
+  Jacobi fallback chain, plus a cleaner `.diagonal()`-based block
+  extraction
+- `device3d.py`: `solve_bias`'s direct-solve fallback now routes
+  through `linsolve.solve_linear` (catches `LinearSolveError`) instead
+  of a raw `scipy.spsolve` call
+- New GUI: Band Diagram panel, Probe Station panel, Solver Telemetry
+  panel, and a Characterization service, wired into
+  `Main.qml`/`app_controller.py`/`job_runner.py`/`result_store.py`/
+  `device_spec.py`/`structure_model.py`. Characterization has tests
+  (passing); the three new panel controllers do not.
+
+Merge strategy: files neither branch touched in a conflicting way
+(`dg.py`, `ac.py`, `unstructured_dd.py`, `linsolve.py`, `device3d.py`,
+`device_spec.py`, `job_runner.py`, `result_store.py`,
+`structure_model.py`, several `gui/tests` files, the M13 goldens/
+digests) were taken wholesale from the other branch. Three files both
+branches touched independently (`solver_runner.py`'s `extract_result`,
+`app_controller.py`, `Main.qml`) were hand-merged, adding the other
+branch's band-diagram-stamping/controller-wiring/tab-entries onto this
+session's MPI generalization work rather than picking one side.
+`solver_runner.py`/`mpi_schwarz_runner.py` themselves kept THIS
+session's versions (strictly ahead -- the other branch was still on
+the older x-only, single-bias-point MPI Schwarz).
+
+A REAL BUG SURFACED BY THE MERGE, not present in either branch alone:
+the other branch's M13 golden `.npz` files AND `test_m13_solver.py`'s
+hardcoded sha256 digest constants had been captured in a DIFFERENT
+sandbox's numpy/scipy/BLAS build. Copied verbatim, they failed bit-
+identity here even with byte-identical code -- 6 test failures on the
+first full-suite run after merging. `frozen_meshes.npz` (pure mesh-
+coordinate math, no BLAS involved) was portable and fine; every
+solver-OUTPUT golden was not. Fixed by regenerating the `.npz` goldens
+on THIS machine (`PYTCAD_REGEN_M13_GOLDENS=1`) and recomputing the
+three hardcoded digest constants via the test module's own `_digest()`
+helper, verifying physical sanity (finite, correct sign/magnitude)
+before trusting the new values, exactly as the removed values'
+documentation said to do -- just on the actual target machine this
+time. Generalized into an AGENTS.md gotcha: these values are a
+snapshot of ONE environment's floating-point summation order, never
+portable, and must be regenerated (not copied) per machine.
+
+### Verified
+- `tests/`: 419 passed, 1 xfailed (up from 365 pre-merge; the new
+  unstructured-3D/Y-parameter/etc. tests plus the fixed M13 goldens)
+- `gui/tests`: 608 passed (up from 590; the new characterization +
+  live-telemetry/band-diagram tests)
+- `AppController` smoke-test: all three new controllers
+  (`probeStation`/`solverTelemetry`/`bandDiagram`) construct and wire
+  up cleanly via a real `QApplication` instance (offscreen platform)

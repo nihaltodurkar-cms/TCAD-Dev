@@ -14,15 +14,44 @@ transverse dual width, exactly the same weighting Poisson's flux
 already uses), not assumed from the plan's handoff notes.
 
 Homojunction-only simplifications (stated, not hidden, mirroring
-phase 3b's uniform-eps_r one): mobility is `material.mu_n_max`/
-`mu_p_max` UNIFORMLY (no Caughey-Thomas doping dependence); no
-heterojunction ln(nie) edge term (delta = psi_j - psi_i for both
-carriers); SRH lifetimes are the material's own tau_n0/tau_p0
-constants (no Scharfetter doping-dependent lifetime); Auger is off by
-default. `Device2D(unstructured=True)` class-level integration is
-explicitly NOT built -- this module is a standalone, directly-tested
-physics core, the same relationship `unstructured_poisson.py` has to
-`Device2D._residual_jacobian_poisson`.
+phase 3b's uniform-eps_r one): SRH lifetimes are the material's own
+tau_n0/tau_p0 constants (no Scharfetter doping-dependent lifetime);
+Auger is off by default. `Device2D(unstructured=True)` class-level
+integration is explicitly NOT built -- this module is a standalone,
+directly-tested physics core, the same relationship
+`unstructured_poisson.py` has to `Device2D._residual_jacobian_poisson`.
+
+M21-follow-up (doping-dependent mobility + heterojunctions): `solve_bias`
+now accepts `doping_mobility` and `materials_per_node`, mirroring
+device2d.py's own per-node material grouping:
+
+  - `doping_mobility=False` (default) reproduces the ORIGINAL uniform
+    `material.mu_n_max`/`mu_p_max` behavior bit-for-bit -- this is the
+    regression safety net (see test_unstructured_dd.py
+    test_homojunction_unchanged).
+  - `doping_mobility=True` evaluates `materials.mobility_caughey_thomas`
+    per node from `Ntot_phys` (total ionized impurity N_A+N_D, NOT net
+    doping -- same caveat as materials.py's own docstring), then takes
+    the SAME harmonic mean across each edge's two endpoint mobilities
+    that device2d.py's `dn_edge_x`/`dn_edge_y` use at structured cell
+    faces (Meyer et al.-style TPFA: harmonic mean is the right average
+    for a diffusive/conductive flux in series across the two half-edges).
+  - `materials_per_node` (array of `Semiconductor`, one per node;
+    default: all `material`, i.e. homojunction) enables the Anderson
+    band-offset heterojunction term device2d.py adds at structured cell
+    faces: a per-edge `ln(nie_s[j]/nie_s[i])` shift added to the
+    electron SG argument and SUBTRACTED from the hole one (opposite
+    signs -- device2d.py's own comment on why a shared-sign delta
+    breaks hole detailed balance applies identically here). With a
+    uniform `materials_per_node`, `dlnnie == 0` everywhere and this
+    reduces algebraically to the homojunction SG current.
+
+NOT implemented (explicit, matching device2d.py's own unstructured
+refusal list): Fermi-Dirac statistics, bandgap narrowing, incomplete
+ionization, surface/field-dependent mobility, doping-dependent (vs.
+constant) SRH lifetime. A future session wanting these should extend
+`materials_per_node`-style per-node grouping the same way, not bolt
+them on ad hoc.
 """
 import warnings
 
@@ -35,13 +64,13 @@ from .device import (
     NewtonOptions, thermal_voltage, bernoulli, dbernoulli, D0_REF,
 )
 from .device2d import _ohmic_values
-from .materials import SILICON, recombination
+from .materials import SILICON, recombination, mobility_caughey_thomas
 from .unstructured_poisson import evaluate_doping_at_nodes  # re-exported
 
 
 def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
                        eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p, material,
-                       Ns, srh=True, auger=False):
+                       Ns, srh=True, auger=False, dlnnie=None):
     """Scaled coupled residual/Jacobian for the INTERIOR physics only
     (no Dirichlet contact rows -- solve_bias overwrites those after
     calling this, the same split phase 3b's Poisson solver uses).
@@ -50,10 +79,17 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
 
     eps_trans: eps * (dual_facet_length/primal_edge_length) per
     interior edge -- Poisson's own prefactor.
-    D_n_s, D_p_s: scaled diffusivities (mu*VT/D0_REF), UNIFORM scalars
-    this slice (homojunction). The continuity prefactor per edge is
+    D_n_s, D_p_s: scaled diffusivities (mu*VT/D0_REF) PER INTERIOR EDGE
+    (harmonic mean of the two endpoint mobilities when doping_mobility
+    is on; a uniform scalar broadcasts unchanged for the homojunction,
+    uniform-mobility case). The continuity prefactor per edge is
     D_n_s/D0_REF-normalized trans, i.e. (eps_trans/eps)*D_n_s -- reusing
     the SAME geometric ratio, just swapping the physical constant.
+    nie_s: per-NODE scaled intrinsic concentration (array); a uniform
+    array reduces this to the old homojunction scalar broadcast.
+    dlnnie: per-INTERIOR-EDGE ln(nie_s[j]/nie_s[i]) heterojunction band-
+    offset shift (device2d.py's own Anderson-offset SG term); None or
+    all-zero reproduces the homojunction current exactly.
     """
     N = psi.shape[0]
     n_phys, p_phys = n * Ns, p * Ns
@@ -103,14 +139,22 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
     add(3 * j_idx, 3 * i_idx, eps_trans)
 
     # --- continuity: Scharfetter-Gummel current on each edge ---
-    delta = psi[j_idx] - psi[i_idx]
-    Bp, Bm = bernoulli(delta), bernoulli(-delta)
-    dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+    # Anderson band-offset shift (device2d.py section "M11-S4"):
+    # electron argument gains +dlnnie, hole argument gains -dlnnie
+    # (opposite signs -- a shared-sign delta breaks hole detailed
+    # balance). dlnnie is exactly zero for a homojunction.
+    dz = 0.0 if dlnnie is None else dlnnie
+    delta_n = psi[j_idx] - psi[i_idx] + dz
+    delta_p = psi[j_idx] - psi[i_idx] - dz
+    Bp, Bm = bernoulli(delta_n), bernoulli(-delta_n)
+    dBp, dBm = dbernoulli(delta_n), dbernoulli(-delta_n)
+    Bp_h, Bm_h = bernoulli(delta_p), bernoulli(-delta_p)
+    dBp_h, dBm_h = dbernoulli(delta_p), dbernoulli(-delta_p)
     n_i, n_j = n[i_idx], n[j_idx]
     p_i, p_j = p[i_idx], p[j_idx]
 
     Jn = D_n_s * trans * (n_j * Bp - n_i * Bm)
-    Jp = -D_p_s * trans * (p_j * Bm - p_i * Bp)
+    Jp = -D_p_s * trans * (p_j * Bm_h - p_i * Bp_h)
     np.add.at(F[1::3], i_idx, Jn)
     np.add.at(F[1::3], j_idx, -Jn)
     np.add.at(F[2::3], i_idx, Jp)
@@ -128,9 +172,9 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
     add(3 * j_idx + 1, 3 * i_idx + 1, -dJn_dn_i)
     add(3 * j_idx + 1, 3 * j_idx + 1, -dJn_dn_j)
 
-    dJp_dpsi_j = D_p_s * trans * (p_j * dBm + p_i * dBp)
-    dJp_dp_j = -D_p_s * trans * Bm
-    dJp_dp_i = D_p_s * trans * Bp
+    dJp_dpsi_j = D_p_s * trans * (p_j * dBm_h + p_i * dBp_h)
+    dJp_dp_j = -D_p_s * trans * Bm_h
+    dJp_dp_i = D_p_s * trans * Bp_h
     add(3 * i_idx + 2, 3 * i_idx, -dJp_dpsi_j)
     add(3 * i_idx + 2, 3 * j_idx, dJp_dpsi_j)
     add(3 * i_idx + 2, 3 * i_idx + 2, dJp_dp_i)
@@ -148,7 +192,9 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
 
 def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
               trans_geom, C_phys, contacts, bias, material=SILICON,
-              T=300.0, opts=None, srh=True, auger=False):
+              T=300.0, opts=None, srh=True, auger=False,
+              doping_mobility=False, Ntot_phys=None, materials_per_node=None,
+              init=None, return_diagnostics=False):
     """Newton-solve the coupled unstructured drift-diffusion system at
     an applied bias.
 
@@ -157,27 +203,87 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     contacts: {name: (K, 2) boundary-edge node-index array} from
     region_resolver.resolve_contacts().
 
-    Returns (psi, n, p) [all scaled, dimensionless] plus the scaling
-    dict (Ns, LD, VT, nie, eps, R0) and a per-contact terminal current
-    dict [A/cm, matching Device2D.terminal_current's 2D convention --
-    this is a 2D unstructured mesh, same physical units].
+    doping_mobility: if True, per-node mobility is
+    materials.mobility_caughey_thomas(Ntot_phys, node's material, T,
+    carrier), harmonic-averaged across each edge (device2d.py's own
+    edge-mobility convention). Default False keeps the ORIGINAL uniform
+    material.mu_n_max/mu_p_max behavior exactly.
+    Ntot_phys: (N,) physical TOTAL ionized impurity concentration
+    [cm^-3] per node (N_A+N_D, not net doping -- required, and used
+    only, when doping_mobility=True).
+    materials_per_node: (N,) array of Semiconductor, one per node, for
+    heterojunction band offsets (default: all `material`, homojunction).
+    `material` itself is still used for the overall scaling
+    constants (Ns/LD/VT normalization reference), matching device2d.py's
+    "first material is the scaling reference" convention.
+
+    init: OPTIONAL {"psi": (N,), "n": (N,), "p": (N,)} SCALED initial
+    guess (same node ordering/count as `nodes`), used INSTEAD of the
+    default equilibrium (V=0 Boltzmann) cold-start guess -- M21
+    adaptive-refinement follow-up (adapt_unstructured.py), warm-starting
+    a refined mesh's Newton solve from a coarser mesh's converged state
+    interpolated onto the new nodes. Contact nodes are still overwritten
+    with their exact Dirichlet (psi0, n0, p0) values regardless of
+    `init`, exactly as the cold-start path already does. None (default)
+    reproduces the ORIGINAL cold-start behavior bit-for-bit -- this is a
+    pure opt-in addition, not a default-behavior change.
+
+    return_diagnostics: if True, ALSO return a 6th tuple element, a
+    dict {"n_iter": int, "residual_node_history": (n_iter, N) float},
+    where residual_node_history[k] is the per-node L2 norm of the
+    [F_psi, F_n, F_p] residual triple BEFORE Newton step k's update is
+    applied (i.e. the residual the solver was working to drive down
+    that iteration) -- a genuinely solver-aware signal (which nodes'
+    residual stays large longest through the Newton iteration) distinct
+    from any post-hoc, converged-solution-only physical indicator.
+    Default False preserves the ORIGINAL 5-tuple return signature
+    exactly -- existing callers are unaffected.
     """
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
     eps = material.eps_r * EPS0
-    nie = material.ni(T)
-    Ns = max(float(np.abs(C_phys).max()), nie)
+    N = C_phys.shape[0]
+    mats = (np.array([material] * N, dtype=object) if materials_per_node is None
+           else np.asarray(materials_per_node, dtype=object))
+    nie_node = np.array([m.ni(T) for m in mats])
+    nie = material.ni(T)   # reference material's nie for the scale dict
+    Ns = max(float(np.abs(C_phys).max()), float(nie_node.max()))
     LD = np.sqrt(eps * VT / (Q * Ns))
     R0 = D0_REF * Ns / LD ** 2
 
     C_s = C_phys / Ns
-    nie_s = nie / Ns
+    nie_s = nie_node / Ns          # per-NODE (array; uniform => old scalar)
     areas_s = node_areas / LD ** 2
     eps_trans = trans_geom * eps
-    D_n_s = material.mu_n_max * VT / D0_REF
-    D_p_s = material.mu_p_max * VT / D0_REF
     tau_n = np.full_like(C_phys, material.tau_n0)
     tau_p = np.full_like(C_phys, material.tau_p0)
+
+    # --- per-node mobility (uniform mu_n_max/mu_p_max, or Caughey-
+    # Thomas doping-dependent), then harmonic-mean onto interior edges
+    # -- the same averaging device2d.py's dn_edge_x/dn_edge_y apply at
+    # structured cell faces. ---
+    if doping_mobility:
+        if Ntot_phys is None:
+            raise ValueError(
+                "doping_mobility=True requires Ntot_phys (total ionized "
+                "impurity concentration per node) -- net doping alone "
+                "cannot recover it in compensated regions.")
+        mu_n_node = np.empty(N); mu_p_node = np.empty(N)
+        for m in {id(mm): mm for mm in mats}.values():
+            sel = np.array([mm is m for mm in mats])
+            mu_n_node[sel] = mobility_caughey_thomas(Ntot_phys[sel], m, T, "n")
+            mu_p_node[sel] = mobility_caughey_thomas(Ntot_phys[sel], m, T, "p")
+    else:
+        mu_n_node = np.array([m.mu_n_max for m in mats])
+        mu_p_node = np.array([m.mu_p_max for m in mats])
+
+    def hmean(lo, hi):
+        return 2.0 * lo * hi / (lo + hi)
+
+    i_e, j_e = interior_edges[:, 0], interior_edges[:, 1]
+    D_n_s = hmean(mu_n_node[i_e], mu_n_node[j_e]) * VT / D0_REF
+    D_p_s = hmean(mu_p_node[i_e], mu_p_node[j_e]) * VT / D0_REF
+    dlnnie = np.log(nie_s[j_e] / nie_s[i_e])
 
     contact_node_bias = {}
     for name, edges in contacts.items():
@@ -187,28 +293,46 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
                 contact_node_bias[node] = V
     contact_idx = np.array(sorted(contact_node_bias), dtype=int)
     contact_V = np.array([contact_node_bias[k] for k in contact_idx])
-    psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_s, contact_V, VT)
+    psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_s[contact_idx],
+                                 contact_V, VT)
 
     # warm start: equilibrium first (V=0 everywhere), matching
-    # Device1D/Device2D.solve_bias's own convention
-    psi = np.arcsinh(C_s / (2.0 * nie_s))
-    n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
-                nie_s ** 2 / np.maximum(
-                    0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
-    p = nie_s ** 2 / np.maximum(n, 1e-300)
+    # Device1D/Device2D.solve_bias's own convention -- UNLESS `init`
+    # supplies an explicit (already-scaled) guess (adaptive-refinement
+    # warm start from a coarser mesh's converged solution).
+    if init is None:
+        psi = np.arcsinh(C_s / (2.0 * nie_s))
+        n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
+                    nie_s ** 2 / np.maximum(
+                        0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
+        p = nie_s ** 2 / np.maximum(n, 1e-300)
+    else:
+        psi = np.array(init["psi"], dtype=float, copy=True)
+        n = np.array(init["n"], dtype=float, copy=True)
+        p = np.array(init["p"], dtype=float, copy=True)
+        if psi.shape != C_s.shape:
+            raise ValueError(
+                f"init arrays have shape {psi.shape}, expected {C_s.shape} "
+                "(one value per node of THIS mesh)")
     psi[contact_idx], n[contact_idx], p[contact_idx] = psi0, n0, p0
 
     N = psi.shape[0]
     last_converged = False
+    n_iter_used = 0
+    residual_node_history = [] if return_diagnostics else None
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian(
             psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
             D_n_s, D_p_s, R0, tau_n, tau_p, material, Ns, srh=srh,
-            auger=auger)
+            auger=auger, dlnnie=dlnnie)
         F3 = F.reshape(N, 3)
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
         F3[contact_idx, 2] = p[contact_idx] - p0
+
+        if return_diagnostics:
+            residual_node_history.append(
+                np.linalg.norm(F3, axis=1).astype(float))
 
         Jl = J.tolil()
         for comp in range(3):
@@ -228,6 +352,7 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
         rel_n = np.abs(n / np.maximum(n_old, 1e-300) - 1.0).max()
         rel_p = np.abs(p / np.maximum(p_old, 1e-300) - 1.0).max()
         err = max(float(np.abs(dpsi).max()), float(rel_n), float(rel_p))
+        n_iter_used = it + 1
         if opts.verbose:
             print(f"    unstructured-dd it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}"
                  f"  |dn/n|={rel_n:.3e}")
@@ -239,7 +364,8 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
 
     _, _, Jn, Jp = _residual_jacobian(
         psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
-        D_n_s, D_p_s, R0, tau_n, tau_p, material, Ns, srh=srh, auger=auger)
+        D_n_s, D_p_s, R0, tau_n, tau_p, material, Ns, srh=srh, auger=auger,
+        dlnnie=dlnnie)
 
     terminal_current = {}
     for name, edges in contacts.items():
@@ -262,4 +388,11 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
 
     scale = dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps, R0=R0,
                 last_converged=last_converged)
+    if return_diagnostics:
+        diagnostics = dict(
+            n_iter=n_iter_used,
+            residual_node_history=(np.array(residual_node_history)
+                                   if residual_node_history else
+                                   np.zeros((0, N))))
+        return psi, n, p, scale, terminal_current, diagnostics
     return psi, n, p, scale, terminal_current
