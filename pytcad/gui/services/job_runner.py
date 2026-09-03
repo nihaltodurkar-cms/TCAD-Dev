@@ -9,6 +9,7 @@ terminate a numerical solver unsafely" requirement satisfied without
 touching validated numerical code.
 """
 import json
+import math
 import os
 import re
 import shutil
@@ -21,11 +22,17 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal, Property
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Cosmetic only.  pytcad's NewtonOptions(verbose=True) prints lines like
-#   "    it  3  |dpsi|=1.234e-02  |dn/n|=5.678e-03"
-# We scrape an iteration number out of them for the progress display and
-# nothing else -- results always come from the .npz.  If this format ever
-# changes, progress degrades to a plain running indicator; nothing breaks.
+#   "    eq it  3  |dpsi|=1.234e-02"                        (equilibrium)
+#   "   it  3  |F|=9.9e-01  |dpsi|=1.234e-02  |dn/n|=5.678e-03"  (bias)
+# We scrape an iteration number and the leading residual out of them for
+# the progress display and nothing else -- results always come from the
+# .npz.  If this format ever changes, progress degrades to a plain
+# running indicator; nothing breaks. Same two-regex convention already
+# used by solver_runner.py's own _trace_from_output (_ITERATION/_METRIC)
+# for the post-hoc convergence trace stamped into the result file --
+# this is the LIVE (during-the-run) counterpart of that same text.
 _ITER_RE = re.compile(r"\bit\s+(\d+)\b")
+_RESIDUAL_RE = re.compile(r"\|\s*dpsi\s*\|\s*=\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?\d+)?)")
 _STAGE_RE = re.compile(r"^PYTCAD_STAGE=(\w+)")
 _RESULT_RE = re.compile(r"^RESULT_PATH=(.+)$")
 _ERROR_RE = re.compile(r"^PYTCAD_ERROR=(.+)$")
@@ -38,6 +45,7 @@ class JobRunner(QObject):
     progressLine = Signal(str)
     stageChanged = Signal(str)
     iterationChanged = Signal(int)
+    residualChanged = Signal(float)  # latest |dpsi| Newton-update residual
     finished = Signal(str)          # result path
     failed = Signal(str, str)       # concise summary, expandable details
     canceled = Signal()
@@ -115,6 +123,14 @@ class JobRunner(QObject):
             m = _ITER_RE.search(line)
             if m:
                 self.iterationChanged.emit(int(m.group(1)))
+            m = _RESIDUAL_RE.search(line)
+            if m:
+                try:
+                    val = float(m.group(1))
+                except ValueError:
+                    val = None
+                if val is not None and math.isfinite(val):
+                    self.residualChanged.emit(val)
             self.progressLine.emit(line)
 
     def _on_stderr(self):
