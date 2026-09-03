@@ -314,8 +314,25 @@ def _default_models():
     # keeping the invariant that this dict equals
     # ModelCatalog.default_config() and covers every Models dataclass
     # flag the solver exposes through the catalog.
+    #
+    # M12-S2 GUI exposure (2026-09-04): "tat" joins the same way -- the
+    # Models.tat flag (trap-assisted tunneling, Hurkx-style field-
+    # enhanced SRH) has been a real, validated core flag since M12-S2
+    # landed, but had no wire-format/catalog/GUI entry at all until now
+    # (ARCHITECTURE.md flagged this explicitly as still-open, catalog-
+    # wiring-only work -- the physics itself needed no change). Default
+    # OFF, same as every other opt-in model here, so this is additive:
+    # an old job.json simply lacks the key and gets tat=False via
+    # DeviceSpec.from_dict's `d.get("models") or _default_models()`
+    # fallback -- bit-identical to before this key existed.
+    # Models.trap_et_rel (the trap-level fraction of Eg TAT also takes)
+    # stays at its own dataclass default (0.5) -- like every other
+    # model's internal numeric constants (Cn_auger, bgn_E0, ...), it is
+    # a physics parameter on Semiconductor/Models, not a per-job wire-
+    # format toggle the catalog's bool-only contract covers.
     return {"doping_mobility": True, "field_mobility": False,
             "srh": True, "auger": True, "bgn": True,
+            "tat": False,
             "fd": False, "incomplete_ion": False,
             "impact": False, "btbt": False,
             "surface_mobility": False, "dg": False}

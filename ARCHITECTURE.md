@@ -1315,8 +1315,9 @@ Independent candidates for the next milestone (any order):
    2026-08-31" section for the full record. All 13 tests pass after
    fixing the test code only (history.md
    Addendum 16).
-4. M12-S2 GUI exposure -- Physics Lab entries for TAT (model exists and
-   is validated; catalog wiring only).
+4. M12-S2 GUI exposure -- LANDED 2026-09-04: "tat" added to the wire-
+   format defaults and ModelCatalog registry; see section 7 item 5 for
+   the full record.
 5. M14 remainder -- LANDED 2026-08-28/31: G-B (D_it C-V stretch-out),
    G-C (S_n/S_p surface recombination in Device1D AND, as of
    2026-08-31, Device2D -- a Robin BC reusing the already-computed
@@ -1472,8 +1473,20 @@ recorded here so they are tracked rather than silently absent):
 5. [DONE 2026-08-28, G-C(2D) DONE 2026-08-31] M14 remainder --
    G-B/G-C(1D+2D)/catalog LANDED; driving_force descoped, G-A remains
    open, re-searched 2026-08-31 with no new result (see section 5 item
-   5). M11-S4/S5 GUI polish, M12-S2 catalog wiring for TAT -- small,
-   independent, low-risk, still open.
+   5). M11-S4/S5 GUI polish still open. M12-S2 catalog wiring for TAT
+   -- [DONE 2026-09-04]: "tat" added to device_spec.py's
+   _default_models() (default False, additive -- an old job.json
+   without the key still gets tat=False) and to
+   workbench/core/catalog.py's ModelInfo registry (Hurkx reference,
+   honest limitations note pointing at the WKB-underflow gotcha).
+   PhysicsLabPanel/lab_controller.py already iterate ModelCatalog.list()
+   generically, so no QML change was needed. Verified end to end: a
+   real diode_1d solve with models["tat"]=True through the actual GUI
+   wire format solves cleanly and stamps tat=True into record__meta.
+   Two tests had a hardcoded catalog-key list (gui/tests/
+   test_physics_lab.py, tests/test_workbench_m1.py) and needed
+   updating; full suites (tests/ 419 passed 1 xfailed, gui/tests 624
+   passed) otherwise unaffected.
 7. [COMPLETE 2026-08-31] M20 DENSITY-GRADIENT -- Ancona-Stafford DG
    quantum correction (equilibrium-only: MOSCapacitor dg flag +
    Device1D Models.dg) plus the pytcad/dg.py analysis layer with the

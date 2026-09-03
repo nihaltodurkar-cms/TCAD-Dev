@@ -3080,3 +3080,27 @@ exact to ~1e-17/1e-15 -- both at the SAME machine-precision confidence
 finfet_3d's pre-fix result was 1.4e-3 away from. No code changed (test
 fixtures only, not shipped as EXAMPLES entries); gui/tests 624 passed,
 unchanged. Full record in M22-LINSOLVE-PLAN.md section 13.
+
+### STATE ADDENDUM -- M12-S2 GUI EXPOSURE LANDED: TAT WIRED INTO THE CATALOG (2026-09-04)
+
+ARCHITECTURE.md's own still-open backlog named this explicitly: `Models.tat`
+(trap-assisted tunneling, Hurkx field-enhanced SRH) has been a real,
+validated core flag since M12-S2 landed, but had no wire-format or
+Physics Lab entry at all. Added `"tat": False` to
+`gui/services/device_spec.py`'s `_default_models()` (additive -- an old
+job.json without the key still gets `tat=False`) and a `ModelInfo`
+entry to `workbench/core/catalog.py` (Hurkx reference, an honest
+limitations note pointing at the existing WKB-underflow-to-plain-SRH
+gotcha in AGENTS.md). `PhysicsLabPanel.qml`/`lab_controller.py` already
+iterate `ModelCatalog.list()` generically, so no QML change was
+needed -- purely catalog wiring, exactly as the backlog entry said.
+
+Verified end to end: a real `diode_1d` solve with
+`models["tat"]=True` through the actual GUI wire format (not just a
+direct `Models(tat=True)` Python call) solves cleanly and stamps
+`tat: True` into `record__meta`. Two tests had TAT-less catalog-key
+lists hardcoded (`gui/tests/test_physics_lab.py`,
+`tests/test_workbench_m1.py`) and needed updating to include it.
+
+Verified: `tests/` 419 passed, 1 xfailed (unchanged); `gui/tests` 624
+passed (unchanged).

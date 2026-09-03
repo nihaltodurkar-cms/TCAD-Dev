@@ -126,6 +126,36 @@ _MODELS = {
                     "composition keeps its declared-untested status "
                     "until M15/M16.",
     ),
+    # M12-S2
+    "tat": ModelInfo(
+        key="tat",
+        title="Trap-assisted tunneling (Hurkx field-enhanced SRH)",
+        equations=(
+            "R_TAT = R_SRH * Gamma(F),  Gamma = enhancement factor >= 1",
+            "Gamma via WKB tunneling escape probabilities in the SRH "
+            "denominator (plan-specified form), field F = |E| [V/cm]",
+            "trap level Et = trap_et_rel * Eg above the valence band "
+            "(trap_et_rel = 0.5 -> midgap, the SRH default)",
+        ),
+        parameters=(),
+        references=(
+            "Hurkx, Klaassen & Knuvers, IEEE Trans. Electron Devices 39, "
+            "331 (1992)",
+        ),
+        applicability="1D (device.py); local-field enhancement of the "
+                      "existing SRH term; silicon coefficients",
+        enabled_by_default=False,
+        limitations="Default OFF reproduces plain SRH bit-for-bit "
+                    "(Gamma=1 identically at F=0, and the M13 goldens "
+                    "gate this). Midgap trap (trap_et_rel=0.5, a Models "
+                    "field, not a per-model catalog parameter) can "
+                    "underflow Gamma to exactly 1.0 (no enhancement) at "
+                    "realizable bulk-Si fields -- an honest physics "
+                    "result of the WKB factor law, not a bug (see "
+                    "AGENTS.md's TAT WKB gotcha). Not ported to 2D/3D; "
+                    "TAT+FD composition is declared untested (M13-FD "
+                    "plan's own limitations note).",
+    ),
     "impact": ModelInfo(
         key="impact",
         title="Impact ionization (van Overstraeten-de Man)",

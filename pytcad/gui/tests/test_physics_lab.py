@@ -58,10 +58,10 @@ def test_panel_present_with_full_catalog(gapp):
     rows = _catalog_rows(lab.catalogModel)
     assert [r["key"] for r in rows] == sorted(
         ["doping_mobility", "field_mobility", "srh", "auger", "bgn",
-         "fd", "incomplete_ion", "impact", "btbt", "surface_mobility",
-         "dg"])
+         "tat", "fd", "incomplete_ion", "impact", "btbt",
+         "surface_mobility", "dg"])
     assert all(r["enabled"] == (r["key"] not in
-                                ("field_mobility", "fd",
+                                ("field_mobility", "tat", "fd",
                                  "incomplete_ion",
                                  "impact", "btbt",
                                  "surface_mobility", "dg")) for r in rows)
