@@ -166,6 +166,16 @@ class AppController(QObject):
         # ownership pattern as cv/family above.
         from .probe_station_controller import ProbeStationController
         self.probe_station = ProbeStationController(self, parent=self)
+        # Solver Telemetry: listens to self._runner's (already
+        # constructed above) iterationChanged/residualChanged signals --
+        # same ownership pattern as probe_station, but this one reads a
+        # JobRunner that already exists rather than driving its own.
+        from .solver_telemetry_controller import SolverTelemetryController
+        self.solver_telemetry = SolverTelemetryController(self, parent=self)
+        # Band Diagram Viewer: reads band__* arrays off the current
+        # ResultStore on every resultChanged.
+        from .band_diagram_controller import BandDiagramController
+        self.band_diagram = BandDiagramController(self, parent=self)
         # 3D-VISUALIZATION-PLAN.md Phase 1: the currently-open 3D viewer
         # window, if any (a plain Python attribute, not Qt-parented --
         # it's a separate top-level window, not a QML-owned object).
@@ -329,6 +339,14 @@ class AppController(QObject):
     @Property(QObject, constant=True)
     def probeStation(self):
         return self.probe_station
+
+    @Property(QObject, constant=True)
+    def solverTelemetry(self):
+        return self.solver_telemetry
+
+    @Property(QObject, constant=True)
+    def bandDiagram(self):
+        return self.band_diagram
 
     @Property(QObject, constant=True)
     def regionListModel(self):
