@@ -3044,3 +3044,23 @@ result -- "Direct" / "GPU direct" / "AMG (bicgstab)" / "MPI Schwarz
 (x-split, 4 ranks)" -- in a small status-bar label next to the
 existing "results loaded" indicator in Main.qml. Previously this
 choice was completely invisible to the user.
+
+### STATE ADDENDUM -- TESTS ADDED FOR THE MERGED GUI PANELS (2026-09-04)
+
+The Band Diagram, Solver Telemetry, and Virtual Probe Station panels
+merged in earlier this session had zero dedicated tests (unlike
+`characterization.py`, which came with 27). Added
+`gui/tests/test_new_panels.py` (16 tests, headless -- same
+controllers-hold-all-UI-state split test_controllers.py's own docstring
+describes): BandDiagramController's honest no-result/2D-unavailable/
+1D-populated states (the 1D case runs a REAL diode_1d solve through
+the actual subprocess, not a stub); SolverTelemetryController's demo
+trace, a REAL solve's live iteration/residual scraping (not just demo
+mode), and its started/failed signal-driven state transitions;
+ProbeStationController's demo DC sweeps (transfer/output/breakdown)
+and their Vth/SS/gds extraction, demo RF fT extraction, the unknown-
+sweep-type error path, and both real-backend dispatch points
+(`runSweep`/`runRF`) correctly surfacing their NotImplementedError
+through `errorRaised` rather than crashing or fabricating data.
+
+gui/tests: 624 passed (608 + 16 new), no regressions.
