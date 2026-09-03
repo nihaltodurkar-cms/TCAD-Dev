@@ -35,7 +35,6 @@ import warnings
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import spsolve
 
 from . import linsolve
 
@@ -936,7 +935,13 @@ class Device3D:
         for it in range(opts.max_iter):
             F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
             if opts.linsolve == "direct":
-                du = spsolve(J.tocsc(), -F)
+                # linsolve.solve_linear(method="direct") is documented
+                # bit-identical to a raw spsolve call (see its own
+                # docstring) -- routing through it here, rather than
+                # calling spsolve directly, buys the MatrixRankWarning-
+                # as-error guard for free with no behavior change,
+                # matching solve_equilibrium's primary direct branch.
+                du, _ = linsolve.solve_linear(J, -F, method="direct")
             else:
                 # Same fallback contract as solve_equilibrium above: a
                 # requested iterative method is tried first for speed,
@@ -945,10 +950,13 @@ class Device3D:
                 # on this equation's coupled psi/n/p Jacobian, even
                 # with pyamg installed -- block_size=3 routes to
                 # block-Jacobi before AMG is ever tried, see
-                # linsolve._build_preconditioner) falls back to the
-                # exact same direct spsolve the "if" branch above uses,
-                # for that one iteration only, rather than raising out
-                # of the whole solve.
+                # linsolve._build_preconditioner) falls back to a
+                # direct solve for that one iteration only, rather than
+                # raising out of the whole solve. Routed through
+                # linsolve.solve_linear (not a raw spsolve call) so an
+                # exactly-singular Jacobian raises LinearSolveError
+                # instead of silently propagating a NaN/Inf update into
+                # the next Newton iteration.
                 try:
                     du, _ = linsolve.solve_linear(
                         J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
@@ -958,7 +966,7 @@ class Device3D:
                         print(f"    solve_bias it {it:2d}  {opts.linsolve} "
                               "did not converge -- falling back to direct "
                               "for this iteration")
-                    du = spsolve(J.tocsc(), -F)
+                    du, _ = linsolve.solve_linear(J, -F, method="direct")
             dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)

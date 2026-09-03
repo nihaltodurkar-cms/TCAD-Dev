@@ -52,6 +52,7 @@ class JobRunner(QObject):
         self._stderr = ""
         self._result_seen = None
         self.result_path = ""
+        self._job_path = ""
 
     # -- state --------------------------------------------------------
     @Property(bool, notify=started)
@@ -67,6 +68,7 @@ class JobRunner(QObject):
         # Unique per run: a canceled run's missing file can then never be
         # mistaken for some other run's completed result.
         self.result_path = os.path.join(self._work_dir, f"result-{run_id}.npz")
+        self._job_path = job_path
         spec.to_json(job_path)
 
         self._canceling = False
@@ -121,6 +123,18 @@ class JobRunner(QObject):
     def _on_finished(self, exit_code, exit_status):
         proc, self._proc = self._proc, None
         proc.deleteLater()
+
+        # The job-*.json input never gets an atomic-rename-away like the
+        # .tmp.npz/.tmp.json result artifacts do -- solver_runner.py only
+        # reads it, so nothing else ever removes it. Clean it up here on
+        # every outcome (success, failure, or cancel) so a long GUI
+        # session doesn't accumulate one orphaned file per run in the
+        # temp work dir.
+        if self._job_path and os.path.exists(self._job_path):
+            try:
+                os.remove(self._job_path)
+            except OSError:
+                pass
 
         if self._canceling:
             # Belt and braces: solver_runner's atomic rename already means

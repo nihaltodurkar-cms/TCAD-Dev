@@ -110,12 +110,22 @@ def _build_block_jacobi_preconditioner(A, block_size):
     # col_offset) pair within a block, pull every node's entry at once
     # via fancy indexing rather than looping over nodes in Python.
     idx = np.arange(nblk) * block_size
+    # A[3i+r, 3i+c] sits on the (c-r)-th matrix diagonal for every node
+    # i, so block_size**2 calls to the sparse matrix's own .diagonal()
+    # (a fast, C-level pass over the stored entries) extract every
+    # block in one shot per (r, c) pair -- no per-node Python loop, and
+    # no sparse fancy-indexing (which scipy implements comparatively
+    # slowly) as the previous row = Ac[idx + r]; row[arange(nblk),
+    # idx + c] approach did. scipy's diagonal(k) is indexed by ROW for
+    # k >= 0 (d[m] = A[m, m+k]) but by COLUMN for k < 0 (d[m] =
+    # A[m-k, m]) -- confirmed directly against a dense reference matrix
+    # before relying on it here -- so which of idx+r / idx+c to index
+    # the returned diagonal with must switch on the sign of (c - r).
     for r in range(block_size):
-        row = Ac[idx + r]                      # (nblk, n) sparse, one row per node
-        row = row.tocsc()
         for c in range(block_size):
-            blocks[:, r, c] = np.asarray(
-                row[np.arange(nblk), idx + c]).ravel()
+            offset = c - r
+            diag = Ac.diagonal(offset)
+            blocks[:, r, c] = diag[idx + r] if offset >= 0 else diag[idx + c]
     dets = np.linalg.det(blocks)
     if not np.all(np.isfinite(dets)) or np.any(np.abs(dets) < 1e-300):
         return None
@@ -244,7 +254,15 @@ def _build_preconditioner(A, block_size=None, precond="auto"):
         M = _build_schur_preconditioner(A, block_size)
         if M is not None:
             return M
-    if block_size is not None and precond in ("auto", "block_jacobi"):
+    # A failed/structurally-impossible "schur" request falls through to
+    # block-Jacobi too (not just "auto"/"block_jacobi"), matching this
+    # function's own docstring ("falls through the chain on structural
+    # failure") -- excluding "schur" here would skip the one preconditioner
+    # actually effective on this codebase's interleaved psi/n/p Jacobians
+    # (see _build_block_jacobi_preconditioner's MOTIVATION) and drop
+    # straight to scalar ILU/PyAMG, which this repo's own measurements
+    # found does not make visible GMRES progress on these systems.
+    if block_size is not None and precond in ("auto", "block_jacobi", "schur"):
         M = _build_block_jacobi_preconditioner(A, block_size)
         if M is not None:
             return M

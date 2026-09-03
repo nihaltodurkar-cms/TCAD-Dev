@@ -353,7 +353,15 @@ class NpzResultStore(ResultStore):
         if not self.has_sweep_snapshots():
             raise KeyError("no sweep snapshots in this store")
         voltages_data = self._d["sweep__snapshot__voltages"]
-        voltages = np.asarray(json.loads(str(voltages_data)))
+        # Handle both JSON string and numpy array storage -- same fragility
+        # (and same fallback) as mesh__shape just below: a backend that
+        # saves this field as a raw numpy array gets a str() like
+        # "[0.1 0.2 0.3]" (no commas), which json.loads() can't parse.
+        voltages_str = str(voltages_data)
+        if voltages_str.startswith("[") and "," not in voltages_str:
+            voltages = np.asarray([float(x) for x in voltages_str.strip("[]").split()])
+        else:
+            voltages = np.asarray(json.loads(voltages_str))
         mesh_shape_data = self._d["mesh__shape"]
         # Handle both JSON string and numpy array storage
         mesh_shape_str = str(mesh_shape_data)

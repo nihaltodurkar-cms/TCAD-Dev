@@ -297,6 +297,19 @@ class StructureModel:
                     or r.y_min < 0 or r.y_max > self.height_cm):
                 errors.append(ValidationError(
                     f"Region '{r.name}' extends outside the domain", r.id))
+            if self.depth_cm is not None:
+                if r.z_min is None or r.z_max is None:
+                    errors.append(ValidationError(
+                        f"Region '{r.name}' in a 3D structure must have "
+                        f"z_min and z_max", r.id))
+                else:
+                    if r.z_min >= r.z_max:
+                        errors.append(ValidationError(
+                            f"Region '{r.name}' has zero or negative depth", r.id))
+                    if r.z_min < 0 or r.z_max > self.depth_cm:
+                        errors.append(ValidationError(
+                            f"Region '{r.name}' extends outside the domain "
+                            f"in z", r.id))
 
         seen = set()
         for c in self.contacts:

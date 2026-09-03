@@ -85,10 +85,21 @@ class SweepSpec:
             raise ValueError(
                 f"sweep step {self.step} does not move from start "
                 f"{self.start} toward stop {self.stop}")
-        n = abs((self.stop - self.start) / self.step) + 1
+        # Mirror voltages()'s own rounding here rather than either (a) a
+        # fresh raw division, which can land a hair above an integer
+        # purely from float imprecision (e.g. 99999.0000000001 > 100000)
+        # and falsely reject a sweep voltages() would happily produce at
+        # exactly MAX_SWEEP_POINTS, or (b) calling voltages()/n_points()
+        # directly, which would materialize the full point list -- with
+        # a pathological (huge range, tiny step) input that's exactly
+        # the unbounded-memory cost this check exists to reject BEFORE
+        # incurring it.
+        k = (self.stop - self.start) / self.step
+        n = (int(round(k)) + 1 if abs(k - round(k)) < 1e-9
+             else int(math.floor(k)) + 1)
         if n > MAX_SWEEP_POINTS:
             raise ValueError(
-                f"sweep would need ~{int(n):g} points; the limit is "
+                f"sweep would need {n} points; the limit is "
                 f"{MAX_SWEEP_POINTS} (increase the step)")
 
     def validate(self, contact_names):
