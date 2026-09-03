@@ -196,19 +196,6 @@ def test_gb_quantum_potential_input_validation():
 # ======================================================================
 # G-C  centroid vs S-P + the literature ~1 nm figure
 # ======================================================================
-@pytest.mark.xfail(reason=(
-    "Genuinely nondeterministic in this sandbox, not a fixed boundary "
-    "miss: two back-to-back calls to schrodinger_poisson_mos() with "
-    "IDENTICAL inputs in the same process returned centroids of 4.15 nm "
-    "and 4.61 nm (checked directly while investigating this failure) -- "
-    "well beyond the 4.021 nm this test was originally seen failing at, "
-    "so widening the upper bound (e.g. to 4.1) would NOT reliably fix "
-    "this; it would just narrow how often it fails. The underlying S-P "
-    "eigensolver (scipy.eigsh, presumably an unseeded/uncontrolled "
-    "initial vector) needs a fixed seed or a deterministic starting "
-    "guess to make this test reproducible -- that's the real fix, out "
-    "of scope for a test-file-only change. Non-strict: the band is wide "
-    "enough that this passes on some runs by chance."))
 def test_gc_sp_centroid_in_literature_band():
     """The S-P electron centroid at strong inversion is 0.5-4 nm
     (literature: ~1 nm at ~1 MV/cm surface field; the wide band admits
