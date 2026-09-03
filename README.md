@@ -40,13 +40,14 @@ pytcad/
   device3d.py    3D drift-diffusion: box-integration Poisson + continuity
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
                  3D-reduces-to-2D validation
-tests/           900+ tests: analytic-limit validation, published-value
+tests/           1000+ tests: analytic-limit validation, published-value
                    physics benchmarks, headless GUI tests — fast suite
-                   (`-m "not slow"`) currently 942 passed, 6 skipped,
-                   1 xfailed (M14 G-A, blocked on paywalled Lombardi
-                   constants), 1 known failure (an unrelated, pre-
-                   existing flaky eigensolver test in the M20
-                   Schrödinger-Poisson reference solver)
+                   (`-m "not slow"`) currently 1028 passed, 1 xfailed
+                   (M14 G-A, blocked on paywalled Lombardi constants),
+                   0 known failures -- the M20 Schrödinger-Poisson
+                   reference solver's once-flaky eigensolver test is
+                   now fixed (a genuinely symmetric Hamiltonian solved
+                   directly via eigh_tridiagonal, not iterative eigsh)
 workbench/       Semiconductor Workbench domain layer: Region /
                  DomainDevice / MaterialLibrary (Si, Ge, GaAs, InGaAs,
                  AlGaAs) / ModelCatalog as pure data; lossless adapters
@@ -142,10 +143,11 @@ $$\psi \to \psi/V_T,\quad n,p \to n/N_{peak},\quad x \to x/L_D,\quad L_D = \sqrt
 ## 4. Validation
 
 The fast suite (`pytest tests/ gui/tests/ -n 6 -m "not slow" -q`)
-currently reports 942 passed, 6 skipped, 1 xfailed (M14 G-A, blocked
-on paywalled Lombardi constants), and 1 known failure (an unrelated,
-pre-existing flaky eigensolver test in the M20 Schrödinger-Poisson
-reference solver). Every verification
+currently reports 1028 passed, 1 xfailed (M14 G-A, blocked
+on paywalled Lombardi constants), and 0 known failures -- the M20
+Schrödinger-Poisson reference solver's once-flaky eigensolver test is
+now fixed (a genuinely symmetric Hamiltonian solved directly via
+eigh_tridiagonal, not iterative eigsh). Every verification
 result is classified as one of
 **literature benchmark** (agrees with measured published values),
 **analytical validation** (agrees with closed-form theory independent of
@@ -273,7 +275,7 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Validation.** The primary correctness gate is dimensional reduction: a z-invariant 3D structure must reproduce the already-validated 2D solver exactly. `tests/test_validation_3d.py` checks this at equilibrium and forward bias, and `examples/05_3d_reduces_to_2d.py` makes it visual — extruding a p-n junction in z, solving both 2D and 3D, and plotting the difference. Measured on this repo: max $|\psi_{3D}-\psi_{2D}|$ = 1.11e-16 V, max $|J_{3D}-J_{2D}|$ = 3.98e-10 A/cm² — both at floating-point noise level, not just within the tests' (looser) 1e-6 V / 1e-3 relative tolerances. The analytic Newton Jacobian is independently checked against finite differences (worst relative error < 1e-3 across 30 random sampled columns via sparse column-slice extraction — never `J.toarray()` on the full matrix), and terminal-current extraction (residual-based, not edge-walking) conserves charge to <1e-6 relative error on a two-terminal 3D resistor.
 
-**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). The default path is a direct sparse solve (`scipy.sparse.linalg.spsolve`); `pytcad/linsolve.py` provides GMRES with node-block-Jacobi and Schur-complement preconditioners (M22, `precond="schur"`) for the large coupled systems, but the direct path remains the default until iteration counts are measured across the suite. Since 2026-09-02, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned, optional `pyamg` dependency) and `linsolve="gpu_direct"` (CUDA via optional `cupy`) — 8x-44x faster for a large equilibrium solve, 2.8x for a large bias solve respectively, but measurably worse than `"direct"` below roughly 20,000-50,000 nodes, which is why `"direct"` stays the default rather than either becoming it; `gui/services/solver_runner.py` picks automatically for GUI-driven 3D jobs based on mesh size and what's installed. A 4-rank MPI Schwarz domain decomposition (`gui/services/mpi_schwarz_runner.py`) also exists at the GUI layer for large 3D jobs, 5.1x on the geometry it was measured against — but it is NOT safe for every geometry (a device whose doping varies along the split axis converges far slower or not at all; the GUI checks the actual doping array and refuses the MPI path when that's the case) and is scoped to equilibrium + a single bias point. See M22-LINSOLVE-PLAN.md section 9 for the full record. The direct-solve scaling cost this whole paragraph is otherwise about is real and measured: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware without one of the alternatives above; do not attempt 40³+ meshes without one.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
+**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). The default path is a direct sparse solve (`scipy.sparse.linalg.spsolve`); `pytcad/linsolve.py` provides GMRES with node-block-Jacobi and Schur-complement preconditioners (M22, `precond="schur"`) for the large coupled systems, but the direct path remains the default until iteration counts are measured across the suite. Since 2026-09-02, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned, optional `pyamg` dependency) and `linsolve="gpu_direct"` (CUDA via optional `cupy`) — 8x-44x faster for a large equilibrium solve, 2.8x for a large bias solve respectively, but measurably worse than `"direct"` below roughly 20,000-50,000 nodes, which is why `"direct"` stays the default rather than either becoming it; `gui/services/solver_runner.py` picks automatically for GUI-driven 3D jobs based on mesh size and what's installed. A 4-rank MPI Schwarz domain decomposition (`gui/services/mpi_schwarz_runner.py`) also exists at the GUI layer for large 3D jobs: 5.1x on the geometry it was first measured against, extended to voltage sweeps (2.7x on a 3-point sweep) and to picking whichever of x/y/z is actually safe to split along, rather than only x — pn_junction_3d, refused outright by an x-only check, now qualifies via a z-split (1.5x). It is NOT safe for every geometry: a device whose doping varies along the candidate axis converges far slower or not at all, and (a real bug found and fixed) a device with a gate contact whose own `normal_axis` matches the candidate axis can converge to a silently WRONG answer even when the doping check alone would call that axis safe — the GUI checks both the doping array and every registered gate's normal_axis, and refuses the MPI path whenever either is unsafe. Which engine actually ran a given result (direct / AMG / GPU / MPI Schwarz) is now shown in the GUI's own status bar rather than being a silent internal choice. See M22-LINSOLVE-PLAN.md sections 9-13 for the full record. The direct-solve scaling cost this whole paragraph is otherwise about is real and measured: benchmarking a uniformly-doped cubic resistor showed solve time growing from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes — clearly superlinear LU fill-in), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice this solver is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware without one of the alternatives above; do not attempt 40³+ meshes without one.** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
 
 ### Transient simulation (new)
 
