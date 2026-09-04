@@ -220,6 +220,56 @@ Rectangle {
                     font.pixelSize: Theme.fsSmall
                 }
             }
+
+            // Workflow-friction pass: a real empty state instead of the
+            // bare "No project loaded" matplotlib text, for the specific
+            // case of nothing being loaded at all (not just "this mode
+            // has no data yet for an already-loaded device" -- every
+            // other per-mode fallback in mpl_canvas_item.py is
+            // untouched). Buttons call the exact same controller methods
+            // the File menu's "Load X example" items already use.
+            Rectangle {
+                objectName: "viewportEmptyState"
+                anchors.fill: parent
+                visible: !!(controller && !controller.hasDeviceToRun)
+                // Opaque so it fully covers the canvas's own bare "No
+                // project loaded" matplotlib text underneath, rather
+                // than letting both render on top of each other.
+                color: Theme.cardBg
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: Theme.padLg
+
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "No device loaded"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fsHeader
+                        font.bold: true
+                    }
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "Load a built-in example to get started, or build one in Structure."
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fsSmall
+                    }
+                    Row {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: Theme.padSm
+                        Button {
+                            objectName: "emptyStateLoadDiodeButton"
+                            text: "Load 1D Diode Example"
+                            onClicked: if (controller) controller.loadExample("diode_1d")
+                        }
+                        Button {
+                            objectName: "emptyStateLoadMosfetButton"
+                            text: "Load 2D MOSFET Example"
+                            onClicked: if (controller) controller.loadStructureExample("mosfet_2d_structure")
+                        }
+                    }
+                }
+            }
         }
     }
 

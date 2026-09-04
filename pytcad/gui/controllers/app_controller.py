@@ -594,6 +594,16 @@ class AppController(QObject):
                 "t0": c.waveform.t0, "t1": c.waveform.t1,
                 "t_end": c.t_end, "dt0": c.dt0}
 
+    # -- workflow-friction pass: Run enablement ---------------------------
+    @Property(bool, notify=structureChanged)
+    def hasDeviceToRun(self):
+        """Mirrors run()'s own early-return check ("Nothing to run" /
+        "Load an example first.") so Main.qml can disable the Run button
+        instead of letting the user click it into a dead-end error
+        dialog -- same condition, surfaced before the click rather than
+        after it."""
+        return self.structure is not None or self.spec is not None
+
     # -- v0.6 Phase 2c: solver backend selection --------------------------
     @Property(bool, notify=structureChanged)
     def canSelectBackend(self):

@@ -83,7 +83,7 @@ ApplicationWindow {
         Menu {
             title: "&Run"
             MenuItem { text: "Run simulation"
-                       enabled: !appController.busy
+                       enabled: !appController.busy && appController.hasDeviceToRun
                        onTriggered: appController.run() }
             MenuItem { text: "Cancel"
                        enabled: appController.busy
@@ -128,12 +128,21 @@ ApplicationWindow {
 
             Button {
                 id: runButton
+                objectName: "runButton"
                 display: AbstractButton.IconOnly
                 text: "▶"
                 ToolTip.visible: hovered
                 ToolTip.delay: 500
-                ToolTip.text: "Solve the current device"
-                enabled: !appController.busy
+                // Workflow-friction pass: disabled (with an explanatory
+                // tooltip) instead of clickable-then-erroring -- mirrors
+                // run()'s own "Nothing to run" early-return check via
+                // hasDeviceToRun, so the dead-end error dialog is no
+                // longer the only feedback a user with nothing loaded
+                // gets from pressing Run.
+                ToolTip.text: appController.hasDeviceToRun
+                              ? "Solve the current device"
+                              : "Load an example (File menu) or build a structure first"
+                enabled: !appController.busy && appController.hasDeviceToRun
                 onClicked: appController.run()
                 background: Rectangle {
                     radius: Theme.radiusSm
