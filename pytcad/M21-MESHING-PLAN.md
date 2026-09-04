@@ -6,8 +6,12 @@ Status: **PHASES 1-2 IMPLEMENTED, GATES GREEN.**  pytcad/adapt.py plus
 tests/test_m21_adapt.py (17 tests, phase 1) and tests/test_m21_phase2.py
 (25 tests, phase 2, 2026-08-28).  Phase 3's geometry foundation shipped
 2026-08-31 (gmsh_mesh.py/region_resolver.py/unstructured_assembly.py,
-14 tests); the coupled-physics assembly (G1-G5) is not started -- see
-M21-PHASE3-MESHING-PLAN.md's own status line.  Section 10
+14 tests). [Update, same day: the coupled-physics assembly (3b Poisson
+equilibrium G1-G3, 3c coupled bias solve G1/G4/G5, 3d
+`Device2D(unstructured=True)` integration) also SHIPPED 2026-08-31 --
+M21 Phase 3 is now COMPLETE end to end; see
+M21-PHASE3-MESHING-PLAN.md's own status line, which supersedes the
+"not started" note this sentence originally made.]  Section 10
 records the decisions taken; section 11 records what phase 1's
 implementation changed about the design and what it found; section 13
 records phase 2's hard-debug pass -- six real bugs found and fixed,

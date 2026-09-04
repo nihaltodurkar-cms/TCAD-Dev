@@ -19,8 +19,11 @@ user-decided open — see M20-DENSITY-GRADIENT-PLAN.md).
 
 Follow-on work: 3D visualization -- see `3D-VISUALIZATION-PLAN.md`
 (Phases 1-2 shipped 2026-08-29/30: a real 3D example device, a
-PyVista/VTK viewer window with isosurface controls; Phases 3-5 not
-started). That work also fixed a real bug in THIS plan's own Phase 1-4
+PyVista/VTK viewer window with isosurface controls. [Update: Phases
+3-5 -- volumetric rendering, animated bias-sweep playback, exploded
+multi-layer structural view -- also SHIPPED 2026-08-30, superseding
+the "not started" note this sentence originally made; see that plan's
+own status line.]). That work also fixed a real bug in THIS plan's own Phase 1-4
 landing: `gui/app.py` bootstrapped with `QGuiApplication`, which
 hard-crashes the whole process on the first `QWidget` construction --
 switched to `QApplication` (a confirmed strict superset; zero effect on
@@ -392,7 +395,11 @@ are NOT pure-GUI tasks -- the underlying data does not exist yet:
 
 - TRANSIENT PLOTTING: blocked on M17 (transient simulation), "not
   started" per ARCHITECTURE.md. No GUI work is possible before M17
-  lands a transient result schema to plot.
+  lands a transient result schema to plot. [Update: M17 Phase 3 (GUI
+  wiring for both 1D and 2D transient results) SHIPPED 2026-08-31,
+  superseding this blocker -- see M17-TRANSIENT-PLAN.md's own status
+  line. This item was completed as part of that milestone's own GUI
+  phase, not as a phase of this plan.]
 - GEOMETRY-FROM-PROCESS VIEWER: blocked on M23 (2D process geometry
   engine), "not started." `pytcad.process` is 1D-only today (README's
   "Not supported, by design" list) -- there is no 2D process geometry

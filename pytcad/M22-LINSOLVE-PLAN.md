@@ -25,6 +25,13 @@ day, section 10) from an x-only split to picking whichever mesh axis
 (x/y/z) a device's doping is actually safe to split along -- this is
 what brought pn_junction_3d (previously refused outright) onto the
 MPI path via a z-split, 1.5x over its single-process AMG+GPU baseline.
+**SWEEP SUPPORT LANDED 2026-09-04** (section 11). **A REAL GATE-AXIS
+CORRECTNESS BUG WAS FOUND AND FIXED 2026-09-04** (section 12: a
+device's own gate BC normal_axis, not just its doping uniformity, must
+be excluded from split-axis candidates -- finfet_3d's doping-uniform
+z-axis also carried a GateBC oxide-coupling term the doping-only check
+couldn't see, silently producing a wrong AND slower result before the
+fix) and **verified end to end on mosfet_3d/moscap_3d** (section 13).
 
 Roadmap slot: ARCHITECTURE.md section 4b.2, "M22 LINEAR SOLVER
 MODERNIZATION + CONTINUATION [L]".

@@ -3204,3 +3204,218 @@ panels, etc. -- design spec section 8) is Slice 2, a deliberate,
 separate follow-up plan, not started here. Workflow-friction, QML
 architecture cleanup, and performance are the other three GUI
 improvement areas from the original request, still queued.
+
+[Update: all four of the above -- Slice 2, workflow-friction, QML
+cleanup, and performance -- landed the same day; see the addenda
+below. The `solverEngineLabel` crash noted above as "left for a future
+session" was also fixed the same day.]
+
+### STATE ADDENDUM -- GUI VISUAL RESKIN SLICE 2 LANDED (2026-09-04)
+
+Restyled the Mesh panel's stats block (the one named explicitly by the
+user as feeling cramped) from a plain mono-font label list into a
+card-grid: a total-nodes tile plus one tile per mesh axis (node count,
+min-max extent), using the v2 reskin's `Theme.cardBg`/`cardBorder`
+tokens. `AppController.meshStats`/`MeshEditor` untouched -- same data,
+same controller API, display only.
+
+Then extended the same design language to the remaining panels without
+touching any controller/service code or panel structure: StructurePanel's
+contact/gate-list selection highlight and ProcessPanel's step-list
+selection highlight both moved from the generic `Theme.panelAlt` to
+`Theme.accentSoft` (the same violet wash the sidebar tabs already use),
+and a couple of one-off header-styling inconsistencies (ProcessPanel's
+"PROCESS FLOW" title, the just-landed MeshPanel's "MESH STATISTICS"
+label) were brought in line with the section-subheader convention
+already established elsewhere (StructurePanel's "CONTACTS"/"GATES",
+SweepPanel's own headers, MeshEditor's "MESH").
+
+Per-axis mesh tiles are Repeater-generated and (same finding as the
+Slice 1 sidebar tabs) unreachable via `QObject.findChildren()` in this
+PySide6/Qt build, so the regression test checks the statically-declared
+parts plus a QML-source token check, with per-axis-tile correctness
+confirmed via live-app screenshot. Verified live across all three
+panels with a real `mosfet_2d_structure` load. `gui/tests`: 641 passed
+(up from 638), zero regressions.
+
+### STATE ADDENDUM -- WORKFLOW-FRICTION PASS LANDED (2026-09-04)
+
+Audited the main end-to-end workflow (device load -> mesh -> solve ->
+view results) live, via a fork driving the real app, per the user's
+"audit end-to-end, fix only the highest-impact points" instruction.
+Two friction points shared one root cause and were fixed together:
+
+1. A fresh launch showed a blank viewport with no indication of what
+   to do next.
+2. The Run button was unconditionally enabled; clicking it with
+   nothing loaded raised a dead-end error dialog instead of the button
+   simply being disabled.
+
+Fix: a new `AppController.hasDeviceToRun` property mirrors `run()`'s
+own early-return condition as a single source of truth. The Run button
+and "Run simulation" menu item now gate on it (with an explanatory
+tooltip when disabled); `ViewportPanel.qml` gained an empty-state
+overlay, shown only when `hasDeviceToRun` is false, with two buttons
+that call the exact same `loadExample()`/`loadStructureExample()`
+methods the File menu already uses -- no new backend logic.
+
+Ruled out during the audit (checked, not fixed): a suspected stale
+post-solve viewport turned out to already auto-refresh correctly.
+Flagged but explicitly out of scope for a friction pass: mesh adequacy
+(`check_mesh`) has no GUI surfacing at all. Verified live: fresh launch
+shows the empty state with Run disabled; either quick-start button
+loads the device, hides the empty state, and enables Run. `gui/tests`:
+648 passed (up from 641), zero regressions.
+
+### STATE ADDENDUM -- QML ARCHITECTURE CLEANUP LANDED (2026-09-04)
+
+Four incremental structural refactors, no UI-behavior or backend
+change, each its own commit with regression tests:
+
+1. **Shared `ThemedSpinBox`/`ThemedComboBox`.** Factored out "sunken
+   input" background styling that had been hand-rolled independently
+   12 times across `MeshEditor.qml`, `DopingEditor.qml`,
+   `GateEditor.qml`, `OxidizeEditor.qml`, `ImplantEditor.qml`
+   (~85 duplicated lines). Every field's objectName, id, model, signal
+   handler, and computed value is unchanged. Found, not fixed (flagged
+   as pre-existing and out of scope for this pass): `MeshPanel`'s
+   mesh-info list showed "undefined / undefined" rows on the
+   Structure/Device-Builder path -- see the bug-fix addendum below,
+   this was fixed later the same day.
+2. **Generic row lookup for `StructurePanel`.** `_regionData()`/
+   `_contactData()`/`_gateData()` each hand-rolled the same
+   "loop rowCount(), compare id role, return named fields" logic
+   against a different list model (21 total unnamed
+   `Qt.UserRole + N` literals). Replaced with one generic
+   `_lookupRow(model, roles, id)` plus a named role-offset map per
+   model type, cross-referenced against each Python `...ListModel`'s
+   own `Role` class. Confirmed directly (not assumed) that
+   `model.roleNames()` is not callable from QML in this PySide6 build
+   before choosing this design.
+3. **`MainToolBar.qml` extraction.** `Main.qml`'s inline ~235-line
+   toolbar block (Run/Stop, backend selector, Undo/Redo, view-mode
+   selector, status label, theme toggle) moved to
+   `components/MainToolBar.qml`: 801 -> 577 lines in `Main.qml`
+   (~28% smaller). Every objectName, id, binding, signal handler, and
+   styling rule preserved byte-identical; the one real coupling change
+   (the toolbar's implicit same-file reference to `Main.qml`'s
+   `viewport` id) became an explicit `viewport` property, verified
+   live. One expected knock-on fix: a test reading `Main.qml`'s source
+   text for `Icons.svg(...)` call sites now reads `MainToolBar.qml`
+   instead, caught immediately by the full suite.
+4. **`MeshEditor` controller lookup.** `MeshPanel.qml` reached
+   `MeshEditor`'s controller via `parent.parent.controller` (two
+   parent levels up, correct only by accident of the current tree
+   depth -- any inserted wrapper would silently null it with no
+   warning). Given the root `Rectangle` an explicit `id: root` and
+   referenced it directly.
+
+`gui/tests`: 653 passed (up from 648) after item 4, zero regressions
+across all four commits.
+
+### STATE ADDENDUM -- PERFORMANCE AUDIT + OPTIMIZATION PASS LANDED (2026-09-04)
+
+Per the user's "profile first, optimize second" instruction: measured
+startup time, solver/mesh execution, Python<->QML updates, viewport
+rendering, panel/model updates, and memory (`python3 -X importtime`,
+cProfile, isolated `QQmlComponent` construction timing, RSS sampling)
+before changing anything, then worked the ranked findings one at a
+time, each its own commit:
+
+1. **Lazy-import cupy** (`pytcad/linsolve.py`, frozen-core file --
+   explicit sign-off obtained first as a zero-numerical-impact
+   import-timing change). Unconditional `import cupy`/`cupyx` cost
+   ~85-124ms of `gui.app`'s ~505ms cold-start import chain even though
+   most sessions never touch the opt-in `gpu_direct` method.
+   `_HAVE_CUPY` now computed via `importlib.util.find_spec` (0.04ms);
+   the actual cupy imports moved into `solve_linear()`'s `gpu_direct`
+   branch. Measured: 505ms -> 425ms cumulative import time.
+   `tests/test_m22_linsolve.py`: 16 passed, unchanged.
+2. **Startup memory jump, root-caused not fixed.** The audit's
+   "+189MB settling jump" is dominated by `matplotlib` itself
+   (~130MB RSS just to `import gui.visualization.mpl_canvas_item`),
+   not panel instantiation (~50MB for all 11 panels) or paint
+   settling (~12MB). No code change: matplotlib is a hard dependency
+   of the always-visible viewport, so lazy-loading it would only move
+   *when* the cost is paid, not reduce it. Documented at the import
+   site instead.
+3. **Pan/zoom fast path.** cProfile showed matplotlib's
+   `tight_layout()` alone is ~69% of a full render's cost. `pan()`/
+   `zoom()` now reuse existing Axes (when a prior render left them,
+   true only for line-plot modes, at the same pixel size) instead of
+   rebuilding the whole figure. Measured 27.64ms/call -> 11.29ms/call
+   on a real solved `diode_1d` view, a 2.4x speedup. `gui/tests`: 659
+   passed (up from 653).
+4. **QML engine construction** -- audited, not changed: disk caching
+   (`.qmlc`) already active; an A/B timing comparison showed no
+   significant difference with it disabled, matching the audit's own
+   prediction that this was near the floor.
+5. **Solver hot path** -- audited, not changed by design: 91% of a
+   real `mosfet_2d` solve is scipy's direct sparse LU inside the
+   frozen numerical core, out of scope for a GUI-performance mandate.
+   Added a generous (10s, ~9x margin) timing regression gate on the
+   GUI-facing `run_job()` entry point instead.
+6. **List-model refresh cost** -- confirmed already cheap
+   (`RegionListModel.refresh()` 0.0006ms/call, `AppController.meshInfo`
+   0.0136ms/call for a real MOSFET) and already signal-gated, not
+   polled -- premature-optimization bait, not touched. Added benchmark
+   gates (~1600x/~150x margin) against future regression instead.
+7. **Family-sweep signal traffic** -- confirmed (by reading the
+   source, then verifying with a real signal-count test) that
+   `familyChanged` fires exactly once per completed sweep, never the
+   heavier `resultChanged`/`structureChanged`. Added a counting-based
+   regression gate.
+8. **3D viewer laziness** -- confirmed `import gui.app` never reaches
+   `gui/services/viewer3d.py` (pyvista/pyvistaqt stay out of
+   `sys.modules` until the user opens the 3D viewer). Already-correct
+   existing design; added a subprocess-based regression gate matching
+   item 1's cupy-isolation pattern.
+
+Full suite gate after all 8 items: `pytest tests/ gui/tests/ -n 6 -q`
+-> 1089 passed, 1 xfailed, 0 failed.
+
+### STATE ADDENDUM -- TWO BUGS FOUND DURING QML CLEANUP, NOW FIXED (2026-09-04)
+
+Both bugs below were found and explicitly deferred during earlier
+passes this same day (the `solverEngineLabel` crash during the visual
+reskin, the `meshInfo` "undefined" rows during QML cleanup item 1) and
+were fixed together once the user asked for both by name.
+
+**`AppController.solverEngineLabel` crash.** Called
+`store.has_record()` unconditionally, crashing with
+`AttributeError: 'SpecResultStore' object has no attribute
+'has_record'` any time a device was loaded but not yet solved. Root
+cause: `has_record()`/`run_record()` were added directly to
+`NpzResultStore` without also becoming protocol members on the
+`ResultStore` ABC with honest defaults -- unlike every sibling
+capability (`has_sweep`/`has_transient`/`has_band_diagram`), which the
+ABC's own docstring already documents this exact pattern for. Fixed by
+adding `has_record() -> False` / `run_record() -> None` to the ABC;
+`solverEngineLabel` itself needed no change. TDD
+(`gui/tests/test_solver_engine_label_bug.py`); verified against every
+existing caller of `has_record()`/`run_record()` in the codebase (all
+test code on an already-solved store -- `solverEngineLabel` was the
+only production path reachable with a pre-solve store); 92-test
+regression suite plus live verification (`''` before a solve,
+`'Direct'` after).
+
+**`MeshEditor` stats grid "undefined" rows.** `AppController.meshInfo`
+built its `rows` list out of Python tuple literals; PySide6's QVariant
+marshaling exposes a list-of-lists as an indexable JS array but NOT a
+list-of-tuples, and `MeshEditor.qml`'s delegate reads
+`modelData[0]`/`modelData[1]` per row -- every tuple-based row came
+back `undefined`. Only triggered once `mesh_model` is populated (the
+2D Device-Builder/Structure path); 1D Process-Flow devices short-
+circuit to `[]` and never hit it. Confirmed empirically with a
+standalone `QQmlComponent` probe (identical data as tuples vs. lists
+producing `undefined` vs. correct values) before touching any code.
+Fix: every tuple literal in `rows` (and the oversized-mesh warning
+row's `.append(...)`) became a list literal. TDD
+(`gui/tests/test_mesh_info_undefined_rows_bug.py`); verified live by
+loading `mosfet_2d_structure` and printing `meshInfo` (real Nx/Ny/
+node-count values); mesh/smoke/phase3 regression suite (53 tests)
+passed with zero regressions.
+
+Final gate for both fixes together: `pytest tests/ gui/tests/ -n 6 -q`
+-> 1089 passed, 1 xfailed, 0 failed in 562s. Merged to `main` (fast-
+forward, `dd1b04b`).

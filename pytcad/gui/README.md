@@ -207,12 +207,16 @@ honestly-simpler MOSFET built from uniform rectangular regions so it
   session. This is the close-confirmation feature working as designed,
   not a bug; it's a real gotcha we hit writing this file's own
   verification script (see the v0.2 plan's Self-Review Notes).
-- The mesh-info `ListView` in `MeshEditor.qml` can print a handful of
-  benign "Unable to assign [undefined] to QString" warnings to stderr
-  when its model array is replaced (e.g. after a mesh edit) — cosmetic
-  console noise from delegate-recycling churn on a plain-array-bound
-  model, not a data or rendering defect (verified: the bound values are
-  always correct once settled).
+- **Corrected 2026-09-04** — the "Unable to assign [undefined] to
+  QString" stderr warnings from the mesh-info `ListView` in
+  `MeshEditor.qml` were NOT cosmetic delegate-recycling noise as
+  originally recorded here: `AppController.meshInfo` built its rows as
+  Python tuples, and PySide6 does not marshal a list-of-tuples to an
+  indexable JS array the way it does a list-of-lists, so the stats
+  grid genuinely showed "undefined" for every label/value on the
+  Structure/Device-Builder 2D path (1D Process-Flow devices never hit
+  it, since `meshInfo` short-circuits to `[]` there). Fixed by changing
+  every row to a plain list; see `history.md`'s 2026-09-04 addendum.
 
 **Verified on a real display, not just headlessly:** the whole 95-test
 headless suite was passing before this app was ever actually shown on
