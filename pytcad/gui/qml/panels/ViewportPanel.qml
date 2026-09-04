@@ -6,8 +6,12 @@ import ".."
 
 Rectangle {
     id: root
-    color: Theme.background
-    border.color: Theme.border
+    // v2 reskin: reads as a floating card (Main.qml insets it with a
+    // margin against a darker Theme.background backdrop -- see the
+    // "CENTER: viewport" block there) rather than flush chrome.
+    color: Theme.cardBg
+    border.color: Theme.cardBorder
+    radius: Theme.radiusCard
     property var controller
     property string currentMode: "doping"   // mirrors MplCanvasItem's own default
     // Which process step's checkpoint the "process" mode plot shows.

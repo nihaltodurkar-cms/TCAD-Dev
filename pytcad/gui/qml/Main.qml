@@ -343,10 +343,10 @@ ApplicationWindow {
             // ---- LEFT: tabbed workbench dock ---------------------------
             Rectangle {
                 objectName: "workbenchDock"
-                color: Theme.panel
-                border.color: Theme.border
-                SplitView.preferredWidth: 310
-                SplitView.minimumWidth: 240
+                color: Theme.cardBg
+                border.color: Theme.cardBorder
+                SplitView.preferredWidth: 360
+                SplitView.minimumWidth: 280
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -512,26 +512,36 @@ ApplicationWindow {
                 }
             }
 
-            // ---- CENTER: viewport --------------------------------------
-            ViewportPanel {
-                id: viewport
-                objectName: "viewportPanel"
+            // ---- CENTER: viewport, inset as a floating card over a
+            // darker backdrop rather than flush chrome (v2 reskin). The
+            // SplitView.* attached properties move to this wrapper since
+            // a SplitView's direct children carry them.
+            Rectangle {
+                id: viewportFrame
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 320
-                controller: appController
+                color: Theme.background
 
-                BusyOverlay {
+                ViewportPanel {
+                    id: viewport
+                    objectName: "viewportPanel"
                     anchors.fill: parent
-                    running: appController.busy
-                    stageText: appController.status
+                    anchors.margins: Theme.padLg
+                    controller: appController
+
+                    BusyOverlay {
+                        anchors.fill: parent
+                        running: appController.busy
+                        stageText: appController.status
+                    }
                 }
             }
 
             // ---- RIGHT: collapsible properties dock ---------------------
             Rectangle {
                 objectName: "propertiesDock"
-                color: Theme.panelAlt
-                border.color: Theme.border
+                color: Theme.cardBg
+                border.color: Theme.cardBorder
                 SplitView.preferredWidth: window.propsCollapsed ? 26 : 280
                 SplitView.minimumWidth: 26
                 Behavior on SplitView.preferredWidth {
@@ -569,8 +579,8 @@ ApplicationWindow {
         // ---- BOTTOM: collapsible console --------------------------------
         Rectangle {
             objectName: "consoleDock"
-            color: Theme.panel
-            border.color: Theme.border
+            color: Theme.cardBg
+            border.color: Theme.cardBorder
             SplitView.preferredHeight: window.consoleCollapsed ? 26 : 190
             SplitView.minimumHeight: 26
             Behavior on SplitView.preferredHeight {
