@@ -5,6 +5,7 @@ import "../components"
 import ".."
 
 Rectangle {
+    id: root
     color: Theme.panel
     border.color: Theme.border
     property var controller
@@ -13,7 +14,12 @@ Rectangle {
         anchors.fill: parent
         anchors.margins: Theme.pad
         spacing: Theme.pad
-        MeshEditor { controller: parent.parent.controller; Layout.fillWidth: true }
+        // QML architecture cleanup: was `parent.parent.controller` -- a
+        // fragile 2-level parent-chain reach that happened to resolve
+        // to this same root Rectangle's own controller property, but
+        // would silently break if a layer were ever inserted between
+        // this ColumnLayout and the root. Direct id reference instead.
+        MeshEditor { controller: root.controller; Layout.fillWidth: true }
 
         // v2 reskin: the stats block reads as a small card-grid (one
         // tile per mesh axis) instead of bare mono-font label lines --
