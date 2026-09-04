@@ -1,16 +1,13 @@
 pragma Singleton
 import QtQuick
 
-// PyTCAD design system.
-//
-// One place defines every colour, spacing, radius and type size the UI
-// uses, in dark and light variants.  Restrained scientific-instrument
-// principle: neutral surfaces carry the structure, colour is reserved
-// for STATE (running / error / success / accent) so it stays meaningful.
-//
-// All pre-v0.5 token names (pad, radius, mono, background, panel,
-// panelAlt, border, text, textDim, accent, running, error, ok, dark)
-// remain valid -- older components keep rendering while they migrate.
+// PyTCAD design system -- "Modern Dev Tool" identity (v2, 2026-09-04
+// reskin). Near-black surfaces carry structure; a violet -> blue
+// gradient is the one accent used for active/selected state and the
+// primary action (Run). All v1 token names remain valid so nothing
+// else in the codebase breaks while panels migrate to the new
+// cardBg/cardBorder/cardShadow surfaces panel-by-panel (see
+// docs/superpowers/specs/2026-09-04-gui-visual-reskin-design.md).
 QtObject {
     id: theme
 
@@ -31,40 +28,48 @@ QtObject {
     readonly property int radiusSm: 3     // legacy name below
     readonly property int radius: 3
     readonly property int radiusLg: 6
+    readonly property int radiusCard: 10  // v2: floating-card corner radius
 
     // ---- surfaces ------------------------------------------------------
-    readonly property color background:  dark ? "#171b20" : "#eef1f4"
-    readonly property color panel:       dark ? "#1f242b" : "#ffffff"
-    readonly property color panelAlt:    dark ? "#262c34" : "#eceff2"
-    readonly property color panelRaised: dark ? "#2b323a" : "#f7f9fa"
-    readonly property color sunken:      dark ? "#14181d" : "#e2e6ea"
+    readonly property color background:  dark ? "#0a0b0e" : "#eef1f4"
+    readonly property color panel:       dark ? "#0d0e12" : "#ffffff"
+    readonly property color panelAlt:    dark ? "#111217" : "#eceff2"
+    readonly property color panelRaised: dark ? "#16171d" : "#f7f9fa"
+    readonly property color sunken:      dark ? "#050608" : "#e2e6ea"
+
+    // ---- v2: floating-card surfaces -------------------------------------
+    readonly property color cardBg:      dark ? "#16171d" : "#ffffff"
+    readonly property color cardBorder:  dark ? "#24252c" : "#dde3e9"
+    readonly property color cardShadow:  dark ? Qt.rgba(0, 0, 0, 0.4) : Qt.rgba(0, 0, 0, 0.12)
 
     // ---- lines & text ---------------------------------------------------
-    readonly property color border:       dark ? "#343c46" : "#c9d0d8"
-    readonly property color borderStrong: dark ? "#454f5b" : "#a8b2bc"
-    readonly property color text:         dark ? "#dde3e9" : "#1a2129"
-    readonly property color textDim:      dark ? "#8d99a5" : "#5a6572"
-    readonly property color textFaint:    dark ? "#5c6873" : "#8894a0"
-    readonly property color focus:        dark ? "#5aa2e6" : "#2f7fd4"
+    readonly property color border:       dark ? "#1f2026" : "#c9d0d8"
+    readonly property color borderStrong: dark ? "#2c2d36" : "#a8b2bc"
+    readonly property color text:         dark ? "#e4e4e7" : "#1a2129"
+    readonly property color textDim:      dark ? "#a1a1aa" : "#5a6572"
+    readonly property color textFaint:    dark ? "#71717a" : "#8894a0"
+    readonly property color focus:        dark ? "#8b5cf6" : "#7c3aed"
 
     // ---- state colours --------------------------------------------------
-    readonly property color accent:       dark ? "#4a90d9" : "#2f7fd4"
-    readonly property color accentSoft:   dark ? "#2a3b4d" : "#dbe9f7"
+    readonly property color accent:       dark ? "#8b5cf6" : "#7c3aed"
+    readonly property color accentSoft:   dark ? "#241f38" : "#ede9fe"
     readonly property color running:      dark ? "#d9a441" : "#b57f14"
     property color error:                 dark ? "#e05c56" : "#c0392b"
     readonly property color ok:           dark ? "#61bd6d" : "#2e8b44"
 
+    // ---- v2: brand gradient -- identical in both themes, since the
+    // accent IS the brand, not a theme-dependent surface.
+    readonly property color accentGradientStart: "#8b5cf6"
+    readonly property color accentGradientEnd:   "#3b82f6"
+
     // selection highlight inside lists
-    readonly property color selection:    dark ? "#31506e" : "#cfe2f5"
+    readonly property color selection:    dark ? "#3a2f57" : "#ede9fe"
 
     // ---- type ------------------------------------------------------------
     readonly property string mono: '"DejaVu Sans Mono", "Consolas", monospace'
     readonly property string family: '"Inter", "Segoe UI", "Ubuntu", "Cantarell", sans-serif'
 
     // ---- motion ----------------------------------------------------------
-    // A single shared timing scale keeps every hover/press/collapse
-    // transition in the app feeling like one consistent instrument
-    // rather than a pile of ad-hoc durations.
     readonly property int animFast: 110
     readonly property int animMed:  200
     readonly property int animSlow: 360
@@ -75,8 +80,8 @@ QtObject {
     readonly property color hoverOverlay: dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.045)
     readonly property color pressOverlay: dark ? Qt.rgba(1, 1, 1, 0.11) : Qt.rgba(0, 0, 0, 0.08)
     readonly property color shadow:       dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(0, 0, 0, 0.18)
-    readonly property color accentGlow:   dark ? Qt.rgba(0.345, 0.651, 1.0, 0.35)
-                                                : Qt.rgba(0.184, 0.498, 0.831, 0.30)
+    readonly property color accentGlow:   dark ? Qt.rgba(0.545, 0.361, 0.965, 0.35)
+                                                : Qt.rgba(0.486, 0.227, 0.929, 0.22)
 
     function toggle() { theme.dark = !theme.dark }
 }
