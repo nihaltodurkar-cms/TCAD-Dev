@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQuick.Effects
+import QtQuick.Window
 import "panels"
 import "components"
 
@@ -25,6 +26,18 @@ ApplicationWindow {
     // dock collapse state (animated below)
     property bool propsCollapsed: false
     property bool consoleCollapsed: false
+
+    // v2 reskin: launch filling the screen so panels (the Mesh panel
+    // was named explicitly) aren't cramped by the fixed 1440x900
+    // default -- the width/height/minimum* values above remain as the
+    // fallback. Guarded against the offscreen QPA platform: Qt's
+    // offscreen platform has no real screen to maximize against, and
+    // gui/tests' headless runs (QT_QPA_PLATFORM=offscreen, set in
+    // conftest.py) must keep getting the deterministic default size.
+    Component.onCompleted: {
+        if (Qt.platformName !== "offscreen")
+            window.visibility = Window.Maximized
+    }
 
     Shortcut { sequence: "Ctrl+Z"; onActivated: if (appController.canUndo) appController.undo() }
     Shortcut { sequence: "Ctrl+Y"; onActivated: if (appController.canRedo) appController.redo() }
