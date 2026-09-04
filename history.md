@@ -3419,3 +3419,81 @@ passed with zero regressions.
 Final gate for both fixes together: `pytest tests/ gui/tests/ -n 6 -q`
 -> 1089 passed, 1 xfailed, 0 failed in 562s. Merged to `main` (fast-
 forward, `dd1b04b`).
+
+### STATE ADDENDUM -- M18 PHASE 3 LANDED: DEVICE2D N-TERMINAL AC/Y-PARAMETERS INCL. GATE PORTS (2026-09-04)
+
+Generalized M18's small-signal AC framework to `Device2D`, and
+generalized the port model from a fixed one-port measurement to a
+genuine N-terminal Y-parameter matrix covering both `Device2D` port
+kinds (`DirichletBC` ohmic contacts and `GateBC` gates). New module
+`pytcad/pytcad/ac2d.py` drives `Device2D` from outside
+`_residual_jacobian`, same externally-driven pattern as
+`ac.py`/`transient2d.py` -- `device2d.py` untouched. Scoping decided
+with the user up front: full MOSFET-capable (gate terminal included),
+N-terminal (not fixed 2-port), `moscap_2d` as the gate-physics
+acceptance-gate anchor with full 4-terminal `mosfet_2d` fT extraction
+deferred (Phase 3b), GUI exposure deferred (Phase 4).
+
+Discovered along the way: an already-landed "M18 Phase 2" existed in
+`pytcad/ac.py` (Device1D N-terminal Y-parameters + fT, `y_parameters`/
+`cutoff_frequency`), merged in from a parallel branch the same day
+(commit `9906d6b`) but never itself recorded in `M18-AC-PLAN.md`. This
+session's own Device2D work is therefore Phase 3, not Phase 2 as
+originally planned -- renumbered throughout `M18-AC-PLAN.md` and
+`ARCHITECTURE.md`, and a Phase 2 section backfilled into the plan doc
+summarizing that already-shipped code for a complete record.
+
+Gate battery `tests/test_m18_ac2d.py`, 6/6 green: G-CONSISTENCY-2D
+(Cmat bit-identical to `transient2d`'s storage term -- no gate-row
+term needed, Poisson carries no time derivative in this codebase),
+G-LOWF-2D, G-NPORT-OHMIC (a genuine 3-ohmic-terminal `_resistor3term`
+fixture -- no >2-terminal 2D device existed in the repo before this),
+G-GATE-FD (closed-form gate forcing/observation vs. direct FD),
+G-MOSCAP-CV (low-f Cgg(Vg) vs. `MOSCapacitor.cv_sweep`'s independent
+reference), G-SCOPE-REFUSAL-2D.
+
+Two substantial debugging findings, both root-caused rather than
+worked around:
+
+1. **A ~5x apparent formula bug in the gate-port sensitivity was
+   actually mesh/fixture ill-conditioning.** `MOSCAP_PARAMS` initially
+   used `tox_cm=5e-7` (5nm, matching
+   `test_cv_physics_validation.py`'s own value) -- on the `moscap_2d`
+   fixture's 61-point graded mesh, this makes the gate row's
+   linearization numerically unstable: the AC-computed gate-node
+   sensitivity varied 0.045-1.746 across nominally-equivalent Newton
+   tolerances, while a direct finite difference of `psi` from two
+   independently-converged `solve_bias` calls stayed rock-stable at
+   ~0.378. Root-caused (not worked around) by switching to
+   `tox_cm=2e-6` (20nm): the closed-form sensitivity then matched the
+   direct FD reference to 8 significant figures (0.558410 vs
+   0.558410), confirming `ac2d.py`'s code was correct all along.
+2. **G-MOSCAP-CV's original design (reproduce the classic real-device
+   LF/HF inversion C-V divergence) could not be met, for a genuine
+   physical reason.** That divergence comes from minority-carrier
+   generation LIFETIME (a slow, Hz-to-kHz process); on `moscap_2d` the
+   DC solve genuinely DOES build an inversion layer past threshold
+   (surface `n` exceeds `Na` by Vg=1.0, confirmed by direct inspection
+   of `dev.n`), but the linearized AC *sensitivity* stops tracking
+   `MOSCapacitor`'s quasi-static reference beyond `Vg~0.6` -- likely
+   the same ill-conditioning class as finding 1, now triggered by
+   carrier-concentration dynamic range rather than oxide thinness.
+   Separately, the roll-off this fixture DOES show (~1e10-1e11 Hz) was
+   measured to be essentially bias-independent (near-identical onset
+   at Vg=-0.5, 0.0, 0.3) -- a structural dielectric-relaxation effect
+   of the small (2 micron) mesh, not an inversion-specific signature.
+   G-MOSCAP-CV was rescoped to accumulation/depletion/near-threshold
+   LF matching plus a bias-independent high-f roll-off sanity check,
+   rather than forced to pass with a cherry-picked tolerance or bias
+   point; deep-inversion AC fidelity is left an open, documented
+   limitation. Full record in `M18-AC-PLAN.md` section 10.
+
+Full suite: `pytest tests/ -q` -> 427 passed, 1 xfailed, 0 failed
+(unchanged xfail). `pytest gui/tests/ -n 6 -q` -> 92 failed, all
+QML-loading tests failing with `undefined symbol:
+_ZN14QObjectPrivateC2E16QtPrivate_6_11_0` from a local Qt6/QML
+library-version mismatch (`libqtquickcontrols2plugin.so` vs.
+`libQt6QuickTemplates2.so.6` in this machine's anaconda env);
+confirmed pre-existing and unrelated by reproducing the same failures
+identically on a `git stash` of every change this session made (which
+touches no GUI code at all).

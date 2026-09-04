@@ -94,10 +94,13 @@ record, including a genuine wrong-sign boundary-condition bug found
 and fixed via literature/production-tool research).
 M17 transient simulation: PHASES 1-3 (1D/2D backward-Euler/theta-scheme
 cores, GUI Transient tab) SHIPPED 2026-08-30/31. See M17-TRANSIENT-PLAN.md.
-M18 small-signal AC analysis: PHASE 1 (Device1D, Python-API only, no GUI)
-LANDED 2026-08-31 -- Y(f)/C(f)/G(f) via a J_ac(w)=J0+jw*Cmat complex
-solve reusing M17's already-FD-gated storage-term Jacobian. See
-M18-AC-PLAN.md.
+M18 small-signal AC analysis: PHASE 1 (Device1D one-port, Python-API
+only, no GUI) LANDED 2026-08-31 -- Y(f)/C(f)/G(f) via a
+J_ac(w)=J0+jw*Cmat complex solve reusing M17's already-FD-gated
+storage-term Jacobian. PHASE 2 (Device1D N-terminal Y-parameters + fT,
+merged from a parallel branch) LANDED 2026-09-04. PHASE 3 (Device2D,
+N-terminal Y-parameters incl. GateBC ports, Python-API only, no GUI)
+LANDED 2026-09-04. See M18-AC-PLAN.md.
 M19 self-heating: PHASE 1 (steady-state 1D, isothermal-DD + outer
 Gummel thermal loop, no GUI) LANDED 2026-08-31. See
 M19-SELFHEATING-PLAN.md.
@@ -607,8 +610,47 @@ M18  SMALL-SIGNAL AC ANALYSIS                                [M]
   roll-off signature (measured: C drops 6.80x, G rises 2.32e6x over
   1kHz-1e11Hz on a 0.4V-forward diode), same honesty standard M17 used
   for its own G2.
-  NOT STARTED: Device2D/Device3D AC (Phase 2), GUI exposure (Phase 3),
-  general multi-terminal Y-parameters.
+  PHASE 2 (Device1D N-terminal Y-parameters + fT) LANDED 2026-09-04,
+  merged in from a parallel branch (see commit 9906d6b) -- additive to
+  ac_sweep(), new y_parameters()/cutoff_frequency() in the same
+  pytcad/ac.py, fixed at exactly 2 ports (Device1D has no N>2-terminal
+  case); fmax deliberately not implemented (only meaningful for a
+  3-terminal active device). Gates: tests/test_m18_yparam.py.
+  PHASE 3 (Device2D, N-terminal Y-parameters) LANDED 2026-09-04 -- see
+  pytcad/M18-AC-PLAN.md sections 7-11. New module pytcad/ac2d.py, same
+  externally-driven pattern (device2d.py untouched). Generalizes
+  Phase 1/2's ohmic-only forcing to a genuine N-terminal Y-parameter
+  matrix covering both Device2D port kinds: DirichletBC (ohmic, FD
+  current-sensitivity generalized from a 1D edge to an arbitrary 2D
+  node set) and GateBC (gate, CLOSED-FORM forcing/observation derived
+  from the gate row's own linearization -- genuinely new territory,
+  since transient2d.py's own docstring notes time-varying GateBC
+  voltage isn't supported there). Cmat needs no gate-row term (Poisson
+  carries no time derivative in this codebase). All 6 gates green:
+  G-CONSISTENCY-2D, G-LOWF-2D, G-NPORT-OHMIC (a genuine 3-ohmic-
+  terminal fixture, none existed before this phase), G-GATE-FD,
+  G-MOSCAP-CV, G-SCOPE-REFUSAL-2D. Ill-conditioning found and root-
+  caused during development (not a formula bug): a 5nm oxide
+  (matching test_cv_physics_validation.py's own value) makes the gate
+  row's linearization numerically unstable on the test mesh (AC
+  sensitivity varied 0.045-1.746 across equivalent Newton tolerances);
+  switching to 20nm gave an 8-significant-figure match against a
+  direct finite-difference reference, confirming the code was correct.
+  G-MOSCAP-CV's original design (reproduce the classic real-device
+  LF/HF inversion C-V divergence) had to be descoped: that divergence
+  comes from minority-carrier generation lifetime (a slow process);
+  this fixture's DC solve genuinely builds inversion charge but its
+  linearized AC sensitivity stops tracking the quasi-static reference
+  past threshold (same ill-conditioning class as above, now triggered
+  by carrier-concentration dynamic range), and the roll-off it DOES
+  show is a bias-independent structural RC effect, not inversion-
+  specific -- gated instead on accumulation/depletion/near-threshold
+  LF matching plus a bias-independent high-f roll-off sanity check.
+  Deep-inversion AC fidelity for Device2D gates is a documented open
+  limitation. Full 4-terminal mosfet_2d Y-parameter/fT extraction
+  (Phase 3b) and GUI exposure (Phase 4) remain not started.
+  NOT STARTED: mosfet_2d Y-parameters/fT (Phase 3b), GUI exposure
+  (Phase 4), Device3D AC (out of scope entirely).
 
 M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   PHASE 1 (steady-state, 1D) LANDED 2026-08-31. New sibling module
@@ -985,16 +1027,22 @@ for what has actually landed)
                                                   DONE 2026-08-31; see
                                                   pytcad/M17-TRANSIENT-
                                                   PLAN.md
-  M18 small-signal AC                            PHASE 1 (1D) LANDED
-                                                  2026-08-31; see
+  M18 small-signal AC                            PHASE 1 (1D one-port)
+                                                  LANDED 2026-08-31; see
                                                   pytcad/M18-AC-PLAN.md;
-                                                  PHASE 2 (multi-terminal
+                                                  PHASE 2 (1D
+                                                  multi-terminal
                                                   Y-parameter extraction +
                                                   fT) merged in from a
                                                   parallel branch
                                                   2026-09-04, additive to
-                                                  ac_sweep(); 2D/GUI not
-                                                  started
+                                                  ac_sweep(); PHASE 3
+                                                  (Device2D N-terminal
+                                                  Y-parameters incl. gate
+                                                  ports) LANDED
+                                                  2026-09-04, new
+                                                  pytcad/ac2d.py; GUI
+                                                  (Phase 4) not started
   M19 self-heating                               PHASE 1 (1D
                                                   steady-state) LANDED
                                                   2026-08-31; see
@@ -1342,8 +1390,9 @@ Independent candidates for the next milestone (any order):
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Transient (M17) LANDED; AC (M18) Phase 1 (1D) LANDED, 2D/GUI not
-  started; self-heating (M19) Phase 1 (1D steady-state) LANDED,
+- Transient (M17) LANDED; AC (M18) Phases 1-3 (1D one-port, 1D
+  N-terminal+fT, 2D N-terminal incl. gate ports) LANDED, GUI exposure
+  not started; self-heating (M19) Phase 1 (1D steady-state) LANDED,
   2D/transient not started -- see each milestone's own plan doc.
   (M15 impact ionization, M22 phase 2's
   continuation driver, and M16 local Kane BTBT are COMPLETE/LANDED --
@@ -1540,10 +1589,12 @@ recorded here so they are tracked rather than silently absent):
    remain out of scope, honestly flagged in the plan doc. Next: M18
    (small-signal AC), which depends only on the Device1D transient
    machinery Phase 1 shipped.
-9. [PHASE 1 LANDED 2026-08-31] M18 SMALL-SIGNAL AC -- see the "M18
-   SMALL-SIGNAL AC ANALYSIS" milestone entry above and
-   pytcad/M18-AC-PLAN.md for the full record. Device1D-only; 2D/GUI
-   not started.
+9. [PHASES 1-3 LANDED, latest 2026-09-04] M18 SMALL-SIGNAL AC -- see
+   the "M18 SMALL-SIGNAL AC ANALYSIS" milestone entry above and
+   pytcad/M18-AC-PLAN.md for the full record. Phase 1 (1D one-port),
+   Phase 2 (1D N-terminal Y-parameters + fT, merged from a parallel
+   branch), Phase 3 (2D N-terminal Y-parameters incl. gate ports) all
+   landed; GUI exposure (Phase 4) not started.
 10. [PHASE 1 LANDED 2026-08-31] M19 SELF-HEATING -- see the "M19
     SELF-HEATING (THERMODYNAMIC MODEL)" milestone entry above and
     pytcad/M19-SELFHEATING-PLAN.md for the full record, including the
