@@ -6,12 +6,10 @@ import ".."
 
 Rectangle {
     id: root
-    // v2 reskin: reads as a floating card (Main.qml insets it with a
-    // margin against a darker Theme.background backdrop -- see the
-    // "CENTER: viewport" block there) rather than flush chrome.
-    color: Theme.cardBg
-    border.color: Theme.cardBorder
-    radius: Theme.radiusCard
+    // v2.1 correction (DESIGN.md section 2/10): the viewport is the
+    // app's darkest, highest-contrast surface -- flush against the
+    // surrounding chrome, not a floating card. No border, no radius.
+    color: Theme.background
     property var controller
     property string currentMode: "doping"   // mirrors MplCanvasItem's own default
     // Which process step's checkpoint the "process" mode plot shows.
@@ -235,7 +233,7 @@ Rectangle {
                 // Opaque so it fully covers the canvas's own bare "No
                 // project loaded" matplotlib text underneath, rather
                 // than letting both render on top of each other.
-                color: Theme.cardBg
+                color: Theme.background
 
                 Column {
                     anchors.centerIn: parent

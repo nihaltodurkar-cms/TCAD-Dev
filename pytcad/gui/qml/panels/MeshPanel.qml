@@ -60,13 +60,16 @@ Rectangle {
             columnSpacing: Theme.padSm
             rowSpacing: Theme.padSm
 
+            // v2.1 correction (DESIGN.md section 2/6): stat tiles are
+            // inset wells (panelAlt), not floating cards -- radius
+            // capped at radiusSm (3px), no drop shadow.
             Rectangle {
                 objectName: "meshStatsTotalTile"
                 Layout.fillWidth: true
                 Layout.columnSpan: 2
-                radius: Theme.radiusLg
-                color: Theme.cardBg
-                border.color: Theme.cardBorder
+                radius: Theme.radiusSm
+                color: Theme.panelAlt
+                border.color: Theme.border
                 implicitHeight: totalCol.implicitHeight + Theme.padSm * 2
 
                 Column {
@@ -98,9 +101,9 @@ Rectangle {
                     objectName: "meshStatsAxisTile"
                     required property string modelData
                     Layout.fillWidth: true
-                    radius: Theme.radiusLg
-                    color: Theme.cardBg
-                    border.color: Theme.cardBorder
+                    radius: Theme.radiusSm
+                    color: Theme.panelAlt
+                    border.color: Theme.border
                     implicitHeight: axisCol.implicitHeight + Theme.padSm * 2
 
                     Column {

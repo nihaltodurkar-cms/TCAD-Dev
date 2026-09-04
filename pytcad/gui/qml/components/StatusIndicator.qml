@@ -87,12 +87,15 @@ Item {
         }
 
         // Dirty indicator
+        // v2.1 correction (DESIGN.md section 3.3): unsaved changes is a
+        // caution/attention state, not "running" -- was Theme.running
+        // (amber), now the dedicated Theme.warning token (same hex).
         Rectangle {
             width: 8
             height: 8
             radius: 4
-            color: root.isDirty ? Theme.running : "transparent"
-            border.color: root.isDirty ? Theme.running : "transparent"
+            color: root.isDirty ? Theme.warning : "transparent"
+            border.color: root.isDirty ? Theme.warning : "transparent"
             Behavior on color { ColorAnimation { duration: Theme.animMed } }
         }
 

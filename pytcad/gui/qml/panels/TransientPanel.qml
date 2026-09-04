@@ -204,7 +204,9 @@ Rectangle {
         Label {
             objectName: "transientRejectNote"
             visible: root.lastArmRejected
-            color: Theme.running
+            // v2.1 correction (DESIGN.md section 3.3): a rejected arm
+            // attempt is a warning, not "running".
+            color: Theme.warning
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
             font.italic: true

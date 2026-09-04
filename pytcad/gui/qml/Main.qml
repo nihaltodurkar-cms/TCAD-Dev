@@ -126,10 +126,12 @@ ApplicationWindow {
             orientation: Qt.Horizontal
 
             // ---- LEFT: tabbed workbench dock ---------------------------
+            // v2.1 correction (DESIGN.md section 2/7): docked panels are
+            // not cards -- flat panel surface + border, no shadow.
             Rectangle {
                 objectName: "workbenchDock"
-                color: Theme.cardBg
-                border.color: Theme.cardBorder
+                color: Theme.panel
+                border.color: Theme.border
                 SplitView.preferredWidth: 360
                 SplitView.minimumWidth: 280
 
@@ -162,8 +164,16 @@ ApplicationWindow {
                                 required property var modelData
                                 width: Math.max(implicitWidth, 64)
                                 font.pixelSize: Theme.fsSmall
-                                readonly property color tabColor: tabDelegate.checked ? Theme.accentGradientEnd
-                                                                   : tabDelegate.activeFocus ? Theme.focus : Theme.text
+                                // v2.1 correction (DESIGN.md section 9,
+                                // Tab): selected label brightens to
+                                // Theme.text (paired with the accent
+                                // underline below), not a blue tint --
+                                // color alone no longer needs to carry
+                                // the "selected" signal since the
+                                // underline already does.
+                                readonly property color tabColor: tabDelegate.checked ? Theme.text
+                                                                   : tabDelegate.hovered ? Theme.text
+                                                                   : tabDelegate.activeFocus ? Theme.focus : Theme.textDim
                                 contentItem: Row {
                                     spacing: Theme.padXs
                                     anchors.centerIn: parent
@@ -180,14 +190,18 @@ ApplicationWindow {
                                     Text {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: tabDelegate.modelData.label
-                                        font: tabDelegate.font
+                                        font.pixelSize: tabDelegate.font.pixelSize
+                                        font.bold: tabDelegate.checked
                                         color: tabDelegate.tabColor
                                         elide: Text.ElideRight
                                         Behavior on color { ColorAnimation { duration: Theme.animFast } }
                                     }
                                 }
                                 background: Rectangle {
-                                    radius: Theme.radiusLg
+                                    // v2.1 correction: radius capped at
+                                    // radiusSm (3px, DESIGN.md section 6)
+                                    // -- was radiusLg (6px).
+                                    radius: Theme.radiusSm
                                     color: tabDelegate.checked ? Theme.accentSoft
                                            : tabDelegate.hovered ? Theme.hoverOverlay : "transparent"
                                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
@@ -195,26 +209,22 @@ ApplicationWindow {
                             }
                         }
 
-                        // Accent bar that glides beneath the active tab
-                        // instead of snapping there, tying tab selection
-                        // to a single continuous piece of motion. Now a
-                        // real violet->blue gradient rather than a flat
-                        // fill (QtQuick's Gradient has no arbitrary-angle
-                        // mode, so this is a horizontal approximation of
-                        // the approved mockup's 135deg buttons -- a
-                        // deliberate simplification, not an oversight).
+                        // Accent bar that glides beneath the active tab,
+                        // tying tab selection to a single continuous
+                        // piece of motion. v2.1 correction (DESIGN.md
+                        // section 2/9, Tab component): a gradient on a
+                        // tab indicator encodes nothing -- flat
+                        // Theme.accent underline instead, matching the
+                        // spec's "flat 2px accent underline (no
+                        // gradient)" rule.
                         Rectangle {
                             id: tabIndicator
                             height: 2
-                            radius: 1
+                            radius: 0
                             y: workbenchTabs.height - height
                             x: workbenchTabs.currentItem ? workbenchTabs.currentItem.x : 0
                             width: workbenchTabs.currentItem ? workbenchTabs.currentItem.width : 0
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: 0.0; color: Theme.accentGradientStart }
-                                GradientStop { position: 1.0; color: Theme.accentGradientEnd }
-                            }
+                            color: Theme.accent
                             Behavior on x { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
                             Behavior on width { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
                         }
@@ -297,10 +307,14 @@ ApplicationWindow {
                 }
             }
 
-            // ---- CENTER: viewport, inset as a floating card over a
-            // darker backdrop rather than flush chrome (v2 reskin). The
-            // SplitView.* attached properties move to this wrapper since
-            // a SplitView's direct children carry them.
+            // ---- CENTER: viewport -----------------------------------------
+            // v2.1 correction (DESIGN.md section 2/10): the viewport is
+            // elevation 0, the darkest, highest-contrast surface in the
+            // app ("content beats chrome, always") -- it is flush
+            // against the surrounding chrome, not inset as a floating
+            // card with a margin/border/radius. The SplitView.*
+            // attached properties stay on this wrapper since a
+            // SplitView's direct children carry them.
             Rectangle {
                 id: viewportFrame
                 SplitView.fillWidth: true
@@ -311,7 +325,6 @@ ApplicationWindow {
                     id: viewport
                     objectName: "viewportPanel"
                     anchors.fill: parent
-                    anchors.margins: Theme.padLg
                     controller: appController
 
                     BusyOverlay {
@@ -325,8 +338,8 @@ ApplicationWindow {
             // ---- RIGHT: collapsible properties dock ---------------------
             Rectangle {
                 objectName: "propertiesDock"
-                color: Theme.cardBg
-                border.color: Theme.cardBorder
+                color: Theme.panel
+                border.color: Theme.border
                 SplitView.preferredWidth: window.propsCollapsed ? 26 : 280
                 SplitView.minimumWidth: 26
                 Behavior on SplitView.preferredWidth {
@@ -364,8 +377,8 @@ ApplicationWindow {
         // ---- BOTTOM: collapsible console --------------------------------
         Rectangle {
             objectName: "consoleDock"
-            color: Theme.cardBg
-            border.color: Theme.cardBorder
+            color: Theme.panel
+            border.color: Theme.border
             SplitView.preferredHeight: window.consoleCollapsed ? 26 : 190
             SplitView.minimumHeight: 26
             Behavior on SplitView.preferredHeight {

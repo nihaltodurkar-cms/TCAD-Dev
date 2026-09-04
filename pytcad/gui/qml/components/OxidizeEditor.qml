@@ -20,7 +20,9 @@ ColumnLayout {
         text: "Oxidation is bookkeeping-only in this backend: it reports oxide " +
               "thickness and Si consumed, but does not alter the wafer's x-axis " +
               "or doping profile."
-        color: Theme.running
+        // v2.1 correction (DESIGN.md section 3.3): this is a caution
+        // note (was Theme.running/amber, now the dedicated Theme.warning).
+        color: Theme.warning
         font.pixelSize: 10
         font.bold: true
         wrapMode: Text.WordWrap

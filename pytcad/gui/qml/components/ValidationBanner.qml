@@ -11,9 +11,12 @@ Rectangle {
     id: root
     property var validator: stateValidator
     height: validator && validator.problemCount > 0 ? 32 : 0
-    color: Theme.running
+    // v2.1 correction (DESIGN.md section 3.3): validation problems are
+    // a warning, not "running" -- was Theme.running (amber), which
+    // collided a caution color with the busy/solver-active signal.
+    color: Theme.warning
     opacity: 0.9
-    border.color: Qt.darker(Theme.running, 1.2)
+    border.color: Qt.darker(Theme.warning, 1.2)
 
     visible: height > 0
 

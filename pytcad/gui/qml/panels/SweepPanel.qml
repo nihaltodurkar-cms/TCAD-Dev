@@ -156,7 +156,9 @@ Rectangle {
         Label {
             objectName: "sweepRejectNote"
             visible: root.lastArmRejected
-            color: Theme.running
+            // v2.1 correction (DESIGN.md section 3.3): a rejected arm
+            // attempt is a warning, not "running".
+            color: Theme.warning
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
             font.italic: true
@@ -217,9 +219,12 @@ Rectangle {
         }
         Label {
             objectName: "familyStatusLabel"
+            // v2.1 correction (DESIGN.md section 3.3): "stale, needs
+            // re-run" is a caution state, not "running" -- was
+            // Theme.running (amber), now Theme.warning (same hex).
             color: !(root.controller && root.controller.familySweep.hasCurves)
                    ? Theme.textDim
-                   : (root.controller.familySweep.isStale ? Theme.running : Theme.ok)
+                   : (root.controller.familySweep.isStale ? Theme.warning : Theme.ok)
             font.pixelSize: Theme.fsSmall
             // Staleness (GUI-IMPROVEMENT-PLAN.md Phase 1b): the structure
             // was edited after these curves were solved, so they no

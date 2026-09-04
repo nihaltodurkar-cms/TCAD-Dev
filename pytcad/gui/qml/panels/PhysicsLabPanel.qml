@@ -97,7 +97,9 @@ Rectangle {
             Label {
                 visible: lab.selectedDetail() && lab.selectedDetail().limitations !== ""
                 text: lab.selectedDetail() ? lab.selectedDetail().limitations : ""
-                color: Theme.running
+                // v2.1 correction (DESIGN.md section 3.3): a model's
+                // stated limitations are a caution note, not "running".
+                color: Theme.warning
                 font.pixelSize: 10
                 font.italic: true
                 wrapMode: Text.WordWrap
@@ -216,7 +218,10 @@ Rectangle {
                 }
                 Label {
                     text: model.accepted ? "✓" : "✗"
-                    color: model.accepted ? Theme.ok : Theme.running
+                    // v2.1 correction (DESIGN.md section 3.3): a
+                    // rejected continuation stage is a caution marker,
+                    // not "running".
+                    color: model.accepted ? Theme.ok : Theme.warning
                     font.pixelSize: 10
                     font.bold: true
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
