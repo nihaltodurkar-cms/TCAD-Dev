@@ -231,6 +231,22 @@ class ResultStore(ABC):
     def band_diagram(self):
         raise KeyError("this store carries no band-diagram data")
 
+    def has_record(self):
+        """True only for stores carrying a run provenance record (v2).
+        Bug fix (2026-09-04): has_record()/run_record() were added
+        directly to NpzResultStore without also becoming protocol
+        members here, unlike every sibling capability above -- any
+        other store (e.g. SpecResultStore, a pre-solve structure
+        preview) inherited no default and crashed with AttributeError
+        the moment AppController.solverEngineLabel called this on it.
+        """
+        return False
+
+    def run_record(self):
+        """The RunRecord, or None -- matches NpzResultStore.run_record()'s
+        own documented contract ("None for pre-v2 files"), never raises."""
+        return None
+
 
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
