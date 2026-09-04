@@ -79,24 +79,14 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Species"; Layout.preferredWidth: 90 }
-        ComboBox {
+        ThemedComboBox {
             id: speciesBox
             objectName: "implantSpeciesBox"
+            Layout.preferredWidth: 90
             model: ["B", "P", "As"]
             currentIndex: parameters && parameters.species != null ? model.indexOf(parameters.species) : 0
             onActivated: if (stepId) controller.setProcessStepParameters(stepId,
                 Object.assign({}, parameters, {species: currentText}))
-            background: Rectangle {
-                implicitWidth: 90
-                implicitHeight: 24
-                radius: Theme.radiusSm
-                color: speciesBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                border.width: speciesBox.activeFocus ? 2 : 1
-                border.color: speciesBox.activeFocus ? Theme.focus
-                              : speciesBox.hovered ? Theme.borderStrong : Theme.border
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-            }
         }
     }
     RowLayout {

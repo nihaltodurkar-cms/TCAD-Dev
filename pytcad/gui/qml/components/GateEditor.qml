@@ -44,24 +44,14 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Vfb mode"; color: Theme.textDim; Layout.preferredWidth: 80 }
-        ComboBox {
+        ThemedComboBox {
             id: modeBox
             objectName: "gateVfbModeBox"
+            Layout.preferredWidth: 120
             model: ["computed", "manual"]
             currentIndex: gateData && gateData.vfbMode === "manual" ? 1 : 0
             onActivated: if (gateId) controller.setGateVfbMode(
                 gateId, currentText, manualField.text ? parseFloat(manualField.text) : 0.0)
-            background: Rectangle {
-                implicitWidth: 120
-                implicitHeight: 24
-                radius: Theme.radiusSm
-                color: modeBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                border.width: modeBox.activeFocus ? 2 : 1
-                border.color: modeBox.activeFocus ? Theme.focus
-                              : modeBox.hovered ? Theme.borderStrong : Theme.border
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-            }
         }
     }
     RowLayout {

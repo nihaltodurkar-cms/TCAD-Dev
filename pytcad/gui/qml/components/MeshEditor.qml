@@ -8,20 +8,8 @@ ColumnLayout {
 
     Label { text: "MESH"; color: Theme.textDim; font.pixelSize: 11; font.letterSpacing: 1 }
 
-    component MeshSpinBox: SpinBox {
-        id: control
+    component MeshSpinBox: ThemedSpinBox {
         from: 2; to: 2000
-        background: Rectangle {
-            implicitWidth: 70
-            implicitHeight: 24
-            radius: Theme.radiusSm
-            color: control.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-            border.width: control.activeFocus ? 2 : 1
-            border.color: control.activeFocus ? Theme.focus
-                          : control.hovered ? Theme.borderStrong : Theme.border
-            Behavior on color { ColorAnimation { duration: Theme.animFast } }
-            Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-        }
     }
 
     RowLayout {
@@ -48,22 +36,12 @@ ColumnLayout {
 
     RowLayout {
         Label { text: "Grading"; color: Theme.textDim; Layout.preferredWidth: 60 }
-        ComboBox {
+        ThemedComboBox {
             id: gradingBox
             objectName: "meshGradingBox"
+            Layout.preferredWidth: 100
             model: ["uniform", "graded"]
             onActivated: if (controller) controller.setMeshGrading(currentText)
-            background: Rectangle {
-                implicitWidth: 100
-                implicitHeight: 24
-                radius: Theme.radiusSm
-                color: gradingBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                border.width: gradingBox.activeFocus ? 2 : 1
-                border.color: gradingBox.activeFocus ? Theme.focus
-                              : gradingBox.hovered ? Theme.borderStrong : Theme.border
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-            }
         }
     }
 

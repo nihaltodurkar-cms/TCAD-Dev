@@ -26,7 +26,7 @@ ColumnLayout {
     // key is what to_device_spec() emits into region_materials)
     RowLayout {
         Label { text: "Material"; color: Theme.textDim; Layout.preferredWidth: 90 }
-        ComboBox {
+        ThemedComboBox {
             id: materialBox
             objectName: "regionMaterialBox"
             Layout.fillWidth: true
@@ -42,33 +42,12 @@ ColumnLayout {
             onActivated: if (regionId)
                 controller.setRegionMaterial(regionId,
                                              model[currentIndex])
-            background: Rectangle {
-                implicitHeight: 24
-                radius: Theme.radiusSm
-                color: materialBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                border.width: materialBox.activeFocus ? 2 : 1
-                border.color: materialBox.activeFocus ? Theme.focus
-                              : materialBox.hovered ? Theme.borderStrong : Theme.border
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-            }
         }
     }
 
-    component BoundsSpinBox: SpinBox {
-        id: control
+    component BoundsSpinBox: ThemedSpinBox {
+        fieldWidth: 90
         from: -100000; to: 100000
-        background: Rectangle {
-            implicitWidth: 90
-            implicitHeight: 24
-            radius: Theme.radiusSm
-            color: control.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-            border.width: control.activeFocus ? 2 : 1
-            border.color: control.activeFocus ? Theme.focus
-                          : control.hovered ? Theme.borderStrong : Theme.border
-            Behavior on color { ColorAnimation { duration: Theme.animFast } }
-            Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-        }
     }
 
     RowLayout {
@@ -120,7 +99,7 @@ ColumnLayout {
     // measured from THIS region's own y_min (see rasterize_doping).
     RowLayout {
         Label { text: "Profile"; color: Theme.textDim; Layout.preferredWidth: 90 }
-        ComboBox {
+        ThemedComboBox {
             id: profileBox
             objectName: "regionProfileBox"
             Layout.fillWidth: true
@@ -133,16 +112,6 @@ ColumnLayout {
                 sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
                 edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
                 highSideBox.currentText)
-            background: Rectangle {
-                implicitHeight: 24
-                radius: Theme.radiusSm
-                color: profileBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                border.width: profileBox.activeFocus ? 2 : 1
-                border.color: profileBox.activeFocus ? Theme.focus
-                              : profileBox.hovered ? Theme.borderStrong : Theme.border
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-            }
         }
     }
 
@@ -218,7 +187,7 @@ ColumnLayout {
         }
         RowLayout {
             Label { text: "Full-strength side"; color: Theme.textDim; Layout.preferredWidth: 90 }
-            ComboBox {
+            ThemedComboBox {
                 id: highSideBox
                 objectName: "regionProfileHighSideBox"
                 Layout.fillWidth: true
@@ -231,16 +200,6 @@ ColumnLayout {
                     sigmaLatField.text ? parseFloat(sigmaLatField.text) : 0.0,
                     edgeXField.text ? parseFloat(edgeXField.text) : 0.0,
                     model[currentIndex])
-                background: Rectangle {
-                    implicitHeight: 24
-                    radius: Theme.radiusSm
-                    color: highSideBox.hovered ? Qt.tint(Theme.sunken, Theme.hoverOverlay) : Theme.sunken
-                    border.width: highSideBox.activeFocus ? 2 : 1
-                    border.color: highSideBox.activeFocus ? Theme.focus
-                                  : highSideBox.hovered ? Theme.borderStrong : Theme.border
-                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
-                    Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
-                }
             }
         }
     }
