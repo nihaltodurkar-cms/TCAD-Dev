@@ -18,6 +18,7 @@ from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PySide6.QtWidgets import QApplication
 
 from gui.controllers.app_controller import AppController
+from gui.services.icon_provider import IconImageProvider
 from gui.visualization.mpl_canvas_item import MplCanvasItem
 
 QML_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qml")
@@ -33,6 +34,11 @@ def create_engine(app):
 
     engine = QQmlApplicationEngine()
     engine.addImportPath(QML_DIR)
+    # v2 reskin: Icons.qml's svg(name, color) builds an image://icons/...
+    # URL rather than a data:image/svg+xml,... URI -- see
+    # gui/services/icon_provider.py's module docstring for why (a real,
+    # confirmed QtSvg-image-plugin rendering bug on this machine).
+    engine.addImageProvider("icons", IconImageProvider())
 
     controller = AppController()
     # Parent the controller to the engine (both QObjects): without this,

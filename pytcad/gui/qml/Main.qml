@@ -144,11 +144,13 @@ ApplicationWindow {
                     scale: runButton.pressed ? 0.92 : 1.0
                     Behavior on scale { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic } }
                 }
-                contentItem: Text {
-                    text: runButton.text
-                    color: runButton.enabled ? "#ffffff" : Theme.textFaint
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                contentItem: Image {
+                    source: Icons.svg("run", runButton.enabled ? "#ffffff" : Theme.textFaint)
+                    sourceSize.width: 13
+                    sourceSize.height: 13
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignHCenter
+                    verticalAlignment: Image.AlignVCenter
                 }
             }
             Button {
@@ -169,11 +171,13 @@ ApplicationWindow {
                     scale: stopButton.pressed ? 0.92 : 1.0
                     Behavior on scale { NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic } }
                 }
-                contentItem: Text {
-                    text: stopButton.text
-                    color: stopButton.enabled ? "#ffffff" : Theme.textFaint
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                contentItem: Image {
+                    source: Icons.svg("stop", stopButton.enabled ? "#ffffff" : Theme.textFaint)
+                    sourceSize.width: 12
+                    sourceSize.height: 12
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignHCenter
+                    verticalAlignment: Image.AlignVCenter
                 }
             }
             ComboBox {
@@ -221,11 +225,13 @@ ApplicationWindow {
                            : undoButton.hovered ? Theme.hoverOverlay : "transparent"
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
-                contentItem: Text {
-                    text: undoButton.text
-                    color: undoButton.enabled ? Theme.text : Theme.textFaint
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                contentItem: Image {
+                    source: Icons.svg("undo", undoButton.enabled ? Theme.text : Theme.textFaint)
+                    sourceSize.width: 14
+                    sourceSize.height: 14
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignHCenter
+                    verticalAlignment: Image.AlignVCenter
                 }
             }
             Button {
@@ -243,11 +249,13 @@ ApplicationWindow {
                            : redoButton.hovered ? Theme.hoverOverlay : "transparent"
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
-                contentItem: Text {
-                    text: redoButton.text
-                    color: redoButton.enabled ? Theme.text : Theme.textFaint
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                contentItem: Image {
+                    source: Icons.svg("redo", redoButton.enabled ? Theme.text : Theme.textFaint)
+                    sourceSize.width: 14
+                    sourceSize.height: 14
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignHCenter
+                    verticalAlignment: Image.AlignVCenter
                 }
             }
             ToolSeparator {}
@@ -302,11 +310,13 @@ ApplicationWindow {
                            : themeButton.hovered ? Theme.hoverOverlay : "transparent"
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
                 }
-                contentItem: Text {
-                    text: themeButton.text
-                    color: Theme.text
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                contentItem: Image {
+                    source: Icons.svg(Theme.dark ? "sun" : "moon", Theme.text)
+                    sourceSize.width: 15
+                    sourceSize.height: 15
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignHCenter
+                    verticalAlignment: Image.AlignVCenter
                     rotation: 0
                     RotationAnimation on rotation {
                         id: spin
@@ -346,41 +356,55 @@ ApplicationWindow {
                         id: workbenchTabs
                         objectName: "workbenchTabs"
                         Layout.fillWidth: true
-                        contentHeight: 30
+                        contentHeight: 32
 
                         Repeater {
                             model: [
-                                { "label": "Project",   "icon": "⌂" },
-                                { "label": "Structure", "icon": "▤" },
-                                { "label": "Mesh",      "icon": "▦" },
-                                { "label": "Process",   "icon": "⚗" },
-                                { "label": "Sweeps",    "icon": "∿" },
-                                { "label": "Probe Station", "icon": "⎍" },
-                                { "label": "Telemetry", "icon": "◈" },
-                                { "label": "Bands", "icon": "≡" },
-                                { "label": "Transient", "icon": "⏱" },
-                                { "label": "Physics Lab", "icon": "⚛" },
-                                { "label": "Builder",   "icon": "✎" }
+                                { "label": "Project",   "icon": "project" },
+                                { "label": "Structure", "icon": "structure" },
+                                { "label": "Mesh",      "icon": "mesh" },
+                                { "label": "Process",   "icon": "process" },
+                                { "label": "Sweeps",    "icon": "sweeps" },
+                                { "label": "Probe Station", "icon": "probeStation" },
+                                { "label": "Telemetry", "icon": "telemetry" },
+                                { "label": "Bands", "icon": "bands" },
+                                { "label": "Transient", "icon": "transient" },
+                                { "label": "Physics Lab", "icon": "physicsLab" },
+                                { "label": "Builder",   "icon": "builder" }
                             ]
                             delegate: TabButton {
                                 id: tabDelegate
                                 required property var modelData
-                                text: modelData.icon + "\u2009" + modelData.label
-                                width: Math.max(implicitWidth, 44)
+                                width: Math.max(implicitWidth, 64)
                                 font.pixelSize: Theme.fsSmall
-                                contentItem: Text {
-                                    text: tabDelegate.text
-                                    font: tabDelegate.font
-                                    color: tabDelegate.checked ? Theme.accent
-                                           : tabDelegate.activeFocus ? Theme.focus : Theme.text
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                                readonly property color tabColor: tabDelegate.checked ? Theme.accentGradientEnd
+                                                                   : tabDelegate.activeFocus ? Theme.focus : Theme.text
+                                contentItem: Row {
+                                    spacing: Theme.padXs
+                                    anchors.centerIn: parent
+                                    Image {
+                                        objectName: "sidebarTabIcon"
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: Icons.svg(tabDelegate.modelData.icon, tabDelegate.tabColor)
+                                        sourceSize.width: 15
+                                        sourceSize.height: 15
+                                        width: 15
+                                        height: 15
+                                        smooth: true
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: tabDelegate.modelData.label
+                                        font: tabDelegate.font
+                                        color: tabDelegate.tabColor
+                                        elide: Text.ElideRight
+                                        Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                                    }
                                 }
                                 background: Rectangle {
-                                    color: tabDelegate.hovered && !tabDelegate.checked
-                                           ? Theme.hoverOverlay : "transparent"
+                                    radius: Theme.radiusLg
+                                    color: tabDelegate.checked ? Theme.accentSoft
+                                           : tabDelegate.hovered ? Theme.hoverOverlay : "transparent"
                                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
                                 }
                             }
@@ -388,15 +412,24 @@ ApplicationWindow {
 
                         // Accent bar that glides beneath the active tab
                         // instead of snapping there, tying tab selection
-                        // to a single continuous piece of motion.
+                        // to a single continuous piece of motion. Now a
+                        // real violet->blue gradient rather than a flat
+                        // fill (QtQuick's Gradient has no arbitrary-angle
+                        // mode, so this is a horizontal approximation of
+                        // the approved mockup's 135deg buttons -- a
+                        // deliberate simplification, not an oversight).
                         Rectangle {
                             id: tabIndicator
                             height: 2
                             radius: 1
-                            color: Theme.accent
                             y: workbenchTabs.height - height
                             x: workbenchTabs.currentItem ? workbenchTabs.currentItem.x : 0
                             width: workbenchTabs.currentItem ? workbenchTabs.currentItem.width : 0
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: Theme.accentGradientStart }
+                                GradientStop { position: 1.0; color: Theme.accentGradientEnd }
+                            }
                             Behavior on x { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
                             Behavior on width { NumberAnimation { duration: Theme.animMed; easing.type: Easing.OutCubic } }
                         }
