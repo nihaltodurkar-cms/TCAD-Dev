@@ -15,31 +15,113 @@ Rectangle {
         spacing: Theme.pad
         MeshEditor { controller: parent.parent.controller; Layout.fillWidth: true }
 
-        // Phase 3c: mesh statistics panel
+        // v2 reskin: the stats block reads as a small card-grid (one
+        // tile per mesh axis) instead of bare mono-font label lines --
+        // same controller.meshStats data as before, only the display
+        // changed (spec section 8, item 1: this is the panel the user
+        // named explicitly as feeling cramped/basic).
         Label {
-            text: "Mesh statistics"
+            text: "MESH STATISTICS"
             color: Theme.textDim
-            font.pixelSize: 10
+            font.pixelSize: Theme.fsTiny
             font.bold: true
+            font.letterSpacing: 1
         }
-        Column {
+
+        Label {
+            objectName: "meshStatsNoControllerLabel"
+            visible: !controller
+            text: "No controller"
+            color: Theme.textFaint
+            font.pixelSize: Theme.fsSmall
+        }
+        Label {
+            objectName: "meshStatsNoDataLabel"
+            visible: !!controller && !controller.meshStats
+            text: "No mesh data"
+            color: Theme.textFaint
+            font.pixelSize: Theme.fsSmall
+        }
+
+        GridLayout {
+            objectName: "meshStatsGrid"
+            visible: !!controller && !!controller.meshStats
             Layout.fillWidth: true
-            spacing: 2
-            Label {
-                text: controller ? controller.meshStats ? "Nodes: " + controller.meshStats.node_count : "No mesh data" : "No controller"
-                color: Theme.text
-                font.pixelSize: 10
-                font.family: Theme.mono
+            columns: 2
+            columnSpacing: Theme.padSm
+            rowSpacing: Theme.padSm
+
+            Rectangle {
+                objectName: "meshStatsTotalTile"
+                Layout.fillWidth: true
+                Layout.columnSpan: 2
+                radius: Theme.radiusLg
+                color: Theme.cardBg
+                border.color: Theme.cardBorder
+                implicitHeight: totalCol.implicitHeight + Theme.padSm * 2
+
+                Column {
+                    id: totalCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.margins: Theme.padSm
+                    spacing: 2
+                    Label {
+                        text: "TOTAL NODES"
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fsTiny
+                        font.letterSpacing: 1
+                    }
+                    Label {
+                        text: controller && controller.meshStats ? String(controller.meshStats.node_count) : "0"
+                        color: Theme.text
+                        font.pixelSize: Theme.fsHeader
+                        font.family: Theme.mono
+                        font.bold: true
+                    }
+                }
             }
+
             Repeater {
                 model: controller && controller.meshStats && controller.meshStats.axes ? Object.keys(controller.meshStats.axes) : []
-                Label {
-                    text: modelData + ": " + (controller.meshStats.axes[modelData].size || 0) + " nodes ("
-                        + (controller.meshStats.axes[modelData].min * 1e4).toFixed(2) + " to "
-                        + (controller.meshStats.axes[modelData].max * 1e4).toFixed(2) + " um)"
-                    color: Theme.textDim
-                    font.pixelSize: 10
-                    font.family: Theme.mono
+                delegate: Rectangle {
+                    objectName: "meshStatsAxisTile"
+                    required property string modelData
+                    Layout.fillWidth: true
+                    radius: Theme.radiusLg
+                    color: Theme.cardBg
+                    border.color: Theme.cardBorder
+                    implicitHeight: axisCol.implicitHeight + Theme.padSm * 2
+
+                    Column {
+                        id: axisCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: Theme.padSm
+                        spacing: 2
+                        Label {
+                            text: modelData.toUpperCase() + " AXIS"
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fsTiny
+                            font.letterSpacing: 1
+                        }
+                        Label {
+                            text: (controller.meshStats.axes[modelData].size || 0) + " nodes"
+                            color: Theme.text
+                            font.pixelSize: Theme.fsBody
+                            font.family: Theme.mono
+                            font.bold: true
+                        }
+                        Label {
+                            text: (controller.meshStats.axes[modelData].min * 1e4).toFixed(2) + " – " +
+                                  (controller.meshStats.axes[modelData].max * 1e4).toFixed(2) + " µm"
+                            color: Theme.textDim
+                            font.pixelSize: Theme.fsTiny
+                            font.family: Theme.mono
+                        }
+                    }
                 }
             }
         }
