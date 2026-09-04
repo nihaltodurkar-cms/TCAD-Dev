@@ -126,6 +126,25 @@ class TransientResult:
 
 
 @dataclass(frozen=True)
+class ACResult:
+    """One executed AC/Y-parameter sweep (M18 Phase 4): a single
+    driven port's own diagonal admittance, decomposed into C(f)/G(f).
+    `port` is the driven contact/gate name; every other port was
+    AC-grounded. `unit_c`/`unit_g` are always "F/cm^2"/"S/cm^2" today
+    (solver_runner.py stamps them explicitly rather than hardcoding
+    them here, so a future 3D/unit change stays a one-line fix there)."""
+    port: str
+    freqs: np.ndarray      # [Hz]
+    C: np.ndarray          # [unit_c], same length as freqs
+    G: np.ndarray          # [unit_g], same length as freqs
+    unit_c: str
+    unit_g: str
+
+    def n_points(self):
+        return int(self.freqs.size)
+
+
+@dataclass(frozen=True)
 class SweepSnapshots:
     """Sweep field snapshots for animated 3D playback.
 
@@ -247,6 +266,16 @@ class ResultStore(ABC):
         own documented contract ("None for pre-v2 files"), never raises."""
         return None
 
+    def has_ac(self):
+        """True only for stores carrying an executed AC/Y-parameter
+        sweep (M18 Phase 4). Protocol member with an honest default,
+        same has_sweep/has_transient/has_record pattern this ABC's own
+        docstring documents -- most stores legitimately carry none."""
+        return False
+
+    def ac_result(self):
+        raise KeyError("this store carries no AC sweep")
+
     def region_materials(self):
         """The DeviceSpec.region_materials wire-shape list ([{"material",
         "box"}, ...]) this result's device was built with, or None for a
@@ -359,6 +388,22 @@ class NpzResultStore(ResultStore):
         if not self.has_record():
             return None
         return RunRecord.from_npz_keys(self._d)
+
+    # -- AC/Y-parameter sweep (M18 Phase 4) ------------------------------
+    def has_ac(self):
+        return "ac__freqs" in self._d
+
+    def ac_result(self):
+        if not self.has_ac():
+            raise KeyError(f"no AC sweep in {self.path}")
+        return ACResult(
+            port=str(self._d["ac__port"]),
+            freqs=np.asarray(self._d["ac__freqs"], dtype=float),
+            C=np.asarray(self._d["ac__C"], dtype=float),
+            G=np.asarray(self._d["ac__G"], dtype=float),
+            unit_c=str(self._d["unit__ac_capacitance"]),
+            unit_g=str(self._d["unit__ac_conductance"]),
+        )
 
     def region_materials(self):
         """The region_materials list stamped by solver_runner.run_job()

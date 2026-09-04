@@ -74,3 +74,56 @@ def test_old_job_file_without_ac_key_still_loads(tmp_path):
     path = str(tmp_path / "old.json")
     json.dump(d, open(path, "w"))
     assert DeviceSpec.from_json(path).ac is None
+
+
+# ---------------------------------------------------------------- ACResult / ResultStore
+def test_spec_result_store_answers_has_ac_honestly():
+    from gui.services.result_store import SpecResultStore
+    spec = _diode_1d_spec(with_sweep=False)
+    store = SpecResultStore(spec)
+    assert store.has_ac() is False
+    with pytest.raises(KeyError):
+        store.ac_result()
+
+
+def test_npz_result_store_reads_back_a_hand_stamped_ac_block(tmp_path):
+    from gui.services.result_store import NpzResultStore
+    from gui.services.solver_backend import SOLVER_RESULT_SCHEMA_VERSION, GEOM_STRUCTURED
+    x = np.linspace(0.0, 2e-4, 10)
+    out = str(tmp_path / "ac_hand.npz")
+    np.savez(out,
+             dimensionality=np.array(1),
+             solved_bias=np.array(True),
+             axis_x=x,
+             field__potential=np.zeros_like(x),
+             unit__potential=np.array("V"),
+             result__schema=np.array(SOLVER_RESULT_SCHEMA_VERSION),
+             geom__kind=np.array(GEOM_STRUCTURED),
+             mesh__shape=np.array([x.size]),
+             nodes__count=np.array(int(x.size)),
+             nodes__coords=x.reshape(-1, 1),
+             ac__freqs=np.array([1.0, 10.0, 100.0]),
+             ac__C=np.array([1e-7, 9e-8, 5e-8]),
+             ac__G=np.array([1e-3, 2e-3, 5e-3]),
+             ac__port=np.array("left"),
+             unit__ac_capacitance=np.array("F/cm^2"),
+             unit__ac_conductance=np.array("S/cm^2"))
+    store = NpzResultStore(out)
+    assert store.has_ac() is True
+    res = store.ac_result()
+    assert res.port == "left"
+    assert np.allclose(res.freqs, [1.0, 10.0, 100.0])
+    assert np.allclose(res.C, [1e-7, 9e-8, 5e-8])
+    assert np.allclose(res.G, [1e-3, 2e-3, 5e-3])
+    assert res.unit_c == "F/cm^2"
+    assert res.unit_g == "S/cm^2"
+
+
+def test_npz_result_store_has_ac_false_on_a_plain_run(tmp_path):
+    from gui.services.result_store import NpzResultStore
+    spec = _diode_1d_spec(with_sweep=False)
+    from gui.services.solver_runner import run_job
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+    assert NpzResultStore(out).has_ac() is False
