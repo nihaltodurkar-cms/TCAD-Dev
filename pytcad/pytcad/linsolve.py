@@ -39,13 +39,23 @@ except ImportError:
 # services/solver_runner.py) gate on mesh size before requesting this;
 # absence of cupy changes nothing here beyond this method not being
 # offered -- optional dep stays optional, same as pyamg above.
-try:
-    import cupy as _cupy
-    import cupyx.scipy.sparse as _cusp
-    import cupyx.scipy.sparse.linalg as _cuspla
-    _HAVE_CUPY = True
-except ImportError:
-    _HAVE_CUPY = False
+# Performance pass (2026-09-04): the actual `import cupy`/`cupyx.*`
+# statements are deferred to solve_linear()'s gpu_direct branch below,
+# the one place that actually needs them, rather than paid by every
+# process that merely imports this module -- confirmed via
+# `python3 -X importtime` that a real cupy import costs ~85-124ms
+# (CUDA driver detection, extension loading), overwhelmingly the
+# largest single contributor to this codebase's ~505ms cold-start
+# import chain, even though most sessions never touch gpu_direct.
+# _HAVE_CUPY itself stays a plain, eagerly-computed module-level bool
+# (0.04ms via importlib.util.find_spec, which locates the package
+# without executing its __init__.py) because gui/services/
+# solver_runner.py imports it directly as a name
+# (`from pytcad.linsolve import ..., _HAVE_CUPY`) and reads it as a
+# plain flag, not a function call -- it must see accurate availability
+# with no behavior change on that side.
+import importlib.util as _importlib_util
+_HAVE_CUPY = _importlib_util.find_spec("cupy") is not None
 
 __all__ = ["solve_linear", "LinearSolveError"]
 
@@ -379,6 +389,9 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
             A = sp.csr_matrix(A)
         _check_finite(A, b, method)
         try:
+            import cupy as _cupy
+            import cupyx.scipy.sparse as _cusp
+            import cupyx.scipy.sparse.linalg as _cuspla
             Ag = _cusp.csr_matrix(A.tocsr())
             bg = _cupy.asarray(b)
             xg = _cuspla.spsolve(Ag.tocsc(), bg)
