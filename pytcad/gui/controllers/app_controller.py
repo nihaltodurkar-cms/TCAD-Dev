@@ -713,18 +713,21 @@ class AppController(QObject):
         total_cells = (nx - 1) * (ny - 1)
         dof = 3 * total_nodes
         est_mb = dof * 8 * 3 / (1024 * 1024)   # rough: psi/n/p doubles + Jacobian working set order-of-magnitude
-        rows = [("Nx", str(nx)), ("Ny", str(ny)),
-                ("Total nodes", str(total_nodes)), ("Total cells", str(total_cells)),
-                ("Domain width", f"{self.structure.width_cm * 1e4:g} um"),
-                ("Domain height", f"{self.structure.height_cm * 1e4:g} um"),
-                ("Min spacing (x)", f"{hx.min() * 1e4:.4g} um" if hx.size else "n/a"),
-                ("Max spacing (x)", f"{hx.max() * 1e4:.4g} um" if hx.size else "n/a"),
-                ("Min spacing (y)", f"{hy.min() * 1e4:.4g} um" if hy.size else "n/a"),
-                ("Max spacing (y)", f"{hy.max() * 1e4:.4g} um" if hy.size else "n/a"),
-                ("Estimated memory (rough)", f"{est_mb:.1f} MB")]
+        # Rows must be plain lists, not tuples: PySide6 marshals a
+        # list-of-lists to an indexable JS array but NOT a list-of-tuples,
+        # and MeshEditor.qml's delegate reads modelData[0]/modelData[1].
+        rows = [["Nx", str(nx)], ["Ny", str(ny)],
+                ["Total nodes", str(total_nodes)], ["Total cells", str(total_cells)],
+                ["Domain width", f"{self.structure.width_cm * 1e4:g} um"],
+                ["Domain height", f"{self.structure.height_cm * 1e4:g} um"],
+                ["Min spacing (x)", f"{hx.min() * 1e4:.4g} um" if hx.size else "n/a"],
+                ["Max spacing (x)", f"{hx.max() * 1e4:.4g} um" if hx.size else "n/a"],
+                ["Min spacing (y)", f"{hy.min() * 1e4:.4g} um" if hy.size else "n/a"],
+                ["Max spacing (y)", f"{hy.max() * 1e4:.4g} um" if hy.size else "n/a"],
+                ["Estimated memory (rough)", f"{est_mb:.1f} MB"]]
         if total_nodes > 50_000:
-            rows.append(("Warning", "This mesh is large; 2D drift-diffusion may "
-                                    "require substantial memory and solve time."))
+            rows.append(["Warning", "This mesh is large; 2D drift-diffusion may "
+                                    "require substantial memory and solve time."])
         return rows
 
     def _refresh_structure_models(self):
