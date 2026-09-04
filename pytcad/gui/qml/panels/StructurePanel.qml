@@ -13,55 +13,55 @@ Rectangle {
     property string selectedContactId: ""
     property string selectedGateId: ""
 
+    // QML architecture cleanup: named role-offset maps, one per list
+    // model, matching each Python ...ListModel's own Role class exactly
+    // (gui/controllers/region_list_model.py / contact_list_model.py /
+    // gate_list_model.py) -- replaces the same Qt.UserRole + N literals
+    // previously repeated inline, unnamed, at every lookup call site
+    // below. model.roleNames() (which WOULD give the same names
+    // dynamically) is not callable from QML in this PySide6 build --
+    // confirmed directly ("TypeError: ... is not a function") -- so
+    // these stay explicit, cross-referenced constants instead.
+    readonly property var _regionRoles: ({
+        id: Qt.UserRole + 1, name: Qt.UserRole + 2, bounds: Qt.UserRole + 3,
+        doping: Qt.UserRole + 4, material: Qt.UserRole + 6,
+        dopingProfile: Qt.UserRole + 7, profilePeak: Qt.UserRole + 8,
+        profileSigmaY: Qt.UserRole + 9, profileSigmaLat: Qt.UserRole + 10,
+        profileEdgeX: Qt.UserRole + 11, profileHighSide: Qt.UserRole + 12
+    })
+    readonly property var _contactRoles: ({
+        id: Qt.UserRole + 1, name: Qt.UserRole + 2,
+        edge: Qt.UserRole + 3, voltage: Qt.UserRole + 4
+    })
+    readonly property var _gateRoles: ({
+        id: Qt.UserRole + 1, name: Qt.UserRole + 2, tox: Qt.UserRole + 3,
+        vfbMode: Qt.UserRole + 4, vfbValue: Qt.UserRole + 5, voltage: Qt.UserRole + 6
+    })
+
+    // Generic row-by-id lookup, replacing three near-identical
+    // hand-rolled loops (one per model) that differed only in which
+    // role map they read.
+    function _lookupRow(model, roles, id) {
+        for (var i = 0; i < model.rowCount(); i++) {
+            var idx = model.index(i, 0)
+            if (model.data(idx, roles.id) === id) {
+                var result = {}
+                for (var key in roles)
+                    if (key !== "id") result[key] = model.data(idx, roles[key])
+                return result
+            }
+        }
+        return null
+    }
+
     function _regionData(id) {
-        for (var i = 0; i < controller.regionListModel.rowCount(); i++) {
-            var idx = controller.regionListModel.index(i, 0)
-            if (controller.regionListModel.data(idx, Qt.UserRole + 1) === id) {
-                return {
-                    name: controller.regionListModel.data(idx, Qt.UserRole + 2),
-                    bounds: controller.regionListModel.data(idx, Qt.UserRole + 3),
-                    doping: controller.regionListModel.data(idx, Qt.UserRole + 4),
-                    material: controller.regionListModel.data(idx, Qt.UserRole + 6),
-                    dopingProfile: controller.regionListModel.data(idx, Qt.UserRole + 7),
-                    profilePeak: controller.regionListModel.data(idx, Qt.UserRole + 8),
-                    profileSigmaY: controller.regionListModel.data(idx, Qt.UserRole + 9),
-                    profileSigmaLat: controller.regionListModel.data(idx, Qt.UserRole + 10),
-                    profileEdgeX: controller.regionListModel.data(idx, Qt.UserRole + 11),
-                    profileHighSide: controller.regionListModel.data(idx, Qt.UserRole + 12),
-                }
-            }
-        }
-        return null
+        return root._lookupRow(controller.regionListModel, root._regionRoles, id)
     }
-
     function _contactData(id) {
-        for (var i = 0; i < controller.contactListModel.rowCount(); i++) {
-            var idx = controller.contactListModel.index(i, 0)
-            if (controller.contactListModel.data(idx, Qt.UserRole + 1) === id) {
-                return {
-                    name: controller.contactListModel.data(idx, Qt.UserRole + 2),
-                    edge: controller.contactListModel.data(idx, Qt.UserRole + 3),
-                    voltage: controller.contactListModel.data(idx, Qt.UserRole + 4),
-                }
-            }
-        }
-        return null
+        return root._lookupRow(controller.contactListModel, root._contactRoles, id)
     }
-
     function _gateData(id) {
-        for (var i = 0; i < controller.gateListModel.rowCount(); i++) {
-            var idx = controller.gateListModel.index(i, 0)
-            if (controller.gateListModel.data(idx, Qt.UserRole + 1) === id) {
-                return {
-                    name: controller.gateListModel.data(idx, Qt.UserRole + 2),
-                    tox: controller.gateListModel.data(idx, Qt.UserRole + 3),
-                    vfbMode: controller.gateListModel.data(idx, Qt.UserRole + 4),
-                    vfbValue: controller.gateListModel.data(idx, Qt.UserRole + 5),
-                    voltage: controller.gateListModel.data(idx, Qt.UserRole + 6),
-                }
-            }
-        }
-        return null
+        return root._lookupRow(controller.gateListModel, root._gateRoles, id)
     }
 
     ScrollView {
