@@ -127,3 +127,146 @@ def test_npz_result_store_has_ac_false_on_a_plain_run(tmp_path):
     spec.to_json(job)
     run_job(job, out)
     assert NpzResultStore(out).has_ac() is False
+
+
+# ---------------------------------------------------------------- solver dispatch (1D)
+def test_cli_1d_ac_stamps_the_expected_block_and_matches_direct_call(tmp_path):
+    """G-AC-1D: the stamped ac__C/ac__G must match a DIRECT call to
+    pytcad.ac.y_parameters() on an independently-built, independently-
+    solved copy of the SAME device -- a wiring/dispatch gate, not a
+    fresh physics gate (the physics itself is already gated by
+    tests/test_m18_ac.py / tests/test_m18_yparam.py)."""
+    from gui.services.device_spec import ACSpec
+    from gui.services.solver_runner import run_job
+    from gui.services.result_store import NpzResultStore
+
+    spec = _diode_1d_spec(with_sweep=False)
+    spec.ac = ACSpec(contact="left", f_start=1.0, f_stop=1e6, n_points=5)
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+
+    store = NpzResultStore(out)
+    assert store.has_ac() is True
+    res = store.ac_result()
+    assert res.port == "left"
+    assert res.freqs.size == 5
+    assert np.allclose(res.freqs, np.logspace(0, 6, 5))
+
+    # Independent reference: build + solve the SAME device directly
+    # against pytcad's own core, bypassing solver_runner entirely.
+    from pytcad import Device1D, Models
+    from pytcad.ac import y_parameters
+    x = np.linspace(0.0, 2e-4, 40)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    dev = Device1D(x, doping, models=Models(bgn=False))
+    dev.solve_equilibrium()
+    dev.solve_bias([0.3, 0.0])   # spec.bias = {"left": 0.3, "right": 0.0}
+    ref = y_parameters(dev, res.freqs)
+    li = ref.port_names.index("left")
+    C_ref = ref.Y[:, li, li].imag / (2 * np.pi * res.freqs)
+    G_ref = ref.Y[:, li, li].real
+    assert np.allclose(res.C, C_ref, rtol=1e-6)
+    assert np.allclose(res.G, G_ref, rtol=1e-6)
+
+
+def test_cli_1d_ac_driving_the_second_contact_uses_the_right_port(tmp_path):
+    """Confirms the positional contacts[0]->left/contacts[1]->right
+    resolution (M18-AC-PLAN.md section 13's port-resolution note) reads
+    off the CORRECT diagonal Y entry for whichever contact is driven.
+
+    NOTE (discovered by running the real physics, not assumed): for any
+    genuine two-terminal 1D device, Y11 == Y22 EXACTLY -- a consequence
+    of total-current continuity (the AC current entering the left
+    terminal always equals minus the current leaving the right terminal;
+    there is no third conduction path in a 2-terminal Device1D).
+    Confirmed directly against pytcad.ac.y_parameters() itself: driving
+    "left" and driving "right" on this diode produce bit-identical C/G.
+    So a "must differ" assertion is unsatisfiable for ANY correct
+    dispatch on this device class -- instead, each driven contact's
+    result is cross-checked against the independently-computed
+    reference at ITS OWN expected port index (same style as the
+    previous test's rtol=1e-6 check), which still catches a wrong
+    scale/sign/unit bug even though no diagonal-value-based test can
+    distinguish a port_idx=0-vs-1 swap on a 2-terminal device.
+    """
+    from gui.services.device_spec import ACSpec
+    from gui.services.solver_runner import run_job
+    from gui.services.result_store import NpzResultStore
+    from pytcad import Device1D, Models
+    from pytcad.ac import y_parameters
+
+    def _run(contact):
+        spec = _diode_1d_spec(with_sweep=False)
+        spec.ac = ACSpec(contact=contact, f_start=1.0, f_stop=10.0, n_points=2)
+        job = str(tmp_path / f"job_{contact}.json")
+        out = str(tmp_path / f"out_{contact}.npz")
+        spec.to_json(job)
+        run_job(job, out)
+        return NpzResultStore(out).ac_result()
+
+    left = _run("left")
+    right = _run("right")
+    assert left.port == "left" and right.port == "right"
+
+    x = np.linspace(0.0, 2e-4, 40)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    dev = Device1D(x, doping, models=Models(bgn=False))
+    dev.solve_equilibrium()
+    dev.solve_bias([0.3, 0.0])
+    ref = y_parameters(dev, left.freqs)
+    for res, port_idx in ((left, 0), (right, 1)):
+        C_ref = ref.Y[:, port_idx, port_idx].imag / (2 * np.pi * res.freqs)
+        G_ref = ref.Y[:, port_idx, port_idx].real
+        assert np.allclose(res.C, C_ref, rtol=1e-6)
+        assert np.allclose(res.G, G_ref, rtol=1e-6)
+
+
+def test_ac_absent_when_not_armed(tmp_path):
+    from gui.services.solver_runner import run_job
+    from gui.services.result_store import NpzResultStore
+    spec = _diode_1d_spec(with_sweep=False)
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+    assert NpzResultStore(out).has_ac() is False
+
+
+# ---------------------------------------------------------------- solver dispatch (3D refusal)
+def test_ac_refuses_on_device3d(tmp_path):
+    """G-AC-3D-REFUSAL: a clear ValueError naming AC/Device3D, not a
+    bare crash from deep inside ac2d.py (there is no ac3d module to
+    even import)."""
+    from gui.services.device_spec import ACSpec, ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+    from gui.services.solver_runner import run_job
+    import subprocess, sys, json
+
+    x = np.linspace(0.0, 2e-4, 5)
+    y = np.linspace(0.0, 1e-4, 4)
+    z = np.linspace(0.0, 1e-4, 4)
+    doping = np.full((z.size, y.size, x.size), 1e17)
+    jj, kk = np.meshgrid(np.arange(y.size), np.arange(z.size))
+    jj, kk = jj.ravel().tolist(), kk.ravel().tolist()
+    spec = DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="left", kind="ohmic",
+                        nodes={"i": [0] * len(jj), "j": jj, "k": kk}, V=0.0),
+            ContactSpec(name="right", kind="ohmic",
+                        nodes={"i": [x.size - 1] * len(jj), "j": jj, "k": kk}, V=0.0),
+        ],
+        bias={"left": 0.05, "right": 0.0},
+        ac=ACSpec(contact="left", f_start=1.0, f_stop=1e6, n_points=3),
+    )
+    job = str(tmp_path / "job.json")
+    out = str(tmp_path / "out.npz")
+    spec.to_json(job)
+    proc = subprocess.run(
+        [sys.executable, "-m", "gui.services.solver_runner", job, out],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True, text=True, timeout=120)
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    assert "AC" in proc.stderr and "Device3D" in proc.stderr

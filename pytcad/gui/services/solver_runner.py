@@ -87,6 +87,7 @@ from pytcad.transient import (
     solve_transient as solve_transient_1d,
 )
 from pytcad.transient2d import solve_transient as solve_transient_2d
+from pytcad import ac, ac2d
 
 from .device_spec import DeviceSpec
 from .solver_backend import (
@@ -719,6 +720,39 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
 
         print("PYTCAD_STAGE=extract", flush=True)
         result = extract_result(device, spec, solved_bias)
+        # M18 Phase 4: AC runs AT this same converged point (it does
+        # NOT replace equilibrium/bias the way transient/sweep do
+        # above -- see M18-AC-PLAN.md section 13's own note on why
+        # this lives here, inside the plain-bias branch, and not as a
+        # third top-level elif).
+        if spec.ac is not None:
+            print("PYTCAD_STAGE=ac", flush=True)
+            if isinstance(device, Device3D):
+                raise ValueError(
+                    "AC analysis is not implemented for Device3D "
+                    "(no ac3d module exists) -- see M18-AC-PLAN.md.")
+            freqs = np.logspace(np.log10(spec.ac.f_start),
+                                np.log10(spec.ac.f_stop), spec.ac.n_points)
+            yfn = ac.y_parameters if isinstance(device, Device1D) else ac2d.y_parameters
+            yres = yfn(device, freqs)
+            if isinstance(device, Device1D):
+                # apply_bias()'s own positional convention: contacts[0]
+                # is always the x=0 "left" node, contacts[1] always
+                # x=N-1 "right", regardless of either contact's NAME
+                # (Device1D has no named contact registry at the core
+                # level at all -- see apply_bias()'s own docstring).
+                port_idx = 0 if spec.ac.contact == spec.contacts[0].name else 1
+            else:
+                port_idx = yres.port_names.index(spec.ac.contact)
+            Y_kk = yres.Y[:, port_idx, port_idx]
+            result.update({
+                "ac__freqs": freqs,
+                "ac__C": Y_kk.imag / (2 * np.pi * freqs),
+                "ac__G": Y_kk.real,
+                "ac__port": np.array(spec.ac.contact),
+                "unit__ac_capacitance": np.array("F/cm^2"),
+                "unit__ac_conductance": np.array("S/cm^2"),
+            })
     return result
 
 
