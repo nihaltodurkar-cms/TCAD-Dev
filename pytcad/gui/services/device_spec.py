@@ -309,6 +309,31 @@ def _validate_region_materials(entries):
                 "[x0,x1,y0,y1] or [x0,x1,y0,y1,z0,z1] in cm")
 
 
+def _validate_structure_regions(entries):
+    """Structural validation of the structure_regions wire field: same
+    box shape/contract as region_materials (see its own docstring
+    above), a NAME instead of a material -- this is a purely
+    geometric/structural region (any material, including plain
+    silicon), used by the 3D viewer's exploded-view feature to
+    separate a device into its logical parts (source/drain/channel,
+    emitter/base/collector, ...) when there is no material difference
+    for region_materials to key off of."""
+    if not isinstance(entries, list):
+        raise ValueError("structure_regions must be a list")
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict) \
+                or not isinstance(entry.get("name"), str) \
+                or not entry["name"]:
+            raise ValueError(
+                f"structure_regions[{i}] needs a 'name' string")
+        box = entry.get("box")
+        if not isinstance(box, (list, tuple)) or len(box) not in (2, 4, 6) \
+                or not all(isinstance(v, (int, float)) for v in box):
+            raise ValueError(
+                f"structure_regions[{i}].box must be [x0,x1], "
+                "[x0,x1,y0,y1] or [x0,x1,y0,y1,z0,z1] in cm")
+
+
 def _default_models():
     # M13: fd / incomplete_ion join the wire-format defaults (OFF),
     # keeping the invariant that this dict equals
@@ -376,6 +401,15 @@ class DeviceSpec:
     # mpi_schwarz on a 2D device) instead of silently falling back.
     # One of "auto", "direct", "gpu_direct", "amg", "mpi_schwarz".
     engine: str = "auto"
+    # v0.6 Phase 2f: optional purely-STRUCTURAL regions (name + box),
+    # independent of material -- the 3D viewer's exploded-view feature
+    # falls back to this when region_materials is absent (a same-
+    # material device, e.g. a homojunction MOSFET/BJT/JFET, still has
+    # logical parts -- source/drain/channel, emitter/base/collector --
+    # worth separating visually even though pytcad solves them as one
+    # silicon domain). See gui/services/viewer3d.py's
+    # _build_exploded_view for how the two are combined.
+    structure_regions: list = None
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -388,6 +422,9 @@ class DeviceSpec:
         rm = d.get("region_materials")
         if rm is not None:
             _validate_region_materials(rm)
+        sr = d.get("structure_regions")
+        if sr is not None:
+            _validate_structure_regions(sr)
         return cls(
             mesh=MeshSpec(**d["mesh"]),
             doping=DopingSpec(**d["doping"]),
@@ -404,6 +441,7 @@ class DeviceSpec:
             transient=TransientSpec.from_dict(transient) if transient else None,
             backend=d.get("backend", "pytcad"),
             engine=d.get("engine", "auto"),
+            structure_regions=sr,
         )
 
     def to_json(self, path):

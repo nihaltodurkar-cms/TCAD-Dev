@@ -41,6 +41,36 @@ _HAVE_MPI = (importlib.util.find_spec("mpi4py") is not None
             and shutil.which("mpirun") is not None)
 MPI_SCHWARZ_RANKS = 4
 
+# Real, pre-existing bug fixed here (confirmed by actually running the
+# MPI Schwarz path): the mpirun invocation below used to hardcode
+# "--allow-run-as-root" unconditionally. That flag is Open MPI-
+# specific (Open MPI refuses to run as root without it); MPICH's
+# Hydra process manager -- what `mpirun` actually resolves to on a
+# plain `conda install mpi4py mpich` machine, confirmed directly via
+# `mpirun --version` printing "HYDRA build details" -- has no such
+# concept at all and refuses to start with "unrecognized argument
+# allow-run-as-root", failing EVERY MPI Schwarz job outright regardless
+# of whether the process is actually running as root. Detected once,
+# lazily (only when the MPI Schwarz path is actually about to run
+# mpirun, not at import time -- this shells out) and cached, since a
+# machine's MPI implementation does not change mid-session.
+_mpirun_is_openmpi_cache = None
+
+
+def _mpirun_is_openmpi():
+    global _mpirun_is_openmpi_cache
+    if _mpirun_is_openmpi_cache is None:
+        try:
+            out = subprocess.run(["mpirun", "--version"], capture_output=True,
+                                 text=True, timeout=10).stdout
+        except Exception:
+            out = ""
+        # Open MPI's own --version banner starts "mpirun (Open MPI)
+        # X.Y.Z"; older releases said "Open RTE" instead -- MPICH/Hydra
+        # prints "HYDRA build details" and never either string.
+        _mpirun_is_openmpi_cache = "Open MPI" in out or "Open RTE" in out
+    return _mpirun_is_openmpi_cache
+
 # v0.6 Phase 2d: DeviceSpec.engine's valid values -- "auto" keeps
 # run_job()'s existing node-count/dimensionality heuristic; any other
 # value forces that engine (see run_job()'s own override block).
@@ -775,7 +805,10 @@ def _solve_via_mpi_schwarz(job_path, split_axis):
     once, not independently per rank).
     """
     tmp_out = job_path + ".schwarz_result.npz"
-    cmd = ["mpirun", "--allow-run-as-root", "-np", str(MPI_SCHWARZ_RANKS),
+    cmd = ["mpirun"]
+    if _mpirun_is_openmpi():
+        cmd.append("--allow-run-as-root")
+    cmd += ["-np", str(MPI_SCHWARZ_RANKS),
            sys.executable, "-m", "gui.services.mpi_schwarz_runner",
            job_path, tmp_out, split_axis]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1021,6 +1054,31 @@ def run_job(job_path, out_path, capture_trace=True):
     coords = _node_coords(spec.mesh)
     result["nodes__count"] = np.array(int(coords.shape[0]))
     result["nodes__coords"] = coords
+
+    # v0.6 Phase 2e: round-trip the region_materials wire field into the
+    # result itself. build_material_grid() above already CONSUMES this
+    # (rasterizing it into per-node materials for the physics solve),
+    # but until now nothing carried it back OUT again -- the 3D viewer's
+    # exploded-view feature (gui/services/viewer3d.py's
+    # _build_exploded_view) reads exactly this shape back via
+    # store.region_materials(), which every real result silently
+    # returned None for (no store implemented it at all, see
+    # result_store.py's ResultStore.region_materials), so exploded view
+    # could never do anything for ANY device, heterojunction included.
+    # Only stamped when non-empty, same "absent means N/A" convention
+    # sweep__meta/transient__meta below already use.
+    if spec.region_materials:
+        result["region_materials__meta"] = np.array(
+            json.dumps(spec.region_materials))
+    # v0.6 Phase 2f: same round-trip, for a device with named
+    # structural regions but no material difference for
+    # region_materials above to carry (a homojunction MOSFET/BJT/JFET
+    # built via the Structure workbench, or one of the 3D EXAMPLES
+    # functions that now stamps this directly) -- see
+    # DeviceSpec.structure_regions's own docstring.
+    if spec.structure_regions:
+        result["structure_regions__meta"] = np.array(
+            json.dumps(spec.structure_regions))
 
     transient_meta = None
     if spec.transient is not None:

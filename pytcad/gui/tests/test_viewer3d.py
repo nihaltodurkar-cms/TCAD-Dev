@@ -596,12 +596,20 @@ def test_viewer3d_window_release_stops_playback_timer(gapp,
 # ----------------------------------------------------------------------
 def test_viewer3d_window_exploded_toggle_exists(gapp, resistor_3d_store, monkeypatch):
     """The exploded view checkbox and separation spinbox should be
-    present in the sidebar."""
+    present in the sidebar, with a default separation SCALED FROM the
+    device's own size (real bug fix: a hardcoded 0.5 cm default made
+    exploded view invisible for every device this app ships, all of
+    which span roughly 1e-5 to 2e-4 cm -- see viewer3d.py's own comment
+    on self._exploded_separation for the measured effect)."""
     win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
     assert hasattr(win, '_exploded_toggle')
     assert hasattr(win, '_exploded_sep_spin')
     assert win._exploded_toggle.text() == "Exploded view"
-    assert win._exploded_sep_spin.value() == 0.5
+    # abs= accounts for QDoubleSpinBox's own 9-decimal display rounding
+    # (setDecimals(9)), not a real discrepancy in the stored value.
+    assert win._exploded_sep_spin.value() == pytest.approx(
+        0.15 * win.grid.length, abs=1e-8)
+    assert 0.0 < win._exploded_sep_spin.value() < win.grid.length
 
 
 def test_viewer3d_window_exploded_disabled_without_region_data(gapp,

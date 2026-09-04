@@ -265,7 +265,19 @@ def mosfet_3d_example_spec():
                        nodes=_top_face_node_indices(i_gate, nz),
                        V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="y"),
         ],
-        bias={"source": 0.0, "drain": 0.0, "body": 0.0, "gate": 0.0})
+        bias={"source": 0.0, "drain": 0.0, "body": 0.0, "gate": 0.0},
+        # v0.6 Phase 2f: this is a homojunction device (plain SILICON
+        # throughout -- doping is the only thing that changes), so
+        # region_materials has nothing to key off; structure_regions
+        # tiles the SAME source/channel/drain x-split i_src/i_gate/
+        # i_drn above already computed, full y/z extent each, so the
+        # 3D viewer's exploded-view feature has real named parts to
+        # separate.
+        structure_regions=[
+            {"name": "source", "box": [0.0, Lsd, 0.0, depth, 0.0, W]},
+            {"name": "channel", "box": [Lsd, Lsd + Lg, 0.0, depth, 0.0, W]},
+            {"name": "drain", "box": [Lsd + Lg, L, 0.0, depth, 0.0, W]},
+        ])
 
 
 def finfet_3d_example_spec():
@@ -376,7 +388,17 @@ def finfet_3d_example_spec():
                         V=0.0, tox_cm=tox_cm, Vfb=Vfb, normal_axis="z"),
         ],
         bias={"source": 0.0, "drain": 0.0, "body": 0.0,
-              "gate_top": 0.0, "gate_left": 0.0, "gate_right": 0.0})
+              "gate_top": 0.0, "gate_left": 0.0, "gate_right": 0.0},
+        # v0.6 Phase 2f: same homojunction reasoning as mosfet_3d_
+        # example_spec's own structure_regions -- tiles the same
+        # source/channel(fin-under-gate)/drain x-split i_src/i_gate/
+        # i_drn above, full y/z (fin) extent each.
+        structure_regions=[
+            {"name": "source", "box": [0.0, Lsd, 0.0, Hfin, 0.0, Wfin]},
+            {"name": "channel",
+             "box": [Lsd, Lsd + Lg, 0.0, Hfin, 0.0, Wfin]},
+            {"name": "drain", "box": [Lsd + Lg, L, 0.0, Hfin, 0.0, Wfin]},
+        ])
 
 
 def pn_junction_3d_example_spec():
@@ -441,7 +463,16 @@ def pn_junction_3d_example_spec():
                                                     z.size),
                         V=0.0),
         ],
-        bias={"anode": 0.0, "cathode": 0.0})
+        bias={"anode": 0.0, "cathode": 0.0},
+        # v0.6 Phase 2f: plain SILICON throughout (doping-only
+        # junction, same reasoning as mosfet_3d_example_spec's own
+        # structure_regions) -- p-side/n-side split at the same
+        # x_junc the Gaussian doping profile above is centered on,
+        # full y/z extent each.
+        structure_regions=[
+            {"name": "p_side", "box": [0.0, x_junc, 0.0, H, 0.0, W]},
+            {"name": "n_side", "box": [x_junc, L, 0.0, H, 0.0, W]},
+        ])
 
 
 def bjt_3d_example_spec():
@@ -541,7 +572,19 @@ def bjt_3d_example_spec():
                                "j": [y.size - 1] * len(ii), "k": kk},
                         V=0.0),
         ],
-        bias={"emitter": 0.0, "base": 0.0, "collector": 0.0})
+        bias={"emitter": 0.0, "base": 0.0, "collector": 0.0},
+        # v0.6 Phase 2f: a homojunction BJT (module docstring above --
+        # plain SILICON throughout), same reasoning as mosfet_3d_
+        # example_spec's own structure_regions -- tiles the same
+        # emitter/base/collector y-layering H_emit/H_base above
+        # already computed, full x/z extent each.
+        structure_regions=[
+            {"name": "emitter", "box": [0.0, L, 0.0, H_emit, 0.0, W]},
+            {"name": "base",
+             "box": [0.0, L, H_emit, H_emit + H_base, 0.0, W]},
+            {"name": "collector",
+             "box": [0.0, L, H_emit + H_base, H, 0.0, W]},
+        ])
 
 
 def moscap_3d_example_spec():
@@ -688,7 +731,16 @@ def jfet_3d_example_spec():
                         nodes=_bottom_face_node_indices(x.size, y.size, nz),
                         V=0.0),
         ],
-        bias={"source": 0.0, "drain": 0.0, "gate": 0.0})
+        bias={"source": 0.0, "drain": 0.0, "gate": 0.0},
+        # v0.6 Phase 2f: plain SILICON throughout (the n-channel/p+
+        # gate junction here is doping-only, same reasoning as
+        # mosfet_3d_example_spec's own structure_regions) -- tiles the
+        # same channel/gate y-layering Hch above already computed,
+        # full x/z extent each.
+        structure_regions=[
+            {"name": "channel", "box": [0.0, L, 0.0, Hch, 0.0, W]},
+            {"name": "gate", "box": [0.0, L, Hch, H, 0.0, W]},
+        ])
 
 
 EXAMPLES = {"mosfet_2d": mosfet_example_spec,

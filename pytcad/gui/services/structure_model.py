@@ -414,6 +414,26 @@ class StructureModel:
                           max(r.y_min, 0.0), min(r.y_max, self.height_cm)]}
                  for r in self.regions
               if r.material.upper() not in ("SILICON", "SI")]
+
+        # v0.6 Phase 2f: structure_regions carries EVERY region (silicon
+        # included), by NAME instead of material -- the 3D viewer's
+        # exploded-view feature falls back to this for a same-material
+        # (e.g. all-silicon) structure, which region_materials above
+        # says nothing about. 3D-only for the same reason exploded view
+        # itself is 3D-only (Viewer3DWindow has no 2D mode); a 2D
+        # structure emits none, same "additive, absent means N/A"
+        # contract every other optional wire field here follows. Boxes
+        # reuse the exact clamp logic `rm` above already has, just
+        # without the material filter and with `name` instead of
+        # `material` as the label key.
+        sr = None
+        if is_3d:
+            sr = [{"name": r.name,
+                  "box": [max(r.x_min, 0.0), min(r.x_max, self.width_cm),
+                          max(r.y_min, 0.0), min(r.y_max, self.height_cm),
+                          max(r.z_min, 0.0), min(r.z_max, self.depth_cm)]}
+                 for r in self.regions] or None
+
         return DeviceSpec(
             mesh=mesh_spec,
             doping=DopingSpec(kind="array", values=doping.tolist()),
@@ -421,6 +441,7 @@ class StructureModel:
             contacts=contacts,
             bias=bias,
             region_materials=(rm if rm else None),
+            structure_regions=sr,
         )
 
 

@@ -205,8 +205,13 @@ class Viewer3DWindow:
         # device volume -- permanent spatial context underneath
         # whichever isosurface is selected.
         self.plotter.add_mesh(self.grid.outline(), color="white")
-        self.plotter.add_mesh(self.grid, style="surface", opacity=0.15,
-                              show_edges=False, color="lightsteelblue")
+        # Tracked directly (not re-discovered by scanning the plotter
+        # later -- see _remove_monolithic_surface's own note on the
+        # real bug that used to do that) so Exploded view can remove
+        # and later restore exactly this actor.
+        self._monolithic_surface_actor = self.plotter.add_mesh(
+            self.grid, style="surface", opacity=0.15,
+            show_edges=False, color="lightsteelblue")
 
         self._iso_actor = None
         self._iso_cache_key = None
@@ -224,7 +229,20 @@ class Viewer3DWindow:
         self._playback_timer.setInterval(300)  # ~3.3 fps default
         # Phase 5: exploded view state.
         self._exploded_view = False
-        self._exploded_separation = 0.5  # cm, adjustable via spinbox
+        # Real, pre-existing bug fixed here (confirmed by actually
+        # running this against a real solved result, not the test
+        # suite's mocked plotter): a hardcoded 0.5 cm default -- with a
+        # 0.01-10.0 cm spinbox range -- made exploded view LOOK like a
+        # no-op for every device this app ships (all span roughly 1e-5
+        # to 2e-4 cm total). z_offset = idx*separation pushed regions
+        # 2500x-50000x farther apart than the device's own size, so
+        # reset_camera() zoomed out until each region was sub-pixel.
+        # Scaled from the device's OWN bounding-box diagonal
+        # (self.grid.length, already built above) instead of a fixed
+        # constant, so a device 1000x bigger or smaller gets an equally
+        # sensible default -- see _build_sidebar's spinbox range/step,
+        # scaled from this same reference.
+        self._exploded_separation = 0.15 * self.grid.length  # cm
         self._region_actors = []  # list of (actor, box) tuples for exploded regions
         self._store = store  # keep reference for region_materials access
         self._build_sidebar(field_names)
@@ -290,8 +308,16 @@ class Viewer3DWindow:
         form.addRow("Exploded", self._exploded_toggle)
 
         self._exploded_sep_spin = QDoubleSpinBox()
-        self._exploded_sep_spin.setRange(0.01, 10.0)
-        self._exploded_sep_spin.setDecimals(3)
+        # Range/decimals/step scaled from the device's own size
+        # (self._exploded_separation, set in __init__ from
+        # self.grid.length), not the old fixed 0.01-10.0 cm range --
+        # see __init__'s own comment for the bug this fixes. 9 decimals
+        # so a typical device (self.grid.length ~ 1e-4 cm) still shows
+        # meaningful digits down near this range's own floor.
+        self._exploded_sep_spin.setRange(
+            max(self.grid.length * 1e-4, 1e-9), self.grid.length * 5.0)
+        self._exploded_sep_spin.setDecimals(9)
+        self._exploded_sep_spin.setSingleStep(self._exploded_separation / 10.0)
         self._exploded_sep_spin.setSuffix(" cm")
         self._exploded_sep_spin.setValue(self._exploded_separation)
         self._exploded_sep_spin.valueChanged.connect(self._on_exploded_sep_changed)
@@ -527,13 +553,25 @@ class Viewer3DWindow:
                 self.plotter.remove_actor(actor)
         self._region_actors.clear()
 
-        # Get region materials from the store.
+        # Get the regions to explode from the store: prefer material
+        # regions (region_materials -- a genuine heterojunction, colored
+        # by material), falling back to purely structural regions
+        # (structure_regions -- a same-material device like a
+        # homojunction MOSFET/BJT/JFET, named source/drain/channel/...)
+        # when there is no material difference to key off. Box handling
+        # below is identical either way -- only the *reason* a box
+        # exists differs, never its shape.
         region_data = None
         if self._store is not None:
             try:
                 region_data = self._store.region_materials()
             except Exception:
                 region_data = None
+            if not region_data:
+                try:
+                    region_data = self._store.structure_regions()
+                except Exception:
+                    region_data = None
         if region_data is None or not isinstance(region_data, list):
             # No region data available -- keep the monolithic surface.
             self._exploded_view = False
@@ -622,24 +660,36 @@ class Viewer3DWindow:
         for actor in self._region_actors:
             self.plotter.remove_actor(actor)
         self._region_actors.clear()
-        # Restore the monolithic surface.
-        self.plotter.add_mesh(self.grid, style="surface", opacity=0.15,
-                              show_edges=False, color="lightsteelblue")
+        # Restore the monolithic surface -- re-captured into the same
+        # tracked reference _remove_monolithic_surface reads, so a
+        # SECOND toggle back into exploded view can find and remove it
+        # again (see that method's own note on the bug this fixes).
+        self._monolithic_surface_actor = self.plotter.add_mesh(
+            self.grid, style="surface", opacity=0.15,
+            show_edges=False, color="lightsteelblue")
 
     def _remove_monolithic_surface(self):
-        """Remove the monolithic device surface actor from the plotter."""
-        # The monolithic surface is the second added actor (after the outline).
-        # We track it by looking for the lightsteelblue surface actor.
-        to_remove = []
-        for added in self.plotter.added:
-            mesh, kwargs, actor = added
-            if (hasattr(mesh, 'n_points') and mesh.n_points > 0 and
-                    kwargs.get('style') == 'surface' and
-                    kwargs.get('opacity') == 0.15 and
-                    kwargs.get('color') == 'lightsteelblue'):
-                to_remove.append(actor)
-        for actor in to_remove:
-            self.plotter.remove_actor(actor)
+        """Remove the monolithic device surface actor from the plotter.
+
+        Real, pre-existing bug fixed here: this used to scan
+        `self.plotter.added` for an actor matching the surface's own
+        kwargs -- an attribute that exists ONLY on the test suite's
+        FakeInteractor mock (test_viewer3d.py's own docstring explains
+        why real pyvistaqt.QtInteractor/pv.Plotter objects are never
+        exercised directly there), not on the real plotter class. Every
+        exploded-view test passed anyway because every one of them
+        monkeypatches QtInteractor to that same fake -- so a REAL run
+        of this code (confirmed directly: `AttributeError:
+        'QtInteractor' object has no attribute 'added'`, raised inside
+        the checkbox's own Qt slot) crashed the instant a user checked
+        "Exploded view", regardless of whether region_materials/
+        structure_regions found anything to explode. Fixed by tracking
+        the actor directly (self._monolithic_surface_actor, set in
+        __init__ and again in _remove_exploded_view below) instead of
+        re-discovering it through an interface the real plotter never had."""
+        if self._monolithic_surface_actor is not None:
+            self.plotter.remove_actor(self._monolithic_surface_actor)
+            self._monolithic_surface_actor = None
 
     def _add_volume(self):
         """Add a volume actor to the plotter using the current field

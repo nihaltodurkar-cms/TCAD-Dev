@@ -247,6 +247,29 @@ class ResultStore(ABC):
         own documented contract ("None for pre-v2 files"), never raises."""
         return None
 
+    def region_materials(self):
+        """The DeviceSpec.region_materials wire-shape list ([{"material",
+        "box"}, ...]) this result's device was built with, or None for a
+        single-material device or a result predating this field. Bug fix
+        (v0.6 Phase 2e): the 3D viewer's exploded-view feature
+        (viewer3d.py's _build_exploded_view) has always called this on
+        whatever store it was given, but no store defined it -- same
+        "protocol member added to one concrete class without an ABC
+        default" class of bug has_record()/run_record() above already
+        documents; here the concrete implementation itself was simply
+        missing, so exploded view silently did nothing for EVERY device,
+        heterojunction included. Never raises."""
+        return None
+
+    def structure_regions(self):
+        """The DeviceSpec.structure_regions wire-shape list ([{"name",
+        "box"}, ...]), or None -- the exploded-view feature's fallback
+        for a device with no MATERIAL difference (region_materials
+        above) but real logical/geometric parts (source/drain/channel,
+        emitter/base/collector, ...) worth separating visually. Never
+        raises."""
+        return None
+
 
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
@@ -336,6 +359,23 @@ class NpzResultStore(ResultStore):
         if not self.has_record():
             return None
         return RunRecord.from_npz_keys(self._d)
+
+    def region_materials(self):
+        """The region_materials list stamped by solver_runner.run_job()
+        (only present for a heterojunction/multi-material device), or
+        None -- see ResultStore.region_materials's own docstring for
+        why this override exists at all."""
+        if "region_materials__meta" not in self._d:
+            return None
+        return json.loads(str(self._d["region_materials__meta"]))
+
+    def structure_regions(self):
+        """The structure_regions list stamped by solver_runner.run_job()
+        (only present for a device with named structural regions), or
+        None -- see ResultStore.structure_regions's own docstring."""
+        if "structure_regions__meta" not in self._d:
+            return None
+        return json.loads(str(self._d["structure_regions__meta"]))
 
     def sweep_result(self):
         """The executed sweep as a SweepResult, or KeyError for a plain
