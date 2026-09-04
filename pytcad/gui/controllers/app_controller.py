@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 from ..services import examples
 from ..services.device_spec import (
     ContactSpec, DeviceSpec, DopingSpec, MeshSpec, SweepSpec,
-    TransientSpec, WaveformSpec,
+    TransientSpec, WaveformSpec, ACSpec,
 )
 from ..services.job_runner import JobRunner
 from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
@@ -61,6 +61,7 @@ class AppController(QObject):
     processResultChanged = Signal()
     sweepChanged = Signal()                 # v0.4 sweep configuration edits
     transientChanged = Signal()             # M17 phase 3 transient config edits
+    acChanged = Signal()                    # M18 Phase 4 AC config edits
     comparisonChanged = Signal()            # M9 model on/off overlay
 
     def __init__(self, parent=None):
@@ -133,6 +134,7 @@ class AppController(QObject):
         # _sweep_config, and mutually exclusive with it (enforced in
         # run()).
         self._transient_config = None
+        self._ac_config = None
         # v0.6 Phase 2c: which SolverBackend id the next Run uses. Run
         # configuration, like the sweep config above -- not undoable,
         # not device geometry.
@@ -600,6 +602,64 @@ class AppController(QObject):
                 "v0": c.waveform.v0, "v1": c.waveform.v1,
                 "t0": c.waveform.t0, "t1": c.waveform.t1,
                 "t_end": c.t_end, "dt0": c.dt0}
+
+    # -- M18 Phase 4: AC/Y-parameter configuration and results ------------
+    @Property(bool, notify=acChanged)
+    def hasACConfig(self):
+        return self._ac_config is not None
+
+    @Property(bool, notify=resultChanged)
+    def hasAc(self):
+        return self._store is not None and self._store.has_ac()
+
+    # Same opaque-handoff rationale as transientResultForQml above:
+    # handed to MplCanvasItem by ViewportPanel, never attribute-read
+    # from QML.
+    @Property(object, notify=resultChanged)
+    def acResultForQml(self):
+        if self._store is None or not self._store.has_ac():
+            return None
+        try:
+            return self._store.ac_result()
+        except Exception:
+            return None
+
+    @Property(bool, notify=structureChanged)
+    def canRunAc(self):
+        """AC analysis has no ac3d module -- hidden for a 3D spec, same
+        "must not even appear" convention canSelectBackend's own
+        DEVSIM-is-1D-only gate already uses (not merely disabled)."""
+        return self.spec is not None and self.spec.mesh.dimensionality != 3
+
+    @Slot(str, float, float, int)
+    def setACConfig(self, contact, f_start, f_stop, n_points):
+        """Configure the AC sweep Run() will attach to the spec.
+        Numeric sanity is checked immediately (same precedent setSweep
+        Config/setTransientConfig follow) so a typo'd field cannot sit
+        there labeled 'armed'; contact-name validity still waits for
+        Run, where the real spec is known."""
+        cfg = ACSpec(contact=str(contact), f_start=float(f_start),
+                     f_stop=float(f_stop), n_points=int(n_points))
+        try:
+            cfg.validate_values()
+        except ValueError as exc:
+            self.errorRaised.emit("Invalid AC configuration", str(exc))
+            return
+        self._ac_config = cfg
+        self.acChanged.emit()
+
+    @Slot()
+    def clearACConfig(self):
+        self._ac_config = None
+        self.acChanged.emit()
+
+    @Slot(result="QVariant")
+    def acConfig(self):
+        c = self._ac_config
+        if c is None:
+            return None
+        return {"contact": c.contact, "f_start": c.f_start,
+                "f_stop": c.f_stop, "n_points": c.n_points}
 
     # -- workflow-friction pass: Run enablement ---------------------------
     @Property(bool, notify=structureChanged)
@@ -1565,10 +1625,23 @@ class AppController(QObject):
                 self.errorRaised.emit(
                     "Transient run cannot run on this device", str(exc))
                 return
-        if self._sweep_config is not None and self._transient_config is not None:
+        # M18 Phase 4: same pre-flight validation for an armed AC
+        # config, plus extending the sweep/transient mutual-exclusion
+        # check to a 3-way one -- at most ONE of the three may be
+        # armed on a single Run.
+        if self._ac_config is not None:
+            try:
+                self._ac_config.validate([c.name for c in self.spec.contacts])
+            except ValueError as exc:
+                self.errorRaised.emit(
+                    "AC analysis cannot run on this device", str(exc))
+                return
+        armed = sum(cfg is not None for cfg in
+                    (self._sweep_config, self._transient_config, self._ac_config))
+        if armed > 1:
             self.errorRaised.emit(
-                "Cannot run a sweep and a transient run together",
-                "Clear one of the two armed configurations first.")
+                "Cannot run more than one of Sweep/Transient/AC together",
+                "Clear all but one of the armed configurations first.")
             return
         # GUI-IMPROVEMENT-PLAN.md Phase 1c: "Equilibrium only" sets
         # spec.bias = None instead of the usual contact-voltage dict --
