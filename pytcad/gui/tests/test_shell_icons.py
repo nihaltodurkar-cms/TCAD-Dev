@@ -25,6 +25,13 @@ MAIN_QML = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "qml", "Main.qml",
 )
+# QML architecture cleanup: the toolbar (and its Icons.svg(...) calls)
+# moved from Main.qml into its own component -- see
+# components/MainToolBar.qml's header comment for why.
+TOOLBAR_QML = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "qml", "components", "MainToolBar.qml",
+)
 
 EXPECTED_TAB_COUNT = 11
 
@@ -54,7 +61,7 @@ def test_every_sidebar_tab_icon_name_is_registered():
 
 
 def test_toolbar_icon_calls_reference_registered_names():
-    text = open(MAIN_QML, encoding="utf-8").read()
+    text = open(TOOLBAR_QML, encoding="utf-8").read()
     # Icons.svg(<name-expr>, <color-expr>) calls for the toolbar buttons
     # (run/stop/undo/redo/sun/moon). The name argument is either a plain
     # string literal ("run") or a ternary between two literals
@@ -69,7 +76,7 @@ def test_toolbar_icon_calls_reference_registered_names():
         name_expr = text[arg_start:comma]
         names_found.update(re.findall(r'"([^"]+)"', name_expr))
 
-    assert names_found, "expected at least one Icons.svg(...) call in Main.qml"
+    assert names_found, "expected at least one Icons.svg(...) call in MainToolBar.qml"
     unknown = [n for n in names_found if n not in ICON_PATHS]
     assert not unknown, f"Icons.svg() call(s) with unregistered name(s): {unknown}"
     expected_toolbar = {"run", "stop", "undo", "redo", "sun", "moon"}
