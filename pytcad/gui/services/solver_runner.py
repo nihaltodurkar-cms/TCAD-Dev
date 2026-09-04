@@ -884,6 +884,8 @@ def run_job(job_path, out_path, capture_trace=True):
         spec.sweep.validate([c.name for c in spec.contacts])
     if spec.transient is not None:
         spec.transient.validate([c.name for c in spec.contacts])
+    if spec.ac is not None:
+        spec.ac.validate([c.name for c in spec.contacts])
 
     # build_doping() alone is needed up front (the MPI-Schwarz gate
     # below reads the actual doping array); build_mesh/build_device/

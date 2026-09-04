@@ -270,3 +270,34 @@ def test_ac_refuses_on_device3d(tmp_path):
     assert proc.returncode != 0
     assert not os.path.exists(out)
     assert "AC" in proc.stderr and "Device3D" in proc.stderr
+
+
+def test_ac_refuses_bogus_contact_name(tmp_path):
+    """Review finding fix: ACSpec.validate() is defined but must actually
+    be CALLED by run_job() before any solve work starts. Without the
+    call, Device1D's positional port-resolution
+    (`port_idx = 0 if spec.ac.contact == spec.contacts[0].name else 1`)
+    has no error branch -- a typo'd/bogus contact name silently falls
+    into the `else` and gets treated as the SECOND contact, producing a
+    numerically plausible but WRONG result instead of failing loudly.
+    This must raise a ValueError, fail fast (before writing an output
+    file), and name the bad contact in an actionable stderr message --
+    the exact wording from ACSpec.validate()."""
+    from gui.services.solver_runner import run_job
+    import subprocess, sys
+
+    spec = _diode_1d_spec(with_sweep=False)
+    spec.ac = ACSpec(contact="bogus_nonexistent_contact",
+                      f_start=1.0, f_stop=1e6, n_points=5)
+    job = str(tmp_path / "job.json")
+    out = str(tmp_path / "out.npz")
+    spec.to_json(job)
+    proc = subprocess.run(
+        [sys.executable, "-m", "gui.services.solver_runner", job, out],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True, text=True, timeout=120)
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    assert "ValueError" in proc.stderr
+    assert "bogus_nonexistent_contact" in proc.stderr
+    assert "not a registered" in proc.stderr
