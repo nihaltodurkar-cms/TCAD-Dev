@@ -366,6 +366,16 @@ class DeviceSpec:
     # old job file simply lacks the key and defaults to "pytcad" here
     # too, so nothing about pre-2c behavior changes.
     backend: str = "pytcad"
+    # v0.6 Phase 2d: which linear-solve engine run_job() uses -- "auto"
+    # (default) keeps the existing node-count/dimensionality heuristic
+    # (see solver_runner.run_job's own extensive comments) completely
+    # unchanged; any other value FORCES that engine, refusing loudly
+    # (ValueError, surfaced to the GUI the same way every other job
+    # failure is) if the requested engine's optional dependency isn't
+    # installed or the device is structurally incompatible (e.g.
+    # mpi_schwarz on a 2D device) instead of silently falling back.
+    # One of "auto", "direct", "gpu_direct", "amg", "mpi_schwarz".
+    engine: str = "auto"
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -393,6 +403,7 @@ class DeviceSpec:
             sweep=SweepSpec.from_dict(sweep) if sweep else None,
             transient=TransientSpec.from_dict(transient) if transient else None,
             backend=d.get("backend", "pytcad"),
+            engine=d.get("engine", "auto"),
         )
 
     def to_json(self, path):

@@ -131,6 +131,36 @@ ToolBar {
                 }
             }
         }
+        ComboBox {
+            id: engineBox
+            objectName: "engineSelector"
+            // v0.6 Phase 2d: which linear-solve engine (Direct/GPU
+            // direct/AMG/MPI Schwarz) the pytcad backend forces --
+            // "Auto" (default) reproduces solver_runner.run_job's
+            // existing node-count/dimensionality heuristic unchanged.
+            Layout.preferredWidth: 130
+            textRole: "label"
+            valueRole: "id"
+            model: appController.engineOptionsForQml()
+            delegate: ItemDelegate {
+                width: engineBox.width
+                text: modelData.label
+                enabled: modelData.enabled
+                ToolTip.visible: hovered && !modelData.enabled
+                ToolTip.text: modelData.reason
+            }
+            ToolTip.visible: hovered
+            ToolTip.delay: 600
+            ToolTip.text: "Force which solver engine Run uses (Auto picks by device size/shape)"
+            onActivated: appController.setEngine(
+                model[currentIndex].id)
+            Connections {
+                target: appController
+                function onStructureChanged() {
+                    engineBox.model = appController.engineOptionsForQml()
+                }
+            }
+        }
         ToolSeparator {}
         Button {
             id: undoButton

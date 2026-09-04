@@ -41,6 +41,11 @@ _HAVE_MPI = (importlib.util.find_spec("mpi4py") is not None
             and shutil.which("mpirun") is not None)
 MPI_SCHWARZ_RANKS = 4
 
+# v0.6 Phase 2d: DeviceSpec.engine's valid values -- "auto" keeps
+# run_job()'s existing node-count/dimensionality heuristic; any other
+# value forces that engine (see run_job()'s own override block).
+ENGINE_CHOICES = ("auto", "direct", "gpu_direct", "amg", "mpi_schwarz")
+
 from pytcad.mesh2d import Mesh2D
 from pytcad.mesh3d import Mesh3D
 from pytcad.device import Device1D, Models, NewtonOptions
@@ -931,6 +936,64 @@ def run_job(job_path, out_path, capture_trace=True):
                                     _pick_mpi_split_axis(doping, spec))
     use_mpi_schwarz = (is_large_3d and _HAVE_MPI and split_axis is not None
                        and spec.transient is None)
+
+    # v0.6 Phase 2d: spec.engine == "auto" (the default -- old job files
+    # simply lack the key, see DeviceSpec.from_dict) leaves every choice
+    # above exactly as the heuristic computed it. Any other value FORCES
+    # that engine, discarding the heuristic's choice entirely and
+    # refusing loudly for a dependency/structural mismatch instead of
+    # silently falling back -- same "graceful refusal with a precise
+    # message" contract every other optional-dependency gate in this
+    # file already uses (_HAVE_PYAMG/_HAVE_CUPY/_HAVE_MPI above).
+    engine = getattr(spec, "engine", "auto") or "auto"
+    if engine not in ENGINE_CHOICES:
+        raise ValueError(
+            f"unknown engine {engine!r}; expected one of {ENGINE_CHOICES}")
+    if engine != "auto":
+        opts.linsolve = "direct"
+        linsolve_bias = "direct"
+        use_mpi_schwarz = False
+        if engine == "gpu_direct":
+            if not _HAVE_CUPY:
+                raise ValueError(
+                    "GPU direct solve requested but cupy is not installed "
+                    "in this environment.")
+            linsolve_bias = "gpu_direct"
+        elif engine == "amg":
+            if not _HAVE_PYAMG:
+                raise ValueError(
+                    "AMG (bicgstab) solve requested but pyamg is not "
+                    "installed in this environment.")
+            # AMG only replaces the EQUILIBRIUM linear solve, same as
+            # the auto heuristic's own use_amg_equilibrium -- see
+            # run_job()'s module-level comment above for why the bias/
+            # sweep phase is left on "direct" (measured net-neutral-to-
+            # slower under iterative preconditioning on the coupled
+            # psi/n/p Jacobian, not a gap in this override).
+            opts.linsolve = "bicgstab"
+        elif engine == "mpi_schwarz":
+            if spec.mesh.dimensionality != 3:
+                raise ValueError(
+                    "MPI Schwarz solve requires a 3D device; this job is "
+                    f"{spec.mesh.dimensionality}D.")
+            if spec.transient is not None:
+                raise ValueError(
+                    "MPI Schwarz solve does not support transient runs.")
+            if not _HAVE_MPI:
+                raise ValueError(
+                    "MPI Schwarz solve requested but mpi4py/mpirun are not "
+                    "available in this environment.")
+            forced_axis, forced_array_axis = _pick_mpi_split_axis(doping, spec)
+            if forced_axis is None:
+                raise ValueError(
+                    "MPI Schwarz solve requested but no mesh axis is safe "
+                    "to split along for this device's doping profile/gate "
+                    "layout (see _pick_mpi_split_axis's docstring).")
+            split_axis, split_array_axis = forced_axis, forced_array_axis
+            use_mpi_schwarz = True
+        # engine == "direct" needs no further action: the reset above
+        # (opts.linsolve/linsolve_bias = "direct", use_mpi_schwarz =
+        # False) already is the plain, always-safe baseline.
 
     if not use_mpi_schwarz:
         mesh_obj = build_mesh(spec.mesh)

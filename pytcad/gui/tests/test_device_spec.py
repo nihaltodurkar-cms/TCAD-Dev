@@ -49,6 +49,25 @@ def test_defaults_are_sane():
     assert spec.bias is None            # None means "equilibrium only"
     assert spec.contacts == []
     assert spec.models["field_mobility"] is False
+    assert spec.backend == "pytcad"
+    assert spec.engine == "auto"
+
+
+def test_engine_field_round_trips_and_defaults_for_old_jobs(tmp_path):
+    """v0.6 Phase 2d: additive wire-format field, same "old job files
+    simply lack the key" contract every prior additive field
+    (backend, region_materials, ...) already has."""
+    spec = _sample_spec()
+    spec.engine = "gpu_direct"
+    path = str(tmp_path / "job.json")
+    spec.to_json(path)
+    back = DeviceSpec.from_json(path)
+    assert back.engine == "gpu_direct"
+
+    d = _sample_spec().to_dict()
+    assert "engine" in d
+    del d["engine"]
+    assert DeviceSpec.from_dict(d).engine == "auto"
 
 
 def test_mesh_spec_shape_helper():

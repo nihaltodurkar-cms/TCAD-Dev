@@ -137,6 +137,13 @@ class AppController(QObject):
         # configuration, like the sweep config above -- not undoable,
         # not device geometry.
         self._backend = "pytcad"
+        # v0.6 Phase 2d: which linear-solve ENGINE the next Run uses
+        # (Direct / GPU direct / AMG / MPI Schwarz) -- distinct from
+        # _backend above (pytcad vs. devsim, a different SOLVER
+        # entirely). "auto" reproduces solver_runner.run_job's existing
+        # node-count/dimensionality heuristic unchanged; see
+        # engineOptionsForQml's docstring for the rest.
+        self._engine = "auto"
         # v0.5.0 M4: the Physics Lab owns the model-flag configuration.
         # Its defaults equal the wire-format defaults, so this is
         # invisible until a student toggles something.
@@ -661,6 +668,66 @@ class AppController(QObject):
     @Slot(str)
     def setBackend(self, backend_id):
         self._backend = str(backend_id)
+        self.structureChanged.emit()
+
+    # -- v0.6 Phase 2d: solver ENGINE selection ---------------------------
+    # Distinct from the backend selector above: backend picks WHICH
+    # SOLVER runs the job (pytcad vs. devsim); this picks WHICH LINEAR-
+    # SOLVE PATH the pytcad backend itself uses (Direct / GPU direct /
+    # AMG / MPI Schwarz domain decomposition) -- solver_runner.run_job()
+    # already implements every one of these and auto-selects among them
+    # by node count/dimensionality; this exposes a manual override
+    # (DeviceSpec.engine, "auto" by default) so a user can force one.
+    @Slot(result="QVariant")
+    def engineOptionsForQml(self):
+        """[{"id","label","enabled","reason"}, ...] for the engine
+        selector. Cheap, best-effort checks only (dimensionality,
+        transient, optional-dependency presence) -- same "defense in
+        depth" contract backendOptionsForQml documents: run() re-sends
+        whatever was picked and solver_runner.run_job() is the actual,
+        authoritative gate (e.g. mpi_schwarz's precise per-axis
+        doping/gate-layout refusal via _pick_mpi_split_axis is NOT
+        re-derived here, since that needs the full doping array this
+        list must stay cheap enough to recompute on every
+        structureChanged)."""
+        # Reached through gui.services.solver_runner, never imported
+        # directly out of core (test_m3_store_seam.py's own
+        # test_app_controller_never_imports_pytcad_core enforces that
+        # this controller only ever reaches core math through services);
+        # solver_runner.py already re-exports these three exactly for
+        # this "is the optional dependency present" purpose.
+        from gui.services.solver_runner import _HAVE_MPI, _HAVE_PYAMG, _HAVE_CUPY
+        dim = self.spec.mesh.dimensionality if self.spec is not None else None
+        opts = [{"id": "auto", "label": "Auto", "enabled": True,
+                "reason": ""}]
+        opts.append({"id": "direct", "label": "Direct", "enabled": True,
+                    "reason": ""})
+        opts.append({"id": "gpu_direct", "label": "GPU direct",
+                    "enabled": _HAVE_CUPY,
+                    "reason": "" if _HAVE_CUPY
+                              else "optional cupy dependency not installed"})
+        opts.append({"id": "amg", "label": "AMG (bicgstab)",
+                    "enabled": _HAVE_PYAMG,
+                    "reason": "" if _HAVE_PYAMG
+                              else "optional pyamg dependency not installed"})
+        mpi_reason = ""
+        if not _HAVE_MPI:
+            mpi_reason = "optional mpi4py dependency / mpirun not available"
+        elif dim != 3:
+            mpi_reason = "only available for 3D devices"
+        elif self._transient_config is not None:
+            mpi_reason = "not compatible with an armed transient run"
+        opts.append({"id": "mpi_schwarz", "label": "MPI Schwarz",
+                    "enabled": not mpi_reason, "reason": mpi_reason})
+        return opts
+
+    @Property(str, notify=structureChanged)
+    def selectedEngine(self):
+        return self._engine
+
+    @Slot(str)
+    def setEngine(self, engine_id):
+        self._engine = str(engine_id)
         self.structureChanged.emit()
 
     @Property(float, notify=processResultChanged)
@@ -1541,6 +1608,13 @@ class AppController(QObject):
                     f"Cannot run with backend '{self._backend}'", str(exc))
                 return
         self.spec.backend = self._backend
+        # v0.6 Phase 2d: engine selection only applies to the pytcad
+        # backend's own linear-solve path (solver_runner.run_job) --
+        # devsim has no such concept, so a stray non-"auto" engine left
+        # selected from a prior pytcad run must not leak into a devsim
+        # job (harmless either way, since devsim_backend.run() never
+        # reads spec.engine, but explicit is safer than relying on that).
+        self.spec.engine = self._engine if self._backend == "pytcad" else "auto"
         # Final review I-3: a fresh run invalidates whatever is on show.
         # Mirrors runProcess()'s clear-on-start: during a long sweep, the
         # previous run's curves must not sit there looking current.

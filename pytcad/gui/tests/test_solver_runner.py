@@ -158,6 +158,145 @@ def test_bad_spec_exits_nonzero_with_message(tmp_path):
     assert "field" in proc.stderr.lower() or "NotImplementedError" in proc.stderr
 
 
+# ---------------------------------------------------------------- v0.6 Phase 2d: engine override
+def _tiny_resistor_3d_spec(nx=6, ny=6, nz=6):
+    """Uniform-doping, ohmic-only, no-gates 3D slab -- deliberately
+    below MPI_SCHWARZ_RANKS*2 nodes on every axis, so
+    _pick_mpi_split_axis has no qualifying candidate regardless of
+    doping uniformity (see its own node-count filter)."""
+    x = np.linspace(0.0, 2e-4, nx)
+    y = np.linspace(0.0, 1e-4, ny)
+    z = np.linspace(0.0, 1e-4, nz)
+    doping = np.full((nz, ny, nx), 1e17)
+    jj, kk = np.meshgrid(np.arange(ny), np.arange(nz))
+    jj, kk = jj.ravel().tolist(), kk.ravel().tolist()
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="left", kind="ohmic",
+                        nodes={"i": [0] * len(jj), "j": jj, "k": kk}, V=0.0),
+            ContactSpec(name="right", kind="ohmic",
+                        nodes={"i": [nx - 1] * len(jj), "j": jj, "k": kk}, V=0.0),
+        ],
+        bias={"left": 0.05, "right": 0.0},
+    )
+
+
+def test_engine_field_defaults_to_auto_for_old_jobs(tmp_path):
+    """Additive wire-format field (mirrors the "backend" field's own
+    pre-2c-job test above): a job JSON written before "engine" existed
+    simply lacks the key and must still run the unchanged auto
+    heuristic, not raise on a missing key."""
+    job = str(tmp_path / "old_engine.json")
+    out = str(tmp_path / "old_engine.npz")
+    d = _diode_1d_spec().to_dict()
+    assert "engine" in d      # sanity: the field exists on a fresh spec
+    del d["engine"]           # simulate a pre-2d job file
+    import json
+    json.dump(d, open(job, "w"))
+    proc = subprocess.run(
+        [sys.executable, "-m", "gui.services.solver_runner", job, out],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    numerics = json.loads(str(np.load(out)["record__meta"]))["numerics"]
+    assert numerics["linsolve"] == "direct"    # this tiny 1D job's auto choice
+
+
+def test_engine_direct_is_forced_regardless_of_auto_heuristic(tmp_path):
+    spec = _diode_1d_spec()
+    spec.engine = "direct"
+    proc, out = _run_cli(spec, tmp_path, "engine_direct")
+    assert proc.returncode == 0, proc.stderr
+    import json
+    numerics = json.loads(str(np.load(out)["record__meta"]))["numerics"]
+    assert numerics["linsolve"] == "direct"
+
+
+def test_engine_unknown_value_refuses_loudly(tmp_path):
+    spec = _diode_1d_spec()
+    spec.engine = "quantum_annealing"
+    proc, out = _run_cli(spec, tmp_path, "engine_bogus")
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    assert "unknown engine" in proc.stderr.lower()
+
+
+def test_engine_gpu_direct_matches_cupy_availability(tmp_path):
+    from pytcad.linsolve import _HAVE_CUPY
+    spec = _diode_1d_spec()
+    spec.engine = "gpu_direct"
+    proc, out = _run_cli(spec, tmp_path, "engine_gpu")
+    if _HAVE_CUPY:
+        assert proc.returncode == 0, proc.stderr
+        import json
+        numerics = json.loads(str(np.load(out)["record__meta"]))["numerics"]
+        assert numerics["linsolve"] == "gpu_direct"
+    else:
+        assert proc.returncode != 0
+        assert not os.path.exists(out)
+        assert "cupy" in proc.stderr.lower()
+
+
+def test_engine_amg_matches_pyamg_availability(tmp_path):
+    from pytcad.linsolve import _HAVE_PYAMG
+    spec = _diode_1d_spec()
+    spec.engine = "amg"
+    proc, out = _run_cli(spec, tmp_path, "engine_amg")
+    if _HAVE_PYAMG:
+        assert proc.returncode == 0, proc.stderr
+        import json
+        numerics = json.loads(str(np.load(out)["record__meta"]))["numerics"]
+        assert numerics["linsolve"] == "bicgstab"
+    else:
+        assert proc.returncode != 0
+        assert not os.path.exists(out)
+        assert "pyamg" in proc.stderr.lower()
+
+
+def test_engine_mpi_schwarz_refuses_on_a_2d_device(tmp_path):
+    """Dimensionality is checked before the mpi4py/mpirun availability
+    check (see run_job's override block), so this refuses identically
+    regardless of whether MPI is installed in this environment."""
+    spec = _resistor_2d_spec()
+    spec.engine = "mpi_schwarz"
+    proc, out = _run_cli(spec, tmp_path, "engine_mpi_2d")
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    assert "3d" in proc.stderr.lower() or "3D" in proc.stderr
+
+
+def test_engine_mpi_schwarz_refuses_without_a_safe_split_axis(tmp_path):
+    """A genuinely too-small-on-every-axis 3D device: whether this
+    environment has mpi4py/mpirun or not, the request must still be
+    refused (with a different, but equally precise, reason each way)
+    rather than silently falling back to a different engine."""
+    from gui.services.solver_runner import _HAVE_MPI
+    spec = _tiny_resistor_3d_spec()
+    spec.engine = "mpi_schwarz"
+    proc, out = _run_cli(spec, tmp_path, "engine_mpi_no_axis")
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    if _HAVE_MPI:
+        assert "safe" in proc.stderr.lower() and "split" in proc.stderr.lower()
+    else:
+        assert "mpi4py" in proc.stderr.lower() or "mpirun" in proc.stderr.lower()
+
+
+def test_engine_mpi_schwarz_refuses_with_an_armed_transient(tmp_path):
+    from gui.services.device_spec import TransientSpec, WaveformSpec
+    spec = _tiny_resistor_3d_spec(nx=12)   # a real qualifying split axis
+    spec.engine = "mpi_schwarz"
+    spec.transient = TransientSpec(
+        contact="left", waveform=WaveformSpec(kind="constant", v0=0.05),
+        t_end=1e-9, dt0=1e-10)
+    proc, out = _run_cli(spec, tmp_path, "engine_mpi_transient")
+    assert proc.returncode != 0
+    assert not os.path.exists(out)
+    assert "transient" in proc.stderr.lower()
+
+
 def test_kill_leaves_no_file_at_canonical_path(tmp_path):
     """Cancellation safety: the result is written to <out>.tmp and only
     atomically renamed on success, so a killed run can never leave a
