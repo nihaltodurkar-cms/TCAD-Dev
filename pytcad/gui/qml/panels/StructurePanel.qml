@@ -138,7 +138,7 @@ Rectangle {
                         }
                     }
                     background: Rectangle {
-                        color: highlighted ? Theme.panelAlt : "transparent"
+                        color: highlighted ? Theme.accentSoft : "transparent"
                         Behavior on color { ColorAnimation { duration: Theme.animFast } }
                     }
                 }
@@ -183,7 +183,7 @@ Rectangle {
                         }
                     }
                     background: Rectangle {
-                        color: highlighted ? Theme.panelAlt : "transparent"
+                        color: highlighted ? Theme.accentSoft : "transparent"
                         Behavior on color { ColorAnimation { duration: Theme.animFast } }
                     }
                 }

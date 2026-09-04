@@ -21,10 +21,13 @@ Rectangle {
         // changed (spec section 8, item 1: this is the panel the user
         // named explicitly as feeling cramped/basic).
         Label {
+            // Matches the app's existing section-subheader convention
+            // (StructurePanel's "CONTACTS"/"GATES", SweepPanel's
+            // "FAMILY (batch)"/"MOS C-V", MeshEditor's own "MESH") --
+            // Theme.fsSmall, not bold, not the panel-title weight.
             text: "MESH STATISTICS"
             color: Theme.textDim
-            font.pixelSize: Theme.fsTiny
-            font.bold: true
+            font.pixelSize: Theme.fsSmall
             font.letterSpacing: 1
         }
 

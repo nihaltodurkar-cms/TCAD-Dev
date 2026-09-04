@@ -97,7 +97,15 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
-            Label { text: "PROCESS FLOW"; color: Theme.textDim; font.bold: true; Layout.fillWidth: true }
+            // Matches SweepPanel's "Voltage sweep" panel-title styling
+            // (bold, Theme.fsHeader) for consistency across panels.
+            Label {
+                text: "PROCESS FLOW"
+                color: Theme.textDim
+                font.bold: true
+                font.pixelSize: Theme.fsHeader
+                Layout.fillWidth: true
+            }
         }
 
         Label {
@@ -283,7 +291,7 @@ Rectangle {
                     }
                 }
                 background: Rectangle {
-                        color: highlighted ? Theme.panelAlt : "transparent"
+                        color: highlighted ? Theme.accentSoft : "transparent"
                         Behavior on color { ColorAnimation { duration: Theme.animFast } }
                     }
             }
