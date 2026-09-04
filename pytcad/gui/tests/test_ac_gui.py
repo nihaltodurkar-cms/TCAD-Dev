@@ -301,3 +301,88 @@ def test_ac_refuses_bogus_contact_name(tmp_path):
     assert "ValueError" in proc.stderr
     assert "bogus_nonexistent_contact" in proc.stderr
     assert "not a registered" in proc.stderr
+
+
+# ---------------------------------------------------------------- solver dispatch (2D)
+def _moscap_2d_gui_spec():
+    """A gate-bearing Device2D GUI fixture, built through DeviceSpec
+    (not raw pytcad) so this exercises the SAME build_device/
+    register_contacts path a real Run takes. Same Na/tox_cm/gate
+    parameters as test_m18_ac2d.py's own _moscap2d() fixture --
+    tox_cm=2e-6 (20nm), NOT test_cv_physics_validation.py's 5e-7: a
+    5nm oxide makes the Device2D gate row's linearization
+    ill-conditioned on a mesh this size (M18-AC-PLAN.md section 10's
+    own finding from M18 Phase 3)."""
+    from pytcad.mesh import graded_mesh
+    from pytcad.moscap import flatband_voltage
+    from pytcad.materials import SILICON
+    from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
+
+    Na = 1e17
+    tox_cm = 2e-6
+    depth = 2e-4
+    Lx = 1e-4
+    nx, ny = 3, 61
+
+    x = np.linspace(0.0, Lx, nx)
+    y = graded_mesh(depth, [0.0], depth / (ny * 20), depth / ny, 1.15)
+    doping = np.full((y.size, x.size), -Na)
+    Vfb = flatband_voltage(-Na, tox_cm, "n+poly", 0.0, 300.0, SILICON)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=2,
+                      axes={"x": x.tolist(), "y": y.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist()),
+        contacts=[
+            ContactSpec(name="body", kind="ohmic",
+                        nodes={"i": list(range(nx)), "j": [y.size - 1] * nx},
+                        V=0.0),
+            ContactSpec(name="gate", kind="gate",
+                        nodes={"i": list(range(nx)), "j": [0] * nx},
+                        V=0.2, tox_cm=tox_cm, Vfb=Vfb),
+        ],
+        bias={"body": 0.0, "gate": 0.2},
+    )
+
+
+def test_cli_2d_ac_driving_the_gate_matches_direct_ac2d_call(tmp_path):
+    """G-AC-2D: same cross-check as G-AC-1D, on a real Device2D moscap
+    fixture, driving the GATE port -- confirms the 1D/2D port-
+    resolution asymmetry (M18-AC-PLAN.md section 13) is handled
+    correctly for the case that is NOT the simple positional one."""
+    from gui.services.device_spec import ACSpec
+    from gui.services.solver_runner import (
+        run_job, build_mesh, build_doping, build_device, register_contacts, apply_bias)
+    from gui.services.result_store import NpzResultStore
+    from pytcad import NewtonOptions
+    from pytcad.ac2d import y_parameters as y_parameters_2d
+
+    spec = _moscap_2d_gui_spec()
+    spec.ac = ACSpec(contact="gate", f_start=1.0, f_stop=10.0, n_points=2)
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+
+    store = NpzResultStore(out)
+    assert store.has_ac() is True
+    res = store.ac_result()
+    assert res.port == "gate"
+
+    # Independent reference: build + solve the SAME spec's device
+    # directly (reusing solver_runner's own construction helpers, but
+    # calling ac2d.y_parameters() ourselves, not through run_job/
+    # _solve_all -- this is still an independent code path for the
+    # thing under test, the port-index resolution).
+    mesh_obj = build_mesh(spec.mesh)
+    doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
+    dev = build_device(spec, mesh_obj, doping, ntotal)
+    register_contacts(dev, spec)
+    opts = NewtonOptions()
+    dev.solve_equilibrium(opts)
+    apply_bias(dev, spec, opts)
+    ref = y_parameters_2d(dev, res.freqs)
+    gi = ref.port_names.index("gate")
+    C_ref = ref.Y[:, gi, gi].imag / (2 * np.pi * res.freqs)
+    G_ref = ref.Y[:, gi, gi].real
+    assert np.allclose(res.C, C_ref, rtol=1e-6)
+    assert np.allclose(res.G, G_ref, rtol=1e-6)
