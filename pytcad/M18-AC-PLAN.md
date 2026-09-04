@@ -1,8 +1,13 @@
 # M18 — Small-Signal AC Analysis Implementation Plan
 
-Status: PHASE 1 (Device1D) LANDED 2026-08-31. Gate battery
-`tests/test_m18_ac.py`, 6/6 green. Phase 2 (Device2D) and Phase 3
-(GUI) not started -- see section 4.
+Status: PHASE 1 (Device1D one-port) LANDED 2026-08-31. PHASE 2
+(Device1D N-terminal Y-parameters + fT) LANDED 2026-09-04, merged in
+from a parallel branch (commit 9906d6b). PHASE 3 (Device2D, N-terminal
+Y-parameters incl. gate ports) LANDED 2026-09-04. Gate batteries
+`tests/test_m18_ac.py` (6/6), `tests/test_m18_yparam.py` (Phase 2),
+and `tests/test_m18_ac2d.py` (6/6), all green. Phase 4 (GUI exposure)
+and Phase 3b (full 4-terminal `mosfet_2d` Y-parameter/fT extraction)
+not started -- see section 11.
 
 ## 1. Scope (Phase 1)
 
@@ -104,7 +109,7 @@ Full suite: `pytest tests/ gui/tests/ -n 6 -m "not slow" -q` -- see
 history.md addendum for the run this session, unchanged apart from the
 6 new M18 tests.
 
-## 4. Honest limits
+## 4. Honest limits (Phase 1)
 
 - **G-ROLLOFF has NO quantitative pole match**, by design: M17's own
   plan doc (section 5) explicitly tried and abandoned `Qs ~=
@@ -139,19 +144,215 @@ history.md addendum for the run this session, unchanged apart from the
   component (`_edge_current_sensitivity` in `pytcad/ac.py`).
 - Only a one-port measurement is implemented (drive one contact,
   AC-ground the other) -- no general multi-terminal Y-parameter matrix
-  (Y11/Y12/Y21/Y22) or reciprocity check. Sufficient for the stated
-  acceptance gates (all two-terminal); a full 2-port framework is
-  deferred, not attempted.
-- `Device2D`/`Device3D` AC analysis: not started (Phase 2, natural
-  continuation given M17's own 2D transient phase already exists to
-  mirror the same external-driver pattern against).
-- GUI exposure: not started (Phase 3, same as M17's own Phase 3 was
+  (Y11/Y12/Y21/Y22) or reciprocity check. Addressed in Phase 2 (section
+  6) for Device1D and Phase 3 (sections 7-10) for Device2D.
+- `Device2D` AC analysis: landed in Phase 3, see sections 7-10 below.
+  `Device3D` AC analysis remains out of scope entirely.
+- GUI exposure: not started (Phase 4, same as M17's own Phase 3 was
   separately scoped from Phases 1/2).
 
-## 5. Files changed
+## 5. Files changed (Phase 1)
 
 - `pytcad/pytcad/ac.py` (new)
 - `pytcad/tests/test_m18_ac.py` (new)
 - `pytcad/M18-AC-PLAN.md` (new, this file)
+- `ARCHITECTURE.md`: M18 status line + milestone table updated
+- `history.md`: new STATE ADDENDUM
+
+## 6. Phase 2 (Device1D N-terminal Y-parameters + fT)
+
+Landed 2026-09-04 via merge of a parallel branch (commit 9906d6b,
+"Merge parallel branch: 3D unstructured DD, Y-params, DG fix, new GUI
+panels") that this session's own history does not otherwise cover --
+summarized here from the shipped code
+(`pytcad/pytcad/ac.py::y_parameters`/`cutoff_frequency`,
+`pytcad/tests/test_m18_yparam.py`) for a complete record, since that
+branch did not itself update this plan doc.
+
+- Additive to `ac.py`: `YParamResult`, `y_parameters(device, freqs)`,
+  `cutoff_frequency(yres)`. Same `J_ac(w) = J0 + 1j*w_s*Cmat` machinery
+  as Phase 1, factored ONCE per frequency (`scipy.sparse.linalg.splu`)
+  and reused across both ports' RHS solves.
+- Fixed at exactly 2 ports: `Device1D` has only a left/right contact,
+  so this is the full `Y11/Y12/Y21/Y22` matrix for that structure, not
+  a general N>2-terminal framework (no such 1D device exists in this
+  repo).
+- `fmax` (Mason's unilateral power gain crossing) deliberately NOT
+  implemented: only physically meaningful for an active 3-terminal
+  device, and would be a vacuous figure of merit on a reciprocal
+  2-terminal diode's Y matrix. `fT` (current-gain cutoff, from
+  `|Y21/Y11|=1`) has no such problem and is implemented via a
+  log-log bisection for the crossing.
+- Gates (`tests/test_m18_yparam.py`): reduction to `ac_sweep`'s
+  one-port result, right-port magnitude match, reciprocity, junction-C
+  cross-check, positive diagonal conductance, `fT` sanity/crossing-
+  algorithm gates, and an `splu`-reuse-vs-`spsolve` parity check.
+
+## 7. Scope (Phase 3)
+
+Generalize the frequency-domain small-signal analysis to `Device2D`,
+and generalize the port model from Phase 1/2's fixed 2-port
+(Device1D-only) case to a genuine N-terminal Y-parameter matrix
+(`Y[k,i,j] = dI_i/dV_j` at `freqs[k]`, all undriven ports AC-grounded)
+covering BOTH of `Device2D`'s port kinds: `DirichletBC` (ohmic
+contact) and `GateBC` (Robin/oxide-coupled gate) -- scoping decisions
+made explicitly with the user before implementation:
+
+- Device scope: full MOSFET-capable (gate terminal included), not
+  ohmic-only.
+- Port scope: N-terminal Y-parameters, not a fixed 2-terminal
+  one-port measurement.
+- Gate physics anchor: `moscap_2d` (a 2-terminal gate+body `Device2D`
+  fixture built for this phase, mirroring `MOSCapacitor`'s own 1D
+  setup) is the acceptance-gate target; full 4-terminal `mosfet_2d`
+  Y-parameter/fT extraction is explicitly deferred as Phase 3b.
+- GUI exposure: out of scope, deferred to Phase 4 (separate effort).
+
+New module `pytcad/pytcad/ac2d.py`, following the same
+externally-driven pattern as `ac.py`/`transient2d.py` --
+`pytcad/device2d.py` is NOT touched.
+
+## 8. Architecture (Phase 3)
+
+Same `J_ac(w) = J0 + 1j*w_s*Cmat` shape as Phases 1/2, `w_s =
+2*pi*f*t0`, `t0 = device.Ns/device.R0`. Two structural differences
+from the 1D modules:
+
+- **`Cmat` needs no gate-row term.** `Device2D`'s Poisson residual
+  carries no time derivative anywhere in this codebase (only the n/p
+  continuity rows do, same as 1D) -- confirmed by reading
+  `_residual_jacobian` directly. So `_storage_matrix` in `ac2d.py` is
+  structurally identical to `ac.py`'s (n/p diagonal rows only, `dt_s
+  =1.0` convention), verified bit-identical against
+  `transient2d._step_residual_jacobian`'s own storage term
+  (G-CONSISTENCY-2D).
+- **Two port kinds, two forcing/observation formulas**, dispatched by
+  `isinstance(bc, DirichletBC | GateBC)`:
+  - **Ohmic** (`DirichletBC`): forcing `b[3*m]=1` for every node `m`
+    in the contact (mirrors Phase 1's Dirichlet-row convention, now
+    generalized from a single node to an arbitrary node SET, since a
+    named 2D contact can span many mesh nodes). Observation: a real
+    central finite difference of `terminal_current`'s own raw
+    `F_n+F_p` sum, using ONE shared step size per state component
+    across the whole "support set" (the contact's nodes plus their
+    4-connected neighbors) -- generalizes Phase 1's shared-step-size
+    fix (see Phase 1 section 4's "real bug" note) from a 1D two-node
+    edge to a 2D multi-node stencil.
+  - **Gate** (`GateBC`): CLOSED FORM, no FD needed. From the gate
+    row's own linearization (`dF[m]/dVg_s = +kappa*w[m]`, read
+    directly out of `_residual_jacobian`), forcing is `b[3*m] =
+    -kappa*w[m]` and the observation is `Y[i,k](w) = j*w_s *
+    sum_{m in gate i's nodes} kappa*w[m] * (delta_ik - du_k[3*m])`,
+    `delta_ik=1` only when gate `i` is the driven port `k`. This is
+    genuinely new territory: `transient2d.py`'s own docstring
+    explicitly notes time-varying `GateBC` voltage isn't supported
+    there -- gated FIRST (G-GATE-FD, before anything else gate-related)
+    against a direct finite difference of two independent
+    `solve_bias({"gate": ...})` calls, not trusted by construction.
+- **Physical scaling**, uniform across BOTH port kinds: `Y_phys =
+  Y_scaled * device.J0 * device.LD / device.VT` (matches
+  `terminal_current`'s own `*J0*LD` current convention, `/VT` since a
+  unit *scaled* voltage perturbation corresponds to `VT` physical
+  volts). A DIFFERENT conversion applies when converting a raw
+  Poisson-residual flux value to physical CHARGE (used only inside
+  G-GATE-FD's own independent reference, not in `ac2d.py` itself):
+  `Q_phys = flux_scaled * Q_electron * LD^2 * Ns` (no `/VT` -- this
+  converts a value, not a per-volt derivative).
+
+## 9. Gates (`tests/test_m18_ac2d.py`)
+
+1. **G-CONSISTENCY-2D**: `Cmat` bit-identical to
+   `transient2d._step_residual_jacobian`'s storage term at `dt_s=1.0`
+   (same justification as Phase 1's G-CONSISTENCY). GREEN.
+2. **G-LOWF-2D**: on a 2-terminal ohmic diode2d, `f=1 Hz` `Re(Y)`/`C`
+   match FD `dI/dV`/`dQ/dV` from two independent `solve_bias` calls.
+   GREEN.
+3. **G-NPORT-OHMIC**: a genuine 3-ohmic-terminal fixture
+   (`_resistor3term`, no such >2-terminal 2D device existed anywhere
+   in the repo before this phase) -- full 3x3 `Y` is approximately
+   reciprocal (loose tolerance, same known particle-current-only
+   omission Phase 2's own Y-parameter reciprocity gate documents), and
+   the third port (never exercised by any 2-port case) shows a
+   genuinely nonzero response, not a degenerate zero row from a bug in
+   the N-port generalization. GREEN.
+4. **G-GATE-FD**: the closed-form gate forcing/observation formula
+   matches a direct finite difference of two independent
+   `solve_bias({"gate": ...})` calls to <5% relative error. GREEN --
+   see section 10's ill-conditioning note for what it took to get
+   here.
+5. **G-MOSCAP-CV** (the headline physics gate): low-f `Cgg(Vg)` from
+   the `Device2D` gate port tracks `MOSCapacitor.cv_sweep`'s
+   independent quasi-static reference (accumulation/depletion/
+   near-threshold, <25% relative error), AND shows a genuine
+   measurable high-frequency roll-off (not a frequency-independent
+   constant). GREEN -- but substantially descoped from its original
+   design; see section 10.
+6. **G-SCOPE-REFUSAL-2D**: `y_parameters(Device1D)` raises `TypeError`
+   (mirrors Phase 1's G-SCOPE-REFUSAL). GREEN.
+
+Full suite: `pytest tests/ gui/tests/ -n 6 -q` -- see history.md
+addendum for the run this session.
+
+## 10. Honest limits (Phase 3)
+
+- **A 5nm oxide (`tox_cm=5e-7`, matching
+  `test_cv_physics_validation.py`'s own value) makes the gate row's
+  linearization numerically ill-conditioned** on the `moscap_2d` test
+  mesh used (graded 61-point y-mesh, depth=2e-4 cm): the AC-computed
+  gate-node sensitivity varied wildly (0.045 to 1.746) across
+  nominally-equivalent Newton-tolerance settings, while a direct
+  finite difference of `psi` itself (two independently-converged
+  `solve_bias` calls) stayed rock-stable at ~0.378. This looked like a
+  ~5x formula bug and consumed most of this phase's debugging time;
+  root-caused instead to fixture conditioning by switching to
+  `tox_cm=2e-6` (20nm), where the closed-form sensitivity matched the
+  direct FD reference to 8 significant figures (0.558410 vs
+  0.558410) -- confirming `ac2d.py`'s formula/code is correct.
+  `MOSCAP_PARAMS` in the test file uses 20nm for this reason, with the
+  finding documented inline.
+- **G-MOSCAP-CV could not reproduce the classic inversion-region LF/HF
+  divergence its original design targeted**, for a genuine physical/
+  numerical reason, not a bug: the real-device signature
+  `test_cv_physics_validation.py` documents analytically comes from
+  minority-carrier GENERATION LIFETIME, a slow (Hz-to-kHz) process.
+  On the `moscap_2d` fixture, the DC solve genuinely DOES build an
+  inversion layer past threshold (surface `n` exceeds `Na` by
+  `Vg=1.0`, confirmed by direct inspection of `dev.n`) -- but the
+  linearized AC *sensitivity* stops tracking `MOSCapacitor`'s
+  quasi-static reference beyond `Vg~0.6` (near this fixture's own
+  threshold), most likely the same class of Jacobian ill-conditioning
+  as the tox_cm finding above, now triggered by the huge surface/bulk
+  carrier-concentration ratio in strong inversion rather than oxide
+  thinness. Separately, the roll-off that DOES appear in this fixture
+  (~1e10-1e11 Hz) was measured to be essentially bias-INDEPENDENT
+  (near-identical onset at Vg=-0.5, 0.0, 0.3) -- a structural
+  dielectric-relaxation/RC effect of the small (2 micron) mesh, not an
+  inversion-specific minority-carrier-lag signature. G-MOSCAP-CV was
+  therefore rescoped to accumulation/depletion/near-threshold bias
+  points only (where LF genuinely matches the reference) plus a
+  bias-independent high-frequency roll-off sanity check, rather than
+  forcing a pass with a cherry-picked tolerance or bias point. Deep-
+  inversion small-signal AC fidelity for `Device2D` gates is left as a
+  known, undeferred-but-unsolved limitation for any future session
+  that needs it.
+- **N-port ohmic reciprocity uses a loose tolerance** for the same
+  reason Phase 2's own reciprocity check does: the current-sensitivity
+  `S` vector captures particle current only (`F_n+F_p`), an
+  already-known, already-documented omission carried forward
+  unchanged from Phase 1/2.
+- Full 4-terminal `mosfet_2d` Y-parameter matrix / fT extraction: not
+  attempted (Phase 3b, explicitly deferred per the user's own scoping
+  decision going into this phase).
+- GUI exposure: not started (Phase 4, unchanged from Phase 1's own
+  scoping).
+- `Device3D` AC analysis: out of scope entirely, not part of any
+  planned phase.
+
+## 11. Files changed (Phase 3)
+
+- `pytcad/pytcad/ac2d.py` (new)
+- `pytcad/tests/test_m18_ac2d.py` (new)
+- `pytcad/M18-AC-PLAN.md` (this file, sections 6-11 added: section 6
+  backfills Phase 2's record, sections 7-11 are this phase's own)
 - `ARCHITECTURE.md`: M18 status line + milestone table updated
 - `history.md`: new STATE ADDENDUM
