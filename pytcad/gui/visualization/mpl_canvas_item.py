@@ -9,6 +9,19 @@ real 3D scientific renderer is its own design decision for the version
 that needs it.  Nothing here blocks that later -- the viewport talks to
 the ResultStore interface, so a 3D item can be swapped in beside it.
 """
+# Performance pass (2026-09-04): confirmed directly (isolated import
+# measurement, RSS via resource.getrusage) that `import matplotlib` +
+# its Agg backend/Figure imports below cost ~130MB RSS on their own --
+# the single largest contributor to this app's cold-start memory
+# footprint (dwarfing the ~50MB combined cost of constructing all 11
+# always-alive workbench panels, and the ~12MB first-paint "settling"
+# cost measured separately). Deliberately left eager, not deferred:
+# ViewportPanel (this module's consumer) is Main.qml's center panel,
+# always visible and always constructed at startup regardless of what
+# the user does first -- lazy-loading matplotlib would only move WHEN
+# this cost is paid, not reduce peak memory in normal use, for real
+# added complexity. Not touched, per "profile first, do not make
+# speculative changes."
 import matplotlib
 matplotlib.use("Agg")
 
