@@ -234,6 +234,69 @@ class TransientSpec:
 
 
 @dataclass
+class ACSpec:
+    """M18 Phase 4: a single-contact small-signal AC (frequency-domain)
+    sweep at the device's ordinary converged operating point.
+
+    `contact` is driven with a unit AC voltage; every OTHER port is
+    implicitly AC-grounded (matches pytcad.ac.ac_sweep's own
+    convention). Frequencies are ALWAYS log-spaced between f_start and
+    f_stop (AC analysis is inherently multi-decade) -- there is no
+    linear-spacing option.
+    """
+    contact: str
+    f_start: float       # Hz, > 0
+    f_stop: float        # Hz, > f_start
+    n_points: int = 40   # log-spaced points between f_start/f_stop
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"AC configuration must be an object, got {type(d).__name__}")
+        try:
+            spec = cls(contact=d["contact"], f_start=float(d["f_start"]),
+                       f_stop=float(d["f_stop"]),
+                       n_points=int(d.get("n_points", 40)))
+        except KeyError as exc:
+            raise ValueError(f"AC configuration is missing field {exc}") from None
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid AC configuration: {exc}") from None
+        spec.validate_values()
+        return spec
+
+    def validate_values(self):
+        """Everything checkable WITHOUT knowing the contact registry."""
+        for label, v in (("f_start", self.f_start), ("f_stop", self.f_stop)):
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError(f"AC {label} must be finite, got {v!r}")
+        if self.f_start <= 0.0:
+            raise ValueError(f"AC f_start must be > 0, got {self.f_start}")
+        if self.f_stop <= self.f_start:
+            raise ValueError(
+                f"AC f_stop must be > f_start, got f_stop={self.f_stop}, "
+                f"f_start={self.f_start}")
+        if not isinstance(self.n_points, int) or self.n_points < 2:
+            raise ValueError(
+                f"AC n_points must be an integer >= 2, got {self.n_points!r}")
+
+    def validate(self, contact_names):
+        """Raise ValueError with an actionable message on any spec that
+        cannot be executed. `contact_names` is the list of names the
+        enclosing DeviceSpec actually registers."""
+        names = list(contact_names)
+        if not isinstance(self.contact, str) or not self.contact \
+                or self.contact not in names:
+            raise ValueError(
+                f"AC contact '{self.contact}' is not a registered "
+                f"contact (have: {', '.join(names) or 'none'})")
+        self.validate_values()
+
+
+@dataclass
 class MeshSpec:
     """Geometry ONLY -- axis node positions [cm] and nothing else.
 
@@ -410,6 +473,12 @@ class DeviceSpec:
     # silicon domain). See gui/services/viewer3d.py's
     # _build_exploded_view for how the two are combined.
     structure_regions: list = None
+    # v0.6 Phase 2f (M18 Phase 4): optional single-contact AC/Y-
+    # parameter sweep at the device's ordinary converged operating
+    # point. Additive, mutually exclusive with sweep/transient
+    # (enforced in AppController.run(), same as sweep+transient
+    # already are). See pytcad/M18-AC-PLAN.md sections 12-16.
+    ac: ACSpec = None
 
     # -- serialization ------------------------------------------------
     def to_dict(self):
@@ -419,6 +488,7 @@ class DeviceSpec:
     def from_dict(cls, d):
         sweep = d.get("sweep")
         transient = d.get("transient")
+        ac_d = d.get("ac")
         rm = d.get("region_materials")
         if rm is not None:
             _validate_region_materials(rm)
@@ -439,6 +509,7 @@ class DeviceSpec:
             # SweepSpec(**dict).
             sweep=SweepSpec.from_dict(sweep) if sweep else None,
             transient=TransientSpec.from_dict(transient) if transient else None,
+            ac=ACSpec.from_dict(ac_d) if ac_d else None,
             backend=d.get("backend", "pytcad"),
             engine=d.get("engine", "auto"),
             structure_regions=sr,
