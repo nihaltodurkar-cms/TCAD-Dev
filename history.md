@@ -3104,3 +3104,103 @@ lists hardcoded (`gui/tests/test_physics_lab.py`,
 
 Verified: `tests/` 419 passed, 1 xfailed (unchanged); `gui/tests` 624
 passed (unchanged).
+
+### STATE ADDENDUM -- GUI VISUAL RESKIN, SLICE 0+1 LANDED (2026-09-04)
+
+User-requested visual overhaul (one of four independently-scoped GUI
+improvement areas identified up front -- visual/UX polish, workflow
+friction, QML/code architecture, performance; only the first is in
+scope here). Brainstormed to a written spec
+(`docs/superpowers/specs/2026-09-04-gui-visual-reskin-design.md`,
+including a visual-companion mockup session choosing a "Modern Dev
+Tool" identity -- near-black surfaces, floating cards, a violet->blue
+gradient accent -- over three other directions) and an implementation
+plan (`docs/superpowers/plans/2026-09-04-gui-visual-reskin-slice-0-1.md`),
+then executed inline task-by-task, TDD throughout.
+
+**Design system (Slice 0).** `gui/qml/Theme.qml` retuned to the new
+near-black palette (`background`/`panel`/etc. values changed; every v1
+token NAME kept, so nothing else needed editing to pick up the new
+look) plus new tokens: `cardBg`/`cardBorder`/`cardShadow`,
+`accentGradientStart`/`End` (violet/blue, identical in both light and
+dark -- the accent is the brand, not a theme-dependent surface),
+`radiusCard`. New `gui/qml/Icons.qml` singleton (`svg(name, color)`)
+replaces the plain Unicode glyphs used since v0.1.
+
+**A real, confirmed rendering bug changed the icon architecture along
+the way.** Icons.qml originally built a `data:image/svg+xml,...` URI
+directly (the spec's stated approach). On this machine's QtQuick
+backend (no working GPU/EGL driver), an `Image` sourced from that URI
+reports `status: Ready` with correct `paintedWidth`/`paintedHeight` but
+paints NOTHING -- confirmed by pixel-sampling a live grabbed
+screenshot (constant background color across the icon's whole bounding
+box) and isolated with a chain of standalone repros: `QSvgRenderer`
+renders the identical markup correctly when driven directly from
+Python; a `data:image/png;base64,...` source in the exact same
+delegate position DOES paint; only the SVG-via-Image path is broken.
+Fixed by rasterizing icons in Python (new
+`gui/services/icon_provider.py`, using that same proven `QSvgRenderer`)
+and serving them through a `QQuickImageProvider` registered as
+`"icons"` in `gui/app.py`'s `create_engine()`. `Icons.qml` keeps its
+`svg(name, color)` signature -- it now builds an
+`"image://icons/<name>/<rrggbb>"` URL instead of a data URI -- so every
+call site is unaffected. A second Python color-serialization gotcha is
+also guarded against: Qt's QML `color.toString()` yields `"#AARRGGBB"`
+(alpha-first, 8 hex digits), not valid SVG/CSS syntax -- a color
+*object* argument (as opposed to a literal hex string) is converted to
+`rgba(r,g,b,a)` instead of being stringified directly, both in the
+(now Python-only) rasterizer and in `Icons.qml`'s URL-building.
+
+Also discovered and worked around, unrelated to the SVG bug:
+`TabBar { Repeater { delegate: TabButton {...} } }` delegate items are
+unreachable via `QObject.findChildren()` and even `TabBar.itemAt()` in
+this PySide6/Qt build -- confirmed true for the PRE-EXISTING Text-only
+delegate as much as the new Image-bearing one (diffed directly against
+the pre-reskin `Main.qml`). `gui/tests/test_shell_icons.py` verifies
+icon-name correctness statically (parsing `Main.qml`'s tab model and
+`Icons.svg()` calls, cross-checked against the provider's registry)
+rather than via tree introspection; the pixel-level rendering gate
+lives in `gui/tests/test_icons.py`, testing the provider directly.
+
+**Shell (Slice 1).** `Main.qml`: launches maximized by default
+(`Qt.platformName !== "offscreen"` guarded, so headless test runs are
+unaffected -- addresses the "window feels small" complaint), sidebar
+tabs get real vector icons plus a soft violet wash on the active tab
+and a violet->blue gradient indicator bar, the five toolbar buttons
+(Run/Stop/Undo/Redo/theme-toggle) swap their glyph `Text` for an
+Icons-backed `Image`, the viewport reads as a floating card
+(`Theme.cardBg`/`cardBorder`, rounded corners) inset with a margin
+against a darker backdrop instead of flush chrome, and the workbench
+dock widens from 310/240 to 360/280 (directly addresses the "Mesh
+panel feels small" complaint) with all three docks
+(workbench/properties/console) sharing the same card surface.
+
+Every task's regression gate was the fast suite
+(`gui/tests -n 6 -m "not slow"`); the final gate was the FULL suite
+including slow gates: `pytest tests/ gui/tests/ -n 6 -q` ->
+**1057 passed, 1 xfailed (unchanged), 0 new warnings** in 582s. Live-app
+verification (real `DISPLAY`, not offscreen) at every slice: grabbed
+window screenshots confirmed the maximized launch, the rendered icons
+(pixel-sampled, not just status-checked), and the floating-card
+viewport; a full interactive pass loaded the `diode_1d` example, cycled
+all 11 sidebar tabs, and ran a real solve to convergence (Newton
+`|F|` -> 1.4e-15) with the new chrome, confirming the reskin doesn't
+break interactivity, not just how it looks.
+
+Also found, NOT fixed (pre-existing, confirmed unrelated -- zero diff
+in `gui/controllers/app_controller.py` or `gui/services/result_store.py`
+on this branch): `AppController.solverEngineLabel`
+(`app_controller.py:274`) calls `store.has_record()` on a
+`SpecResultStore`, which has no such method
+(`AttributeError: 'SpecResultStore' object has no attribute
+'has_record'`) -- reproducible on `main` too, triggered by loading an
+example via `loadExample()` while the footer's `solverEngineLabel`
+binding is live. Left for a future session; out of scope for this
+visual-only reskin.
+
+**Honest scope note:** panel-*content* restyling (the Mesh statistics
+block called out explicitly by the user, Structure/Process/Sweep
+panels, etc. -- design spec section 8) is Slice 2, a deliberate,
+separate follow-up plan, not started here. Workflow-friction, QML
+architecture cleanup, and performance are the other three GUI
+improvement areas from the original request, still queued.
