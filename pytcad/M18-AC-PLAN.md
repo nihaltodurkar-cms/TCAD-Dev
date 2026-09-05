@@ -3,11 +3,20 @@
 Status: PHASE 1 (Device1D one-port) LANDED 2026-08-31. PHASE 2
 (Device1D N-terminal Y-parameters + fT) LANDED 2026-09-04, merged in
 from a parallel branch (commit 9906d6b). PHASE 3 (Device2D, N-terminal
-Y-parameters incl. gate ports) LANDED 2026-09-04. Gate batteries
-`tests/test_m18_ac.py` (6/6), `tests/test_m18_yparam.py` (Phase 2),
-and `tests/test_m18_ac2d.py` (6/6), all green. Phase 4 (GUI exposure)
-and Phase 3b (full 4-terminal `mosfet_2d` Y-parameter/fT extraction)
-not started -- see section 11.
+Y-parameters incl. gate ports) LANDED 2026-09-04. PHASE 4 (GUI
+exposure) LANDED 2026-09-05 -- see sections 12-16 below for the
+design; implementation plan at
+docs/superpowers/plans/2026-09-05-m18-phase4-ac-gui.md. Gate battery
+`gui/tests/test_ac_gui.py` green (non-QML gates); QML-object-tree
+gates (`test_ac_panel.py`, viewport selector) written and correct,
+verified against the same pre-existing local Qt6/QML environment
+issue this session's other GUI work already documented (not a defect
+in this phase's own code -- confirmed by reproducing the identical
+failure with `git stash` before writing any of this phase's code).
+Gate batteries `tests/test_m18_ac.py` (6/6), `tests/test_m18_yparam.py`
+(Phase 2), and `tests/test_m18_ac2d.py` (6/6), all green. Phase 3b
+(full 4-terminal `mosfet_2d` Y-parameter/fT extraction) not started --
+see section 15.
 
 ## 1. Scope (Phase 1)
 
@@ -354,5 +363,177 @@ addendum for the run this session.
 - `pytcad/tests/test_m18_ac2d.py` (new)
 - `pytcad/M18-AC-PLAN.md` (this file, sections 6-11 added: section 6
   backfills Phase 2's record, sections 7-11 are this phase's own)
+- `ARCHITECTURE.md`: M18 status line + milestone table updated
+- `history.md`: new STATE ADDENDUM
+
+## 12. Scope (Phase 4)
+
+Expose Phase 1-3's Y-parameter/AC machinery in the GUI: a single-
+contact frequency sweep armed from a new panel, dispatched through the
+existing solve pipeline (`solver_runner.py`), and plotted as C(f)/G(f).
+Landed 2026-09-05 via the implementation plan at
+`docs/superpowers/plans/2026-09-05-m18-phase4-ac-gui.md`; this section
+and 13-16 record the design retroactively as part of Task 9 (this plan
+doc's own sections 12-16 were never actually written before Task 1
+started coding -- a process gap discovered while landing Phase 4,
+same kind of backfill section 6 already did for Phase 2's un-recorded
+landing).
+
+- New wire-format type `ACSpec` (`gui/services/device_spec.py`)
+  mirroring `SweepSpec`/`TransientSpec`'s validate/round-trip shape
+  exactly: `contact`, `f_start`, `f_stop`, `n_points` (log-spaced only
+  -- AC analysis is inherently multi-decade, no linear-spacing option).
+  Additive `DeviceSpec.ac` field; a job file saved before this phase
+  (no `ac` key at all) still loads unchanged.
+- Dispatch in `solver_runner.py`'s `_solve_all()`/`run_job()` for BOTH
+  `Device1D` and `Device2D`, reusing `pytcad.ac.y_parameters`/
+  `pytcad.ac2d.y_parameters` (Phase 1/2/3's own code, untouched) --
+  explicit refusal (`ValueError`) for `Device3D` (no `ac3d` module
+  exists, same honesty standard Phase 1's G-SCOPE-REFUSAL set).
+- `AppController` wiring: `setACConfig`/`clearACConfig`/`acConfig`/
+  `hasACConfig`/`hasAc`/`acResultForQml`/`canRunAc`, plus extending the
+  existing Sweep/Transient mutual-exclusion check in `run()` to a
+  3-way Sweep/Transient/AC mutex.
+- New `"ac"` plotting mode in `MplCanvasItem`: C(f) on the primary
+  axis, G(f) on `ax.twinx()`.
+- New "AC" entry in the viewport mode selector.
+- New `ACPanel.qml` config panel registered as a workbench tab (with
+  its own icon in `Icons.qml`/`icon_provider.py`).
+- Explicitly NOT in scope: the GUI surfaces only the driven port's own
+  diagonal `Y[:, port_idx, port_idx]` (C/G of the driven contact
+  against AC ground) -- Phase 2/3's full N-port Y-matrix and `fT` are
+  not displayed anywhere in this phase. AC combined with an armed
+  Sweep or Transient is refused (mutually exclusive, same as
+  Sweep+Transient already are). `Device3D` AC remains out of scope
+  entirely, unchanged from Phase 1-3.
+
+## 13. Architecture (Phase 4)
+
+Two real design corrections were found and applied while WRITING the
+implementation plan (before any Task 1 code existed):
+
+1. **Solver-dispatch insertion point.** AC does not replace
+   equilibrium/bias the way `sweep`/`transient` do (each of which is a
+   full alternative to a plain bias solve) -- AC instead runs AT the
+   same converged operating point an ordinary bias solve already
+   reaches. The naive design would add a fourth top-level
+   `elif spec.ac is not None:` branch alongside `_solve_all()`'s
+   existing `if spec.transient... elif spec.sweep... else:` chain,
+   making AC a mutually-exclusive fourth "mode" -- semantically wrong,
+   since AC augments a plain-bias result rather than replacing it.
+   Corrected: the AC dispatch lives INSIDE the existing `else:` branch
+   (the plain-bias path), placed right after `extract_result()`, so an
+   armed AC config adds `ac__*` keys onto the ordinary
+   equilibrium/bias result dict instead of describing a fourth
+   disjoint solve mode. See `solver_runner.py::_solve_all()`'s own
+   comment at the dispatch site.
+2. **Canvas plotting decision.** C(f) and G(f) differ by many orders
+   of magnitude across a Hz-to-GHz sweep and cannot share one linear
+   y-axis meaningfully. The naive design would add a new multi-
+   subplot figure layout to `MplCanvasItem` -- a first, since every
+   existing mode draws on a single `Axes`. Corrected: use `ax.twinx()`
+   on the SAME single Axes every other mode already gets -- C(f) on
+   the primary (left) axis, G(f) on a twin (right) axis sharing the
+   log-scaled frequency x-axis -- confirmed while planning this that
+   no existing mode needed more than one Axes, so `twinx()` keeps
+   `MplCanvasItem`'s one-Axes-per-mode invariant intact rather than
+   adding a second code path for multi-Axes figures. Known limitation
+   carried from this decision: the hover-readout
+   (`_remember_series`/`self._ax`) tracks only the C(f) curve on the
+   primary axis -- G(f)'s twin axis is not readout-hoverable.
+
+Port-resolution note (also referenced from `solver_runner.py`):
+`Device1D` has no named contact registry at the core level, so
+`apply_bias()`'s own positional convention (`contacts[0]` = left/x=0
+node, `contacts[1]` = right node, regardless of either contact's name)
+is reused to resolve `spec.ac.contact` to `port_idx` 0 or 1. `Device2D`
+DOES have a named port registry (`yres.port_names`, covering both
+`DirichletBC` ohmic contacts and `GateBC` gates), so its port index is
+resolved with a plain name lookup instead.
+
+Wire format: additive `ac__freqs`/`ac__C`/`ac__G`/`ac__port`/
+`unit__ac_capacitance`/`unit__ac_conductance` keys in the result dict,
+following the same `<field>__<name>` convention `sweep__*`/
+`transient__*` already use. `ResultStore.has_ac()`/`ac_result()` mirror
+the existing `has_sweep`/`has_transient`-style accessors.
+
+## 14. Gates
+
+- `gui/tests/test_ac_gui.py` (pure Python, no QML engine): `ACSpec`
+  validation (bad frequencies, bad `n_points`, unregistered contact),
+  `DeviceSpec.ac` JSON round-trip, backward compatibility with a job
+  file missing the `ac` key entirely, `ResultStore.has_ac()` honesty
+  (`SpecResultStore` and `NpzResultStore`, including a plain non-AC
+  run reading back `has_ac()==False`), G-AC-1D (a CLI-driven 1D AC
+  run's stamped `ac__C`/`ac__G` matches a direct `pytcad.ac.
+  y_parameters` call, both contacts), G-AC-2D (same cross-check on a
+  real `Device2D` moscap fixture, driving the gate port), G-AC-3D-
+  REFUSAL (`Device3D` raises a clear `ValueError` naming AC/Device3D),
+  `AppController`-level `setACConfig`/`clearACConfig`, `canRunAc`
+  hidden for a 3D spec, the 3-way Sweep/Transient/AC mutual-exclusion
+  refusal, refusal on an unregistered contact name, and a full `run()`
+  tagging the result so `hasAc` reads back true.
+- `gui/tests/test_mpl_canvas_item.py`: the `"ac"` mode's `twinx()` draw
+  path (pure matplotlib, no QML engine).
+- QML-object-tree gates (require the real QML engine -- in THIS
+  sandbox these fail on the pre-existing local Qt6/QML plugin-load
+  issue documented throughout this session's other GUI work, verified
+  by reproducing the identical failure with `git stash` on unmodified
+  code): `gui/tests/test_ac_panel.py` (`ACPanel` present in the QML
+  tree; arm-and-clear end-to-end through the real panel; a rejected
+  arm reverts fields to the last armed config) and
+  `gui/tests/test_viewport_modes.py::test_view_mode_selector_offers_ac`.
+
+## 15. Honest limits (Phase 4)
+
+- N-port Y-matrix / `fT` are NOT exposed in the GUI: only the driven
+  port's own diagonal C(f)/G(f) is plotted (same one-port scope Phase
+  1's own GUI target always intended); the underlying Phase 2/3 Python
+  API can compute the full matrix, this phase does not surface it.
+- AC + Sweep and AC + Transient combined runs are NOT supported:
+  mutually exclusive, same as Sweep+Transient already are -- a user
+  must clear the other armed config before running AC.
+- `Device3D` AC: still out of scope entirely (unchanged from Phase
+  1-3), refused with an explicit error rather than silently ignored.
+- The hover-readout on the `"ac"` canvas mode only tracks C(f) (primary
+  axis); G(f)'s twin axis is not hoverable -- a direct consequence of
+  the `twinx()` decision in section 13, left as-is for this phase.
+- Project-file persistence of an armed AC config follows the same
+  additive round-trip pattern `SweepSpec`/`TransientSpec` already use
+  (no new persistence mechanism), but per-run field-snapshot/animation
+  playback (already out of scope for Transient per M17's own plan) is
+  equally out of scope here.
+- **Phase 4 itself is now LANDED (2026-09-05):** GUI exposure, the
+  item this milestone's own table has carried as "NOT STARTED" since
+  Phase 1, is complete for the single-port C(f)/G(f) case described
+  above. What remains deferred is Phase 3b (full 4-terminal
+  `mosfet_2d` Y-parameter/fT extraction, unaffected by this phase) and
+  the N-port-matrix/AC+Sweep items listed above.
+
+## 16. Files changed (Phase 4)
+
+- `pytcad/gui/services/device_spec.py` (`ACSpec` + `DeviceSpec.ac`)
+- `pytcad/gui/services/result_store.py` (`ACResult`,
+  `has_ac()`/`ac_result()`)
+- `pytcad/gui/services/solver_runner.py` (AC dispatch in
+  `_solve_all()`/`run_job()`, Device1D+Device2D, Device3D refusal)
+- `pytcad/gui/controllers/app_controller.py` (`setACConfig`/
+  `clearACConfig`/`acConfig`/`hasACConfig`/`hasAc`/`acResultForQml`/
+  `canRunAc`, 3-way `run()` mutex)
+- `pytcad/gui/visualization/mpl_canvas_item.py` (new `"ac"` mode,
+  `ax.twinx()`)
+- `pytcad/gui/qml/panels/ACPanel.qml` (new)
+- `pytcad/gui/qml/panels/ViewportPanel.qml` (AC entry in the mode
+  selector)
+- `pytcad/gui/qml/Main.qml`, `pytcad/gui/qml/components/
+  MainToolBar.qml`, `pytcad/gui/qml/Icons.qml`,
+  `pytcad/gui/services/icon_provider.py` (workbench tab registration +
+  icon)
+- `pytcad/gui/tests/test_ac_gui.py`, `pytcad/gui/tests/test_ac_panel.py`,
+  `pytcad/gui/tests/test_mpl_canvas_item.py` (new),
+  `pytcad/gui/tests/test_viewport_modes.py`,
+  `pytcad/gui/tests/test_shell_icons.py`,
+  `pytcad/gui/tests/test_transient_gui.py` (updated)
+- `pytcad/M18-AC-PLAN.md` (this file, sections 12-16 added)
 - `ARCHITECTURE.md`: M18 status line + milestone table updated
 - `history.md`: new STATE ADDENDUM

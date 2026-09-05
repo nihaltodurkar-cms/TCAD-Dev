@@ -3497,3 +3497,91 @@ library-version mismatch (`libqtquickcontrols2plugin.so` vs.
 confirmed pre-existing and unrelated by reproducing the same failures
 identically on a `git stash` of every change this session made (which
 touches no GUI code at all).
+
+### STATE ADDENDUM -- M18 PHASE 4 LANDED: AC/Y-PARAMETER GUI EXPOSURE (2026-09-05)
+
+Exposed Phase 1-3's small-signal AC/Y-parameter machinery in the GUI:
+a single-contact frequency sweep armed from a new panel, dispatched
+through the existing solve pipeline, plotted as C(f)/G(f). New wire-
+format type `ACSpec` (`gui/services/device_spec.py`) mirroring
+`SweepSpec`/`TransientSpec`'s validate/round-trip shape exactly,
+additive `DeviceSpec.ac` field (an old job file with no `ac` key still
+loads unchanged); AC dispatch in `solver_runner.py`'s `_solve_all()`/
+`run_job()` for BOTH `Device1D` and `Device2D`, reusing
+`pytcad.ac.y_parameters`/`pytcad.ac2d.y_parameters` untouched, with an
+explicit refusal for `Device3D` (no `ac3d` module); full
+`AppController` wiring (`setACConfig`/`clearACConfig`/`acConfig`/
+`hasACConfig`/`hasAc`/`acResultForQml`/`canRunAc`, plus extending the
+existing Sweep/Transient run mutex to a 3-way Sweep/Transient/AC
+mutex); a new `"ac"` `MplCanvasItem` plotting mode; a new "AC" entry
+in the viewport mode selector; and a new `ACPanel.qml` config panel
+registered as a workbench tab with its own icon.
+
+Two real design corrections were found and applied while WRITING the
+implementation plan (before any task's code existed), both recorded in
+`M18-AC-PLAN.md` section 13:
+
+1. **Solver-dispatch insertion point.** AC does not replace
+   equilibrium/bias the way `sweep`/`transient` do (each a full
+   alternative to a plain bias solve) -- AC instead runs AT the same
+   converged operating point an ordinary bias solve already reaches.
+   The naive design would have added a fourth top-level
+   `elif spec.ac is not None:` branch alongside `_solve_all()`'s
+   existing `if spec.transient... elif spec.sweep... else:` chain,
+   making AC a mutually-exclusive fourth "mode" -- semantically wrong,
+   since AC augments a plain-bias result rather than replacing it.
+   Corrected: the AC dispatch lives INSIDE the existing `else:` branch
+   (the plain-bias path), right after `extract_result()`, so an armed
+   AC config adds `ac__*` keys onto the ordinary equilibrium/bias
+   result dict instead of describing a fourth disjoint solve mode.
+2. **Canvas plotting decision.** C(f) and G(f) differ by many orders
+   of magnitude across a Hz-to-GHz sweep and cannot share one linear
+   y-axis meaningfully. The naive design would have added a new
+   multi-subplot figure layout to `MplCanvasItem` -- a first, since
+   every existing mode draws on a single `Axes`. Corrected: use
+   `ax.twinx()` on the SAME single Axes every other mode already gets
+   -- C(f) on the primary (left) axis, G(f) on a twin (right) axis
+   sharing the log-scaled frequency x-axis -- confirmed while planning
+   this that no existing mode needed more than one Axes, so `twinx()`
+   keeps `MplCanvasItem`'s one-Axes-per-mode invariant intact rather
+   than adding a second code path for multi-Axes figures. Known
+   limitation carried from this decision: the hover-readout tracks
+   only the C(f) curve on the primary axis -- G(f)'s twin axis is not
+   readout-hoverable.
+
+While landing this task (Task 9, full-suite verification + docs), a
+separate process gap was found and fixed: `M18-AC-PLAN.md`'s own
+sections 12-16 (the Phase 4 design spec that Tasks 1-8's implementation
+plan repeatedly cites, e.g. "section 13's port-resolution note") had
+never actually been written into that file -- confirmed via
+`git log -p` showing zero history of that content. Backfilled now as
+part of this task's docs update, the same way section 6 already
+backfilled Phase 2's un-recorded landing into this same file.
+
+Only the driven port's own diagonal `Y[:, port_idx, port_idx]` is
+surfaced in the GUI (C/G of the driven contact against AC ground) --
+Phase 2/3's full N-port Y-matrix and `fT` are not displayed anywhere
+in this phase, and AC+Sweep/AC+Transient combined runs remain mutually
+exclusive, both honestly documented as deferred rather than silently
+half-implemented.
+
+Full suite: `pytest tests/ gui/tests/ -n 6 -q` -> 1068 passed,
+1 xfailed, 97 failed. `tests/` alone: 427 passed, 1 xfailed, 0 failed
+(the 2 previously-known `test_performance_lazy_imports.py` cupy
+lazy-import failures now pass in this environment -- an environment
+change, not a regression). `gui/tests/` alone: 97 failed, all of them
+QML-loading tests failing with the same pre-existing
+`undefined symbol: _ZN14QObjectPrivateC2E16QtPrivate_6_11_0` /
+`IndexError: list index out of range` on `engine.rootObjects()[0]`
+signature this session's other GUI work has already documented
+repeatedly (confirmed again directly on `gui/tests/test_ac_panel.py`
+and `test_viewport_modes.py::test_view_mode_selector_offers_ac`'s own
+failure output) -- not a defect in this phase's own code. Every
+pure-Python AC test (`gui/tests/test_ac_gui.py`,
+`gui/tests/test_mpl_canvas_item.py`) passes cleanly. A manual
+offscreen end-to-end run (`diode_1d`, AC armed on the anode contact,
+1 Hz-1 GHz, 30 points) produced no errors and physically sensible
+results: C nearly flat at ~2.42e-8 F/cm^2 (depletion capacitance
+dominated), G rising from ~8.8e-10 to ~10.8 S/cm^2 across the sweep,
+matching the qualitative roll-off signature Phase 1's own G-ROLLOFF
+gate already established.
