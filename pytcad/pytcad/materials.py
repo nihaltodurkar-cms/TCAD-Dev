@@ -173,6 +173,67 @@ INGAAS = Semiconductor(
 )
 
 
+SIC_4H = Semiconductor(
+    # 4H-SiC (wide-bandgap power-device material). Provenance, field by
+    # field -- some numbers are well-established literature constants,
+    # others are carried over from this module's existing GENERIC fit
+    # FORMS (Caughey-Thomas mobility shape, Varshni T-dependence,
+    # Slotboom BGN) without an independent 4H-SiC-specific refit, same
+    # "state the uncertainty, don't hide it" convention already used
+    # for GE/GAAS/INGAAS above.
+    #
+    # WELL-ESTABLISHED (multiple independent literature sources agree
+    # to within a few percent): eps_r, chi, Eg(300K), the ~2.5x-vs-Si
+    # thermal-conductivity advantage that is the whole reason SiC is
+    # used for power devices, and the order-of-magnitude mobility
+    # endpoints (mu_n_max~950, mu_p_max~120 cm^2/Vs, electrons ~8x
+    # holes -- 4H-SiC's large conduction/valence-band mass asymmetry).
+    # Baliga, "Fundamentals of Power Semiconductor Devices" (Springer,
+    # 2008) Ch. 1 Table 1.2 is a standard citation for these.
+    #
+    # CARRIED-OVER APPROXIMATIONS, explicitly flagged (not independently
+    # fit to 4H-SiC data): mu_*_Nref/mu_*_alpha/mu_*_Texp (Caughey-
+    # Thomas SHAPE parameters -- only the mu_min/mu_max endpoints are
+    # literature-sourced), varshni_alpha/varshni_beta (tuned only so
+    # Eg(300K) lands at the well-established 3.23 eV, not independently
+    # fit to a 4H-SiC Eg(T) dataset), tau_Nref (Scharfetter lifetime-
+    # rolloff SHAPE), Cn_auger/Cp_auger (Auger is a minor effect in
+    # wide-bandgap SiC at typical power-device doping levels, so the
+    # exact coefficient matters far less than in Si -- kept at Si's
+    # order of magnitude rather than asserting a precise SiC number),
+    # bgn_E0/bgn_N0 (Slotboom's fit is a SILICON heavy-doping bandgap-
+    # narrowing model; no validated 4H-SiC-specific BGN fit is used
+    # here -- BGN mainly affects the heavily-doped N+/P+ regions, not
+    # the lightly-doped drift region that sets blocking voltage), and
+    # m_n_star/m_p_star (this field is "unused by any solver yet" per
+    # the Semiconductor class's own docstring -- kept as a representative
+    # DOS-averaged placeholder, not a validated anisotropic fit).
+    #
+    # tau_n0/tau_p0 (SRH minority-carrier lifetime) is GROWTH-QUALITY
+    # DEPENDENT in real 4H-SiC by an order of magnitude or more
+    # (commercial epi typically ~0.1-a few us) -- the value here is a
+    # representative mid-range pick, not a measured value for any
+    # specific wafer.
+    name="4H-SiC",
+    eps_r=9.7,
+    chi=3.17,
+    Eg0=3.30, varshni_alpha=3.3e-4, varshni_beta=0.0,   # -> Eg(300K)~=3.23 eV
+    Nc300=1.7e19, Nv300=2.5e19,
+    mu_n_min=40.0, mu_n_max=950.0, mu_n_Nref=1.94e17, mu_n_alpha=0.61,
+    mu_n_Texp=-2.15,
+    mu_p_min=15.0, mu_p_max=120.0, mu_p_Nref=1.76e19, mu_p_alpha=0.34,
+    mu_p_Texp=-2.15,
+    vsat_n=2.0e7, vsat_p=2.0e7, beta_n=1.0, beta_p=1.0,  # unused: Canali
+    # (field_mobility) is not wired into Device3D -- see device3d.py's
+    # explicit NotImplementedError -- kept for dataclass completeness only.
+    tau_n0=5.0e-7, tau_p0=5.0e-7, tau_Nref=5.0e16,
+    Cn_auger=2.8e-31, Cp_auger=9.9e-32,
+    bgn_E0=6.92e-3, bgn_N0=1.3e17,
+    m_n_star=0.29, m_p_star=1.0,
+    kappa_th300=3.7,             # W/(cm*K) at 300K -- ~2.5x silicon's
+)
+
+
 def algaas(x):
     """Al_x Ga_{1-x} As parameter family (direct-gap regime, x <= 0.45).
 

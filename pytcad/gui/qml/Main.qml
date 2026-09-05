@@ -69,6 +69,8 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("moscap_3d") }
             MenuItem { text: "Load 3D JFET"
                        onTriggered: appController.loadExample("jfet_3d") }
+            MenuItem { text: "Trial"
+                       onTriggered: appController.loadExample("trial") }
             MenuSeparator {}
             MenuItem { text: "Save Project As..."; onTriggered: saveFileDialog.open() }
             MenuItem { text: "Open Project..."; onTriggered: openFileDialog.open() }

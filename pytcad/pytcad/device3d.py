@@ -350,6 +350,23 @@ class Device3D:
 
         self.bcs = {}   # name -> DirichletBC | GateBC
         self.psi = self.n = self.p = None
+        # (id(bc), V) -> (psi0, n0, p0): _bc_contact_values solves a
+        # per-node charge-neutrality root (FD: ~60-iteration vectorized
+        # bisection over tabulated Fermi-Dirac integrals) that depends
+        # only on the contact's fixed node set/doping/material and the
+        # requested V -- all invariant across an entire Newton solve
+        # (V is fixed for the whole solve_equilibrium/solve_bias call).
+        # Every caller (_residual_jacobian_poisson/_residual_jacobian,
+        # every Newton iteration; ac.py/continuation.py/transient.py
+        # calling _residual_jacobian repeatedly at the same voltages)
+        # was redoing that root-find from scratch each time -- profiled
+        # at 66% of a 25-iteration solve_equilibrium's wall time on a
+        # 5040-node mesh. Safe to cache for the object's lifetime: T,
+        # VT, C, nc_s, nv_s, ln_gn, eg_kt are all set once in __init__
+        # and never mutated afterward, and add_contact/add_gate always
+        # install a brand-new BC object (new id()) rather than mutating
+        # node indices in place.
+        self._bc_value_cache = {}
 
     # ------------------------------------------------------------------
     def add_contact(self, name, i, j, k, V=0.0):
@@ -410,15 +427,25 @@ class Device3D:
 
     def _bc_contact_values(self, bc, V):
         """Ohmic values at a contact's nodes (M11-S4 per-node materials;
-        M13 FD-aware)."""
+        M13 FD-aware).  Memoized per (bc, V): pure function of fixed
+        per-node data and the requested V (see the cache comment in
+        __init__) -- callers hit this every Newton iteration with the
+        SAME V, so recomputation here would be pure waste."""
+        key = (id(bc), float(V))
+        cached = self._bc_value_cache.get(key)
+        if cached is not None:
+            return cached
         k, j, i = bc.k, bc.j, bc.i
         if self.fd:
-            return fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
-                                   self.nv_s[k, j, i],
-                                   self.ln_gn[k, j, i],
-                                   self.eg_kt[k, j, i], V, self.VT)
-        return _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
-                             V, self.VT)
+            out = fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
+                                  self.nv_s[k, j, i],
+                                  self.ln_gn[k, j, i],
+                                  self.eg_kt[k, j, i], V, self.VT)
+        else:
+            out = _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
+                                V, self.VT)
+        self._bc_value_cache[key] = out
+        return out
 
     def _gate_face_weight(self, bc: GateBC):
         """Control-volume face AREA the gate's flux crosses, per node,

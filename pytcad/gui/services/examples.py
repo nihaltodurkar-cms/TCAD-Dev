@@ -280,6 +280,89 @@ def mosfet_3d_example_spec():
         ])
 
 
+def sic_power_mosfet_3d_example_spec():
+    """"Trial" -- a vertical planar 4H-SiC power MOSFET half-cell (N+
+    source / P+ body-tie notch / P-body / N- drift / N+ substrate-drain,
+    a true 3D gate/oxide Robin BC over the channel+JFET region).
+
+    Reuses pytcad.sic_vmosfet's own doping/geometry construction (the
+    SAME function examples/07_3d_sic_power_mosfet.py and
+    tests/test_sic_vmosfet.py exercise) -- this GUI entry does not
+    reimplement the physics, only re-expresses it as a DeviceSpec, the
+    same relationship every other example in this module already has
+    to its own pytcad-core builder (see this module's own docstring).
+
+    Fixed (non-adaptive), deliberately coarser mesh than
+    examples/07_3d_sic_power_mosfet.py's own adaptively-refined one
+    (~7,900 nodes there vs. ~5,000 here): a UI quick-load example must
+    construct instantly on the UI thread, like every other EXAMPLES
+    entry -- running pytcad.adapt.adapt_solve_3d (multiple full 3D
+    solves) does not belong behind a menu click. Coarser resolution
+    means a Sweep panel gate/drain sweep run here will be LESS
+    accurate than the standalone example script's own adaptively-
+    refined result, and -- per that script's own measured finding --
+    the off-state branch may hit real Newton convergence difficulty
+    well before a high drain bias (~7-8V in the standalone script's
+    own run); this is a property of the device geometry/doping, not a
+    bug specific to this GUI entry. See
+    examples/README_3d_sic_power_mosfet.md for the full, honest
+    account of what a real run found.
+
+    Loads unbiased (Vg=0, all bias=0); use the Sweeps panel for an
+    Id-Vg or Id-Vd curve, same as the other 3D MOSFET examples.
+    """
+    from pytcad.mesh import graded_mesh, uniform_mesh
+    from pytcad.mesh3d import Mesh3D
+    from pytcad.sic_vmosfet import SiCVMOSFETParams, sic_vmosfet_doping
+    from pytcad.moscap import flatband_voltage
+
+    p = SiCVMOSFETParams()
+    NX, NY, NZ = 16, 10, 6
+    x = graded_mesh(p.Lcell, [p.Ln, p.Lch], h_min=p.Lcell / (NX * 8),
+                    h_max=p.Lcell / NX, ratio=1.2)
+    y = graded_mesh(p.depth, [0.0], h_min=p.depth / (NY * 8),
+                    h_max=p.depth / NY, ratio=1.2)
+    z = uniform_mesh(p.W, NZ)
+    mesh = Mesh3D(x, y, z)
+    nz = z.size
+
+    doping, ntotal = sic_vmosfet_doping(mesh, p)
+
+    i_src = np.where(x <= p.Ln)[0].tolist()
+    i_gate = np.where(x > p.Ln)[0].tolist()
+    Vfb = flatband_voltage(-p.Na_body, p.tox_cm, p.gate, 0.0, p.T, p.material)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                     axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist(),
+                          ntotal=ntotal.tolist()),
+        contacts=[
+            ContactSpec(name="source", kind="ohmic",
+                       nodes=_top_face_node_indices(i_src, nz), V=0.0),
+            ContactSpec(name="gate", kind="gate",
+                       nodes=_top_face_node_indices(i_gate, nz),
+                       V=0.0, tox_cm=p.tox_cm, Vfb=Vfb, normal_axis="y"),
+            ContactSpec(name="drain", kind="ohmic",
+                       nodes=_bottom_face_node_indices(x.size, y.size, nz),
+                       V=0.0),
+        ],
+        bias={"source": 0.0, "drain": 0.0, "gate": 0.0},
+        # Homojunction device (4H-SiC throughout) -- no region_materials
+        # needed. structure_regions gives the 3D viewer's exploded-view
+        # feature the same named-part split the geometry docstring
+        # describes (source+body-tie vs. channel+JFET, by x only --
+        # depth-wise body/drift/substrate layering isn't separately
+        # exploded, matching how mosfet_3d_example_spec's own
+        # structure_regions only splits by x too).
+        structure_regions=[
+            {"name": "source_and_bodytie",
+            "box": [0.0, p.Ln, 0.0, p.depth, 0.0, p.W]},
+            {"name": "channel_and_jfet",
+            "box": [p.Ln, p.Lcell, 0.0, p.depth, 0.0, p.W]},
+        ])
+
+
 def finfet_3d_example_spec():
     """3D tri-gate FinFET: gate wraps around top and two sides of a narrow fin.
 
@@ -752,7 +835,8 @@ EXAMPLES = {"mosfet_2d": mosfet_example_spec,
            "pn_junction_3d": pn_junction_3d_example_spec,
            "bjt_3d": bjt_3d_example_spec,
            "moscap_3d": moscap_3d_example_spec,
-           "jfet_3d": jfet_3d_example_spec}
+           "jfet_3d": jfet_3d_example_spec,
+           "trial": sic_power_mosfet_3d_example_spec}
 
 
 from .structure_model import BoundarySpec, ContactModel, GateModel, MeshModel, RegionSpec, StructureModel
