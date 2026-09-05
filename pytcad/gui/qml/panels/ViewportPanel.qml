@@ -335,6 +335,17 @@ Rectangle {
         }
     }
 
+    // M18 Phase 4: same trap, AC edition -- a finished AC sweep emits
+    // resultChanged only; without this, "AC" mode kept showing the
+    // previous state until the mode selector was re-touched by hand.
+    // Mirrors the "transient" Connections block above.
+    Connections {
+        target: controller
+        function onResultChanged() {
+            if (controller && root.currentMode === "ac") root.setViewMode(root.currentMode)
+        }
+    }
+
     // M9: the models-off comparison finishing must refresh the series
     // overlay the same way. v0.6 Phase 2d reuses this SAME signal/slot
     // pair for the backend comparison -- comparisonLabelForQml says

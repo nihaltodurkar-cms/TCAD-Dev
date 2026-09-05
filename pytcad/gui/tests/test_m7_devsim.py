@@ -172,6 +172,20 @@ def test_check_devsim_compatible_rejects_non_default_models():
         check_devsim_compatible(spec)
 
 
+def test_check_devsim_compatible_rejects_ac():
+    """M18 Phase 4 final-review fix: this backend's run() has no AC
+    dispatch at all, so an armed AC config must be refused rather than
+    silently ignored and solved as a plain bias/sweep job (the same
+    "hidden failure" class the transient check already guards
+    against)."""
+    from gui.services.device_spec import ACSpec
+    from workbench.solvers.devsim_backend import check_devsim_compatible
+    spec = _diode_spec_2c()
+    spec.ac = ACSpec(contact="left", f_start=1e3, f_stop=1e9, n_points=20)
+    with pytest.raises(ValueError, match="AC"):
+        check_devsim_compatible(spec)
+
+
 def test_both_backends_stamp_v2_and_backend_id(run_both):
     from gui.services.solver_backend import SOLVER_RESULT_SCHEMA_VERSION
     for bid, d in run_both.items():

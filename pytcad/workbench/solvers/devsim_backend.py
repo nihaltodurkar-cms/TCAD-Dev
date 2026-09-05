@@ -86,6 +86,14 @@ def check_devsim_compatible(spec):
         raise ValueError(
             "the devsim backend does not support transient (time-domain) "
             "runs (use the pytcad backend)")
+    if spec.ac is not None:
+        # M18 Phase 4: same "hidden failure" class the transient check
+        # above already guards against -- this backend's run() has no
+        # AC dispatch at all, so an armed AC config would otherwise be
+        # silently ignored and solved as a plain bias/sweep job instead.
+        raise ValueError(
+            "the devsim backend does not support AC (small-signal) "
+            "analysis (use the pytcad backend)")
     from gui.services.device_spec import _default_models
     if spec.models != _default_models():
         raise ValueError(

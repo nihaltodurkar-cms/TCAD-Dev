@@ -129,6 +129,62 @@ def test_npz_result_store_has_ac_false_on_a_plain_run(tmp_path):
     assert NpzResultStore(out).has_ac() is False
 
 
+# ---------------------------------------------------------------- schema validation (final-review fix)
+def test_solver_backend_accepts_a_complete_ac_block(tmp_path):
+    """validate_result() must accept a well-formed ac__* block -- the
+    positive-path counterpart to the incomplete/mismatch rejections
+    below, same as the sweep/transient blocks are each covered both
+    ways."""
+    from gui.services.solver_backend import validate_result
+    from gui.tests.test_solver_backend import _minimal_legacy
+    p = _minimal_legacy(
+        tmp_path / "goodac.npz",
+        **{"ac__freqs": np.array([1.0, 10.0, 100.0]),
+           "ac__C": np.array([1e-7, 9e-8, 5e-8]),
+           "ac__G": np.array([1e-3, 2e-3, 5e-3]),
+           "ac__port": np.array("left"),
+           "unit__ac_capacitance": np.array("F/cm^2"),
+           "unit__ac_conductance": np.array("S/cm^2")})
+    validate_result(p)                       # must not raise
+
+
+def test_solver_backend_rejects_incomplete_ac_block(tmp_path):
+    """validate_result() enforces the ac block is all-or-nothing, same
+    as the sweep/transient blocks -- a hand-corrupted file missing
+    ac__G must be rejected, not silently half-read (which previously
+    surfaced as a bare KeyError('ac__C') from ac_result(), swallowed by
+    AppController.acResultForQml's except Exception into a silently
+    empty plot)."""
+    from gui.services.solver_backend import ResultSchemaError, validate_result
+    from gui.tests.test_solver_backend import _minimal_legacy
+    p = _minimal_legacy(
+        tmp_path / "badac.npz",
+        **{"ac__freqs": np.array([1.0, 10.0, 100.0]),
+           "ac__port": np.array("left"),
+           "unit__ac_capacitance": np.array("F/cm^2"),
+           "unit__ac_conductance": np.array("S/cm^2")})
+    with pytest.raises(ResultSchemaError, match="ac__C"):
+        validate_result(p)
+
+
+def test_solver_backend_rejects_ac_length_mismatch(tmp_path):
+    """The previously-deferred Task 6 Minor finding ("no length-mismatch
+    guard on freqs/C/G before plotting in _draw_ac") is fixed at this
+    schema boundary, not in mpl_canvas_item.py's renderer."""
+    from gui.services.solver_backend import ResultSchemaError, validate_result
+    from gui.tests.test_solver_backend import _minimal_legacy
+    p = _minimal_legacy(
+        tmp_path / "shortac.npz",
+        **{"ac__freqs": np.array([1.0, 10.0, 100.0]),
+           "ac__C": np.array([1e-7, 9e-8]),              # 2 != 3
+           "ac__G": np.array([1e-3, 2e-3, 5e-3]),
+           "ac__port": np.array("left"),
+           "unit__ac_capacitance": np.array("F/cm^2"),
+           "unit__ac_conductance": np.array("S/cm^2")})
+    with pytest.raises(ResultSchemaError, match="ac__C"):
+        validate_result(p)
+
+
 # ---------------------------------------------------------------- solver dispatch (1D)
 def test_cli_1d_ac_stamps_the_expected_block_and_matches_direct_call(tmp_path):
     """G-AC-1D: the stamped ac__C/ac__G must match a DIRECT call to

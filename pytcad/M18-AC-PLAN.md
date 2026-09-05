@@ -498,11 +498,13 @@ the existing `has_sweep`/`has_transient`-style accessors.
 - The hover-readout on the `"ac"` canvas mode only tracks C(f) (primary
   axis); G(f)'s twin axis is not hoverable -- a direct consequence of
   the `twinx()` decision in section 13, left as-is for this phase.
-- Project-file persistence of an armed AC config follows the same
-  additive round-trip pattern `SweepSpec`/`TransientSpec` already use
-  (no new persistence mechanism), but per-run field-snapshot/animation
-  playback (already out of scope for Transient per M17's own plan) is
-  equally out of scope here.
+- Project-file persistence of an armed AC config is NOT implemented:
+  `gui/services/project_store.py` only round-trips `sweep` (the v4
+  key) -- it has no `transient` or `ac` key at all, so an armed AC
+  config is lost on save/reload exactly like an armed Transient config
+  already is (ARCHITECTURE.md flags this same gap for Transient). This
+  and per-run field-snapshot/animation playback (already out of scope
+  for Transient per M17's own plan) are both out of scope here.
 - **Phase 4 itself is now LANDED (2026-09-05):** GUI exposure, the
   item this milestone's own table has carried as "NOT STARTED" since
   Phase 1, is complete for the single-port C(f)/G(f) case described

@@ -60,6 +60,16 @@ Transient runs only (complete block, never partial; v3+):
     transient__meta                 JSON string: {"contact", "waveform"
                                     (kind/v0/v1/t0/t1), "t_end", "dt0",
                                     "theta", "dimensionality"}
+AC (small-signal) runs only (complete block, never partial; M18 Phase 4):
+    ac__freqs                       [Hz] frequency points, log-spaced
+    ac__C                           [F/cm^2] capacitance per frequency
+                                    point, C = Im(Y)/(2*pi*f)
+    ac__G                           [S/cm^2] conductance per frequency
+                                    point, G = Re(Y)
+    ac__port                        driven contact/gate name (string
+                                    scalar)
+    unit__ac_capacitance            "F/cm^2"
+    unit__ac_conductance            "S/cm^2"
 
 Validation here is STRUCTURAL, not an inventory: a legal file may carry
 any subset of fields (tests write minimal fixtures), but whatever it
@@ -430,5 +440,22 @@ def _validate_mapping(d, path):
             raise ResultSchemaError(
                 f"{path}: transient__meta must be a JSON object with an "
                 "integer 'dimensionality'")
+
+    # -- ac block: same all-or-nothing shape as sweep/transient ---------------
+    ac_keys = [k for k in files if k.startswith("ac__")]
+    if ac_keys:
+        for required in ("ac__freqs", "ac__C", "ac__G", "ac__port",
+                         "unit__ac_capacitance", "unit__ac_conductance"):
+            _require(d, required, "an incomplete ac block is invalid", path)
+        freqs = np.asarray(d["ac__freqs"], dtype=float)
+        if freqs.ndim != 1 or freqs.size == 0:
+            raise ResultSchemaError(
+                f"{path}: ac__freqs must be a non-empty 1D array")
+        for key in ("ac__C", "ac__G"):
+            vals = np.asarray(d[key], dtype=float)
+            if vals.shape != freqs.shape:
+                raise ResultSchemaError(
+                    f"{path}: {key} length {vals.size} does not match "
+                    f"ac__freqs length {freqs.size}")
 
     return schema_found
