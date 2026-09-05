@@ -3585,3 +3585,68 @@ results: C nearly flat at ~2.42e-8 F/cm^2 (depletion capacitance
 dominated), G rising from ~8.8e-10 to ~10.8 S/cm^2 across the sweep,
 matching the qualitative roll-off signature Phase 1's own G-ROLLOFF
 gate already established.
+
+### STATE ADDENDUM -- M18 PHASE 3b LANDED: FULL 4-TERMINAL MOSFET_2D Y-PARAMETER MATRIX + fT (2026-09-05)
+
+Closed out M18's last deferred item from Phase 3's own scoping note:
+the full N-port Y-parameter matrix and fT (current-gain cutoff
+frequency), validated on a genuine active 3+-terminal device rather
+than the 2-terminal diode (Phase 1/2) or the reciprocal 2-port
+`moscap_2d` gate case (Phase 3), neither of which has real current
+gain to speak of.
+
+Two pieces of prior, unrelated work turned out to already cover most
+of this phase with zero modification, found by checking before
+building anything new: `ac2d.y_parameters()` (Phase 3) already
+generalizes to any mix of ohmic/gate ports (already proven generically
+by Phase 3's own G-NPORT-OHMIC/G-GATE-FD gates) -- no change needed
+for a 4-port device. And `pytcad.mosfet.build_mosfet()`, built for an
+entirely different milestone (M14 surface mobility), already
+constructs a real 4-terminal n-channel MOSFET `Device2D` and already
+solves to a real ON bias (`{"drain": 0.1, "gate": 1.0}`, the same
+point M14's own gates validate) -- reused directly as this phase's
+fixture.
+
+The only genuinely new production code: `ac2d.cutoff_frequency(yres,
+port_in, port_out)`, generalizing `ac.py`'s Phase-2 fT algorithm
+(hardcoded to the fixed 2-port Device1D case, `Y[:,0,0]`/`Y[:,1,0]`)
+to accept named or indexed ports on an N-port matrix -- identical
+log-log bisection logic, just parameterized.
+
+Gate battery `tests/test_m18_ac2d.py`, 4 new (10/10 total), all green
+on the first run with no fix iteration needed: G-MOSFET-GAIN (genuine
+|h21|>1 at low frequency with a real roll-off, unlike the diode's
+`test_g_ft_diode_has_no_meaningful_current_gain`'s flat |h21|=1),
+G-MOSFET-FT (a finite fT crossing within the swept range -- the first
+REAL, non-synthetic validation of the crossing algorithm against
+actual device physics; previously it was validated only against a
+hand-built synthetic profile since no amplifying device existed in
+this repo to test it on), G-MOSFET-RECIPROCITY-BROKEN (`Y[drain,gate]`
+differs from `Y[gate,drain]` by >50% -- an active device is not a
+reciprocal 2-port, unlike Phase 3's passive resistor network or the
+diode's exact reciprocity; catches a broken forcing/observation sign
+convention a reciprocity-preserving check would miss), and G-MOSFET-FD
+(the drain-gate transconductance matches a direct central-difference
+`d(terminal_current("drain"))/d(Vgate)` from two independent
+`solve_bias()` calls to <5% -- same direct-perturbation standard every
+other port kind in this module is already held to).
+
+Unlike several earlier M18 phases, this one produced no debugging
+findings, no test-code bugs, and no fix rounds -- both reused pieces
+(the N-port machinery and the MOSFET fixture) were already validated
+independently by their own originating milestones, and the one new
+function is a small, mechanical generalization of already-gated logic.
+
+Honest limits, unchanged from earlier phases: fmax (Mason's unilateral
+power gain crossing) remains not implemented, still deferred per
+`ac.py`'s own Phase-2 scope note (a formally different derivation, not
+requested for this phase); GUI exposure of the full N-port matrix/fT
+remains unsurfaced (Phase 4's GUI only ever shows the driven port's
+own diagonal, unaffected by this phase); the MOSFET fixture is
+exercised at one fixed bias point, not swept across Vgs the way a real
+datasheet reports fT(Vgs) -- this phase proves the single-point
+machinery is correct, not a bias-sweep feature.
+
+Full suite: `pytest tests/test_m18_ac2d.py tests/test_m18_yparam.py -q`
+-> 19 passed (10 in `test_m18_ac2d.py`, 9 in `test_m18_yparam.py`), no
+regressions.

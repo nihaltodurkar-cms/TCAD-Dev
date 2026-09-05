@@ -301,3 +301,65 @@ def y_parameters(device, freqs):
     # (tests/test_m18_ac2d.py) rather than trusted on this argument alone.
     Y_phys = Y * device.J0 * device.LD / device.VT
     return YParamResult2D(freqs, Y_phys, port_names)
+
+
+def cutoff_frequency(yres, port_in, port_out):
+    """Current-gain cutoff frequency f_T: the frequency at which the
+    short-circuit current gain h21(f) = Y[port_out, port_in](f) /
+    Y[port_in, port_in](f) has |h21| = 1 -- the standard small-signal
+    RF figure of merit (Sedra/Smith's or Sze's f_T definition),
+    generalized from ac.py's `cutoff_frequency()` (which hardcodes the
+    fixed 2-port (0, 1) Device1D case) to an N-port Y matrix with
+    named/indexed ports -- e.g. `cutoff_frequency(yres, "gate",
+    "drain")` for a MOSFET's standard current-gain fT.
+
+    port_in/port_out: either a name looked up in `yres.port_names`, or
+    an integer port index directly.
+
+    Method: IDENTICAL log-log bisection logic to ac.cutoff_frequency
+    (see that docstring for the full derivation, monotonicity
+    assumption, and the flat/no-crossing/None caveats) -- only the two
+    ports feeding h21 are now a parameter instead of hardcoded. This
+    module previously had no fT support at all (Device1D's 2-terminal
+    devices have no genuine current gain to speak of -- see
+    ac.cutoff_frequency's own docstring -- so fT was never physically
+    meaningful until a real 3+-terminal active device (a MOSFET) has a
+    fixture: see tests/test_m18_ac2d.py's G-MOSFET-FT/G-MOSFET-GAIN,
+    the first real (non-synthetic) validation of this crossing logic
+    against actual device physics, not just a hand-built profile.
+
+    Returns f_T [Hz], or None if |h21| never crosses 1 within the
+    swept range (same two cases as ac.cutoff_frequency: starts below 1,
+    or stays above 1 throughout -- reported as None rather than
+    extrapolating past validated data)."""
+    def _idx(p):
+        return yres.port_names.index(p) if isinstance(p, str) else int(p)
+    i_in, i_out = _idx(port_in), _idx(port_out)
+
+    freqs = yres.freqs
+    Y_in = yres.Y[:, i_in, i_in]
+    Y_out = yres.Y[:, i_out, i_in]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        h21 = np.where(np.abs(Y_in) > 0, Y_out / Y_in, np.inf)
+    mag = np.abs(h21)
+
+    if not np.any(np.isfinite(mag)):
+        return None
+    if mag[0] < 1.0:
+        return None  # no useful gain even at the lowest swept frequency
+    if mag[-1] >= 1.0:
+        return None  # fT lies beyond the swept range
+
+    below = np.where(mag < 1.0)[0]
+    i1 = int(below[0])
+    i0 = i1 - 1
+    if i0 < 0:
+        return None
+
+    lf0, lf1 = np.log(freqs[i0]), np.log(freqs[i1])
+    lm0, lm1 = np.log(mag[i0]), np.log(mag[i1])
+    if lm0 == lm1:
+        return float(freqs[i0])
+    frac = (0.0 - lm0) / (lm1 - lm0)
+    log_fT = lf0 + frac * (lf1 - lf0)
+    return float(np.exp(log_fT))

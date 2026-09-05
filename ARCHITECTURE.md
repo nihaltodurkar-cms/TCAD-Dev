@@ -101,8 +101,12 @@ storage-term Jacobian. PHASE 2 (Device1D N-terminal Y-parameters + fT,
 merged from a parallel branch) LANDED 2026-09-04. PHASE 3 (Device2D,
 N-terminal Y-parameters incl. GateBC ports, Python-API only, no GUI)
 LANDED 2026-09-04. PHASE 4 (GUI exposure: ACPanel.qml, ac__* wire
-format, C(f)/G(f) via ax.twinx()) LANDED 2026-09-05. See
-M18-AC-PLAN.md.
+format, C(f)/G(f) via ax.twinx()) LANDED 2026-09-05. PHASE 3b (full
+4-terminal mosfet_2d Y-parameter matrix + fT, ac2d.cutoff_frequency())
+LANDED 2026-09-05 -- the first real (non-synthetic) validation of the
+fT crossing algorithm against an actual amplifying device; reused
+pytcad.mosfet.build_mosfet (built for M14) as the fixture with zero
+new device-builder code. See M18-AC-PLAN.md.
 M19 self-heating: PHASE 1 (steady-state 1D, isothermal-DD + outer
 Gummel thermal loop, no GUI) LANDED 2026-08-31. See
 M19-SELFHEATING-PLAN.md.
@@ -649,8 +653,7 @@ M18  SMALL-SIGNAL AC ANALYSIS                                [M]
   specific -- gated instead on accumulation/depletion/near-threshold
   LF matching plus a bias-independent high-f roll-off sanity check.
   Deep-inversion AC fidelity for Device2D gates is a documented open
-  limitation. Full 4-terminal mosfet_2d Y-parameter/fT extraction
-  (Phase 3b) remains not started.
+  limitation.
   PHASE 4 (GUI exposure) LANDED 2026-09-05 -- see pytcad/M18-AC-
   PLAN.md sections 12-16. Adds: new ACPanel.qml config panel
   (workbench tab + icon) driving a single-contact frequency sweep;
@@ -667,8 +670,25 @@ M18  SMALL-SIGNAL AC ANALYSIS                                [M]
   a 3-way Sweep/Transient/AC mutex. Only the driven port's own
   diagonal Y_kk is surfaced (no N-port matrix/fT display); AC+Sweep
   and AC+Transient combined runs remain mutually exclusive.
-  NOT STARTED: mosfet_2d Y-parameters/fT (Phase 3b), N-port Y-matrix/
-  fT GUI display, Device3D AC (out of scope entirely).
+  NOT STARTED (at Phase 4 landing): N-port Y-matrix/fT GUI display
+  (still not started -- unaffected by Phase 3b below), Device3D AC
+  (out of scope entirely).
+  PHASE 3b (full 4-terminal mosfet_2d Y-parameter matrix + fT) LANDED
+  2026-09-05 -- see pytcad/M18-AC-PLAN.md section 17. y_parameters()
+  itself needed NO changes (already generalizes to any ohmic/gate port
+  mix, proven by Phase 3's own G-NPORT-OHMIC/G-GATE-FD gates); the only
+  new production code is ac2d.cutoff_frequency(yres, port_in,
+  port_out), generalizing ac.py's hardcoded 2-port fT algorithm to
+  named/indexed N-port pairs. Fixture reused pytcad.mosfet.build_mosfet
+  (built for M14, unrelated milestone) rather than a new device
+  builder. 4 new gates (tests/test_m18_ac2d.py, 10/10 total): genuine
+  current gain + roll-off (unlike the diode's flat |h21|=1), a real fT
+  crossing (the first non-synthetic validation of the crossing
+  algorithm), broken reciprocity (an active device is not a passive
+  2-port, unlike G-NPORT-OHMIC's resistor network), and a direct
+  finite-difference cross-check of the drain-gate transconductance --
+  all passed first try. fmax (Mason's U(f)) remains explicitly
+  deferred, unchanged from Phase 2's own scope note.
 
 M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
   PHASE 1 (steady-state, 1D) LANDED 2026-08-31. New sibling module
@@ -1064,7 +1084,14 @@ for what has actually landed)
                                                   2026-09-05, new
                                                   ACPanel.qml + ac__*
                                                   wire format + C(f)/
-                                                  G(f) via ax.twinx()
+                                                  G(f) via ax.twinx();
+                                                  PHASE 3b (4-terminal
+                                                  mosfet_2d Y-parameter
+                                                  matrix + fT) LANDED
+                                                  2026-09-05, new
+                                                  ac2d.cutoff_frequency(),
+                                                  reused M14's
+                                                  build_mosfet fixture
   M19 self-heating                               PHASE 1 (1D
                                                   steady-state) LANDED
                                                   2026-08-31; see
@@ -1412,8 +1439,9 @@ Independent candidates for the next milestone (any order):
 ------------------------------------------------------------------------
 6. EXPLICITLY NOT IMPLEMENTED YET
 ------------------------------------------------------------------------
-- Transient (M17) LANDED; AC (M18) Phases 1-4 (1D one-port, 1D
-  N-terminal+fT, 2D N-terminal incl. gate ports, GUI exposure) LANDED;
+- Transient (M17) LANDED; AC (M18) Phases 1-4 + 3b (1D one-port, 1D
+  N-terminal+fT, 2D N-terminal incl. gate ports, GUI exposure,
+  4-terminal mosfet_2d Y-parameter matrix + fT) LANDED;
   self-heating (M19) Phase 1 (1D steady-state) LANDED,
   2D/transient not started -- see each milestone's own plan doc.
   (M15 impact ionization, M22 phase 2's
@@ -1611,14 +1639,16 @@ recorded here so they are tracked rather than silently absent):
    remain out of scope, honestly flagged in the plan doc. Next: M18
    (small-signal AC), which depends only on the Device1D transient
    machinery Phase 1 shipped.
-9. [PHASES 1-4 LANDED, latest 2026-09-05] M18 SMALL-SIGNAL AC -- see
-   the "M18 SMALL-SIGNAL AC ANALYSIS" milestone entry above and
+9. [PHASES 1-4 + 3b LANDED, latest 2026-09-05] M18 SMALL-SIGNAL AC --
+   see the "M18 SMALL-SIGNAL AC ANALYSIS" milestone entry above and
    pytcad/M18-AC-PLAN.md for the full record. Phase 1 (1D one-port),
    Phase 2 (1D N-terminal Y-parameters + fT, merged from a parallel
-   branch), Phase 3 (2D N-terminal Y-parameters incl. gate ports), and
+   branch), Phase 3 (2D N-terminal Y-parameters incl. gate ports),
    Phase 4 (GUI exposure: ACPanel.qml, ac__* wire format, C(f)/G(f)
-   via ax.twinx()) all landed; mosfet_2d Y-parameters/fT (Phase 3b)
-   and N-port-matrix/fT GUI display remain not started.
+   via ax.twinx()), and Phase 3b (full 4-terminal mosfet_2d
+   Y-parameter matrix + fT, ac2d.cutoff_frequency(), reusing M14's
+   build_mosfet fixture) all landed; N-port-matrix/fT GUI display and
+   fmax remain not started.
 10. [PHASE 1 LANDED 2026-08-31] M19 SELF-HEATING -- see the "M19
     SELF-HEATING (THERMODYNAMIC MODEL)" milestone entry above and
     pytcad/M19-SELFHEATING-PLAN.md for the full record, including the

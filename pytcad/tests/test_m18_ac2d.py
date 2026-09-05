@@ -21,7 +21,8 @@ from pytcad.constants import Q
 from pytcad.materials import SILICON
 from pytcad.moscap import MOSCapacitor, flatband_voltage
 from pytcad.transient2d import _step_residual_jacobian, _non_contact_flat_index
-from pytcad.ac2d import y_parameters, _storage_matrix
+from pytcad.ac2d import y_parameters, _storage_matrix, cutoff_frequency
+from pytcad.mosfet import build_mosfet
 
 warnings.simplefilter("ignore")
 
@@ -311,3 +312,125 @@ def test_g_scope_refusal_2d_rejects_device1d():
     dev1d.solve_equilibrium()
     with pytest.raises(TypeError):
         y_parameters(dev1d, np.array([1.0]))
+
+
+# ================================================================== Phase 3b
+# M18 Phase 3b: full 4-terminal mosfet_2d Y-parameter matrix + fT. See
+# M18-AC-PLAN.md "Phase 3b" for scope. y_parameters() itself needs NO
+# changes here -- it already generalizes to any mix of ohmic/gate ports
+# (proven by G-NPORT-OHMIC/G-GATE-FD above); this phase's only new
+# production code is cutoff_frequency() generalized to a named/indexed
+# (port_in, port_out) pair instead of ac.py's hardcoded 2-port (0,1).
+
+MOSFET_BIAS = dict(drain=0.1, gate=1.0)   # same ON point M14's own
+# surface-mobility gates already validated (test_m14_surface_mobility.py's
+# _biased()) -- reusing a known-good operating point rather than picking
+# a fresh, unvalidated one.
+
+
+def _mosfet2d():
+    """A real 4-terminal (source/drain/body ohmic + gate) Device2D,
+    biased ON -- reuses pytcad.mosfet.build_mosfet (already exercised,
+    at this exact bias point, by M14's gates) rather than building a new
+    fixture from scratch."""
+    dev = build_mosfet(Lg=0.3e-4, Lsd=0.2e-4, depth=0.5e-4,
+                       Na=1e17, Nsd_peak=1e20, tox_cm=3e-7)
+    opts = NewtonOptions(max_iter=40)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")   # degenerate-doping advisory
+        dev.solve_equilibrium(opts)
+        dev.solve_bias(MOSFET_BIAS, opts)
+    return dev
+
+
+# ---------------------------------------------------------------- G-MOSFET-GAIN
+def test_g_mosfet_gain_shows_genuine_rolloff_unlike_the_diode():
+    """G-MOSFET-GAIN: unlike the 2-terminal diode (G-FT in
+    test_m18_yparam.py: |h21|=1 identically, no real gain to speak of),
+    a MOSFET biased ON must show REAL current gain (|h21|>1 at low
+    frequency) that genuinely rolls off with frequency -- the first
+    device in this repo where fT is a physically meaningful figure of
+    merit, not a spurious noise-floor crossing."""
+    dev = _mosfet2d()
+    freqs = np.logspace(3, 11, 25)
+    res = y_parameters(dev, freqs)
+    gi, di = res.port_names.index("gate"), res.port_names.index("drain")
+
+    h21_mag = np.abs(res.Y[:, di, gi] / res.Y[:, gi, gi])
+    assert h21_mag[0] > 1.0, \
+        f"expected genuine low-f current gain |h21|>1; got {h21_mag[0]:.3e}"
+    assert h21_mag[-1] < h21_mag[0], \
+        "expected |h21| to roll off (decrease) across the swept range"
+    # monotonically decreasing overall (allow tiny numerical non-
+    # monotonicity, same tolerance spirit as G-ROLLOFF elsewhere)
+    diffs = np.diff(h21_mag)
+    assert np.mean(diffs <= 1e-3 * h21_mag[:-1]) > 0.9, \
+        f"|h21| should be mostly decreasing; got diffs {diffs}"
+
+
+# ---------------------------------------------------------------- G-MOSFET-FT
+def test_g_mosfet_ft_is_finite_and_within_swept_range():
+    """G-MOSFET-FT: cutoff_frequency(), generalized to (port_in="gate",
+    port_out="drain"), must return a finite fT within the swept band --
+    the real validation ac.py's own cutoff_frequency() docstring notes
+    was missing (no amplifying 3-terminal device existed in this repo
+    before this fixture)."""
+    dev = _mosfet2d()
+    freqs = np.logspace(3, 11, 40)
+    res = y_parameters(dev, freqs)
+    fT = cutoff_frequency(res, "gate", "drain")
+    assert fT is not None, "expected a genuine |h21|=1 crossing within the swept range"
+    assert freqs[0] < fT < freqs[-1], f"fT={fT:.3e} outside swept range"
+
+
+# ---------------------------------------------------------------- G-MOSFET-RECIPROCITY-BROKEN
+def test_g_mosfet_reciprocity_is_broken_unlike_the_diode():
+    """G-MOSFET-RECIPROCITY-BROKEN: an active 3+-terminal device is NOT
+    a reciprocal 2-port -- Y[drain,gate] (forward transconductance) must
+    differ substantially from Y[gate,drain] (reverse gate-drain
+    coupling, purely capacitive/parasitic) -- unlike G-NPORT-OHMIC's
+    passive resistor network (approximately reciprocal) or the diode's
+    EXACT 2-terminal reciprocity. A regression that accidentally forced
+    symmetry (e.g. a broken forcing/observation sign convention) would
+    silently pass G-NPORT-OHMIC-style checks but must fail this one."""
+    dev = _mosfet2d()
+    res = y_parameters(dev, np.array([1e6]))
+    gi, di = res.port_names.index("gate"), res.port_names.index("drain")
+    Y_dg = res.Y[0, di, gi]   # forward: gate drives, drain observed
+    Y_gd = res.Y[0, gi, di]   # reverse: drain drives, gate observed
+    rel = abs(Y_dg - Y_gd) / max(abs(Y_dg), abs(Y_gd))
+    assert rel > 0.5, \
+        f"expected a strongly non-reciprocal MOSFET; Y_dg={Y_dg:.3e} Y_gd={Y_gd:.3e} (rel {rel:.2%})"
+
+
+# ---------------------------------------------------------------- G-MOSFET-FD
+def test_g_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
+    """G-MOSFET-FD: Y[drain,gate] at low frequency (real transconductance
+    gm) must match a DIRECT finite difference of terminal_current("drain")
+    from two independent solve_bias() calls at Vg0+/-dVg -- same direct-
+    perturbation standard G-LOWF-2D/G-GATE-FD already hold every other
+    port kind to, now applied to the first genuinely active (gain-
+    producing) cross-port entry in this repo."""
+    opts = NewtonOptions(max_iter=40)
+    Vg0 = MOSFET_BIAS["gate"]
+    dVg = 1e-5
+
+    def _drain_I(Vg):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dev = build_mosfet(Lg=0.3e-4, Lsd=0.2e-4, depth=0.5e-4,
+                               Na=1e17, Nsd_peak=1e20, tox_cm=3e-7)
+            dev.solve_equilibrium(opts)
+            dev.solve_bias({"drain": MOSFET_BIAS["drain"], "gate": Vg}, opts)
+            return dev.terminal_current("drain")
+
+    I1, I2 = _drain_I(Vg0 - dVg), _drain_I(Vg0 + dVg)
+    dIdVg = (I2 - I1) / (2 * dVg)
+
+    dev = _mosfet2d()
+    res = y_parameters(dev, np.array([1.0]))   # low f: ~purely real
+    gi, di = res.port_names.index("gate"), res.port_names.index("drain")
+    gm = res.Y[0, di, gi].real
+
+    rel = abs(gm - dIdVg) / abs(dIdVg)
+    assert rel < 5e-2, f"AC gm={gm:.6e} vs FD dI_drain/dVg={dIdVg:.6e} (rel {rel:.2%})"
