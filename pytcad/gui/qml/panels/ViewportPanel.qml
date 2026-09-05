@@ -65,6 +65,12 @@ Rectangle {
             // handoff contract as "series"/"cv" above.
             canvas.setTransientSource(controller ? controller.transientResultForQml : null)
         }
+        if (mode === "ac") {
+            // M18 Phase 4: hand the executed AC sweep (or null before
+            // any AC run) to the canvas -- same opaque-handoff
+            // contract as "series"/"cv"/"transient" above.
+            canvas.setAcSource(controller ? controller.acResultForQml : null)
+        }
     }
 
     // Called from Main.qml on ProcessPanel.stepSelected -- lets clicking a

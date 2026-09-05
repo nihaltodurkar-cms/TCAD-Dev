@@ -216,7 +216,7 @@ ToolBar {
             objectName: "viewModeSelector"
             implicitContentWidthPolicy: ComboBox.WidestText
             model: ["Structure", "Doping", "Mesh", "Process", "Curves",
-                    "C-V", "Transient", "Line Cut", "Bands",
+                    "C-V", "Transient", "AC", "Line Cut", "Bands",
                     "Recombination", "Convergence", "Results"]
             ToolTip.visible: hovered
             ToolTip.delay: 600
@@ -225,7 +225,7 @@ ToolBar {
                 var m = {"Structure": "structure", "Doping": "doping",
                         "Mesh": "mesh", "Process": "process",
                         "Curves": "series", "C-V": "cv",
-                        "Transient": "transient",
+                        "Transient": "transient", "AC": "ac",
                         "Line Cut": "cut",
                         "Bands": "bands",
                         "Recombination": "recombination",

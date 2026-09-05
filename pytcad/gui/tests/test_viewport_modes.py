@@ -343,3 +343,14 @@ def test_view_mode_selector_offers_line_cut(gapp):
     assert "Line Cut" in list(selector.property("model"))
     for name in ("cutOrientationSelector", "cutPositionField", "applyCutButton"):
         assert root.findChild(object, name) is not None, f"missing {name}"
+
+
+def test_view_mode_selector_offers_ac():
+    from gui import app as gui_app
+    from PySide6.QtGui import QGuiApplication
+    gapp = QGuiApplication.instance() or QGuiApplication([])
+    engine, controller = gui_app.create_engine(gapp)
+    root = engine.rootObjects()[0]
+    selector = root.findChild(object, "viewModeSelector")
+    assert selector is not None
+    assert "AC" in list(selector.property("model"))
