@@ -31,6 +31,34 @@ direct solve at 4 ranks. This exchange/convergence loop is factored
 into _schwarz_loop() below so the sweep path reuses the EXACT same
 tested code, not a hand-copied second implementation.
 
+WARM_START (added after the above): every solve_fn used to rebuild its
+Device3D from scratch AND re-run solve_equilibrium from a cold bulk
+guess on EVERY Schwarz iteration, discarding the previous iteration's
+already-nearly-converged state even though only the neighbor pins
+moved slightly. _schwarz_loop now threads the previous iteration's own
+`dev` back into solve_fn so it can reuse the same object, update just
+the interface PinnedBCs, and warm-start from its own current psi/n/p
+(Device3D.solve_equilibrium gained an explicit `psi_guess` param for
+this). Measured directly on a real mpirun run (60x16x16 uniform
+resistor, 4 ranks, split along x, single bias point 0.3V): 120.5s ->
+79.3s wall (34% faster), 606s -> 391s total CPU across ranks (35%
+less work, not just scheduling luck) -- verified bit-for-bit consistent
+with the pre-warm-start result (Jx matches to 7.5e-11 absolute out of
+a 1.6e4 peak; Jy/Jz agree to ~1e-10, both noise around the true zero
+a symmetric resistor should have; potential matches to 1.1e-16).
+A REAL BUG FOUND AND FIXED DURING THIS: naively warm-starting
+solve_equilibrium from dev.psi in the single-bias-point path made
+things SLOWER (measured: 128.7s, worse than the 120.5s baseline)
+because dev.psi holds the BIAS-solved state between iterations there
+(solve_bias overwrites it every iteration), not the equilibrium state
+-- feeding a bias-consistent psi into a V=0 Poisson-only solve is a
+WORSE seed than the cold bulk guess. Fixed by skipping the
+equilibrium re-solve entirely once a bias is being solved (it was only
+ever a seed for solve_bias, and dev's own bias-consistent state from
+the last iteration is already the better seed for solve_bias's SAME
+target bias) -- see the comment at solve_fn's definition near the
+bottom of main() for the full reasoning.
+
 CONFIRMED, NOT JUST SUSPECTED: splitting along a device's OWN doping
 gradient is a genuine regression, not just "unverified." Tried on
 pn_junction_3d split along x (the junction sits inside the split,
@@ -156,8 +184,31 @@ def _face_nodes(array_axis, local_index, shape):
     return out
 
 
+def _set_local_device_pins(dev, array_axis, shape, local_n, pin):
+    """Install/replace this slab's Schwarz interface PinnedBCs from
+    `pin` (a {"left": (psi0,n0,p0), "right": (...)} dict; either key
+    may be absent at a slab with no neighbor on that side).  Safe to
+    call repeatedly on the SAME device across Schwarz iterations --
+    each call replaces the PinnedBC object wholesale (cheap: a handful
+    of node values) rather than rebuilding the mesh/materials/Newton
+    state around it, which is what WARM_START below exists to avoid."""
+    if "left" in pin:
+        face = _face_nodes(array_axis, 0, shape)
+        psi0, n0, p0 = pin["left"]
+        dev.bcs["_schwarz_left"] = PinnedBC(psi0=psi0, n0=n0, p0=p0, **face)
+    if "right" in pin:
+        face = _face_nodes(array_axis, local_n - 1, shape)
+        psi0, n0, p0 = pin["right"]
+        dev.bcs["_schwarz_right"] = PinnedBC(psi0=psi0, n0=n0, p0=p0, **face)
+
+
 def _build_local_device(spec, doping_full, ntotal_full, x, y, z,
                         array_axis, key, lo, hi, Ns_global, pin):
+    """Build ONE rank's local slab device (mesh, materials, ordinary
+    contacts) and install its initial Schwarz interface pins.  Called
+    ONCE per Schwarz loop invocation (see the WARM_START note in
+    _schwarz_loop) -- later iterations reuse this same object via
+    _set_local_device_pins() instead of paying this again."""
     split_name = ARRAY_TO_AXIS[array_axis]
     mesh_axes = {"x": x, "y": y, "z": z}
     mesh_axes[split_name] = mesh_axes[split_name][lo:hi + 1]
@@ -189,14 +240,7 @@ def _build_local_device(spec, doping_full, ntotal_full, x, y, z,
             dev.add_gate(c.name, tox_cm=c.tox_cm, Vfb=c.Vfb, Vg=c.V,
                          normal_axis=c.normal_axis, **local_nodes)
 
-    if "left" in pin:
-        face = _face_nodes(array_axis, 0, local_doping.shape)
-        psi0, n0, p0 = pin["left"]
-        dev.bcs["_schwarz_left"] = PinnedBC(psi0=psi0, n0=n0, p0=p0, **face)
-    if "right" in pin:
-        face = _face_nodes(array_axis, local_n - 1, local_doping.shape)
-        psi0, n0, p0 = pin["right"]
-        dev.bcs["_schwarz_right"] = PinnedBC(psi0=psi0, n0=n0, p0=p0, **face)
+    _set_local_device_pins(dev, array_axis, local_doping.shape, local_n, pin)
     return dev
 
 
@@ -205,13 +249,26 @@ def _schwarz_loop(comm, rank, size, array_axis, lo, hi, core_lo, core_hi,
                   tol=SCHWARZ_TOL):
     """Run the overlapping-Schwarz outer loop.
 
-    `solve_fn(pin)` builds and solves ONE rank's local device for the
-    given interface pin values -- what it does internally (a pure
-    equilibrium solve, an equilibrium+bias solve, or a warm-started
+    `solve_fn(dev_prev, pin)` builds and solves ONE rank's local device
+    for the given interface pin values -- what it does internally (a
+    pure equilibrium solve, an equilibrium+bias solve, or a warm-started
     bias-only solve for a sweep point) is opaque to this function, so
     the single-bias-point path and the sweep path below share this
     EXACT tested exchange/convergence code instead of two hand-copied
     implementations that could silently drift apart.
+
+    WARM_START: `dev_prev` is None on the first call and this
+    function's OWN previous-iteration `dev` afterward -- every solve_fn
+    implementation below uses this to reuse the same Device3D object
+    (via _set_local_device_pins) and warm-start its Newton solve from
+    its own already-nearly-converged psi/n/p on iterations 2+, instead
+    of rebuilding the device and re-deriving a cold initial guess from
+    scratch every Schwarz iteration. Correctness is unaffected either
+    way (Newton converges to the same root regardless of initial
+    guess); only how many Schwarz/Newton iterations it takes, and
+    whether solve_equilibrium's own bulk-guess bisection gets re-paid
+    every time. Confirmed measurably: see mpi_schwarz benchmark note in
+    the module docstring.
 
     Returns (dev, converged): `dev` is solve_fn's own return from the
     LAST iteration; `converged` is whether the CORE region's psi
@@ -225,7 +282,7 @@ def _schwarz_loop(comm, rank, size, array_axis, lo, hi, core_lo, core_hi,
     dev = None
     converged = False
     for _ in range(max_iters):
-        dev = solve_fn(pin)
+        dev = solve_fn(dev, pin)
 
         # Sample at the GLOBAL position the receiving neighbor will
         # actually pin, not an arbitrary OVERLAP-offset from my own
@@ -398,11 +455,25 @@ def _run_sweep(comm, rank, size, spec, doping_full, ntotal_full, x, y, z,
         override_bias = merge_bias(spec, override={sw.contact: V})
         point_ok = {"value": True}
 
-        def solve_fn(pin, override_bias=override_bias, point_ok=point_ok,
+        def solve_fn(dev_prev, pin, override_bias=override_bias, point_ok=point_ok,
                     warm_psi=warm_psi, warm_n=warm_n, warm_p=warm_p):
-            dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
-                                      array_axis, key, lo, hi, Ns_global, pin)
-            dev.psi, dev.n, dev.p = warm_psi.copy(), warm_n.copy(), warm_p.copy()
+            if dev_prev is None:
+                dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
+                                          array_axis, key, lo, hi, Ns_global, pin)
+                dev.psi, dev.n, dev.p = warm_psi.copy(), warm_n.copy(), warm_p.copy()
+            else:
+                # WARM_START (see _schwarz_loop): dev_prev.psi/n/p is
+                # THIS point's own most recent local Schwarz iterate --
+                # strictly closer to converged than warm_psi (the
+                # PREVIOUS sweep point's answer) -- so just update the
+                # interface pins in place and let solve_bias below
+                # warm-start from where this rank's own solve already
+                # is, rather than resetting back to warm_psi every
+                # Schwarz iteration the way the original implementation
+                # did.
+                dev = dev_prev
+                _set_local_device_pins(dev, array_axis, dev.doping.shape,
+                                       hi - lo + 1, pin)
             local_bias = {name: Vv for name, Vv in override_bias.items()
                          if name in dev.bcs}
             with warnings.catch_warnings(record=True) as caught:
@@ -517,10 +588,20 @@ def main(argv):
         # Phase A: pure equilibrium, Schwarz-converged, no bias -- the
         # warm-start seed both for the sweep loop below and for the
         # all-points-diverged fallback fields.
-        def eq_solve_fn(pin):
-            dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
-                                      array_axis, key, lo, hi, Ns_global, pin)
-            dev.solve_equilibrium(opts)
+        def eq_solve_fn(dev_prev, pin):
+            if dev_prev is None:
+                dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
+                                          array_axis, key, lo, hi, Ns_global, pin)
+                dev.solve_equilibrium(opts)
+            else:
+                # WARM_START: reuse the same device, update pins, skip
+                # solve_equilibrium's cold _bulk_psi_guess() bisection
+                # (a real cost -- see device3d.py's psi_guess docstring)
+                # in favor of this rank's own already-close psi.
+                dev = dev_prev
+                _set_local_device_pins(dev, array_axis, dev.doping.shape,
+                                       hi - lo + 1, pin)
+                dev.solve_equilibrium(opts, psi_guess=dev.psi)
             return dev
 
         equilibrium_dev, _ = _schwarz_loop(
@@ -543,16 +624,44 @@ def main(argv):
         print(f"SCHWARZ_RESULT_PATH={out_path}", flush=True)
         return
 
-    # Single bias point (or equilibrium only) -- unchanged from the
-    # original shipped path: one combined equilibrium+bias Schwarz
-    # loop, byte-identical to before the sweep path above was added
-    # (verified: bjt_3d still 32.5s / ~1e-17 after this refactor).
+    # Single bias point (or equilibrium only): one combined
+    # equilibrium+bias Schwarz loop, same result as the original
+    # shipped path (verified: bjt_3d still ~1e-17 relative error
+    # against the single-process reference) -- WARM_START (see
+    # _schwarz_loop's docstring) added on top: iterations after the
+    # first reuse the same device and skip the cold bulk-guess solve.
     bias = merge_bias(spec) if spec.bias is not None else None
 
-    def solve_fn(pin):
-        dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
-                                  array_axis, key, lo, hi, Ns_global, pin)
-        dev.solve_equilibrium(opts)
+    def solve_fn(dev_prev, pin):
+        if dev_prev is None:
+            dev = _build_local_device(spec, doping_full, ntotal_full, x, y, z,
+                                      array_axis, key, lo, hi, Ns_global, pin)
+            dev.solve_equilibrium(opts)
+        else:
+            dev = dev_prev
+            _set_local_device_pins(dev, array_axis, dev.doping.shape,
+                                   hi - lo + 1, pin)
+            # NOT a warm-started solve_equilibrium() here: when bias is
+            # not None, solve_bias below OVERWRITES dev.psi/n/p with the
+            # bias-solved state at the end of every iteration, so on the
+            # NEXT iteration dev.psi is bias-consistent (V=applied), not
+            # equilibrium-consistent (V=0) -- feeding that into
+            # solve_equilibrium's Poisson-only (implicitly V=0) solve as
+            # psi_guess is a WORSE seed than the cold bulk guess, not a
+            # better one (confirmed directly: measurably slower, not
+            # faster, on a real mpirun benchmark before this fix).
+            # solve_equilibrium here is purely a warm-start SEED for the
+            # solve_bias call below -- its own accuracy never affects
+            # the final answer, only how many of ITS OWN iterations it
+            # burns -- and dev's already-bias-consistent psi/n/p from
+            # the previous Schwarz iteration is a strictly better seed
+            # for solve_bias's SAME target bias than re-deriving
+            # equilibrium at all. So: skip it entirely when there's a
+            # bias to solve; only re-run it (warm-started, correctly)
+            # when bias is None and dev.psi stays equilibrium-consistent
+            # the whole loop (see eq_solve_fn above for that case).
+            if bias is None:
+                dev.solve_equilibrium(opts, psi_guess=dev.psi)
         if bias is not None:
             local_bias = {name: V for name, V in bias.items() if name in dev.bcs}
             dev.solve_bias(local_bias, opts)

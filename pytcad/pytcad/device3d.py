@@ -551,11 +551,24 @@ class Device3D:
         return F, J
 
     # ------------------------------------------------------------------
-    def solve_equilibrium(self, opts: NewtonOptions = None):
+    def solve_equilibrium(self, opts: NewtonOptions = None, psi_guess=None):
+        """psi_guess: optional warm-start initial iterate, shape
+        (Nz,Ny,Nx).  When given, skips _bulk_psi_guess()'s bisection
+        root-find (itself a real cost -- see M22-LINSOLVE-PLAN's
+        profiling note) and starts Newton directly from psi_guess
+        instead.  Correctness never depends on the initial guess (same
+        contract as solve_bias's own psi/n/p warm start); only how
+        many iterations it takes to reconverge.  Default None keeps
+        the original cold bulk-neutral guess -- every existing caller
+        omits this and is unaffected.  Added for
+        mpi_schwarz_runner.py's Schwarz outer loop, whose interface
+        pins change only slightly between iterations, so re-deriving
+        the flat bulk guess from scratch every iteration was pure
+        waste."""
         opts = opts or NewtonOptions()
         Nz, Ny, Nx = self.Nz, self.Ny, self.Nx
 
-        psi = self._bulk_psi_guess()
+        psi = self._bulk_psi_guess() if psi_guess is None else np.array(psi_guess, dtype=float)
         for it in range(opts.max_iter):
             F, J = self._residual_jacobian_poisson(psi)
             # linsolve.solve_linear(method="direct") no longer
