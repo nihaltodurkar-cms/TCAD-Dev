@@ -35,7 +35,7 @@ QtObject {
     // gui/tests/test_icon_provider.py).
     readonly property var names: [
         "project", "structure", "mesh", "process", "sweeps",
-        "probeStation", "telemetry", "bands", "transient", "physicsLab",
+        "probeStation", "telemetry", "bands", "transient", "ac", "physicsLab",
         "builder", "run", "stop", "undo", "redo", "sun", "moon"
     ]
 

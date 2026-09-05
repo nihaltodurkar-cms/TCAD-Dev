@@ -33,7 +33,7 @@ TOOLBAR_QML = os.path.join(
     "qml", "components", "MainToolBar.qml",
 )
 
-EXPECTED_TAB_COUNT = 11
+EXPECTED_TAB_COUNT = 12
 
 
 def _sidebar_tab_icon_names():

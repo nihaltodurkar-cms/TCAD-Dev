@@ -42,6 +42,7 @@ ICON_PATHS = {
     "telemetry":    "<path d='M3 17 L8 10 L12 14 L21 5'/><path d='M15 5 H21 V11'/>",
     "bands":        "<path d='M3 8 H21 M3 16 H21 M7 8 V16 M17 8 V16'/>",
     "transient":    "<circle cx='12' cy='12' r='8'/><path d='M12 7 V12 L16 14'/>",
+    "ac":           "<path d='M3 12 Q6 4 9 12 T15 12 T21 12'/>",
     "physicsLab":   "<circle cx='12' cy='12' r='1.6' fill='currentColor' stroke='none'/><ellipse cx='12' cy='12' rx='9' ry='3.6'/><ellipse cx='12' cy='12' rx='9' ry='3.6' transform='rotate(60 12 12)'/><ellipse cx='12' cy='12' rx='9' ry='3.6' transform='rotate(120 12 12)'/>",
     "builder":      "<path d='M14 3 L21 10 L10 21 L3 21 L3 14 Z'/>",
     "run":          "<path d='M6 4 L20 12 L6 20 Z' fill='currentColor' stroke='none'/>",

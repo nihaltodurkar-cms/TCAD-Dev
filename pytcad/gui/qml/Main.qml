@@ -156,6 +156,7 @@ ApplicationWindow {
                                 { "label": "Telemetry", "icon": "telemetry" },
                                 { "label": "Bands", "icon": "bands" },
                                 { "label": "Transient", "icon": "transient" },
+                                { "label": "AC", "icon": "ac" },
                                 { "label": "Physics Lab", "icon": "physicsLab" },
                                 { "label": "Builder",   "icon": "builder" }
                             ]
@@ -288,6 +289,12 @@ ApplicationWindow {
                         }
                         TransientPanel {
                             objectName: "transientPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            controller: appController
+                        }
+                        ACPanel {
+                            objectName: "acPanel"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             controller: appController
