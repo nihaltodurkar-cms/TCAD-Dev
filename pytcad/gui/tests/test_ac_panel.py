@@ -62,3 +62,49 @@ def test_ac_panel_arm_and_clear_end_to_end(gapp):
 
     QMetaObject.invokeMethod(clear_btn, "clicked")
     assert not controller.hasACConfig
+
+
+# ----------------------------------------------------------------------
+#  rejected arm attempt must revert the fields to the LIVE armed config
+#  (mirrors test_sweep_panels.py's own
+#  test_rejected_arm_reverts_fields_to_armed_config)
+# ----------------------------------------------------------------------
+def test_rejected_arm_reverts_fields_to_armed_config(gapp):
+    engine, root, controller = _fresh(gapp)
+    controller.loadExample("diode_1d")
+
+    contact_box = root.findChild(object, "acContactBox")
+    f_start = root.findChild(object, "acFStartField")
+    f_stop = root.findChild(object, "acFStopField")
+    n_points = root.findChild(object, "acNPointsField")
+    apply_btn = root.findChild(object, "applyAcButton")
+
+    # arm a valid AC sweep through the panel
+    contact_box.setProperty("currentIndex", 0)
+    f_start.setProperty("text", "1.0")
+    f_stop.setProperty("text", "1e9")
+    n_points.setProperty("text", "30")
+    QMetaObject.invokeMethod(apply_btn, "clicked")
+    assert controller.hasACConfig is True
+
+    # type garbage over it (f_stop <= f_start) and hit Arm again
+    f_stop.setProperty("text", "0.5")
+    errors = []
+    controller.errorRaised.connect(lambda s, d: errors.append(s))
+    QMetaObject.invokeMethod(apply_btn, "clicked")
+
+    assert "Invalid AC configuration" in errors
+    assert controller.hasACConfig is True, "rejection dropped the armed AC config"
+    note = root.findChild(object, "acRejectNote")
+    assert note is not None and note.property("visible") is True, \
+        "panel gave no hint that the armed values differ from the typed ones"
+    # the fields were reverted to the LIVE config -- screen == what Run uses
+    assert float(f_start.property("text")) == 1.0
+    assert float(f_stop.property("text")) == 1e9
+    assert int(n_points.property("text")) == 30
+
+    # a subsequent successful arm clears the rejection note
+    f_stop.setProperty("text", "2e9")
+    QMetaObject.invokeMethod(apply_btn, "clicked")
+    assert controller.acConfig()["f_stop"] == 2e9
+    assert note.property("visible") is False

@@ -15,6 +15,10 @@ Rectangle {
     color: Theme.panel
     border.color: Theme.border
     property var controller
+    // Set when the controller rejects an arm attempt. The fields are
+    // then reverted to the LIVE armed values, mirroring SweepPanel's
+    // lastArmRejected/revertToArmed pair exactly.
+    property bool lastArmRejected: false
 
     function revertToArmed() {
         if (!root.controller) return
@@ -79,8 +83,13 @@ Rectangle {
                             contactBox.currentIndex = names.length ? 0 : -1
                     }
                     function onErrorRaised(summary, details) {
-                        if (summary === "Invalid AC configuration")
+                        if (summary === "Invalid AC configuration") {
+                            root.lastArmRejected = true
                             root.revertToArmed()
+                        }
+                    }
+                    function onAcChanged() {
+                        root.lastArmRejected = false
                     }
                 }
             }
@@ -137,6 +146,18 @@ Rectangle {
                        ? Theme.ok : Theme.textDim
                 text: root.controller && root.controller.hasACConfig
                       ? "AC sweep armed" : "no AC sweep configured"
+            }
+
+            Label {
+                objectName: "acRejectNote"
+                visible: root.lastArmRejected
+                // v2.1 correction (DESIGN.md section 3.3): a rejected arm
+                // attempt is a warning, not "running".
+                color: Theme.warning
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                font.italic: true
+                text: "Last arm attempt was rejected -- the fields show the currently armed configuration."
             }
         }
 
