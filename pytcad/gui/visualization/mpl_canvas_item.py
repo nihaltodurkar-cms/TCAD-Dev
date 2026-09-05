@@ -58,6 +58,7 @@ class MplCanvasItem(QQuickPaintedItem):
         self._sweep_channel = ""
         self._cv = None                # result_store.SweepResult (v0.6 C-V mode)
         self._transient = None         # result_store.TransientResult (M17 phase 3)
+        self._ac = None                # result_store.ACResult (M18 Phase 4)
         self._contours = False         # v0.6 Phase 2a: contour overlay toggle
         self._cut_orientation = "horizontal"   # v0.6 Phase 2b: line-cut mode
         self._cut_position_cm = 0.0
@@ -349,6 +350,58 @@ class MplCanvasItem(QQuickPaintedItem):
         ax.set_title(f"{result.contact} transient", fontsize=9)
         if self._xlim:
             ax.set_xlim(*self._xlim)
+
+    # -- AC/Y-parameter sweep (M18 Phase 4) -------------------------------
+    @Slot(object)
+    def setAcSource(self, result):
+        """Data source for "ac" mode: a result_store.ACResult (or
+        None). Does NOT touch self._mode, like every other source
+        setter -- ViewportPanel.setViewMode() drives the mode."""
+        self._ac = result
+        self.fit()
+
+    def _draw_ac(self, ax):
+        """C(f) on the primary (left) y-axis, G(f) on a twin (right)
+        y-axis sharing the same log-scaled x-axis -- confirmed while
+        planning this (M18-AC-PLAN.md section 13) that no existing
+        mode uses more than one Axes, so this uses ax.twinx() on the
+        single Axes every mode already gets rather than a new
+        multi-subplot figure layout. Known limitation, left as-is for
+        this phase: the hover-readout (_remember_series/self._ax)
+        tracks only the C(f) curve on the primary axis -- G(f)'s twin
+        axis is not readout-hoverable."""
+        result = getattr(self, "_ac", None)
+        if result is None or result.freqs.size == 0:
+            ax.text(0.5, 0.5, "No AC sweep yet\n"
+                    "(arm one in the AC panel and Run)",
+                    ha="center", va="center")
+            ax.set_axis_off()
+            return
+        freqs = np.asarray(result.freqs, dtype=float)
+        C = np.asarray(result.C, dtype=float)
+        G = np.asarray(result.G, dtype=float)
+        c_color = self._series_color(0)
+        g_color = self._series_color(1)
+
+        ax.plot(freqs, C, "-o" if freqs.size <= 40 else "-",
+                lw=1.5, ms=3, color=c_color)
+        ax.set_xscale("log")
+        ax.set_xlabel("frequency [Hz]")
+        ax.set_ylabel(f"C [{result.unit_c}]", color=c_color)
+        ax.tick_params(axis="y", colors=c_color)
+        self._remember_series(ax, [(freqs, C, "C")], unit=result.unit_c)
+
+        ax2 = ax.twinx()
+        ax2.plot(freqs, G, "-o" if freqs.size <= 40 else "-",
+                 lw=1.5, ms=3, color=g_color)
+        ax2.set_ylabel(f"G [{result.unit_g}]", color=g_color)
+        ax2.tick_params(axis="y", colors=g_color)
+        ax2.spines["top"].set_visible(False)
+        ax2.spines["right"].set_visible(True)
+        ax2.spines["right"].set_color(g_color)
+        ax2.set_facecolor("none")
+
+        ax.set_title(f"{result.port} AC sweep", fontsize=9)
 
     # -- convergence history (v0.5.0 M4) ---------------------------------
     @Slot(object)
@@ -649,6 +702,10 @@ class MplCanvasItem(QQuickPaintedItem):
             return fig
         if self._mode == "transient":
             self._draw_transient(ax)
+            fig.tight_layout()
+            return fig
+        if self._mode == "ac":
+            self._draw_ac(ax)
             fig.tight_layout()
             return fig
         if self._mode == "cut":
