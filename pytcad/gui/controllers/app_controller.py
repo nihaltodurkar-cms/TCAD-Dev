@@ -1660,6 +1660,7 @@ class AppController(QObject):
             return
         self.spec.sweep = self._sweep_config
         self.spec.transient = self._transient_config
+        self.spec.ac = self._ac_config
         if self.lab.equilibrium_only:
             self.spec.bias = None
         # The Lab's validated catalog config is what executes; the M2

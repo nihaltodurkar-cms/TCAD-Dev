@@ -200,7 +200,7 @@ def test_run_rejects_sweep_and_transient_armed_together(qapp):
     c.errorRaised.connect(lambda s, d: errors.append((s, d)))
     c.run()
     assert not c.busy
-    assert any(s == "Cannot run a sweep and a transient run together"
+    assert any(s == "Cannot run more than one of Sweep/Transient/AC together"
               for s, d in errors)
 
 
