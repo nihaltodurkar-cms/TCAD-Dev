@@ -1763,13 +1763,22 @@ class Device1D:
             err = float("inf")
             for it in range(opts.max_iter):
                 if self.models.field_mobility:
-                    E = -(psi[1:] - psi[:-1]) * self.VT / (self.h * self.LD)
-                    mu_n = mobility_field(
-                        self.mu_n0, np.r_[np.abs(E), np.abs(E[-1])],
-                        self.mat, "n")
-                    mu_p = mobility_field(
-                        self.mu_p0, np.r_[np.abs(E), np.abs(E[-1])],
-                        self.mat, "p")
+                    # Edge-valued |E| (length N-1) averaged onto nodes
+                    # symmetrically -- E_node[i] = 0.5*(|E_{i-1/2}| +
+                    # |E_{i+1/2}|) for interior nodes, the boundary edge
+                    # value at the endpoints.  Evaluating mu at a node
+                    # using only its RIGHT edge's field (the previous
+                    # np.r_[...] padding) shifted the field-dependence by
+                    # half a cell and broke the discretization's spatial
+                    # symmetry.
+                    E_abs = np.abs(-(psi[1:] - psi[:-1]) * self.VT
+                                   / (self.h * self.LD))
+                    E_node = np.empty(self.N)
+                    E_node[0] = E_abs[0]
+                    E_node[-1] = E_abs[-1]
+                    E_node[1:-1] = 0.5 * (E_abs[:-1] + E_abs[1:])
+                    mu_n = mobility_field(self.mu_n0, E_node, self.mat, "n")
+                    mu_p = mobility_field(self.mu_p0, E_node, self.mat, "p")
                     self._set_edge_diffusivity(mu_n, mu_p)
 
                 F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)

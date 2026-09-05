@@ -428,16 +428,21 @@ def mobility_cvt(E_eff, mu_ct, carrier, T):
 def bandgap_narrowing_slotboom(N, mat: Semiconductor):
     """Slotboom / de Graaff heavy-doping bandgap narrowing, dEg [eV].
 
-        dEg = E0 [ ln(N/N0) + sqrt( ln^2(N/N0) + 1/2 ) ]
+        dEg = E0 [ ln(N/N0) + sqrt( ln^2(N/N0) + 1/2 ) - sqrt(1/2) ]
 
-    Empirical fit to bipolar transistor data.  Set to zero below N0.
+    Empirical fit to bipolar transistor data.  Set to zero below N0.  The
+    "- sqrt(1/2)" shift is NOT part of the textbook formula (which equals
+    E0*sqrt(1/2) at N=N0, not 0) -- it is added here so the zero-below-N0
+    clamp does not introduce a step discontinuity in dEg (and therefore in
+    n_ie) right at the threshold, which would otherwise act like a
+    spurious delta-function field wherever doping crosses N0.
     Effect: n_ie^2 = n_i^2 exp(dEg / kT), which enhances minority-carrier
     injection from heavily doped emitters -- the dominant reason real BJT
     gains fall short of the ideal-diode prediction.
     """
     N = np.maximum(np.asarray(N, dtype=float), 1.0)
     x = np.log(N / mat.bgn_N0)
-    dEg = mat.bgn_E0 * (x + np.sqrt(x * x + 0.5))
+    dEg = mat.bgn_E0 * (x + np.sqrt(x * x + 0.5) - np.sqrt(0.5))
     return np.where(N > mat.bgn_N0, dEg, 0.0)
 
 

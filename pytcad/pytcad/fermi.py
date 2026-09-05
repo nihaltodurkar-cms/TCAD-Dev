@@ -87,7 +87,7 @@ def _fd_series(eta, power):
     return out
 
 
-def _inv_softplus(x):
+def _logistic(x):
     """1/(1+exp(x)) without overflow anywhere in x."""
     out = np.empty_like(x)
     pos = x > 0
@@ -191,9 +191,9 @@ def f_half_exact(eta):
     if bool((~deep).any()):
         res[~deep] = _gl_eval(a1[~deep],
                               lambda s, e: (4.0 / np.sqrt(np.pi)) * s * s
-                              * _inv_softplus(s * s - e),
+                              * _logistic(s * s - e),
                               lambda t, e: (2.0 / np.sqrt(np.pi))
-                              * np.sqrt(t) * _inv_softplus(t - e))
+                              * np.sqrt(t) * _logistic(t - e))
     return res[0] if scalar else res
 
 
@@ -212,9 +212,9 @@ def f_mhalf_exact(eta):
     if bool((~deep).any()):
         res[~deep] = _gl_eval(a1[~deep],
                               lambda s, e: (2.0 / np.sqrt(np.pi))
-                              * _inv_softplus(s * s - e),
+                              * _logistic(s * s - e),
                               lambda t, e: (1.0 / np.sqrt(np.pi))
-                              * t ** -0.5 * _inv_softplus(t - e))
+                              * t ** -0.5 * _logistic(t - e))
     return res[0] if scalar else res
 
 

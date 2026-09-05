@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solver Scaling</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--paper:#f5f5f5;--ink:#2d3142;--muted:#4f5d75;--accent:#eb6c36;--sans:'Geist',sans-serif;--serif:'Instrument Serif',serif;--mono:'Geist Mono',monospace}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:3rem 2rem}
+.frame{max-width:900px;width:100%}
+.eyebrow{font-family:var(--mono);font-size:.66rem;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem}
+h1{font-family:var(--serif);font-size:clamp(1.5rem,2.4vw + .75rem,2rem);font-weight:400;letter-spacing:-.02em;color:var(--ink);margin-bottom:.5rem}
+.sub{font-family:var(--serif);font-style:italic;font-size:.85rem;color:var(--muted);margin-bottom:1rem}
+svg{width:100%;min-width:680px;display:block}
+</style>
+</head>
+<body>
+<div class="frame">
+<p class="eyebrow">Bar Chart · Diagram Design</p>
+<h1>Equilibrium solve time: direct vs. AMG</h1>
+<p class="sub">Measured once by the project author on one machine (M22-LINSOLVE-PLAN.md); not independently reproduced for this guide (&#167;14.3). mosfet_3d is the case AMG makes SLOWER &#8212; exactly why the 20,000-node gate exists.</p>
+<svg viewBox="0 0 860 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="perf-title perf-desc">
+<title id="perf-title">Equilibrium solve time, direct vs AMG, by device</title>
+<desc id="perf-desc">Grouped bar chart comparing direct sparse solve time against AMG-preconditioned iterative solve time for four 3D device equilibrium solves, showing large speedups on three large devices and a regression on a smaller device below the size gate.</desc>
+<defs>
+<marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#f5f5f5"/>
+
+<!-- axis -->
+<line x1="80" y1="280" x2="780" y2="280" stroke="#2d3142" stroke-width="1"/>
+<text x="80" y="52" fill="#4f5d75" font-size="8" font-family="'Geist Mono',monospace" letter-spacing=".1em">SECONDS (equilibrium solve, log-scale relationships shown at true proportion)</text>
+
+<!-- bjt_3d: direct 43.4s -> h217, AMG 1.0s -> h5 -->
+<rect x="182" y="63" width="40" height="217" fill="#4f5d75"/>
+<text x="202" y="55" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">43.4s</text>
+<rect x="230" y="275" width="40" height="5" fill="#eb6c36"/>
+<text x="250" y="271" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">1.0s</text>
+<rect x="184" y="288" width="112" height="12" rx="2" fill="#f5f5f5"/>
+<text x="240" y="297" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">bjt_3d (44&#215;)</text>
+
+<!-- pn_junction_3d: direct 31.1s -> h156, AMG 0.8s -> h4 -->
+<rect x="318" y="124" width="40" height="156" fill="#4f5d75"/>
+<text x="338" y="116" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">31.1s</text>
+<rect x="366" y="276" width="40" height="4" fill="#eb6c36"/>
+<text x="386" y="272" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">0.8s</text>
+<rect x="308" y="288" width="128" height="12" rx="2" fill="#f5f5f5"/>
+<text x="372" y="297" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">pn_junction_3d (39&#215;)</text>
+
+<!-- finfet_3d: direct 33.1s -> h166, AMG 4.0s -> h20 -->
+<rect x="454" y="114" width="40" height="166" fill="#4f5d75"/>
+<text x="474" y="106" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">33.1s</text>
+<rect x="502" y="260" width="40" height="20" fill="#eb6c36"/>
+<text x="522" y="256" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">4.0s</text>
+<rect x="450" y="288" width="98" height="12" rx="2" fill="#f5f5f5"/>
+<text x="499" y="297" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">finfet_3d (8&#215;)</text>
+
+<!-- mosfet_3d: direct 2.1s -> h11, AMG 21.4s -> h107 (AMG SLOWER, below gate) -->
+<rect x="590" y="269" width="40" height="11" fill="#4f5d75"/>
+<text x="610" y="265" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">2.1s</text>
+<rect x="638" y="173" width="40" height="107" fill="#eb6c36"/>
+<text x="658" y="165" fill="#2d3142" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">21.4s</text>
+<rect x="586" y="288" width="106" height="12" rx="2" fill="#f5f5f5"/>
+<text x="639" y="297" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">mosfet_3d (0.1&#215;)</text>
+
+<!-- legend -->
+<line x1="80" y1="336" x2="780" y2="336" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+<text x="80" y="352" fill="#4f5d75" font-size="8" font-family="'Geist Mono',monospace" letter-spacing=".18em">LEGEND</text>
+<rect x="80" y="364" width="14" height="10" rx="2" fill="#4f5d75"/>
+<text x="100" y="372" fill="#4f5d75" font-size="8.5" font-family="'Geist',sans-serif">Direct (scipy spsolve)</text>
+<rect x="280" y="364" width="14" height="10" rx="2" fill="#eb6c36"/>
+<text x="300" y="372" fill="#4f5d75" font-size="8.5" font-family="'Geist',sans-serif">AMG (bicgstab + pyamg)</text>
+<text x="540" y="372" fill="#4f5d75" font-size="8.5" font-family="'Geist Mono',monospace">(&#215;) = speedup, direct/AMG</text>
+</svg>
+</div>
+</body>
+</html>
