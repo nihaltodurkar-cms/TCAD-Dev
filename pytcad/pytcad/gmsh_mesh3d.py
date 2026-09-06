@@ -183,6 +183,77 @@ def build_diode_mesh3d(Lx=2.0e-4, Ly=5.0e-5, Lz=3.0e-5, Xj=1.0e-4,
         gmsh.finalize()
 
 
+def build_gated_slab_mesh3d(Lx=2.0e-4, Ly=1.0e-4, Lz=5.0e-5, Na=1e17):
+    """A z-invariant, uniformly-doped p-type slab with ohmic contacts
+    on the x=0/x=Lx faces and a SINGLE gate covering the whole y=0 (top)
+    face -- the M26 follow-up geometry used to validate
+    unstructured_dd3d.py's new Robin/gate BC against the (already-
+    validated) 2D Device2D solver: because the structure and gate are
+    uniform along z, the true physics has no z-gradient anywhere, so
+    the 3D tet solution must reduce to a 2D (x,y) solve on the same
+    cross-section -- see tests/test_m26_finfet3d.py's own
+    `test_unstructured_gate_bc_reduces_to_2d`, the general-mesh sibling
+    of test_validation_3d.py's structured-only reduces-to-2D gate.
+
+    Physical Groups: "bulk" (volume), "left_contact"/"right_contact"
+    (x=0/x=Lx faces), "gate" (y=0 face).
+
+    Mesh sized against `pytcad.mesh.debye_length(Na)`, GRADED toward
+    the gate (y=0) face with a gmsh Distance+Threshold field -- the
+    gate's Robin BC needs the same near-surface resolution a real
+    depletion/accumulation layer needs, the same reason
+    build_diode_mesh3d grades toward its junction plane instead of
+    meshing uniformly.
+
+    Returns a GmshMesh3D. Raises ImportError if gmsh is not installed.
+    """
+    gmsh = _require_gmsh()
+    from .mesh import debye_length
+    L_D = debye_length(Na)
+
+    gmsh.initialize()
+    try:
+        gmsh.model.add("gated_slab3d")
+        occ = gmsh.model.occ
+        box = occ.addBox(0.0, 0.0, 0.0, Lx, Ly, Lz)
+        occ.synchronize()
+
+        gmsh.model.addPhysicalGroup(3, [box], name="bulk")
+
+        faces = gmsh.model.getEntities(2)
+        left_face = right_face = top_face = None
+        for dim, tag in faces:
+            com = occ.getCenterOfMass(dim, tag)
+            if abs(com[0] - 0.0) < 1e-12:
+                left_face = tag
+            elif abs(com[0] - Lx) < 1e-12:
+                right_face = tag
+            elif abs(com[1] - 0.0) < 1e-12:
+                top_face = tag
+        if left_face is None or right_face is None or top_face is None:
+            raise RuntimeError(
+                "build_gated_slab_mesh3d: could not identify all three "
+                "tagged faces after box construction")
+        gmsh.model.addPhysicalGroup(2, [left_face], name="left_contact")
+        gmsh.model.addPhysicalGroup(2, [right_face], name="right_contact")
+        gmsh.model.addPhysicalGroup(2, [top_face], name="gate")
+
+        gmsh.model.mesh.field.add("Distance", 1)
+        gmsh.model.mesh.field.setNumbers(1, "SurfacesList", [top_face])
+        gmsh.model.mesh.field.add("Threshold", 2)
+        gmsh.model.mesh.field.setNumber(2, "InField", 1)
+        gmsh.model.mesh.field.setNumber(2, "SizeMin", 1.0 * L_D)
+        gmsh.model.mesh.field.setNumber(2, "SizeMax", 0.5 * min(Lx, Ly, Lz))
+        gmsh.model.mesh.field.setNumber(2, "DistMin", 4.0 * L_D)
+        gmsh.model.mesh.field.setNumber(2, "DistMax", 12.0 * L_D)
+        gmsh.model.mesh.field.setAsBackgroundMesh(2)
+
+        gmsh.model.mesh.generate(3)
+        return _extract_current_model3d()
+    finally:
+        gmsh.finalize()
+
+
 def load_gmsh_mesh3d(path):
     """Load an existing .msh file (Physical Groups on volumes/surfaces
     already tagged in the file). Raises ImportError if gmsh is not

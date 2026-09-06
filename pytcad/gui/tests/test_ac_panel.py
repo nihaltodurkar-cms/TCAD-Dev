@@ -72,6 +72,12 @@ def test_ac_panel_arm_and_clear_end_to_end(gapp):
 def test_rejected_arm_reverts_fields_to_armed_config(gapp):
     engine, root, controller = _fresh(gapp)
     controller.loadExample("diode_1d")
+    # select the AC tab -- StackLayout hides inactive tabs (visible:
+    # false), which makes every descendant's OWN `visible` property
+    # (including acRejectNote's) read false regardless of its binding
+    # until this tab is actually current. test_sweep_panels.py's own
+    # equivalent test does the same (currentIndex 4, the Sweeps tab).
+    root.findChild(object, "workbenchTabs").setProperty("currentIndex", 9)
 
     contact_box = root.findChild(object, "acContactBox")
     f_start = root.findChild(object, "acFStartField")

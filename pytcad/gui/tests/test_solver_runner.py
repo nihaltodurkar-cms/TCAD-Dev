@@ -240,8 +240,18 @@ def test_engine_gpu_direct_matches_cupy_availability(tmp_path):
 
 
 def test_engine_amg_matches_pyamg_availability(tmp_path):
+    """engine="amg" only ever replaces the EQUILIBRIUM linear solve
+    (see solver_runner.py's own comment on why the bias/sweep phase is
+    deliberately left on "direct"); _solve_all's linsolve_bias reset
+    then overwrites opts.linsolve back to "direct" once the bias phase
+    runs, so the FINAL numerics["linsolve"] only reflects "bicgstab"
+    for a spec with no bias phase at all -- use an equilibrium-only
+    variant of the diode spec (no `bias`) rather than asserting
+    something the bias-phase reset makes impossible for any spec that
+    actually has a bias config, like `_diode_1d_spec()`."""
     from pytcad.linsolve import _HAVE_PYAMG
     spec = _diode_1d_spec()
+    spec.bias = None
     spec.engine = "amg"
     proc, out = _run_cli(spec, tmp_path, "engine_amg")
     if _HAVE_PYAMG:

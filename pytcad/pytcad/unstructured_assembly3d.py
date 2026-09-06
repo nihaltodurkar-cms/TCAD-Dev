@@ -135,6 +135,53 @@ def build_unstructured_stencil3d(nodes, tets, min_volume=1e-45):
     return edge_list, node_vol
 
 
+def boundary_face_node_weights3d(nodes, faces):
+    """Per-node AREA weight from a set of boundary triangular faces:
+    each face contributes exactly 1/3 of its own area to each of its 3
+    vertices (barycentric split -- the same exact-partition technique
+    build_unstructured_stencil3d already uses for tet VOLUME, just one
+    dimension down, and the unstructured generalization of device3d.py's
+    `_gate_face_weight` -- a structured control-volume face area
+    per surface node -- used to weight its Robin/gate boundary
+    condition).
+
+    nodes: (N, 3) array. faces: (K, 3) int array of 0-based node
+    indices (a Physical-Surface face-tag array, e.g. from
+    gmsh_mesh3d.GmshMesh3D.face_tags).
+
+    Returns (node_idx, weights): node_idx is the sorted-unique node
+    indices touched by `faces` (a node on several faces appears once,
+    same convention np.unique(faces) already uses for contact node
+    lists elsewhere in this sub-project); weights[i] is node_idx[i]'s
+    TOTAL area contribution summed over every incident face in
+    `faces` -- a node shared between two differently-named face
+    groups (e.g. the edge between a FinFET's top gate and one of its
+    sidewall gates) gets its correct total incident area only if BOTH
+    groups' faces are passed in together (see gmsh_finfet3d.py's own
+    docstring for why a tri-gate FinFET's three wrap faces are
+    registered as ONE combined gate, not three, for exactly this
+    reason: passing them separately would silently double-count that
+    shared edge's oxide capacitance, an easy mistake this function
+    cannot detect from a single call in isolation)."""
+    nodes_xyz = np.asarray(nodes, dtype=float)[:, :3]
+    faces = np.asarray(faces, dtype=int)
+    if faces.size == 0:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=float)
+    p0 = nodes_xyz[faces[:, 0]]
+    p1 = nodes_xyz[faces[:, 1]]
+    p2 = nodes_xyz[faces[:, 2]]
+    areas = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
+    per_third = areas / 3.0
+
+    node_w = {}
+    for tri, w in zip(faces, per_third):
+        for v in tri:
+            node_w[int(v)] = node_w.get(int(v), 0.0) + float(w)
+    node_idx = np.array(sorted(node_w), dtype=int)
+    weights = np.array([node_w[k] for k in node_idx], dtype=float)
+    return node_idx, weights
+
+
 def build_edge_flux_geometry3d(nodes, tets, edge_list):
     """TPFA geometry factor per INTERIOR mesh edge: dual_facet_area /
     primal_edge_length (see module docstring for the quad-per-tet

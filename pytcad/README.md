@@ -65,14 +65,63 @@ pytcad/ (this package)
                  geometry, Poisson-equilibrium and coupled SG bias
                  solves; standalone, directly tested, and wired into
                  Device2D(unstructured=True) above
+  gmsh_mesh3d.py, unstructured_assembly3d.py, unstructured_dd3d.py,
+  adapt_unstructured3d.py
+                 M21 phase 3 follow-up: the same unstructured pipeline
+                 one dimension up -- gmsh TETRAHEDRAL meshing, dual-
+                 cell VOLUME + TPFA flux geometry, Poisson-equilibrium
+                 and coupled SG bias solves, solution-adaptive AMR.
+                 unstructured_dd3d.py gained a `gates` Robin/oxide-
+                 coupling BC (M26) -- see that module's own docstring
+                 for the scaling-bug fix that work surfaced and fixed
+  process2d.py   M23: mask-driven 2D deposit/etch, thermal oxidation
+                 with bird's-beak encroachment, mask-driven 2D
+                 implants -- structured-mesh "string model" slice
+  ted.py         M24: pair diffusion/segregation/clustering -- Fair
+                 extrinsic enhancement, "+1" TED supersaturation, OED
+                 boost, segregation partition, solubility-limited
+                 clustering; a lumped-scalar engineering model, not a
+                 coupled point-defect PDE
+  mc_implant.py  M25: Monte-Carlo (BCA) implantation -- screened-
+                 Rutherford nuclear scattering + calibrated LSS
+                 electronic stopping, phenomenological channeling tail
+  finfet3d.py,   M26: 3D tri-gate FinFET template on the structured
+  characterization.py
+                 Device3D/Mesh3D core, plus Vth/subthreshold-swing/
+                 DIBL extraction; literature-trend gate shows both
+                 worsen as gate length shrinks
+  gmsh_finfet3d.py
+                 M26: extrudes a process2d 2D etch profile into a 3D
+                 tri-gate FinFET tet mesh (source/gate/drain regions +
+                 contacts), for the unstructured_dd3d.py gate-BC path
+  schottky.py    M28: Schottky/tunnel contact physics -- thermionic
+                 emission + Richardson constants, image-force barrier
+                 lowering, Padovani-Stratton field-emission/tunnel-
+                 contact regime; standalone contact-physics module,
+                 not wired into a live Device1D/Device2D Jacobian
+  circuit.py     M27: Modified Nodal Analysis circuit solver --
+                 V/I sources, R, C, diode, level-1 MOSFET, plus
+                 DeviceStamp embedding a real Device1D as a nonlinear
+                 element (finite-difference terminal conductance)
+  hydrodynamic.py
+                 M29: local (no spatial energy-flux) steady energy-
+                 balance carrier-temperature closure, energy-
+                 relaxation length scale, heating trend, carrier-
+                 temperature-driven impact ionization
 examples/        p-n diode, full process flow, MOS C-V, 2D MOSFET Id-Vg,
-                 3D-reduces-to-2D validation
+                 3D-reduces-to-2D validation, LOCOS flow, TED anneal,
+                 MC implantation, Schottky diode I-V, 3D FinFET DIBL,
+                 mixed-mode circuit (ring oscillator), hydrodynamic
+                 carrier-temperature closure,
+                 3D FinFET from a process2d extrusion
 tests/           analytic-limit validation + published-value physics
                  benchmarks + headless GUI tests -- fast suite
-                 (`-m "not slow"`) currently 1028 passed, 1 xfailed,
-                 0 known failures -- the M20 Schrödinger-Poisson
-                 reference solver's once-flaky eigensolver test is now
-                 fixed (see M20-DENSITY-GRADIENT-PLAN.md section 7.6)
+                 (`-m "not slow"`) currently 1239 collected (18
+                 deselected as slow) as of 2026-09-06, 0 known
+                 failures in pytcad/ itself (2 pre-existing, unrelated
+                 GUI failures fixed the same day -- see
+                 gui/services/solver_runner.py's `_solve_all` docstring
+                 and gui/tests/test_ac_panel.py)
 ../workbench/    domain layer: materials library (Si, Ge, GaAs, InGaAs,
                  AlGaAs), model catalog, solver backends, tunneling and
                  impact-ionization physics, deck front end
@@ -261,13 +310,13 @@ There is now a 2D extension (`mesh2d.py`'s `Mesh2D`, `device2d.py`'s `Device2D`,
 
 ### 3D Solver (new)
 
-There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Device3D`) that solves full 3D drift-diffusion on a tensor-product Cartesian mesh (independent, non-uniform spacing per axis). It generalizes the same box-integration/edge-scatter assembly used in 1D and 2D: each mesh edge (now three families — x, y, z) scatters a Scharfetter–Gummel flux to its two endpoint nodes, giving a 7-point stencil per equation (block-heptadiagonal Jacobian for the coupled $\psi$/$n$/$p$ Newton system) and implicit zero-flux Neumann boundaries wherever an edge is simply absent. Boundary conditions are geometry-agnostic: `add_contact`/`add_gate` take arbitrary node-index arrays, not device-specific shapes. `GateBC` carries a `normal_axis` (`'x'`/`'y'`/`'z'`) so a gate face can sit on any of the three axes — needed for future wrapped-gate devices (FinFET, GAA) — though only `normal_axis='z'` is exercised by this sub-project's own tests.
+There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Device3D`) that solves full 3D drift-diffusion on a tensor-product Cartesian mesh (independent, non-uniform spacing per axis). It generalizes the same box-integration/edge-scatter assembly used in 1D and 2D: each mesh edge (now three families — x, y, z) scatters a Scharfetter–Gummel flux to its two endpoint nodes, giving a 7-point stencil per equation (block-heptadiagonal Jacobian for the coupled $\psi$/$n$/$p$ Newton system) and implicit zero-flux Neumann boundaries wherever an edge is simply absent. Boundary conditions are geometry-agnostic: `add_contact`/`add_gate` take arbitrary node-index arrays, not device-specific shapes. `GateBC` carries a `normal_axis` (`'x'`/`'y'`/`'z'`) so a gate face can sit on any of the three axes — this is what a wrapped/tri-gate device needs, and `finfet3d.py`'s `build_finfet3d` now exercises `'y'` (top gate) and `'z'` (both sidewalls) together on a single device.
 
 **Validation.** The primary correctness gate is dimensional reduction: a z-invariant 3D structure must reproduce the already-validated 2D solver exactly. `tests/test_validation_3d.py` checks this at equilibrium and forward bias, and `examples/05_3d_reduces_to_2d.py` makes it visual — extruding a p-n junction in z, solving both 2D and 3D, and plotting the difference. Measured on this repo: max $|\psi_{3D}-\psi_{2D}|$ = 1.11e-16 V, max $|J_{3D}-J_{2D}|$ = 3.98e-10 A/cm² — both at floating-point noise level, not just within the tests' (looser) 1e-6 V / 1e-3 relative tolerances. The analytic Newton Jacobian is independently checked against finite differences (worst relative error < 1e-3 across 30 random sampled columns via sparse column-slice extraction — never `J.toarray()` on the full matrix), and terminal-current extraction (residual-based, not edge-walking) conserves charge to <1e-6 relative error on a two-terminal 3D resistor.
 
-**Current limitations, stated honestly.** No device-specific 3D geometry yet — FinFET, GAA nanowire, and GAA nanosheet are deferred to future sub-projects; this one only validates the generic 3D core. No 3D process simulation (implant/diffusion/oxidation remain 1D-only). `scipy.sparse.linalg.spsolve` (`NewtonOptions.linsolve="direct"`, the default) is still what every pre-2026-09-02 benchmark below describes, and the superlinear LU fill-in it shows on a large 3D structured grid is real and unavoidable for a direct solve on this mesh topology. Since then, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned via the optional `pyamg` dependency) and `linsolve="gpu_direct"` (cuSOLVER via the optional `cupy` dependency) — measured 8x-44x faster for a large 3D equilibrium solve and 2.8x faster for a large 3D bias solve respectively, *but* measurably WORSE than plain `"direct"` below roughly 20,000-50,000 nodes (preconditioner/GPU setup cost that only pays for itself once direct factorization is already expensive) — neither is a universal replacement for `"direct"`, which is why it stays the default. `gui/services/solver_runner.py` picks between them automatically for GUI-driven 3D jobs based on mesh size and what's installed; called directly through the pytcad API, `"direct"` remains what you get unless you ask otherwise. MPI-parallel domain decomposition (4-rank overlapping Schwarz, `gui/services/mpi_schwarz_runner.py`) exists only at the GUI layer, not as a `Device3D` capability — it drives several ordinary `Device3D` instances, one per rank, over an already-split mesh, and now covers voltage sweeps as well as equilibrium + a single bias point (transients are still excluded, since `Device3D` has no transient module to parallelize). It also now picks whichever of x/y/z is actually safe to split along, not only x. It is NOT safe for every geometry: a device whose doping varies along the candidate axis converges far slower or not at all, and a device with a gate contact whose own `normal_axis` matches the candidate axis can converge to a silently WRONG answer even when the doping check alone would call that axis safe (a real bug found and fixed) — `run_job()` checks both the doping array and every registered gate's normal_axis, and refuses the MPI path whenever either is unsafe. See M22-LINSOLVE-PLAN.md sections 9-13 for the full measurement record on all three engines.
+**Current limitations, stated honestly.** A structured tri-gate FinFET template now exists (`finfet3d.py`'s `build_finfet3d`, on this same tensor-product `Device3D`/`Mesh3D` core) with literature-trend DIBL/subthreshold-swing gates (see the "3D tri-gate FinFET (M26, new)" subsection below) — GAA nanowire/nanosheet templates remain deferred to future sub-projects. 3D process simulation (implant/diffusion/oxidation) is still 1D/2D-only (`process.py`/`process2d.py`), except that `gmsh_finfet3d.py` can now extrude a `process2d`-built 2D etch profile into a 3D tet mesh (geometry only, not a full 3D process solve — see that module's own honesty clause). `scipy.sparse.linalg.spsolve` (`NewtonOptions.linsolve="direct"`, the default) is still what every pre-2026-09-02 benchmark below describes, and the superlinear LU fill-in it shows on a large 3D structured grid is real and unavoidable for a direct solve on this mesh topology. Since then, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned via the optional `pyamg` dependency) and `linsolve="gpu_direct"` (cuSOLVER via the optional `cupy` dependency) — measured 8x-44x faster for a large 3D equilibrium solve and 2.8x faster for a large 3D bias solve respectively, *but* measurably WORSE than plain `"direct"` below roughly 20,000-50,000 nodes (preconditioner/GPU setup cost that only pays for itself once direct factorization is already expensive) — neither is a universal replacement for `"direct"`, which is why it stays the default. `gui/services/solver_runner.py` picks between them automatically for GUI-driven 3D jobs based on mesh size and what's installed; called directly through the pytcad API, `"direct"` remains what you get unless you ask otherwise. MPI-parallel domain decomposition (4-rank overlapping Schwarz, `gui/services/mpi_schwarz_runner.py`) exists only at the GUI layer, not as a `Device3D` capability — it drives several ordinary `Device3D` instances, one per rank, over an already-split mesh, and now covers voltage sweeps as well as equilibrium + a single bias point (transients are still excluded, since `Device3D` has no transient module to parallelize). It also now picks whichever of x/y/z is actually safe to split along, not only x. It is NOT safe for every geometry: a device whose doping varies along the candidate axis converges far slower or not at all, and a device with a gate contact whose own `normal_axis` matches the candidate axis can converge to a silently WRONG answer even when the doping check alone would call that axis safe (a real bug found and fixed) — `run_job()` checks both the doping array and every registered gate's normal_axis, and refuses the MPI path whenever either is unsafe. See M22-LINSOLVE-PLAN.md sections 9-13 for the full measurement record on all three engines.
 
-Historical benchmark (unchanged, still accurate for the `"direct"` path this whole limitations paragraph is otherwise about): a uniformly-doped cubic resistor's solve time grew from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice `"direct"` alone is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; larger meshes need one of the alternatives above (or, for the GUI's own examples, its automatic gating already picks one).** No claim of parity with commercial 3D TCAD tools is made or intended. The full design rationale, explicit out-of-scope list, and sub-project roadmap (FinFET, GAA nanowire, GAA nanosheet) live in this sub-project's internal design notes, not included in this repository checkout.
+Historical benchmark (unchanged, still accurate for the `"direct"` path this whole limitations paragraph is otherwise about): a uniformly-doped cubic resistor's solve time grew from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice `"direct"` alone is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; larger meshes need one of the alternatives above (or, for the GUI's own examples, its automatic gating already picks one).** No claim of parity with commercial 3D TCAD tools is made or intended. GAA nanowire/nanosheet templates remain future sub-project work; the full design rationale and explicit out-of-scope list otherwise live in this sub-project's internal design notes, not included in this repository checkout.
 
 ### Transient simulation (new)
 
@@ -339,6 +388,115 @@ incomplete-ionization/surface-mobility) -- any incompatible
 `Models()` flag raises `NotImplementedError` rather than solving
 silently wrong. No 3D, no adaptive refinement, no heterojunctions, no
 GUI path to build or edit a mesh. See `M21-PHASE3-MESHING-PLAN.md`.
+
+### Mixed-mode device + circuit (M27, new)
+
+`circuit.py` adds a Modified Nodal Analysis (MNA) SPICE-style circuit
+solver: `VSource`/`ISource`/`Resistor`/`Capacitor`/`Diode`/`MOSFET1`
+(level-1 Shichman-Hodges square-law, no body effect or subthreshold
+conduction — disclosed) elements, plus `DeviceStamp`, which embeds a
+real `Device1D` as a nonlinear two-terminal circuit element. Each
+Newton iteration re-solves the device's full coupled Poisson/
+continuity system at the current (and a slightly perturbed) node
+voltage to get a FINITE-DIFFERENCE terminal conductance — this is
+explicitly NOT "conductance from the existing analytic Jacobian" (the
+milestone spec's own wording would need an adjoint/sensitivity solve
+this pass doesn't build), and is disclosed as such. `dc_operating_point()`
+does Newton-Raphson MNA with per-element companion models (the
+standard SPICE technique); `transient()` is backward-Euler with an
+`initial_conditions` override for circuits whose true DC operating
+point is an unstable equilibrium (a symmetric ring oscillator, most
+notably). Gates: a resistor-divider vs. the analytic result, a
+`DeviceStamp`-embedded p-n junction vs. solving the same `Device1D`
+standalone at the circuit-computed terminal voltage, and a genuine
+3-stage CMOS ring-oscillator transient smoke test (qualitative, per
+the milestone's own acceptance criteria) — see `examples/
+14_mixed_mode_circuit.py`.
+
+### Hydrodynamic / energy-balance carrier temperature (M29, new)
+
+`hydrodynamic.py` adds a standalone, LOCAL (no spatial energy-flux
+term) steady energy-balance closure — carrier temperature from a
+published energy relaxation time (`carrier_temperature`, and its exact
+algebraic inverse `effective_field_from_temperature`), the genuinely
+computable "why velocity overshoot matters in short devices" length
+scale `energy_relaxation_length` = v_sat·τ_w (≈0.04 µm for Si — the
+correct submicron order of magnitude), a qualitative field-driven
+heating trend (`hot_carrier_heating_ratio`, ≈1 at equilibrium, growing
+with field), and carrier-temperature-driven impact ionization
+(`impact_ionization_rate_carrierT`) reached by mapping a carrier
+temperature back to its consistent effective field and reusing the
+existing (M15) published van Overstraeten-de Man field-driven
+coefficients — not an independently fitted temperature-dependent
+ionization law. It is **not** wired into `Device1D`'s residual/
+Jacobian at all — a pure post-processing module, so the milestone's
+"DD limit recovery, bit-identity when off" acceptance criterion holds
+by construction (gated explicitly anyway as a regression guard). The
+honest limitation: a purely LOCAL closure cannot reproduce the actual
+SPATIAL shape of a Monte Carlo overshoot profile (which needs the
+omitted energy-flux term), so the milestone's "overshoot" gate is
+satisfied via the heating-trend/length-scale facts above rather than a
+spatial-profile match — see `examples/15_hydrodynamic_overshoot.py`
+and the module's own docstring for the full account, including why an
+isotropic thermal-speed-vs-v_sat comparison was tried and rejected as
+a meaningless ratio (Si electrons' equilibrium thermal speed is
+already ~2× v_sat).
+
+### Process expansion, Schottky contacts, and 3D FinFET (M23-M26, M28, new)
+
+Four milestones landed 2026-09-06, each a disclosed-simplification
+slice rather than the milestone's full literal spec -- see each
+module's own honesty-clause docstring and `ARCHITECTURE.md` section
+4b.5 for the complete record:
+
+- **M23 — `process2d.py`.** Mask-driven deposit/etch and 2D thermal
+  oxidation (bird's-beak encroachment, qualitative shape only, not
+  quantitatively validated) and mask-driven 2D implants, on the same
+  fixed-lateral-grid "string model" M23's own plan calls the
+  structured-mesh-first slice. See `examples/08_locos_flow.py`.
+- **M24 — `ted.py`.** Transient-enhanced diffusion: Fair extrinsic
+  enhancement, "+1" TED supersaturation, OED boost, equilibrium
+  segregation partition, solubility-limited clustering — a lumped-
+  scalar engineering model, not a coupled point-defect PDE. See
+  `examples/09_ted_anneal.py`.
+- **M25 — `mc_implant.py`.** Monte-Carlo (binary-collision-
+  approximation) implantation: screened-Rutherford nuclear scattering
+  with a calibrated LSS electronic-stopping prefactor (not the literal
+  ZBL magic-formula fit). Amorphous-target range matches the existing
+  SRIM-derived table to roughly ±35% around calibration; channeling is
+  a disclosed phenomenological knob, not a lattice simulation. See
+  `examples/10_mc_implant.py`.
+- **M26 — 3D generalization, two passes.** (1) `finfet3d.py` builds a
+  tri-gate FinFET directly on the existing structured `Device3D`/
+  `Mesh3D` core (top gate on `normal_axis='y'`, both sidewalls on
+  `normal_axis='z'`, one device), with `characterization.py`
+  (Vth/subthreshold-swing/DIBL extraction from an Id-Vg sweep) and a
+  literature-trend gate showing both worsen as gate length shrinks —
+  see `examples/12_finfet3d_dibl.py`. (2) The unstructured tet path
+  gained a `gates` Robin/oxide-coupling BC in `unstructured_dd3d.py`
+  (backed by `unstructured_assembly3d.boundary_face_node_weights3d`)
+  and a `process2d`-to-3D-tet extrusion pipeline in `gmsh_finfet3d.py`
+  — see `examples/13_finfet3d_from_process2d.py`. Building the gate BC
+  surfaced and fixed a pre-existing scaling bug in that module's
+  interior Poisson-flux coefficient (documented in
+  `unstructured_dd3d.py`'s own "SCALING FIX" docstring section); a new
+  general-mesh "3D reduces to 2D" gate
+  (`tests/test_m26_finfet3d.py::test_unstructured_gate_bc_reduces_to_2d`)
+  validates the fix and the new gate BC together against `Device2D`.
+  Doping extrusion is per-region-constant, not a true 2D process
+  implant-array extrusion; the extruded tet FinFET's fully coupled
+  bias solve needs voltage ramping/continuation not yet implemented on
+  that path (measured, not silently skipped).
+- **M28 — `schottky.py`.** Thermionic-emission Schottky I-V (self-
+  derived Richardson constant matches the published 120.173
+  A/(cm²·K²) to 5 significant figures; tabulated literature effective
+  Richardson constants used directly, not derived from conductivity
+  mass), image-force barrier lowering, and Padovani-Stratton field-
+  emission/tunnel-contact regime classification. Fixed charge/work-
+  function engineering in gate stacks was already covered by
+  `moscap.flatband_voltage` (not duplicated). Standalone contact-
+  physics module — not wired into a live `Device1D`/`Device2D`
+  Jacobian as a boundary condition. See `examples/11_schottky_diode.py`.
 
 ### Desktop GUI (new)
 

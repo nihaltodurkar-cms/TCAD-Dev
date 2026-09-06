@@ -15,6 +15,38 @@ unstructured_assembly3d.build_unstructured_stencil3d. No new physics
 term versus unstructured_dd.py -- same Scharfetter-Gummel current, same
 SRH recombination, same Newton scheme.
 
+SCALING FIX (M26, found while adding the gate BC below): the scaled
+Poisson-equation flux coefficient this module used for its interior
+edges (both `solve_poisson_equilibrium3d` and `solve_bias3d`) was
+`trans_geom_phys * eps`. Direct nondimensionalization of the physical
+FVM equation eps*(area/length)*(psi_j-psi_i) = q*Vol*(n-p-C) by the
+same charge scale Q0=q*Ns*LD^3 this module's own vols_s=Vol_phys/LD^3
+already uses gives the coefficient trans_geom_phys/LD instead (using
+LD^2=eps*VT/(q*Ns) to eliminate eps and VT) -- a COMPLETELY DIFFERENT
+quantity, not a rescaling of the same one. Empirically confirmed via
+direct instrumentation on the build_diode_mesh3d p-n junction fixture:
+with the old `*eps` coefficient, the equilibrium potential profile
+collapsed to a near-discontinuous step at the doping transition (the
+interior flux term was ~1e17-19x too weak to visibly bend bands over
+even one Debye length); with the corrected `/LD` coefficient, the SAME
+fixture produces a smooth several-LD depletion-region transition, the
+qualitatively correct shape. The Scharfetter-Gummel current's own
+"bare trans_geom" recovery (`_residual_jacobian_dd3d`) is fixed to
+match (`eps_trans * LD` instead of the old `eps_trans/eps`) -- an
+independent re-derivation (see that function's docstring) shows the
+SG current's own scaled coefficient was ALREADY the bare trans_geom_kj
+with no bug, so only the recovery formula (which assumed the old,
+now-corrected, eps_trans convention) needed updating, not the SG
+physics itself. This bug did NOT visibly break the pre-existing test
+suite (test_unstructured_dd3d.py's own ohmic/forward-junction current
+checks pass at ~15-25% tolerance regardless, since bulk conductance
+and volume-integrated recombination are far less sensitive to the
+exact depletion-region shape than a direct potential-profile
+comparison is) -- it was caught only by this M26 gate-BC work, which
+needed the equilibrium band-bending itself to be physically real, and
+building the "3D reduces to 2D" identity test for the new gate BC
+(tests/test_m26_finfet3d.py) is what surfaced it.
+
 Scope, stated honestly (matching this repo's own convention for a
 first tetrahedral-mesh pass):
 
@@ -29,6 +61,26 @@ first tetrahedral-mesh pass):
     START with for 3D"). A future session wanting this should port
     unstructured_dd.py's dlnnie mechanism the same way Caughey-Thomas
     was ported here -- it needs no new 3D geometry either.
+  - GATE (Robin) BC -- M26 follow-up, closing the "unstructured tet
+    gate BC" gap flagged in finfet3d.py's own honesty clause: both
+    solve functions now accept an optional `gates` argument, a
+    Robin/oxide-coupling BC on psi ONLY exactly matching device3d.py's
+    GateBC physics (F[node] += eps_ox*(area/tox_cm)*(Vg_s - Vfb_s -
+    (psi[node]-psi_b_local)); Jacobian diagonal -= eps_ox*area/tox_cm),
+    generalized from device3d.py's structured per-node face AREA
+    (dVx*dVy on a grid face) to `unstructured_assembly3d.
+    boundary_face_node_weights3d`'s per-node barycentric AREA off an
+    arbitrary boundary-triangle list. See that function's own
+    docstring for why a wrap-around (multi-face) gate must be passed
+    as ONE combined face list, not one `gates` entry per face group --
+    passing separate entries silently double-counts shared-edge nodes'
+    oxide capacitance. Validated in
+    tests/test_m26_finfet3d.py::test_unstructured_gate_bc_reduces_to_2d
+    against the (already-validated) 2D Device2D solver on a z-invariant
+    gated slab -- this is the module's own "3D reduces to 2D on a
+    GENERAL (unstructured) mesh" identity gate, distinct from (and a
+    genuine addition to) test_validation_3d.py's existing structured-
+    mesh-only version of that same acceptance criterion.
   - SRH lifetimes are the material's own tau_n0/tau_p0 constants (no
     Scharfetter doping-dependent lifetime); Auger is off by default;
     no Fermi-Dirac statistics, bandgap narrowing, incomplete
@@ -94,6 +146,36 @@ from .constants import Q, EPS0
 from .device import NewtonOptions, thermal_voltage, bernoulli, dbernoulli, D0_REF
 from .device2d import _ohmic_values
 from .materials import SILICON, recombination, mobility_caughey_thomas
+from .moscap import EPS_OX_R
+from .unstructured_assembly3d import boundary_face_node_weights3d
+
+
+def _gate_node_terms(nodes, gates, eps, LD, VT):
+    """Precompute, for each named gate, the per-node (idx, gate_trans,
+    Vfb_s) triple. gate_trans = (eps_ox/eps)*(area/tox_cm)/LD is the
+    unstructured analogue of device3d.py's `bc.kappa * w` product,
+    RE-DERIVED (not copied) from this module's own scaled-Poisson
+    convention: by the same charge-scale nondimensionalization that
+    gives the interior flux coefficient trans_geom/LD (see this
+    module's own docstring's "SCALING FIX" section), a Robin/oxide
+    boundary is exactly a "virtual edge" of length tox_cm and
+    permittivity eps_ox instead of the silicon bulk's eps, so its
+    scaled coefficient is (eps_ox/eps)*(area_phys/tox_cm)/LD -- the
+    interior formula with trans_geom_phys -> area_phys/tox_cm and the
+    homojunction eps ratio (1.0 for a silicon-silicon edge) ->
+    eps_ox/eps for an oxide-coupled boundary.
+
+    `gates`: {name: {"faces": (K,3) int array, "tox_cm": float, "Vfb":
+    float [volts], "Vg": float [volts, default 0.0]}}."""
+    eps_ox = EPS_OX_R * EPS0
+    terms = {}
+    for name, g in (gates or {}).items():
+        idx, area = boundary_face_node_weights3d(nodes, g["faces"])
+        gate_trans = (eps_ox / eps) * area / (float(g["tox_cm"]) * LD)
+        terms[name] = dict(idx=idx, gate_trans=gate_trans,
+                           Vfb_s=float(g["Vfb"]) / VT,
+                           Vg=float(g.get("Vg", 0.0)))
+    return terms
 
 
 def evaluate_doping_at_nodes3d(nodes, tets, region_of_tet, doping_by_region):
@@ -145,11 +227,17 @@ def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans):
 
 def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
                                 C_phys, contacts, material=SILICON,
-                                T=300.0, opts=None):
+                                T=300.0, opts=None, gates=None):
     """Newton-solve the 3D tet-mesh Poisson equilibrium. 3D analogue
     of unstructured_poisson.solve_poisson_equilibrium; contacts here
     are {name: (K, 3) boundary-face node-index array} (triangular
-    faces, not edges)."""
+    faces, not edges).
+
+    gates: optional {name: {"faces": (K,3) int array, "tox_cm": float,
+    "Vfb": float [V], "Vg": float [V], default 0.0}} Robin/oxide-
+    coupling BC -- see this module's own docstring for the physics and
+    the shared-edge double-counting caveat for a multi-face wrap-around
+    gate."""
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
     eps = material.eps_r * EPS0
@@ -160,7 +248,15 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     C_s = C_phys / Ns
     nie_s = nie / Ns
     vols_s = node_vols / LD ** 3
-    trans_s = trans_geom * eps
+    # M26 fix: the scaled Poisson-flux coefficient is trans_geom/LD, NOT
+    # trans_geom*eps -- see this module's own docstring, "SCALING FIX"
+    # section, for the full re-derivation (confirmed empirically: the
+    # old *eps coefficient made the flux term ~1e17-19x too weak
+    # relative to the node_vols_s bulk term, collapsing the equilibrium
+    # depletion-region potential profile into a near-discontinuous step
+    # instead of a smooth several-LD transition).
+    trans_s = trans_geom / LD
+    gate_terms = _gate_node_terms(nodes, gates, eps, LD, VT)
 
     contact_node = {}
     for faces in contacts.values():
@@ -178,8 +274,17 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     N = psi.shape[0]
     for it in range(opts.max_iter):
         F, J = _residual_jacobian_poisson3d(psi, C_s, nie_s, vols_s, edges, trans_s)
-        F[contact_idx] = psi[contact_idx] - contact_psi0
         J = J.tolil()
+        for g in gate_terms.values():
+            idx, gate_trans = g["idx"], g["gate_trans"]
+            if idx.size == 0:
+                continue
+            Vg_s = g["Vg"] / VT
+            psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
+            F[idx] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
+            for k, gt in zip(idx, gate_trans):
+                J[k, k] -= gt
+        F[contact_idx] = psi[contact_idx] - contact_psi0
         J[contact_idx, :] = 0.0
         J[contact_idx, contact_idx] = 1.0
         J = J.tocsc()
@@ -199,13 +304,21 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
 
 def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
                             eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
-                            material, Ns, srh=True, auger=False):
+                            material, Ns, LD, srh=True, auger=False):
     """Scaled coupled residual/Jacobian, interior physics only -- exact
     3D analogue of unstructured_dd._residual_jacobian (node_areas ->
-    node_vols_s; no dlnnie term, this module is homojunction-only)."""
+    node_vols_s; no dlnnie term, this module is homojunction-only).
+
+    eps_trans here is trans_geom/LD (the M26-fixed scaled Poisson-flux
+    coefficient -- see this module's docstring); the bare geometric
+    trans_geom the Scharfetter-Gummel current needs is recovered as
+    eps_trans*LD (the inverse of how eps_trans itself was built),
+    replacing the old (pre-fix) `eps_trans/material.eps_r/EPS0`
+    recovery, which relied on eps_trans instead carrying a bare `*eps`
+    factor that no longer exists post-fix."""
     N = psi.shape[0]
     n_phys, p_phys = n * Ns, p * Ns
-    trans = eps_trans / material.eps_r / EPS0
+    trans = eps_trans * LD
 
     if srh:
         R, dRdn, dRdp = recombination(n_phys, p_phys, nie_s * Ns,
@@ -294,7 +407,7 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
 def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
                  bias, material=SILICON, T=300.0, opts=None, srh=True,
                  auger=False, doping_mobility=False, Ntot_phys=None,
-                 init=None, return_diagnostics=False):
+                 init=None, return_diagnostics=False, gates=None):
     """Newton-solve the coupled 3D tet-mesh drift-diffusion system at
     an applied bias. 3D analogue of unstructured_dd.solve_bias.
 
@@ -302,6 +415,14 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     doping_mobility/Ntot_phys: same Caughey-Thomas mobility support as
     unstructured_dd.solve_bias (harmonic edge mean); NO heterojunction
     support here (see module docstring).
+
+    gates: optional {name: {"faces": (K,3) int array, "tox_cm": float,
+    "Vfb": float [V], "Vg": float [V] default}}; `bias` may also
+    include a gate's name (same {name: V} dict contacts use) to
+    override its default Vg for this particular solve -- mirroring how
+    `bias.get(contact_name, ...)` already overrides a contact's
+    voltage. See this module's own docstring for the Robin-BC physics
+    and the shared-edge double-counting caveat for a wrap-around gate.
 
     init / return_diagnostics: same M21 adaptive-refinement warm-start /
     per-node Newton-residual-history opt-ins as unstructured_dd.
@@ -325,7 +446,7 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     C_s = C_phys / Ns
     nie_s = nie / Ns
     vols_s = node_vols / LD ** 3
-    eps_trans = trans_geom * eps
+    eps_trans = trans_geom / LD   # M26 fix -- see module docstring's "SCALING FIX"
     tau_n = np.full_like(C_phys, material.tau_n0)
     tau_p = np.full_like(C_phys, material.tau_p0)
 
@@ -347,6 +468,10 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
 
     D_n_s = hmean(mu_n_node[i_e], mu_n_node[j_e]) * VT / D0_REF
     D_p_s = hmean(mu_p_node[i_e], mu_p_node[j_e]) * VT / D0_REF
+
+    gate_terms = _gate_node_terms(nodes, gates, eps, LD, VT)
+    for name, g in gate_terms.items():
+        g["Vg"] = bias.get(name, g["Vg"])
 
     contact_node_bias = {}
     for name, faces in contacts.items():
@@ -380,8 +505,18 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian_dd3d(
             psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
-            R0, tau_n, tau_p, material, Ns, srh=srh, auger=auger)
+            R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger)
         F3 = F.reshape(N, 3)
+        Jl = J.tolil()
+        for g in gate_terms.values():
+            idx, gate_trans = g["idx"], g["gate_trans"]
+            if idx.size == 0:
+                continue
+            Vg_s = g["Vg"] / VT
+            psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
+            F3[idx, 0] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
+            for k, gt in zip(idx, gate_trans):
+                Jl[3 * k, 3 * k] -= gt
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
         F3[contact_idx, 2] = p[contact_idx] - p0
@@ -390,7 +525,6 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             residual_node_history.append(
                 np.linalg.norm(F3, axis=1).astype(float))
 
-        Jl = J.tolil()
         for comp in range(3):
             rows = 3 * contact_idx + comp
             Jl[rows, :] = 0.0
@@ -420,7 +554,7 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
 
     _, _, Jn, Jp = _residual_jacobian_dd3d(
         psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
-        R0, tau_n, tau_p, material, Ns, srh=srh, auger=auger)
+        R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger)
 
     # terminal current: for each contact FACE, sum its net (electron+
     # hole) edge flux over the contact's nodes -- the box-integration

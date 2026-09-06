@@ -27,6 +27,16 @@ from .device3d import Device3D, DirichletBC as DirichletBC3D, GateBC as GateBC3D
 from .moscap import MOSCapacitor, flatband_voltage
 from .mosfet import mosfet_doping, build_mosfet, id_vg_sweep
 from . import process
+from . import process2d
+from . import ted
+from . import mc_implant
+from . import schottky
+from .finfet3d import build_finfet3d, id_vg_sweep_3d
+from .characterization import (
+    extract_vth_constant_current, extract_subthreshold_swing, extract_dibl,
+)
+from . import circuit
+from . import hydrodynamic
 
 __version__ = "0.1.0"
 
@@ -40,6 +50,10 @@ __all__ = [
     "Device1D", "Models", "NewtonOptions", "bernoulli", "dbernoulli",
     "Device2D", "DirichletBC", "GateBC",
     "Device3D", "DirichletBC3D", "GateBC3D",
-    "MOSCapacitor", "flatband_voltage", "process",
+    "MOSCapacitor", "flatband_voltage", "process", "process2d", "ted", "mc_implant",
+    "schottky",
     "mosfet_doping", "build_mosfet", "id_vg_sweep",
+    "build_finfet3d", "id_vg_sweep_3d",
+    "extract_vth_constant_current", "extract_subthreshold_swing", "extract_dibl",
+    "circuit", "hydrodynamic",
 ]

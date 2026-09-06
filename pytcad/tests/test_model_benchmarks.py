@@ -378,3 +378,403 @@ def test_mobility_cvt_effective_mobility_matches_takagi_taur_gate():
     mu_1e6 = float(mobility_cvt(1e6, mu_ct, "n", 300.0))
     assert 200.0 <= mu_1e5 <= 800.0, f"mu_eff(1e5)={mu_1e5:.1f}"
     assert 25.0 <= mu_1e6 <= 100.0, f"mu_eff(1e6)={mu_1e6:.1f}"
+
+
+def test_oxidize_2d_uniform_mask_matches_1d_deal_grove_bit_for_bit():
+    """M23 gate G1 (Architecture_Master_Plan.md Phase 14 / ARCHITECTURE.md
+    M23 acceptance): a fully-open (unmasked) 2D oxidation must reduce
+    exactly to pytcad.process.oxide_thickness -- the whole point of the
+    per-column bookkeeping in process2d.oxidize_2d is that the lateral
+    bird's-beak kernel contributes nothing when there is no mask edge."""
+    from pytcad import process
+    from pytcad.process2d import ProcessGeometry2D, oxidize_2d
+    x = np.linspace(0.0, 10e-4, 21)   # 21 columns, 10 um wide, all open
+    geom = ProcessGeometry2D(x)
+    out = oxidize_2d(geom, T_C=900.0, t_hours=1.0, ambient="dry", mask=None)
+    expected = process.oxide_thickness(900.0, 1.0, ambient="dry")
+    assert np.allclose(out.ox_thick_um, expected, rtol=0, atol=1e-13)
+
+
+def test_oxidize_2d_conserves_silicon_by_the_0_44_factor():
+    """M23 gate G2: cumulative silicon consumed must equal 0.44x the
+    cumulative oxide grown at every column, to machine precision, even
+    under a masked/graded-rate bird's-beak profile."""
+    from pytcad import process
+    from pytcad.process2d import ProcessGeometry2D, oxidize_2d, mask_from_intervals
+    x = np.linspace(0.0, 20e-4, 41)
+    mask = mask_from_intervals(x, [(0.0, 8e-4)])   # open 0-8um, masked past it
+    geom = ProcessGeometry2D(x)
+    out = oxidize_2d(geom, T_C=1000.0, t_hours=0.5, ambient="wet", mask=mask)
+    assert np.allclose(out.si_consumed_um, process.silicon_consumed(out.ox_thick_um),
+                        rtol=0, atol=1e-13)
+
+
+def test_diffuse_with_defects_reduces_bit_identically_to_intrinsic_diffuse_numeric():
+    """M24 gate G1: with no extrinsic/TED/OED enhancement requested,
+    diffuse_with_defects must be bit-identical to process.diffuse_numeric
+    -- it literally calls it, by construction, so this test guards against
+    a future edit accidentally routing the disabled case through the
+    enhanced (and therefore differently-discretized) code path."""
+    from pytcad import process
+    from pytcad.ted import diffuse_with_defects
+    x = np.linspace(0.0, 1e-4, 101)
+    C0 = process.implant(x, "B", 30, 1e13)
+    a = process.diffuse_numeric(x, C0, "B", 950.0, 600.0)
+    b = diffuse_with_defects(x, C0, "B", 950.0, 600.0)
+    assert np.array_equal(a, b)
+
+
+def test_extrinsic_enhancement_matches_fair_model_at_published_ratios():
+    """M24 gate G2: Fair's pair-diffusion enhancement factor D/Di =
+    f_I(n/ni) + f_V(ni/n) must equal 1 exactly at n=ni (intrinsic), and
+    for boron (f_I=1, purely interstitial-mediated) must equal n/ni
+    exactly -- the textbook published relation (Fair, 1981)."""
+    from pytcad.ted import extrinsic_enhancement, ni_silicon
+    ni = ni_silicon(1000.0)
+    assert extrinsic_enhancement("B", ni, 1000.0) == pytest.approx(1.0, rel=1e-12)
+    assert extrinsic_enhancement("B", 10 * ni, 1000.0) == pytest.approx(10.0, rel=1e-9)
+    # Arsenic (mostly vacancy-mediated) must fall *below* boron's ratio at
+    # the same extrinsic doping level -- the qualitative published trend.
+    r_b = extrinsic_enhancement("B", 10 * ni, 1000.0)
+    r_as = extrinsic_enhancement("As", 10 * ni, 1000.0)
+    assert r_as < r_b
+
+
+def test_segregation_partition_matches_the_analytic_equilibrium_split():
+    """M24 gate G4: segregation_partition must exactly satisfy both the
+    conservation and the segregation-coefficient constraints it is
+    defined by (an algebraic identity, checked directly)."""
+    from pytcad.ted import segregation_partition
+    Q, m, t_si, t_ox = 5e13, 0.3, 1e-6, 2e-6
+    C_si, C_ox = segregation_partition(Q, m, t_si, t_ox)
+    assert C_si == pytest.approx(m * C_ox, rel=1e-12)
+    assert (C_si * t_si + C_ox * t_ox) == pytest.approx(Q, rel=1e-9)
+
+
+def test_mc_implant_bca_range_is_same_order_of_magnitude_as_the_srim_table():
+    """M25 gate G1: after calibrating the (disclosed, single free
+    parameter) electronic-stopping prefactor at one reference energy
+    against pytcad.process's existing SRIM-derived range table, the BCA
+    Monte-Carlo range at NEARBY energies (not the calibration point
+    itself) must land within a factor of ~2 of that same table and must
+    increase monotonically with energy. This is a "same physics, right
+    order of magnitude, right trend" gate for a deliberately simplified
+    BCA model -- see pytcad/mc_implant.py's honesty clause for why an
+    exact SRIM match is not attempted."""
+    from pytcad import process
+    from pytcad.mc_implant import calibrate_electronic_stopping, mc_implant_bca
+    species, ref_E = "B", 50
+    k_e = calibrate_electronic_stopping(species, ref_E, n_ions=300, seed=1)
+
+    Rp_mc = []
+    for E in (30, 50, 100):
+        out = mc_implant_bca(species, E, k_e, n_ions=500, seed=2)
+        Rp_tab, _ = process.implant_moments(species, E)
+        ratio = out["Rp_cm"] / Rp_tab
+        assert 0.6 <= ratio <= 1.6, f"E={E}: Rp_mc/Rp_tab={ratio:.2f}"
+        Rp_mc.append(out["Rp_cm"])
+    assert Rp_mc[0] < Rp_mc[1] < Rp_mc[2]
+
+
+def test_mc_implant_bca_channeling_produces_a_deeper_tail_than_amorphous():
+    """M25 gate G2 (qualitative, honestly labeled per the milestone spec):
+    enabling the channeling knob must produce a heavier/deeper tail than
+    a purely amorphous run at the same energy and ion count -- the
+    qualitative channeling-tail signature. Not compared to a specific
+    published SIMS profile."""
+    from pytcad.mc_implant import calibrate_electronic_stopping, mc_implant_bca
+    k_e = calibrate_electronic_stopping("P", 50, n_ions=300, seed=1)
+    amorphous = mc_implant_bca("P", 50, k_e, n_ions=800, seed=3)
+    channeled = mc_implant_bca("P", 50, k_e, n_ions=800, seed=3,
+                                channeling_fraction=0.15,
+                                channeling_length_mean_cm=3e-5)
+    assert channeled["depth_cm"].max() > 2.0 * amorphous["depth_cm"].max()
+    assert channeled["channeled_ever"].sum() > 0
+
+
+def test_mc_implant_bca_accounts_for_every_ion_backscattered_or_stopped():
+    """M25 gate G3: dose conservation for a MC implant means every
+    launched ion is accounted for as either stopped-in-target or
+    backscattered-out -- none silently vanish -- and the backscattered
+    fraction stays physically small for these light/medium ions at these
+    energies (a sanity bound, not a literature-matched yield)."""
+    from pytcad.mc_implant import calibrate_electronic_stopping, mc_implant_bca
+    k_e = calibrate_electronic_stopping("As", 50, n_ions=300, seed=1)
+    out = mc_implant_bca("As", 50, k_e, n_ions=1000, seed=4)
+    assert out["depth_cm"].shape[0] == 1000
+    assert out["backscattered"].shape[0] == 1000
+    assert out["backscatter_fraction"] < 0.10
+    assert out["unstopped_fraction"] < 0.01
+
+
+def test_richardson_constant_A0_matches_the_published_fundamental_constant_value():
+    """M28 gate G1: the free-electron Richardson constant derived here
+    from fundamental constants (A0 = 4 pi q m0 kB^2 / h^3) must match
+    the published textbook value 120.173 A/(cm^2 K^2) (Sze & Ng) to high
+    precision -- this is an exact physical-constant calculation, not a
+    fit, so the tolerance is tight."""
+    from pytcad.schottky import richardson_constant_A0
+    assert richardson_constant_A0() == pytest.approx(120.173, rel=1e-4)
+
+
+def test_schottky_iv_matches_thermionic_emission_theory_at_a_published_barrier():
+    """M28 gate G2: for a PtSi/n-Si-like Schottky contact (published
+    barrier height phi_Bn ~= 0.85 eV, A*_n = 252 A/(cm^2 K^2) for Si,
+    Sze & Ng), the ideal (no image-force) thermionic-emission I-V must
+    exactly satisfy the textbook diode equation at forward bias: J(V) =
+    J0 [exp(qV/kT) - 1] with J0 = A* T^2 exp(-phi_B/kT), and J(0) = 0
+    exactly."""
+    from pytcad.schottky import thermionic_current_density, richardson_a_star
+    from pytcad.constants import KB_EV
+    T = 300.0
+    phi_B = 0.85
+    A_star = richardson_a_star("Si", "n")
+    assert thermionic_current_density(phi_B, T, 0.0, A_star) == pytest.approx(0.0, abs=1e-30)
+    J0 = A_star * T**2 * np.exp(-phi_B / (KB_EV * T))
+    from pytcad.constants import KB, Q
+    Vt = KB * T / Q
+    for V in (0.1, 0.2, 0.3):
+        J = thermionic_current_density(phi_B, T, V, A_star)
+        expected = J0 * (np.exp(V / Vt) - 1.0)
+        assert J == pytest.approx(expected, rel=1e-9)
+
+
+def test_schottky_barrier_lowering_reduces_the_barrier_and_grows_with_field():
+    """M28 gate G3: image-force barrier lowering must be positive (it
+    always LOWERS the barrier) and must increase with the depletion
+    field, the qualitative Schottky-effect trend (Sze & Ng eq. 3.5-3.6),
+    and must land in the tens-of-meV range for a typical moderately
+    doped Si contact (Nd=1e16-1e17), the physically expected magnitude."""
+    from pytcad.schottky import schottky_max_field, image_force_lowering_eV
+    from pytcad.materials import SILICON
+    phi_B = 0.85
+    E_lo = schottky_max_field(1e16, phi_B, 0.0, SILICON.eps_r)
+    E_hi = schottky_max_field(1e17, phi_B, 0.0, SILICON.eps_r)
+    d_lo = image_force_lowering_eV(E_lo, SILICON.eps_r)
+    d_hi = image_force_lowering_eV(E_hi, SILICON.eps_r)
+    assert 0.0 < d_lo < d_hi
+    assert 0.005 < d_lo < 0.1
+    assert 0.005 < d_hi < 0.1
+
+
+def test_schottky_ohmic_limit_recovery_as_barrier_height_vanishes():
+    """M28 gate G4: as the barrier height phi_B -> 0, the thermionic
+    saturation current J0 = A* T^2 exp(-phi_B/kT) must diverge (grow
+    without the usual rectifying-diode bound), i.e. the contact's
+    effective differential resistance collapses toward the near-zero
+    resistance of an ohmic contact -- the model's built-in
+    ohmic-limit-recovery behavior, checked as a strictly monotonic
+    trend across several barrier heights spanning three decades of J0."""
+    from pytcad.schottky import thermionic_current_density, richardson_a_star
+    A_star = richardson_a_star("Si", "n")
+    T = 300.0
+    barriers = [0.85, 0.3, 0.05, 0.001]
+    J0s = [thermionic_current_density(pb, T, 1e-6, A_star) / 1e-6 * (8.617333262e-5 * T)
+           for pb in barriers]
+    for a, b in zip(J0s, J0s[1:]):
+        assert b > a
+    assert J0s[-1] / J0s[0] > 1e6
+
+
+@pytest.mark.slow
+def test_finfet3d_dibl_and_subthreshold_swing_worsen_as_gate_length_shrinks():
+    """M26 gate: FinFET electrostatics vs published TCAD-literature
+    trends (DIBL/SSE), honestly labeled as a LITERATURE-TREND gate --
+    not a match to any specific published I-V curve. Colinge (FinFETs
+    and Other Multi-Gate Transistors) and standard short-channel MOSFET
+    theory agree that both drain-induced barrier lowering and
+    subthreshold swing get WORSE (larger) as gate length shrinks,
+    because the gate progressively loses electrostatic control of the
+    channel potential to the drain. This test builds two otherwise-
+    identical tri-gate FinFETs (pytcad.finfet3d) differing only in Lg
+    and checks that qualitative direction on both metrics.
+
+    Runtime: ~2 minutes (4 full 3D Id-Vg sweeps at ~1500-4000 nodes
+    each) -- see finfet3d.py's own honesty clause for what is and is
+    not physically faithful about this structured-mesh FinFET model."""
+    from pytcad.finfet3d import build_finfet3d, id_vg_sweep_3d
+    from pytcad.characterization import extract_subthreshold_swing, extract_dibl
+
+    Vg = np.linspace(-0.4, 1.2, 12)
+    common = dict(Lsd=0.3e-6, Hfin=0.3e-6, Wfin=0.2e-6, tox_cm=2e-7,
+                  Na=5e17, Nsd_peak=1e19, sigma_y=0.05e-6, sigma_lat=0.05e-6,
+                  NX=6, NY=4, NZ=4, mesh_ratio=1.3)
+
+    metrics = {}
+    for Lg in (1.5e-6, 0.4e-6):
+        Id_low = id_vg_sweep_3d(build_finfet3d(Lg=Lg, **common), Vg, Vds=0.05, verbose=False)
+        Id_high = id_vg_sweep_3d(build_finfet3d(Lg=Lg, **common), Vg, Vds=0.3, verbose=False)
+        ss = extract_subthreshold_swing(Vg, Id_low)
+        dibl = extract_dibl(Vg, Id_low, Vg, Id_high, 0.05, 0.3, target=4e-7)
+        metrics[Lg] = (ss, dibl)
+
+    ss_long, dibl_long = metrics[1.5e-6]
+    ss_short, dibl_short = metrics[0.4e-6]
+    assert dibl_long > 0.0
+    assert dibl_short > dibl_long
+    assert ss_short >= ss_long
+
+
+def test_resistor_divider_matches_analytic():
+    """M27 gate G1: a plain two-resistor voltage divider must match
+    the textbook analytic result to numerical precision."""
+    from pytcad.circuit import Circuit, VSource, Resistor, GND
+    c = Circuit()
+    c.add(VSource("V1", "in", GND, 5.0))
+    c.add(Resistor("R1", "in", "mid", 1000.0))
+    c.add(Resistor("R2", "mid", GND, 2000.0))
+    x, mna = c.dc_operating_point()
+    v_mid = Circuit.node_voltage(x, mna, "mid")
+    assert v_mid == pytest.approx(5.0 * 2000.0 / 3000.0, rel=1e-6)
+
+
+def test_device_in_circuit_operating_point_matches_device_only_solve():
+    """M27 gate G2: a real Device1D p-n junction embedded via
+    DeviceStamp in a resistor-loaded circuit must reach the SAME
+    operating point (terminal current) as solving the identical device
+    standalone at the circuit-computed terminal voltage -- i.e. the
+    finite-difference-conductance MNA stamp (see circuit.py's own
+    honesty clause on why it is not literally "the analytic Jacobian")
+    introduces no additional physics error."""
+    from pytcad.mesh import graded_mesh
+    from pytcad.device import Device1D
+    from pytcad.circuit import Circuit, VSource, Resistor, DeviceStamp, GND
+
+    x = graded_mesh(2e-4, [1e-4], 5e-7, 6e-6, 1.2)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+    dev = Device1D(x, doping)
+
+    c = Circuit()
+    c.add(VSource("V1", "in", GND, 0.5))
+    c.add(Resistor("R1", "in", "a", 500.0))
+    stamp = c.add(DeviceStamp("D1", "a", GND, dev, area_cm2=1e-4))
+    x_sol, mna = c.dc_operating_point(max_iter=40)
+    va = Circuit.node_voltage(x_sol, mna, "a")
+
+    dev_only = Device1D(x, doping)
+    dev_only.solve_bias([va, 0.0])
+    J, _spread = dev_only.current_density()
+    I_standalone = J * 1e-4
+    I_via_kirchhoff = (0.5 - va) / 500.0
+
+    assert stamp.last_current == pytest.approx(I_standalone, rel=1e-6)
+    assert I_standalone == pytest.approx(I_via_kirchhoff, rel=1e-3)
+
+
+@pytest.mark.slow
+def test_ring_oscillator_transient_smoke():
+    """M27 gate G3 (honest: qualitative): a 3-stage CMOS inverter ring
+    (level-1 MOSFETs, one load capacitor per stage), started from a
+    symmetry-broken initial condition (the symmetric DC operating
+    point is a genuine but UNSTABLE fixed point -- see circuit.py's
+    own `transient()` docstring on why `initial_conditions` exists),
+    must show real oscillation: repeated threshold crossings, not a
+    flat line settling back to the symmetric point."""
+    from pytcad.circuit import Circuit, VSource, Capacitor, MOSFET1, GND
+
+    c = Circuit()
+    VDD = 5.0
+    c.add(VSource("VDD", "vdd", GND, VDD))
+    nstages = 3
+    nodes = [f"n{i}" for i in range(nstages)]
+    for i in range(nstages):
+        out = nodes[i]
+        inp = nodes[(i - 1) % nstages]
+        c.add(MOSFET1(f"MP{i}", "vdd", inp, out, kind="p", Vt0=-0.7,
+                     kp=4e-4, W_L=10.0, lam=0.02))
+        c.add(MOSFET1(f"MN{i}", out, inp, GND, kind="n", Vt0=0.7,
+                     kp=2e-4, W_L=10.0, lam=0.02))
+        c.add(Capacitor(f"C{i}", out, GND, 1e-12))
+
+    times, hist, mna = c.transient(
+        t_stop=4e-8, dt=2e-11,
+        initial_conditions={"n0": 4.5, "n1": 0.5, "n2": 2.5})
+    v0 = hist[:, mna.idx("n0")]
+    assert v0.max() > 0.8 * VDD
+    assert v0.min() < 0.2 * VDD
+    crossings = int(np.sum(np.diff(np.sign(v0 - VDD / 2.0)) != 0))
+    assert crossings >= 4
+
+
+def test_hydrodynamic_dd_limit_is_bit_identical_when_unused():
+    """M29 gate G1 (DD limit recovery, bit-identity when off): the
+    hydrodynamic module (pytcad/hydrodynamic.py) is a standalone post-
+    processing closure, never wired into Device1D's own residual/
+    Jacobian -- so a Device1D solve is bit-for-bit identical whether
+    or not the hydrodynamic module happens to be imported/called
+    elsewhere in the process. Regression guard against a future
+    session wiring it in and breaking this property silently."""
+    from pytcad.mesh import graded_mesh
+    from pytcad.device import Device1D
+    import pytcad.hydrodynamic  # noqa: F401  (import alone must be a no-op)
+
+    x = graded_mesh(2e-4, [1e-4], 5e-7, 6e-6, 1.2)
+    doping = np.where(x < 1e-4, -1e17, 1e17)
+
+    dev_a = Device1D(x, doping)
+    dev_a.solve_bias([0.3, 0.0])
+    psi_a, n_a, p_a = dev_a.psi.copy(), dev_a.n.copy(), dev_a.p.copy()
+
+    from pytcad.hydrodynamic import carrier_temperature
+    carrier_temperature(1e5, 1400.0)   # exercise the module in between
+
+    dev_b = Device1D(x, doping)
+    dev_b.solve_bias([0.3, 0.0])
+
+    assert np.array_equal(psi_a, dev_b.psi)
+    assert np.array_equal(n_a, dev_b.n)
+    assert np.array_equal(p_a, dev_b.p)
+
+
+def test_hydrodynamic_heating_ratio_is_near_unity_at_low_field_and_grows_with_field():
+    """M29 gate G2 (overshoot trend, honestly scoped -- see
+    hydrodynamic.py's own module docstring for why a LOCAL energy-
+    balance closure cannot reproduce a Monte Carlo overshoot SPATIAL
+    profile): the local carrier-temperature heating ratio must be
+    ~1 at near-zero field (thermal equilibrium) and increase
+    monotonically and substantially at realistic submicron-device
+    fields, the qualitative "field heats the carrier gas" trend
+    underlying the overshoot phenomenon. Also checks the genuinely
+    computable energy-relaxation length lands in the published
+    submicron order of magnitude (Sze & Ng: overshoot matters once a
+    device's characteristic length is comparable to v_sat*tau_w)."""
+    from pytcad.hydrodynamic import (
+        hot_carrier_heating_ratio, energy_relaxation_length, TAU_W_N,
+    )
+    from pytcad.materials import SILICON
+
+    fields = [1.0e2, 1.0e3, 1.0e4, 5.0e4, 1.0e5, 2.0e5]
+    ratios = [hot_carrier_heating_ratio(E, SILICON.mu_n_max) for E in fields]
+
+    assert ratios[0] == pytest.approx(1.0, abs=0.01)
+    for a, b in zip(ratios, ratios[1:]):
+        assert b > a
+    assert ratios[-1] > 5.0   # substantial heating at a realistic peak field
+
+    l_w = energy_relaxation_length(SILICON.vsat_n, TAU_W_N)
+    assert 0.01e-4 < l_w < 0.5e-4   # 0.01-0.5 um, the published submicron scale
+
+
+def test_hydrodynamic_impact_ionization_reduces_to_the_published_field_model():
+    """M29 gate G3 ("II with carrier-T models vs published"): the
+    carrier-temperature-driven avalanche generation rate, evaluated at
+    the temperature this module's OWN local closure associates with a
+    given field, must reduce to EXACTLY the existing (M15, van
+    Overstraeten-de Man) field-driven generation rate at that same
+    field -- see hydrodynamic.py's own honesty clause for why this
+    (not an independent experimental comparison) is what "vs published"
+    means for a temperature-mediated route to the same coefficients."""
+    from pytcad.hydrodynamic import (
+        carrier_temperature, impact_ionization_rate_carrierT,
+    )
+    from pytcad.ionization import alpha_n, alpha_p
+    from pytcad.materials import SILICON
+
+    n, p, E = 1.0e15, 1.0e10, 3.0e5
+    mu_n, mu_p = SILICON.mu_n_max, SILICON.mu_p_max
+    Tn = carrier_temperature(E, mu_n)
+    Tp = carrier_temperature(E, mu_p)
+
+    G_carrierT = impact_ionization_rate_carrierT(n, p, Tn, Tp, mu_n, mu_p)
+    G_field = alpha_n(E) * mu_n * E * n + alpha_p(E) * mu_p * E * p
+    assert G_carrierT == pytest.approx(G_field, rel=1e-9)

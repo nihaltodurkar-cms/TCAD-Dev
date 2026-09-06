@@ -690,18 +690,32 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
     site. NewtonOptions is a plain (non-frozen) dataclass, so this is
     the same kind of in-place field update opts.verbose already is
     everywhere else in this file -- not a new mutability contract.
+
+    The override is applied ONLY right before whichever phase
+    (bias/sweep/transient) actually runs, not unconditionally right
+    after equilibrium -- a spec with no bias/sweep/transient at all
+    (equilibrium-only) must leave opts.linsolve exactly as the
+    equilibrium solve used it, since run_job() stamps the final
+    `numerics["linsolve"]` from this same opts object afterward.
+    Resetting it unconditionally used to silently mislabel every
+    equilibrium-only job's recorded solver as "direct" even when
+    equilibrium itself ran under "bicgstab" (engine="amg" or the auto
+    heuristic's use_amg_equilibrium) -- caught by
+    gui/tests/test_solver_runner.py::test_engine_amg_matches_pyamg_availability.
     """
     print("PYTCAD_STAGE=equilibrium", flush=True)
     device.solve_equilibrium(opts)
-    if linsolve_bias is not None:
-        opts.linsolve = linsolve_bias
 
     if spec.transient is not None:
+        if linsolve_bias is not None:
+            opts.linsolve = linsolve_bias
         print("PYTCAD_STAGE=transient", flush=True)
         fields, series = run_transient(device, spec, opts)
         result = fields
         result.update(series)
     elif spec.sweep is not None:
+        if linsolve_bias is not None:
+            opts.linsolve = linsolve_bias
         print("PYTCAD_STAGE=sweep", flush=True)
         # Snapshot the equilibrium state BEFORE the sweep mutates the
         # device: if every point diverges, this (honestly labeled
@@ -715,6 +729,8 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
     else:
         solved_bias = spec.bias is not None
         if solved_bias:
+            if linsolve_bias is not None:
+                opts.linsolve = linsolve_bias
             print("PYTCAD_STAGE=bias", flush=True)
             apply_bias(device, spec, opts)
 
