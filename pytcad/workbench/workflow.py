@@ -25,6 +25,30 @@ class DeckRun:
     device: object = None
     bias: dict = field(default_factory=dict)
     sweep: dict = None
+    splits: dict = field(default_factory=dict)
+
+
+def _parse_split_args(rest):
+    """'tox_cm = 7e-7, 8e-7, 9e-7' -> ('tox_cm', [7e-7, 8e-7, 9e-7]);
+    raises ValueError on junk."""
+    key, sep, val = rest.partition("=")
+    if not sep:
+        raise ValueError("SPLIT needs PARAM = value, value, ...")
+    key = key.strip()
+    if not key:
+        raise ValueError("SPLIT needs a parameter name")
+    values = []
+    for piece in val.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            values.append(float(piece))
+        except ValueError:
+            raise ValueError(f"split value {piece!r} is not a number")
+    if not values:
+        raise ValueError(f"SPLIT {key!r} needs at least one value")
+    return key, values
 
 
 def _parse_sweep_args(args):
@@ -69,7 +93,7 @@ def run_deck_full(text):
                 problems.append((lineno, "duplicate TEMPLATE statement"))
             run.template_id = rest.strip() or None
             continue
-        if "=" in line and head not in ("bias", "sweep"):
+        if "=" in line and head not in ("bias", "sweep", "split"):
             key, _, val = line.partition("=")
             try:
                 # plain parameter lines carry no prefix keyword
@@ -99,6 +123,18 @@ def run_deck_full(text):
                 sweep_line = (lineno, _parse_sweep_args(args))
             except ValueError as exc:
                 problems.append((lineno, str(exc)))
+            continue
+        if head == "split":
+            try:
+                key, values = _parse_split_args(rest)
+            except ValueError as exc:
+                problems.append((lineno, str(exc)))
+            else:
+                if key in run.splits:
+                    problems.append(
+                        (lineno, f"duplicate SPLIT statement for {key!r}"))
+                else:
+                    run.splits[key] = values
             continue
         problems.append((lineno, f"unrecognised statement: {raw!r}"))
 

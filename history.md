@@ -3650,3 +3650,106 @@ machinery is correct, not a bias-sweep feature.
 Full suite: `pytest tests/test_m18_ac2d.py tests/test_m18_yparam.py -q`
 -> 19 passed (10 in `test_m18_ac2d.py`, 9 in `test_m18_yparam.py`), no
 regressions.
+
+## STATE ADDENDUM -- M30 PART I: WORKBENCH SYSTEM FEATURES, SPLITS/
+CALIBRATION/BATCH/DECKBUILD-IMPORT (2026-09-07)
+
+Environment finding, unrelated to the code but worth recording since
+it produced a false "97 tests failed" scare mid-session: this machine's
+`base` anaconda3 env has an ABI-mismatched Qt6 install (`undefined
+symbol: _ZN14QObjectPrivateC2E16QtPrivate_6_11_0` loading
+`libqtquickcontrols2plugin.so`), which fails EVERY `gui/tests/*` QML
+test with "Main.qml failed to load," independent of any code change --
+confirmed directly via `git stash` reproducing the identical failure on
+unmodified code. The dedicated `TCAD` conda env (`conda run -n TCAD
+...`) has a working Qt6 and must be used for all commands in this repo
+going forward; recorded in this session's persistent memory so it
+isn't rediscovered from scratch next time.
+
+New work: M30 Part I (see `pytcad/M30-WORKBENCH-PLAN.md` for the full
+plan, including the re-scoping note that two of ARCHITECTURE.md's five
+M30 bullets -- 2D contour/cut plots and transient plots in the GUI --
+were already shipped by GUI-IMPROVEMENT-PLAN.md/M17-TRANSIENT-PLAN.md
+and are NOT part of this work). Four independently-gated phases, none
+touching numerical core (`pytcad/*.py`):
+
+- **Phase 1, parameter splits**: `workbench/splits.py`
+  (`expand_splits`, `run_split_matrix`, `SplitRow`) + a new `SPLIT`
+  statement in `workbench/workflow.py`'s deck grammar
+  (`DeckRun.splits`), fully backward compatible (a deck with no SPLIT
+  line is byte-for-byte unaffected). `run_split_matrix` builds one
+  device per cartesian-product row through the existing template path,
+  isolating a row the template rejects from the rest of the matrix.
+  Gates: `tests/test_m30_splits.py`, 15/15, including a G-STUDY gate
+  tying a `mos_capacitor` `tox_cm` split to the real textbook Cox =
+  eps_ox/tox_cm relation (`pytcad.moscap.EPS_OX_R`/`EPS0`).
+- **Phase 2, calibration**: `workbench/calibration.py`
+  (`GoalFunction`, `calibrate`, `solve_field`), driving
+  `scipy.optimize.minimize(method="Nelder-Mead")` over named template
+  parameters. Each trial solves EQUILIBRIUM-ONLY (no bias sweep needed
+  for a field-profile goal) through the existing, unmodified
+  `gui.services.solver_runner.run_job` -- the exact function
+  `tests/test_workbench_m1.py` already calls directly. An
+  out-of-range or solver-rejected trial is scored with a large, finite
+  penalty (`UNREACHABLE_PENALTY = 1e6`) rather than raising out of the
+  optimizer; when every trial in a search fails, `converged=False` is
+  reported honestly instead of a fabricated best fit. Gates:
+  `tests/test_m30_calibration.py`, 5/5 -- the load-bearing G-RECOVER
+  gate plants `na_cm3 = -3e18` on a `pn_diode` template, perturbs the
+  initial guess to the template default (`-1e18`), and recovers the
+  planted value to within 3% purely from matching the equilibrium
+  potential profile.
+- **Phase 4, batch parallelism**: `workbench/batch.py`
+  (`run_jobs_parallel`, `solve_split_matrix`, `BatchOutcome`), a
+  `concurrent.futures.ProcessPoolExecutor` pool (worker count capped by
+  `default_worker_count`, mirroring AGENTS.md's own `-n 6` convention)
+  pinning `OPENBLAS_NUM_THREADS=1` per worker via the pool initializer
+  -- the exact oversubscription hazard AGENTS.md's own commands section
+  already documents for `pytest -n`, now doubled by running real solves
+  concurrently rather than just test collection. `solve_split_matrix`
+  wires Phase 1's row builder directly into the pool: a row that fails
+  to BUILD never reaches the solver. This parallelizes many
+  INDEPENDENT jobs -- orthogonal to M22's already-shipped MPI-Schwarz
+  work, which parallelizes ONE job's own linear solve across ranks.
+  Gates: `tests/test_m30_batch.py`, 7/7, including a bit-identity check
+  (`np.array_equal`, not merely close) between parallel and sequential
+  `run_job` results on the same inputs, and a real worker-process check
+  that `OPENBLAS_NUM_THREADS` is actually `"1"` inside a pool worker
+  (not just set in the parent).
+- **Phase 3, DeckBuild-dialect import**: `workbench/
+  deckbuild_import.py` (`import_deckbuild`), translating a documented,
+  deliberately bounded five-statement subset of Silvaco DeckBuild/ATLAS
+  syntax (`go atlas`, a `#template ID` pragma -- DeckBuild itself has
+  no template concept, so this is an explicit, documented extension of
+  ours standing in for geometry selection -- `electrode name=...
+  voltage=...`, `solve name=... vstep=... vfinal=... [vstart=...]`, and
+  plain `KEY=value` lines) into our own dialect, then hands off to the
+  real, unmodified `run_deck_full` -- no second validator, no second
+  simulation path. Anything outside the documented subset (e.g. a
+  `mesh`/`region` statement) raises a line-numbered error citing the
+  ORIGINAL deck's line number. No external DeckBuild corpus exists to
+  validate against, so the round-trip gate is deliberately
+  self-referential per the plan doc's own stated honest limitation: an
+  `nmos` deck written in both dialects must produce bit-identical
+  `DeckRun.bias`/`.sweep`/built regions and contacts. Gates:
+  `tests/test_m30_deckbuild_import.py`, 6/6.
+
+Regression status, `TCAD` env: fast suite (`-m "not slow"`) 1279 ->
+1297 passed (+18 = exactly the new tests) across the four phases, 0
+failures, same 39 pre-existing warnings (unrelated scipy sparse-solver
+`RuntimeWarning`s and intentional mesh-refinement `UserWarning`s) both
+before and after. Slow gate battery (`-m "slow"`) also run per
+AGENTS.md's completion-claim rule: 19 passed, 0 failures.
+
+M30 Part II (the GUI/product layer: Study/Split Manager, Sweep Matrix
+Viewer, Run Comparison, study-manifest resume, provenance/
+reproducibility, parameter constraints, adaptive sweep, remote
+execution) is PLANNED in full in `pytcad/M30-WORKBENCH-PLAN.md`'s PART
+II section -- including which existing GUI pieces each phase reuses
+(`FamilySweepController`'s controller shape, `RunRecord`'s existing
+per-job provenance, the `<Name>Panel.qml` convention) and one explicit
+naming-collision fix (the plan calls study-level resume a "study
+manifest resume," never "checkpoint," since that word already names a
+different, existing per-process-step concept in
+`gui/services/process_runner.py`) -- but NOT YET implemented, pending
+the user's go-ahead now that Part I is landed.

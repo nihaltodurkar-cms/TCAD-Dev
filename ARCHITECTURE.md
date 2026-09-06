@@ -968,6 +968,24 @@ Spine: M13 -> M15 -> M17 -> M18 -> M21 -> M23 -> M27
 As of 2026-08-31: M13/M15/M17/M18(phase 1)/M21(phase 3 complete) are
 all landed; M23/M27 remain not started.
 
+As of 2026-09-06: M23 (structured-mesh slice), M24 (lumped-model
+slice), M25 (simplified-BCA slice), M26 (structured-mesh FinFET slice
++ unstructured-tet gate BC/extrusion pipeline), and M28 (standalone-
+module slice) have all since landed to the disclosed simplification
+level in §4b.5 below. M27 (mixed-mode device + circuit) also landed
+2026-09-06 -- see §4b.5. M29 (hydrodynamic/energy balance, local
+closure slice) also landed 2026-09-06 -- see §4b.5.
+
+As of 2026-09-07: M30 Part I (parameter splits, calibration/Nelder-
+Mead, batch parallelism, DeckBuild-dialect import) LANDED -- workbench/
+splits.py, calibration.py, batch.py, deckbuild_import.py; see
+pytcad/M30-WORKBENCH-PLAN.md for scope, gates (tests/test_m30_*.py,
+33/33 green), and honest limits. M30 Part II (GUI/product layer:
+Study Manager, Sweep Matrix Viewer, Run Comparison, study-manifest
+resume, provenance/reproducibility, parameter constraints, adaptive
+sweep, remote execution) is PLANNED but not yet implemented -- see the
+same plan doc's PART II section.
+
 Finish-first queue (already designed, do before M13 -- historical,
 all now DONE, kept for the rationale):
   1. M11-S4  2D heterojunction box-integration (designed, HETERO plan)
@@ -983,10 +1001,14 @@ Parallelizable (independent tracks):
                   blocked on a paywalled source)
   Track numerics: M22 -> M21 -> M26
                   (M22 phase 1 + Schur variant landed; M21 phases 1-2
-                  and phase 3 (3a-3d) all landed; M26 not started)
-  Track process:  M23 -> M24 -> M25 (none started)
+                  and phase 3 (3a-3d) all landed; M26 landed 2026-09-06
+                  to the disclosed slice level -- see §4b.5)
+  Track process:  M23 -> M24 -> M25 (all landed 2026-09-06 to the
+                  disclosed slice level -- see §4b.5)
   Track system:   M17 -> M18 -> M27 -> M30
-                  (M17 and M18-phase1 landed; M27/M30 not started)
+                  (M17, M18-phase1, and M27 landed 2026-09-06 -- see
+                  §4b.5; M30 Part I landed 2026-09-07, Part II not
+                  started -- see pytcad/M30-WORKBENCH-PLAN.md)
 M15 needs M22's continuation only for robustness, not correctness.
 
 ------------------------------------------------------------------------
@@ -1196,14 +1218,310 @@ for what has actually landed)
                                                   its single-process
                                                   AMG+GPU baseline,
                                                   exact to ~1e-17
-  M23 2D process geometry engine                 not started
-  M24 pair diffusion/segregation/clustering      not started
-  M25 Monte-Carlo implantation (BCA)             not started
-  M26 3D generalization                          not started
-  M27 mixed-mode device + circuit                not started
-  M28 Schottky/tunnel contacts                   not started
-  M29 hydrodynamic/energy balance                not started
-  M30 workbench system features + interop        not started
+  M23 2D process geometry engine                 STRUCTURED-MESH SLICE
+                                                  COMPLETE (2026-09-06):
+                                                  pytcad/process2d.py --
+                                                  mask-driven deposit/
+                                                  etch, 2D thermal
+                                                  oxidation with bird's-
+                                                  beak encroachment
+                                                  (qualitative, not
+                                                  quantitatively
+                                                  validated -- see that
+                                                  module's honesty
+                                                  clause), mask-driven
+                                                  2D implants. Gates in
+                                                  tests/
+                                                  test_m23_process2d.py/
+                                                  test_model_benchmarks.py;
+                                                  demo examples/
+                                                  08_locos_flow.py.
+                                                  General-mesh (post-
+                                                  M21) version remains
+                                                  future work.
+  M24 pair diffusion/segregation/clustering      LUMPED-MODEL SLICE
+                                                  COMPLETE (2026-09-06):
+                                                  pytcad/ted.py -- Fair
+                                                  extrinsic enhancement,
+                                                  "+1" TED
+                                                  supersaturation, OED
+                                                  boost, equilibrium
+                                                  segregation
+                                                  partition,
+                                                  solubility-limited
+                                                  clustering. A lumped-
+                                                  scalar engineering
+                                                  model, NOT a coupled
+                                                  point-defect PDE (see
+                                                  module honesty
+                                                  clause). Gates in
+                                                  tests/test_m24_ted.py/
+                                                  test_model_benchmarks.py;
+                                                  demo examples/
+                                                  09_ted_anneal.py.
+  M25 Monte-Carlo implantation (BCA)             SIMPLIFIED-BCA SLICE
+                                                  COMPLETE (2026-09-06):
+                                                  pytcad/mc_implant.py --
+                                                  screened-Rutherford
+                                                  nuclear scattering
+                                                  with a calibrated LSS
+                                                  electronic-stopping
+                                                  prefactor (NOT the
+                                                  literal ZBL magic-
+                                                  formula fit -- see
+                                                  module honesty
+                                                  clause). Amorphous-
+                                                  target range matches
+                                                  the existing SRIM-
+                                                  derived table to
+                                                  roughly +-35% over a
+                                                  few-x energy window
+                                                  around calibration;
+                                                  channeling is a
+                                                  disclosed
+                                                  phenomenological knob,
+                                                  not a lattice
+                                                  simulation. Gates in
+                                                  tests/
+                                                  test_m25_mc_implant.py/
+                                                  test_model_benchmarks.py;
+                                                  demo examples/
+                                                  10_mc_implant.py.
+  M26 3D generalization                          TWO PASSES LANDED
+                                                  2026-09-06 (disclosed
+                                                  slice level -- see
+                                                  Architecture_Master_
+                                                  Plan.md section 0.1
+                                                  for the full record):
+                                                  (1) structured-mesh
+                                                  tri-gate FinFET
+                                                  (pytcad/finfet3d.py)
+                                                  on the existing
+                                                  Device3D/Mesh3D core,
+                                                  with pytcad/
+                                                  characterization.py
+                                                  (Vth/SS/DIBL) and a
+                                                  literature-trend gate
+                                                  in test_model_
+                                                  benchmarks.py showing
+                                                  DIBL/SS both worsen as
+                                                  gate length shrinks
+                                                  (demo examples/
+                                                  12_finfet3d_dibl.py);
+                                                  (2) the unstructured
+                                                  tet path
+                                                  (unstructured_dd3d.py)
+                                                  gained a gates Robin/
+                                                  oxide-coupling BC
+                                                  (backed by
+                                                  unstructured_
+                                                  assembly3d.
+                                                  boundary_face_node_
+                                                  weights3d) and a
+                                                  process2d-to-3D-tet
+                                                  extrusion pipeline
+                                                  (pytcad/
+                                                  gmsh_finfet3d.py,
+                                                  demo examples/
+                                                  13_finfet3d_from_
+                                                  process2d.py). Building
+                                                  the gate BC surfaced
+                                                  and FIXED a pre-
+                                                  existing scaling bug
+                                                  in that module's
+                                                  interior Poisson-flux
+                                                  coefficient (trans_geom
+                                                  *eps -> the correct
+                                                  trans_geom/LD -- see
+                                                  that module's own
+                                                  docstring "SCALING
+                                                  FIX" section). New
+                                                  general-mesh "3D
+                                                  reduces to 2D" gate:
+                                                  tests/
+                                                  test_m26_finfet3d.py::
+                                                  test_unstructured_
+                                                  gate_bc_reduces_to_2d.
+                                                  Disclosed remaining
+                                                  gaps: doping extrusion
+                                                  is per-region-constant
+                                                  (not a true 2D process
+                                                  implant-array
+                                                  extrusion); the
+                                                  extruded tet FinFET's
+                                                  fully coupled bias
+                                                  solve needs voltage
+                                                  ramping/continuation
+                                                  not yet implemented on
+                                                  that path; tet AMR
+                                                  (adapt_unstructured3d.py)
+                                                  at FinFET scale
+                                                  remains lightly
+                                                  validated only.
+  M27 mixed-mode device + circuit                DONE (2026-09-06):
+                                                  pytcad/circuit.py --
+                                                  Modified Nodal
+                                                  Analysis solver
+                                                  (VSource/ISource/
+                                                  Resistor/Capacitor/
+                                                  Diode/level-1
+                                                  Shichman-Hodges
+                                                  MOSFET) plus
+                                                  DeviceStamp,
+                                                  embedding a real
+                                                  Device1D as a
+                                                  nonlinear two-
+                                                  terminal element via
+                                                  a FINITE-DIFFERENCE
+                                                  terminal conductance
+                                                  (NOT literally "the
+                                                  existing analytic
+                                                  Jacobian" -- see
+                                                  that module's own
+                                                  honesty clause).
+                                                  Gates: resistor-
+                                                  divider-vs-analytic,
+                                                  device-in-circuit-
+                                                  vs-device-only-
+                                                  solve, and a 3-stage
+                                                  CMOS ring-oscillator
+                                                  transient smoke test
+                                                  (qualitative, per
+                                                  the milestone's own
+                                                  spec), all in
+                                                  test_model_
+                                                  benchmarks.py;
+                                                  structural tests in
+                                                  tests/
+                                                  test_m27_circuit.py;
+                                                  demo examples/
+                                                  14_mixed_mode_
+                                                  circuit.py.
+                                                  transient() is
+                                                  backward-Euler only;
+                                                  a DeviceStamp inside
+                                                  a transient circuit
+                                                  is solved quasi-
+                                                  statically each step
+                                                  (no device-internal
+                                                  capacitive coupling)
+  M28 Schottky/tunnel contacts + gate stacks     STANDALONE-MODULE
+                                                  SLICE COMPLETE
+                                                  (2026-09-06): pytcad/
+                                                  schottky.py --
+                                                  thermionic emission +
+                                                  Richardson constants
+                                                  (self-derived A0
+                                                  matches published
+                                                  120.173 A/(cm^2 K^2)
+                                                  to 5 sig figs; tabulated
+                                                  literature A* used
+                                                  directly, NOT derived
+                                                  from conductivity
+                                                  mass), image-force
+                                                  barrier lowering,
+                                                  Padovani-Stratton
+                                                  field-emission/tunnel-
+                                                  contact regime
+                                                  classification, ohmic-
+                                                  limit recovery. Fixed
+                                                  charge/work-function
+                                                  engineering in gate
+                                                  stacks was already
+                                                  covered by pytcad.
+                                                  moscap.flatband_voltage
+                                                  (not duplicated).
+                                                  Gates in tests/
+                                                  test_m28_schottky.py/
+                                                  test_model_benchmarks.py;
+                                                  demo examples/
+                                                  11_schottky_diode.py.
+                                                  NOT wired into a live
+                                                  Device1D/Device2D
+                                                  Jacobian as a boundary
+                                                  condition -- standalone
+                                                  contact-physics module
+                                                  only, same pattern as
+                                                  M23-M25.
+  M29 hydrodynamic/energy balance                DONE (2026-09-06) as
+                                                  a disclosed-
+                                                  simplification slice,
+                                                  NOT the full self-
+                                                  consistent transport
+                                                  solve the milestone's
+                                                  own "genuinely
+                                                  stretch" framing
+                                                  anticipated:
+                                                  pytcad/
+                                                  hydrodynamic.py is a
+                                                  standalone LOCAL (no
+                                                  spatial energy-flux)
+                                                  steady energy-balance
+                                                  closure -- carrier
+                                                  temperature from a
+                                                  published energy
+                                                  relaxation time, the
+                                                  genuinely computable
+                                                  "why overshoot
+                                                  matters in short
+                                                  devices" length scale
+                                                  l_w=v_sat*tau_w
+                                                  (~0.04 um for Si,
+                                                  correct submicron
+                                                  order of magnitude),
+                                                  a qualitative field-
+                                                  driven heating trend,
+                                                  and carrier-
+                                                  temperature-driven
+                                                  impact ionization
+                                                  reached by mapping
+                                                  back to an effective
+                                                  field and reusing the
+                                                  existing (M15)
+                                                  published field-
+                                                  driven van
+                                                  Overstraeten-de Man
+                                                  coefficients. NOT
+                                                  wired into Device1D's
+                                                  residual/Jacobian at
+                                                  all (pure post-
+                                                  processing), so "DD
+                                                  limit recovery (bit-
+                                                  identity when off)"
+                                                  holds by construction
+                                                  -- gated explicitly
+                                                  anyway. Disclosed
+                                                  limitation: a LOCAL
+                                                  closure cannot
+                                                  reproduce the actual
+                                                  SPATIAL shape of a
+                                                  Monte Carlo overshoot
+                                                  profile (needs the
+                                                  div(S) energy-flux
+                                                  term this module
+                                                  omits) -- the
+                                                  "overshoot" gate is
+                                                  the heating-trend/
+                                                  length-scale facts
+                                                  above, not a spatial-
+                                                  profile match. Gates
+                                                  in test_model_
+                                                  benchmarks.py/
+                                                  tests/
+                                                  test_m29_
+                                                  hydrodynamic.py; demo
+                                                  examples/
+                                                  15_hydrodynamic_
+                                                  overshoot.py
+  M30 workbench system features + interop        Part I landed
+                                                  2026-09-07 (splits,
+                                                  calibration, batch
+                                                  parallelism, DeckBuild
+                                                  import); Part II
+                                                  (GUI/product layer)
+                                                  not started -- see
+                                                  pytcad/M30-WORKBENCH-
+                                                  PLAN.md
 
 ------------------------------------------------------------------------
 4b.6 GEOMETRY FOUNDATION DECISION (2026-08-27) -- M21 phase 3's mesher
@@ -1453,7 +1771,12 @@ Independent candidates for the next milestone (any order):
   M20-DENSITY-GRADIENT-PLAN.md section 7); DG TRANSPORT and 2D/3D DG
   remain not implemented, out of this milestone's scope.)
 - 2D process geometry engine (M23); pair diffusion/TED/segregation
-  (M24); Monte-Carlo implantation (M25); general 3D (M26).
+  (M24); Monte-Carlo implantation (M25); general 3D (M26) --
+  ALL LANDED 2026-09-06 to a disclosed simplification-slice level
+  (structured-mesh/lumped-model/simplified-BCA/structured-plus-tet-gate-
+  BC respectively) -- see section 4b.5 above for the full per-milestone
+  record and each module's own honesty-clause docstring for exactly
+  what remains a simplification.
   (Unstructured meshing, M21 phase 3, is now COMPLETE 2026-08-31 --
   see section 5 item 2e above. M15 impact ionization and M22 phase 2's
   continuation driver are both COMPLETE/LANDED -- see sections 3 and 5
@@ -1487,9 +1810,17 @@ Independent candidates for the next milestone (any order):
   region/contact, and no "Build 3D device" click-path in the running
   app -- a device author still has to construct the domain objects in
   Python, not through the Structure/Mesh workbench panels.
-- Mixed-mode circuit coupling (M27); Schottky/tunnel contacts (M28);
-  hydrodynamic/energy balance (M29); experiments/calibration/interop
-  (M30).
+- Experiments/calibration/interop (M30) -- Part I (library-level
+  parameter splits/run-matrix, Nelder-Mead calibration, batch
+  parallelism, DeckBuild-dialect import) LANDED 2026-09-07; the GUI/
+  product layer (Study Manager, matrix viewer, run comparison, etc.)
+  is planned but not started -- see pytcad/M30-WORKBENCH-PLAN.md.
+  Mixed-mode
+  circuit coupling (M27) LANDED 2026-09-06 (pytcad/circuit.py, MNA +
+  DeviceStamp); Schottky/tunnel contacts + gate stacks (M28) LANDED
+  2026-09-06 as a standalone-module slice; hydrodynamic/energy balance
+  (M29) LANDED 2026-09-06 as a local energy-balance closure slice --
+  see section 4b.5 for all three.
 - Monte-Carlo transport, atomistic kinetic-MC diffusion, radiation/
   SEE, ferroelectrics, full viscoelastic oxidation mechanics, Maxwell
   solvers -- permanently out of scope per the parity plan.
