@@ -168,6 +168,10 @@ class AppController(QObject):
         # attribute).
         from .family_sweep_controller import FamilySweepController
         self.family = FamilySweepController(self, parent=self)
+        # M30 Phase 5: Split/Study Manager. Same ownership pattern as
+        # family above; family_sweep_controller.py itself is untouched.
+        from .study_controller import StudyController
+        self.study = StudyController(self, parent=self)
         from .cv_controller import CVController
         self.cv = CVController(self, parent=self)
         # Virtual Probe Station: DC/RF device characterization sweeps and
@@ -366,6 +370,10 @@ class AppController(QObject):
     @Property(QObject, constant=True)
     def familySweep(self):
         return self.family
+
+    @Property(QObject, constant=True)
+    def studyManager(self):
+        return self.study
 
     @Property(QObject, constant=True)
     def cvSweep(self):
@@ -2014,6 +2022,24 @@ class AppController(QObject):
                           # "sweep" (the point counter reaches the console
                           # via progressLine).
                           "sweep": "Running voltage sweep..."}.get(stage, "Solving..."))
+
+    @Slot(str)
+    def loadStudyResult(self, path):
+        """Load an arbitrary already-solved result .npz (e.g. one row
+        of a M30 Study) into the main viewport.  Reuses exactly the
+        display half of _on_finished()'s own pipeline -- additive, does
+        not touch the ordinary Run path itself."""
+        try:
+            self._store = NpzResultStore(path)
+        except Exception as exc:
+            self.errorRaised.emit("Could not read the result file", str(exc))
+            return
+        names = self._store.available_scalars()
+        if self._current_field not in names and names:
+            self._current_field = "potential" if "potential" in names else names[0]
+            self.fieldChanged.emit()
+        self.resultChanged.emit()
+        self.selectNode(self._selected)
 
     def _on_finished(self, path):
         self._set_busy(False)

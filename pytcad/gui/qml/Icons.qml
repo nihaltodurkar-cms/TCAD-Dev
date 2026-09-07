@@ -36,7 +36,7 @@ QtObject {
     readonly property var names: [
         "project", "structure", "mesh", "process", "sweeps",
         "probeStation", "telemetry", "bands", "transient", "ac", "physicsLab",
-        "builder", "run", "stop", "undo", "redo", "sun", "moon"
+        "builder", "run", "stop", "undo", "redo", "sun", "moon", "study"
     ]
 
     function _toHex(c) {

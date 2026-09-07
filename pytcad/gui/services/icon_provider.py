@@ -51,6 +51,7 @@ ICON_PATHS = {
     "redo":         "<path d='M16 8 H9 A5 5 0 1 0 13 18'/><path d='M16 8 L12 4 M16 8 L12 12'/>",
     "sun":          "<circle cx='12' cy='12' r='4'/><path d='M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M19.1 4.9 L17 7 M7 17 L4.9 19.1'/>",
     "moon":         "<path d='M20 14.5 A8 8 0 1 1 9.5 4 A6.2 6.2 0 0 0 20 14.5 Z' fill='currentColor' stroke='none'/>",
+    "study":        "<rect x='3' y='4' width='18' height='16' rx='1'/><path d='M3 9 H21 M9 9 V20'/>",
 }
 
 DEFAULT_SIZE = 24

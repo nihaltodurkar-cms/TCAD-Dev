@@ -56,17 +56,16 @@ def default_worker_count(n_jobs):
     return max(1, min(6, os.cpu_count() or 1, n_jobs))
 
 
-def run_jobs_parallel(jobs, max_workers=None):
-    """`jobs`: a sequence of (job_json_path, out_npz_path) pairs, each
-    an ordinary solver_runner job.  Runs them concurrently, one bad job
-    isolated from the rest (mirrors workbench.splits.run_split_matrix's
-    per-row isolation, generalized to the solve step).  Returns a list
-    of BatchOutcome in the SAME ORDER as `jobs`, not completion order."""
+def run_jobs_parallel_iter(jobs, max_workers=None):
+    """Like run_jobs_parallel, but yields (index, BatchOutcome) as each
+    job actually finishes (completion order, not input order) instead
+    of collecting everything into a list first -- lets a caller (e.g.
+    workbench.study_manifest's incremental save) react to each
+    completion as it happens rather than waiting for the whole batch."""
     jobs = list(jobs)
     if not jobs:
-        return []
+        return
     max_workers = max_workers or default_worker_count(len(jobs))
-    outcomes = [None] * len(jobs)
     with cf.ProcessPoolExecutor(
             max_workers=max_workers,
             initializer=_pin_single_threaded_blas) as pool:
@@ -75,7 +74,19 @@ def run_jobs_parallel(jobs, max_workers=None):
         for fut in cf.as_completed(futures):
             i = futures[fut]
             out_path, error = fut.result()
-            outcomes[i] = BatchOutcome(out_path=out_path, error=error)
+            yield i, BatchOutcome(out_path=out_path, error=error)
+
+
+def run_jobs_parallel(jobs, max_workers=None):
+    """`jobs`: a sequence of (job_json_path, out_npz_path) pairs, each
+    an ordinary solver_runner job.  Runs them concurrently, one bad job
+    isolated from the rest (mirrors workbench.splits.run_split_matrix's
+    per-row isolation, generalized to the solve step).  Returns a list
+    of BatchOutcome in the SAME ORDER as `jobs`, not completion order."""
+    jobs = list(jobs)
+    outcomes = [None] * len(jobs)
+    for i, outcome in run_jobs_parallel_iter(jobs, max_workers=max_workers):
+        outcomes[i] = outcome
     return outcomes
 
 

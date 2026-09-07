@@ -19,6 +19,11 @@ class SplitRow:
     params: dict
     device: object
     error: Optional[str]
+    # M30 Phase 10: set (to the violated expression string) instead of
+    # `error` when a row is excluded by a constraint -- kept as a
+    # SEPARATE field so "excluded by constraint" is never collapsed
+    # into "the template rejected this build" (gate G-DISTINCT-STATUS).
+    constraint_violation: Optional[str] = None
 
 
 def expand_splits(base_values, split_spec):
@@ -38,18 +43,36 @@ def expand_splits(base_values, split_spec):
     return rows
 
 
-def run_split_matrix(run):
+def run_split_matrix(run, constraints=None):
     """Build one device per expanded split row via `run`'s template.
     A row whose parameters the template rejects is recorded with its
-    error, not raised -- the rest of the matrix still builds."""
+    error, not raised -- the rest of the matrix still builds. A row
+    that violates one of `constraints` (workbench.constraints
+    expression strings, checked BEFORE building -- cheaper than
+    discovering the same thing via a template ValueError, and
+    distinguishable in the result) never reaches `template.build()` at
+    all; its `constraint_violation` is set and `error`/`device` stay
+    None."""
     from .core.templates import get_template
 
     template = get_template(run.template_id)
     base_values = getattr(run, "_values", {})
     rows = expand_splits(base_values, run.splits or {})
+    defaults = {p.name: p.default for p in template.params}
 
     results = []
     for row in rows:
+        if constraints:
+            from .constraints import first_violation
+            # Check against defaults merged with the row's own explicit
+            # values -- a constraint may name a parameter the deck
+            # never overrides (relying on the template default), which
+            # `row` alone would be missing.
+            violated = first_violation({**defaults, **row}, constraints)
+            if violated is not None:
+                results.append(SplitRow(row, None, None,
+                                        constraint_violation=violated))
+                continue
         try:
             device = template.build(row)
             results.append(SplitRow(row, device, None))

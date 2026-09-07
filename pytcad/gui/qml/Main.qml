@@ -160,7 +160,8 @@ ApplicationWindow {
                                 { "label": "Transient", "icon": "transient" },
                                 { "label": "AC", "icon": "ac" },
                                 { "label": "Physics Lab", "icon": "physicsLab" },
-                                { "label": "Builder",   "icon": "builder" }
+                                { "label": "Builder",   "icon": "builder" },
+                                { "label": "Study",     "icon": "study" }
                             ]
                             delegate: TabButton {
                                 id: tabDelegate
@@ -311,6 +312,13 @@ ApplicationWindow {
                             objectName: "deviceTemplatesPanel"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                        }
+                        StudyPanel {
+                            objectName: "studyPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            controller: appController.studyManager
+                            hostController: appController
                         }
                     }
                 }

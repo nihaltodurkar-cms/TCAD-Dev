@@ -362,8 +362,29 @@ Confirmed by reading the actual code (not assumed from names):
 
 ### 9. Phase 5 — GUI Split/Study Manager
 
+Status: LANDED 2026-09-07. `gui/controllers/study_controller.py`
+(`StudyController`) + `gui/qml/panels/StudyPanel.qml`, wired into
+`AppController` (`self.study`/`studyManager` property, same pattern as
+`family`/`familySweep`) and `Main.qml`'s sidebar (new "Study" tab,
+`study` icon added to `Icons.qml`/`icon_provider.py`). GUI-side batch
+parallelism uses a small pool of `JobRunner` instances (one per
+concurrent row, capped by `workbench.batch.default_worker_count`) since
+there is no Qt event loop for a `ProcessPoolExecutor` to share; a row
+that fails to build (Phase 1's own isolation) never reaches a
+`JobRunner`. Gates: `gui/tests/test_m30_study_controller.py`, 7/7
+green (G-BUILD, G-RUN, G-CANCEL, G-NO-RETROFIT, plus a QML-tree
+existence check). One real, pre-existing latent bug found by
+adversarial testing and fixed: `gui/services/job_runner.py`'s
+`cancel()` grace-timer closure (`_kill_canceled`) accessed a QProcess
+that could already be C++-deleted by the time the 3s timer fired
+(confirmed via immediate cancel-then-teardown, not a hypothetical) --
+fixed with a `shiboken6.isValid()` guard, the same pattern this repo's
+own `gui/tests/test_gui_memory_leaks.py` already uses. Full suite
+after this phase: 1304 passed (+7), 0 failures, same pre-existing
+warnings.
+
 **Prerequisite**: Phase 1 (splits, DONE) + Phase 4 (batch parallelism,
-not yet built).
+DONE).
 
 **Scope**: `gui/controllers/study_controller.py`, a new `StudyController`
 (app-independent, `FamilySweepController`-shaped: takes the
@@ -413,7 +434,34 @@ Phase 1's `G-ISOLATION` gate already exercises.
 
 ### 10. Phase 6 — Sweep Matrix Viewer
 
-**Prerequisite**: Phase 5 (need a study's row/result data to visualize).
+Status: LANDED 2026-09-07. `StudyController` gained `splitAxes`,
+`matrixCells(field_name)` (row-major, matching `expand_splits`' own
+documented order -- the last split key varies fastest), and
+`availableDisplayFields()`; `StudyPanel.qml` gained a Grid/Repeater
+view (visible only for exactly 2 split axes) plus a field-selector
+ComboBox and Refresh button. `matrixCells` value is a real reduction
+(`max()`) of the actual solved scalar field read fresh off each row's
+`.npz` -- never synthesized -- and reports `None` (not `0`) for any
+row that isn't `done`, rendered as the row's own status text in the
+grid. Cell click reuses the new `AppController.loadStudyResult` (added
+in Phase 5) to load that row's result into the main viewport.
+
+One platform limitation confirmed, not a code defect: Qt's offscreen
+test platform never advances a `Repeater`'s item incubator without a
+real run loop -- the SAME limitation `test_smoke_e2e.py` already
+documents for `labCatalogList`/`templateParamColumn`'s own Repeaters,
+not new to this panel. The click-through gate therefore verifies the
+Repeater's backing model has real `done` rows with real result paths,
+then calls the exact method the delegate's own `onClicked` invokes
+(`AppController.loadStudyResult`), matching that established pattern
+rather than synthesizing a mouse event the incubator can never receive.
+
+Gates: `gui/tests/test_m30_matrix_viewer.py`, 4/4 green (G-GRID,
+G-PARTIAL, plus a display-fields-empty-before-any-row-completes check
+and the click-reuse check above). Full suite after this phase: 1308
+passed (+4), 0 failures, same pre-existing warnings.
+
+**Prerequisite**: Phase 5 (DONE).
 
 **Scope**: a read-only visualization layer over a completed (or
 partially completed) study: for a 2-parameter split, a heatmap/grid
@@ -437,6 +485,29 @@ result opening.
   into the existing viewport machinery (reuse, not reimplementation).
 
 ### 11. Phase 7 — Run Comparison
+
+Status: LANDED 2026-09-07. `gui/services/provenance_diff.py`
+(`provenance_diff`, pure Qt-free function) + `StudyController.
+compareRows(indices, field_name, orientation, position_cm)`, which
+reuses `gui.services.result_store.extract_line_cut` VERBATIM (no new
+extraction code) for the per-row overlay curve and builds the
+provenance table from each row's own `RunRecord`. An out-of-range,
+not-`done`, or dimensionality-mismatched index is reported in a
+`skipped` list with a reason rather than aborting the whole comparison
+or corrupting the other rows' curves. `StudyPanel.qml` gained a plain
+row-index compare field + Compare button, a curve-summary list
+(min/max per curve rather than a custom-drawn overlay canvas -- a
+deliberate scope choice: the numeric comparison engine is the
+substantive, testable part, and a hand-rolled QML chart would add
+significant surface area for comparatively little verifiable value
+over reusing the existing viewport for single-result viewing, which
+Phase 5/6 already wired up), and a provenance diff list highlighting
+differing fields. Gates: `gui/tests/test_m30_run_comparison.py`, 7/7
+green (G-PROVDIFF x3, G-OVERLAY, a skip-with-reason gate,
+G-MISMATCHED-DIM using a real independently-solved 1D result injected
+alongside a real 2D study row, and a QML-existence check). Full suite
+after this phase: 1324 passed (+7), 0 failures, same pre-existing
+warnings.
 
 **Prerequisite**: Phase 5 (a set of runs to compare) and, for
 side-by-side provenance display, Phase 9's manifest is convenient but
@@ -464,6 +535,27 @@ shape, generalized to N runs instead of one).
   fails with a clear message rather than silently producing garbage.
 
 ### 12. Phase 8 — Study manifest resume ("Checkpoint/Resume")
+
+Status: LANDED 2026-09-07, together with Phase 9 (below) as planned.
+`workbench/study_manifest.py`: `StudyManifest` (dataclass;
+`schema_version`, `template_id`, `base_values`, `splits`, `bias`,
+`rows`, `git_commit`), `create_and_run_study(...)` (build the split
+matrix, write the manifest, solve every buildable row through
+`workbench.batch`, saving the manifest back to disk after EACH row
+completes), and `resume_study(manifest_path, ...)` (re-run only
+non-`done` rows; a `done` row's result path is never touched, a
+`failed` row IS retried). Required a small, backward-compatible
+refactor of Phase 4's `workbench/batch.py`: `run_jobs_parallel` is now
+a thin wrapper over a new `run_jobs_parallel_iter` generator that
+yields `(index, BatchOutcome)` as each job actually finishes -- needed
+so the manifest can be saved incrementally rather than only after the
+whole pool completes; `run_jobs_parallel`'s own existing signature,
+return shape, and tests (`tests/test_m30_batch.py`) are unchanged.
+Gates: `tests/test_m30_study_manifest.py`, 9/9 green, including
+G-INCREMENTAL (proven live: a background thread runs a 16-row,
+single-worker study while the test polls the manifest file and
+observes a genuine mixed done/pending state mid-run, not merely
+inferred).
 
 **Prerequisite**: Phase 5 (need a study's row list/state to resume) and
 Phase 9's manifest format (a resume needs a persisted, on-disk record
@@ -502,6 +594,18 @@ Run" on the same `StudyPanel.qml`, not a separate UI surface.
 
 ### 13. Phase 9 — Provenance / Reproducibility
 
+Status: LANDED 2026-09-07, together with Phase 8 (same manifest, see
+section 12). `StudyManifest.git_commit` is a best-effort `git
+rev-parse HEAD`, `None` (never fabricated) outside a git checkout or
+on any git-command failure -- gated directly (`git_commit` compared
+against a real `git rev-parse HEAD` call in the test, and a
+monkeypatched `subprocess.run` failure confirmed to yield `None`, not
+an exception or a placeholder string). Each row references its own
+result path rather than duplicating that result's `RunRecord` inline
+(G-NO-DUPLICATION), and the manifest round-trips the exact split
+matrix/parameters (G-MANIFEST-COMPLETE). Gates: covered by the same
+`tests/test_m30_study_manifest.py`, 9/9 (see section 12).
+
 **Prerequisite**: none blocking (extends the already-solid per-job
 `RunRecord`), but most useful once Phase 8's manifest exists to attach
 study-level provenance to.
@@ -534,6 +638,24 @@ limit rather than half-build it).
   and avoiding a second, driftable copy of the same facts.
 
 ### 14. Phase 10 — Parameter constraints
+
+Status: LANDED 2026-09-07. `workbench/constraints.py` (`Constraint`,
+`parse_constraints`, `first_violation`) implements the bounded
+vocabulary ("PARAM OP PARAM" / "PARAM OP NUMBER", six comparison
+operators). `workbench.splits.run_split_matrix` gained an optional
+`constraints=` argument (default `None`, fully backward compatible)
+that checks each row -- merged with template defaults, since a
+constraint may name a parameter neither the deck nor a split overrides
+-- BEFORE calling `template.build()`; a violation sets the new
+`SplitRow.constraint_violation` field, kept deliberately separate from
+`SplitRow.error` so the two failure kinds are never collapsed (gate
+G-DISTINCT-STATUS proves the SAME bad row reports differently with vs.
+without the constraint). `workbench.calibration.calibrate` gained the
+identical optional `constraints=` check on each trial point, verified
+by a monkeypatch spy on `solve_field` proving zero solver calls for an
+always-violated constraint. Gates: `tests/test_m30_constraints.py`,
+15/15 green. Full suite after this phase: 1339 passed (+15), 0
+failures, same pre-existing warnings.
 
 **Prerequisite**: Phase 1 (splits) and Phase 2 (calibration) -- this
 phase adds validation ON TOP of both, not a new runner.
@@ -569,6 +691,26 @@ solver at all.
   build was attempted for it.
 
 ### 15. Phase 11 — Adaptive sweep
+
+Status: LANDED 2026-09-07. `workbench/adaptive_sweep.py` splits into a
+pure algorithm (`adaptive_refine`: single-axis midpoint bisection where
+adjacent points' reduced values differ by more than a threshold,
+bounded by `max_rounds` -- a `for` loop, not `while True`, so a
+pathological never-quieting criterion structurally cannot hang it) and
+a device-solving wrapper (`run_adaptive_sweep`) that batches each
+round's new points through `workbench.batch.run_jobs_parallel` --
+Phase 4's real executor, imported at module level specifically so
+tests can verify it is actually called, not reimplemented sequentially.
+A template-rejected or solve-failed value reduces to `None` and is
+excluded from further refinement judgement at that pair, never crashes
+the sweep. Gates: `tests/test_m30_adaptive_sweep.py`, 6/6 green
+(G-REFINES-WHERE-NEEDED using a synthetic step function -- dense
+sampling around the jump, zero extra points in the genuinely flat
+regions; G-TERMINATES using a pathological alternating-value criterion
+that never quiets down, confirming exact termination at `max_rounds`
+with bounded growth; G-REUSES-BATCH via a monkeypatch spy on
+`run_jobs_parallel` proving it is actually invoked). Full suite after
+this phase: 1345 passed (+6), 0 failures, same pre-existing warnings.
 
 **Prerequisite**: Phase 1 (splits) and Phase 4 (batch parallelism) --
 adaptive refinement is only worth the complexity once rows already run

@@ -102,7 +102,15 @@ class JobRunner(QObject):
         # not "whatever self._proc holds when the timer fires" -- a quick
         # cancel-then-restart would otherwise murder the fresh run.
         def _kill_canceled():
-            if proc is not None and proc.state() != QProcess.NotRunning:
+            import shiboken6
+            # A canceled JobRunner's own owner (e.g. a Study's row pool,
+            # M30 Phase 5) can be destroyed before this grace timer
+            # fires -- confirmed directly via adversarial testing
+            # (immediate cancel-then-teardown): accessing `proc.state()`
+            # on an already-deleted QProcess raises a shiboken
+            # RuntimeError rather than returning cleanly.
+            if proc is not None and shiboken6.isValid(proc) and \
+                    proc.state() != QProcess.NotRunning:
                 proc.kill()
         QTimer.singleShot(_KILL_GRACE_MS, _kill_canceled)
 

@@ -83,13 +83,20 @@ def solve_field(template_id, values, field_key, work_dir):
 
 
 def calibrate(template_id, base_values, free_params, goal, *,
-              x0=None, max_iter=200, tol=1e-6, work_dir=None):
+              x0=None, max_iter=200, tol=1e-6, work_dir=None,
+              constraints=None):
     """Nelder-Mead search over `free_params` (names), holding every
     other template parameter at `base_values` (falling back to the
     template's own defaults), minimizing `goal.error(...)` against the
     field it names.  `x0` optionally overrides the initial guess for
     one or more free parameters (defaults to `base_values`/template
-    defaults, same as an unset parameter anywhere else in this repo)."""
+    defaults, same as an unset parameter anywhere else in this repo).
+    `constraints` (M30 Phase 10, workbench.constraints expression
+    strings): a trial point that violates one is scored with
+    UNREACHABLE_PENALTY WITHOUT ever calling template.build()/the
+    solver -- cheaper than discovering the same violation from a
+    ValueError, and keeps an out-of-constraint region from spending
+    solver time the optimizer will discard anyway."""
     work_dir = work_dir or tempfile.mkdtemp(prefix="pytcad-calib-")
     template = get_template(template_id)
     defaults = {p.name: p.default for p in template.params}
@@ -103,6 +110,17 @@ def calibrate(template_id, base_values, free_params, goal, *,
     def objective(x):
         values = dict(base_values)
         values.update(zip(free_params, x))
+        if constraints:
+            from .constraints import first_violation
+            # Same defaults-merge as workbench.splits.run_split_matrix:
+            # a constraint may name a parameter neither base_values nor
+            # free_params sets explicitly.
+            violated = first_violation({**defaults, **values}, constraints)
+            if violated is not None:
+                trace.append({"params": dict(zip(free_params, x)),
+                             "error": UNREACHABLE_PENALTY, "failed": True,
+                             "constraint_violation": violated})
+                return UNREACHABLE_PENALTY
         try:
             model = solve_field(template_id, values, goal.field, work_dir)
             err = goal.error(model)
