@@ -15,7 +15,9 @@ Read this before doing anything. Then read `history.md`
 (current state + open items -- read at least its LAST few entries,
 not just this file, since state changes faster than this file is
 updated), `ARCHITECTURE.md` (roadmap + live queue,
-including the governing future plan in section 4b, M13-M30), and
+including the governing future plan in sections 4b (M13-M30, now
+essentially closed) and 4c (M31 onward -- the C++/Python/Qt
+re-architecture, plus the proposed M32-M40 map)), and
 the active milestone spec -- as of 2026-08-31 the only genuinely OPEN
 core-solver item is `pytcad/M14-SURFACE-MOBILITY-PLAN.md`'s G-A
 (blocked on a paywalled source); M16/M17/M18/M19/M20/M21/M22 are all
@@ -133,11 +135,39 @@ conda run -n TCAD python -m build --wheel
 conda run -n TCAD pip install --no-build-isolation -ve .
 ```
 
+**PETSc is optional inside the extension** (M31 P3b), on the same
+principle one level down: the CMake option `TCAD_WITH_PETSC` is `AUTO`,
+so a build on a machine without PETSc still compiles and
+`linsolve.solve_linear(method="petsc")` falls back to petsc4py -- or, if
+that is missing too, raises `LinearSolveError` naming both routes. The
+in-place build above picks PETSc up automatically inside the `TCAD`
+conda env; `PKG_CONFIG_PATH` must point at `<prefix>/lib/pkgconfig`
+otherwise. Force either way with `-DTCAD_WITH_PETSC=ON` (fail the
+configure if absent) or `=OFF` (reproduce the pip-only CI job locally).
+`_accel.status()` says which you got, and `info["backend"]` from a
+`method="petsc"` solve says which one actually ran.
+
+**What is compiled so far.** Mesh geometry (`unstructured_assembly{,3d}`
+-- M31 P2), the PETSc KSP/PC configuration (`linsolve`, P3b), and the
+process/adaptivity kernels (P4): the three per-triangle AMR indicators in
+`adapt_unstructured.py` and the 1D explicit diffusion time loops in
+`process.diffuse_numeric` / `ted.diffuse_with_defects`. Everything else
+is still pure Python and none of it is on a deprecation path.
+
+**Where an accelerated function's transcendentals live matters.** The
+P4 kernels take `np.log(n)`, not `n`, and the nodal Debye lengths, not
+the doping -- numpy's `log`/`exp` and C++'s are independent
+implementations, and the gate is `np.array_equal`, so anything of that
+kind is computed ONCE on the Python side and only its result crosses.
+If you add a kernel, follow that; do not assume two libm builds agree
+without measuring it (as `core/src/process/diffuse.cpp` documents for the
+one exception).
+
 Two environment variables govern the boundary:
 
 | var | effect |
 |---|---|
-| `PYTCAD_ACCEL` | `auto` (default) use `_core` if importable; `0` force Python; `1` require `_core` |
+| `PYTCAD_ACCEL` | `auto` (default) use `_core` if importable; `0` force Python; `1` require `_core`. Also selects the `method="petsc"` backend: `0` forces petsc4py |
 | `PYTCAD_NUM_THREADS` | kernel threads. **Defaults to 1** -- threads would oversubscribe `workbench/batch.py`'s pool workers AND make scatter-add reductions non-reproducible, which breaks the `np.array_equal` goldens |
 
 Run the suite **both ways** before claiming a change is done:
@@ -385,7 +415,8 @@ precedent).
 
 ## Milestone state & plans
 
-Governing roadmap: `ARCHITECTURE.md` section 4b (three parity tiers,
+Governing roadmap: `ARCHITECTURE.md` sections 4b and 4c (three parity
+tiers,
 M13-M30, gate-blocking rule 4b.4). Completed: M1-M10 (v0.5.0 tagged),
 M11-S1..S5 (heterostructure materials/wire/1D+2D core, HBT/HEMT
 templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13

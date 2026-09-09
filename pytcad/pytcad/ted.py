@@ -44,6 +44,9 @@ import numpy as np
 
 from .constants import KB_EV
 from . import process
+# See process.py: _accel is the sanctioned downward dependency and the
+# only module permitted to import pytcad._core (M31 P4).
+from . import _accel
 
 
 # ----------------------------------------------------------------------
@@ -183,6 +186,28 @@ def diffuse_with_defects(x, C, species, T_C, t_s, n_total=None,
     dV[0] = xm[0] - x[0]
     dV[-1] = x[-1] - xm[-1]
 
+    # M31 P4: the time loop only -- see process.diffuse_numeric for the
+    # same split and why the set-up above stays here.
+    if _accel.use_accel() and C.size >= 2:
+        return _accel.core.diffuse1d_enhanced(
+            _accel.as_field(C), _accel.as_field(h), _accel.as_field(dV),
+            float(Di), _accel.as_field(np.broadcast_to(extrinsic, x.shape)),
+            float(ted_S0),
+            # tau is genuinely unused when S0 == 0, and the reference
+            # accepts None there, so this stands in for the value the
+            # kernel will never read rather than pretending there is one.
+            1.0 if ted_S0 == 0.0 else float(ted_tau_s),
+            float(oed_boost), float(dt), int(n_steps), bool(reflecting))
+    return _diffuse_loop_py(C, h, dV, Di, extrinsic, ted_S0, ted_tau_s,
+                            oed_boost, dt, n_steps, reflecting)
+
+
+def _diffuse_loop_py(C, h, dV, Di, extrinsic, ted_S0, ted_tau_s,
+                     oed_boost, dt, n_steps, reflecting):
+    """The enhanced explicit time loop -- the ORACLE for
+    `_core.diffuse1d_enhanced` (M31 P4 gate G-A).  Split out of
+    diffuse_with_defects for the same reason process._diffuse_loop_py is
+    split out of diffuse_numeric."""
     t = 0.0
     for _ in range(n_steps):
         S_ted = ted_supersaturation(t, ted_S0, ted_tau_s) if ted_S0 != 0.0 else 0.0

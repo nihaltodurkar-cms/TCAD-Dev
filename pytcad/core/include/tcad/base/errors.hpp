@@ -51,4 +51,17 @@ struct InvalidArgument : Error {
     using Error::Error;
 };
 
+/// A connectivity array names a node that does not exist.  -> IndexError
+///
+/// The reference path gets this for free: numpy fancy-indexing an
+/// out-of-range element raises IndexError.  A C++ kernel that merely
+/// dereferenced it would read out of bounds instead, so every kernel
+/// taking connectivity validates the index range ONCE up front (a
+/// single O(n) pass, not a check per access) and raises this.  The
+/// CLASS matches the reference; the message deliberately does not try
+/// to reproduce numpy's wording.
+struct IndexOutOfRange : Error {
+    using Error::Error;
+};
+
 }  // namespace tcad

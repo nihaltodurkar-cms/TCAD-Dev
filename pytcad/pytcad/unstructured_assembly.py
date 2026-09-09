@@ -44,12 +44,24 @@ def _triangle_area2(pts):
 
 
 def _cot(p_apex, p_a, p_b):
-    """cot of the angle at p_apex subtended by rays to p_a and p_b."""
+    """cot of the angle at p_apex subtended by rays to p_a and p_b.
+
+    The denominator is |cross|, not cross. The undirected angle between
+    two rays lies in (0, pi), so its sine is positive by definition and
+    the cotangent's sign is carried entirely by the dot product. Using
+    the SIGNED cross made this function -- and therefore the dual areas
+    built from it -- depend on the triangle's vertex winding: reverse a
+    non-obtuse triangle and all three contributions flipped sign, while
+    `tri_area` (an abs()) did not, so the partition identity failed by
+    exactly 2x on a clockwise-wound triangle. Fixed in M31 P2b; this is
+    a no-op on counter-clockwise input, so every existing golden and
+    every gmsh-produced mesh is bit-for-bit unaffected.
+    """
     v1 = p_a - p_apex
     v2 = p_b - p_apex
     cross = v1[0] * v2[1] - v1[1] * v2[0]
     dot = v1[0] * v2[0] + v1[1] * v2[1]
-    return dot / cross
+    return dot / abs(cross)
 
 
 def _build_unstructured_stencil_py(nodes, triangles, min_area=1e-30):

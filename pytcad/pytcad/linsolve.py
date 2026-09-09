@@ -10,9 +10,12 @@ Krylov method is the prerequisite for any GPU or MPI solve, since those
 need a distributed/accelerated matvec + preconditioner apply, not a
 distributed LU.
 
-No pytcad imports beyond scipy/numpy: this module is pure and
-independently testable, and is a driver BELOW nothing -- device.py
-calls it, it never calls back into device.py.
+Only one pytcad import, and it points DOWNWARD: `_accel`, the
+soft-import shim for the optional C++ engine (M31 P3b gave
+method="petsc" a compiled backend).  `_accel` itself imports nothing but
+os and numpy and cannot raise at import time, so this module is still
+pure in the sense that matters -- it is a driver below nothing, device.py
+calls it and it never calls back into device.py.
 """
 import warnings
 
@@ -57,9 +60,28 @@ except ImportError:
 import importlib.util as _importlib_util
 _HAVE_CUPY = _importlib_util.find_spec("cupy") is not None
 
+# petsc4py (M31 P3a): same lazy-import contract as cupy above -- the
+# `import petsc4py` line alone triggers PETSc's own start-up (option
+# parsing, MPI init via petsc4py.init()), so it stays deferred to
+# solve_linear()'s "petsc" branch, the one place that needs it.
+# petsc4py/PETSc are conda-forge-only in practice (M31-CPP-
+# ARCHITECTURE-PLAN.md sec 2/5): find_spec is enough to detect them
+# without paying that start-up cost in every process that imports this
+# module, exactly like _HAVE_CUPY.
+_HAVE_PETSC4PY = _importlib_util.find_spec("petsc4py") is not None
+
+# The compiled PETSc backend (M31 P3b).  _accel is the ONE module allowed
+# to know whether pytcad._core exists (enforced by
+# tests/test_architecture_boundaries.py), it imports nothing but os and
+# numpy, and it is contractually forbidden from raising at import time --
+# so importing it here costs nothing and cannot break a checkout with no
+# compiler.  Whether the compiled backend is actually USED is decided per
+# call by _accel.have_petsc(), not here.
+from . import _accel
+
 __all__ = ["solve_linear", "LinearSolveError"]
 
-_METHODS = ("direct", "gmres", "bicgstab", "gpu_direct")
+_METHODS = ("direct", "gmres", "bicgstab", "gpu_direct", "petsc")
 
 # Preconditioner flavor selector values (solve_linear `precond=`).
 _PRECOND = ("auto", "block_jacobi", "schur")
@@ -309,6 +331,127 @@ def _build_preconditioner(A, block_size=None, precond="auto"):
     return None
 
 
+# ----------------------------------------------------------------------
+#  PETSc backends (M31 P3a / P3b)
+# ----------------------------------------------------------------------
+# Two implementations of ONE configuration.  `_solve_petsc_py` is the
+# P3a reference and stays reachable forever, exactly like every
+# `_<name>_py` body in the mesh modules: it is the oracle
+# tests/test_accel_parity.py diffs the compiled path against, and it is
+# what runs wherever the extension was not built or was built without
+# PETSc (the existing pip-only CI job builds precisely that way).
+#
+# Both take an ALREADY-canonical CSR matrix and an already-clamped
+# restart, and both return the raw (x, iterations, KSPConvergedReason)
+# without judging it.  The acceptance test -- recomputing the true
+# residual and raising LinearSolveError -- lives once, in solve_linear
+# below, so the two backends cannot drift apart on the one thing that
+# matters most: whether a solve counts as converged.
+#
+# That discipline is what makes the parity gate strict rather than
+# approximate.  Both paths call the SAME libpetsc.so with the same KSP
+# type, the same restart, the same PC, the same tolerances and the same
+# matrix, so their answers are compared with np.array_equal -- confirmed
+# bit-identical, not merely close.
+def _solve_petsc_py(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
+    """petsc4py backend (M31 P3a).  See the block comment above."""
+    try:
+        import petsc4py
+        petsc4py.init()
+        from petsc4py import PETSc
+    except Exception as exc:
+        raise LinearSolveError(
+            f"petsc4py import/init failed: {exc}") from exc
+    try:
+        n = A.shape[0]
+        # MATAIJ from the scalar CSR we already have -- BAIJ's csr=
+        # constructor wants BLOCK-row indptr/BLOCK-column indices/
+        # block-dense data, not this module's plain scalar CSR, so
+        # building a true MATBAIJ would mean re-deriving block
+        # structure by hand. setBlockSize() on a MATAIJ gets the
+        # same point-block PBJACOBI preconditioning (plan sec 2)
+        # without that reformat -- confirmed: PETSc's PCPBJACOBI
+        # only needs the matrix's block size set, not MATBAIJ
+        # storage.
+        M = PETSc.Mat().createAIJ(
+            (n, n), csr=(A.indptr, A.indices, A.data))
+        point_block = bool(block_size) and n % block_size == 0
+        if point_block:
+            M.setBlockSize(block_size)
+        M.assemble()
+        bv = PETSc.Vec().createWithArray(b)
+        xv = PETSc.Vec().createWithArray(np.zeros(n))
+
+        ksp = PETSc.KSP().create()
+        ksp.setOperators(M)
+        ksp.setType(PETSc.KSP.Type.GMRES)
+        # Same restart-too-small stall as scipy's gmres branch below
+        # (this file's own restart comment there): PETSc's default
+        # GMRES restart (30) made no visible progress on the
+        # coupled 3D device Jacobian either -- confirmed directly.
+        ksp.setGMRESRestart(restart)
+        pc = ksp.getPC()
+        # Block-Jacobi (PCPBJACOBI, plan sec 2) when the interleaved
+        # block structure applies -- the point-block analogue of
+        # this module's own node-block-Jacobi preconditioner above
+        # -- else scalar block-Jacobi/ILU, PETSc's usual default.
+        pc.setType(PETSc.PC.Type.PBJACOBI if point_block
+                   else PETSc.PC.Type.BJACOBI)
+        ksp.setTolerances(rtol=rtol, atol=atol, max_it=maxiter)
+        if x0 is not None:
+            # setInitialGuessNonzero is NOT optional decoration: PETSc
+            # zeroes the solution vector at the top of KSPSolve unless
+            # it is set, so seeding xv alone was silently ignored --
+            # confirmed by measurement (identical iteration count and
+            # bit-identical answer from an EXACT initial guess, versus
+            # 0 iterations once the flag is set). That was a real defect
+            # in the P3a code this function was extracted from; it is
+            # fixed here and in the compiled backend at the same time,
+            # so the two cannot disagree about it.
+            ksp.setInitialGuessNonzero(True)
+            xv.setArray(np.asarray(x0, dtype=float))
+        ksp.setFromOptions()
+        ksp.solve(bv, xv)
+        reason = ksp.getConvergedReason()
+        iters = ksp.getIterationNumber()
+        x = xv.getArray().copy()
+        ksp.destroy(); M.destroy(); bv.destroy(); xv.destroy()
+    except LinearSolveError:
+        raise
+    except Exception as exc:
+        raise LinearSolveError(f"petsc solve failed: {exc}") from exc
+    return x, int(iters), int(reason)
+
+
+def _solve_petsc_cpp(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
+    """Compiled backend (M31 P3b): the same configuration, in
+    core/src/solver/petsc_ksp.cpp.
+
+    Nothing is decided here.  The KSP/PC choices moved to C++; this
+    function only marshals the CSR triple across the boundary (int64 by
+    the rule pytcad/_accel.py states for every kernel -- the C++ side
+    converts to PetscInt once, range-checked) and hands back the same
+    (x, iterations, reason) triple the petsc4py backend returns.
+    """
+    try:
+        x, iters, reason = _accel.core.petsc_solve_csr(
+            _accel.as_csr_index(A.indptr), _accel.as_csr_index(A.indices),
+            np.ascontiguousarray(A.data, dtype=float),
+            np.ascontiguousarray(b, dtype=float),
+            None if x0 is None else np.ascontiguousarray(x0, dtype=float),
+            float(rtol), float(atol), int(maxiter), int(restart),
+            int(block_size or 0))
+    except LinearSolveError:
+        # Already the documented class -- the C++ exception translator in
+        # core/bindings/module.cpp maps tcad::LinearSolveFailure onto
+        # THIS module's LinearSolveError, so it must pass through
+        # unwrapped rather than be re-wrapped into a second message.
+        raise
+    except Exception as exc:
+        raise LinearSolveError(f"petsc solve failed: {exc}") from exc
+    return x, int(iters), int(reason)
+
+
 def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
                  maxiter=500, x0=None, restart=None, block_size=None,
                  precond="auto"):
@@ -332,9 +475,45 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
     structurally impossible "schur" request falls through the normal
     chain rather than raising.
 
-    info = {"method", "iterations", "converged", "residual"}.  An
-    iterative method that does not reach `rtol` within `maxiter` RAISES
-    LinearSolveError rather than returning the unconverged iterate.
+    method="petsc" (M31-CPP-ARCHITECTURE-PLAN.md sec 2/4) is GMRES via
+    PETSc's KSP on a `MATAIJ` built from this module's own scalar CSR,
+    with its block size set to `block_size` when that divides the system
+    evenly (point-block PCPBJACOBI preconditioner, plan sec 2's target),
+    else plain PCBJACOBI -- the PETSc analogue of this module's own
+    node-block-Jacobi path.  It is kept as a SEPARATE method rather than
+    folded into "gmres" because it exercises a genuinely different solver
+    stack.
+
+    Two interchangeable backends run that one configuration, and which
+    one you get is reported in info["backend"]:
+
+      "cpp"      -- core/src/solver/petsc_ksp.cpp through pytcad._core
+                    (M31 P3b).  Preferred when the extension was built
+                    against PETSc and PYTCAD_ACCEL has not forced the
+                    Python path.
+      "petsc4py" -- the P3a reference, kept forever as the oracle the
+                    compiled path is diffed against, and what runs
+                    wherever the extension is absent or was built
+                    without PETSc.
+
+    They are held to np.array_equal against each other, not a tolerance
+    (tests/test_accel_parity.py): both call the same libpetsc with the
+    same configuration on the same canonicalized matrix.  PETSc is
+    optional in both forms and conda-forge is the supported channel; with
+    neither available this raises LinearSolveError, not ImportError, so
+    callers that already fall back to "direct"/"gmres" on
+    LinearSolveError need no new branch.
+
+    One caveat specific to this method: PETSc's internal convergence test
+    runs on the (left-)PRECONDITIONED residual, while `info["residual"]`
+    and the acceptance test here use the plain ||Ax-b||/||b||.  The two
+    can differ by an order of magnitude, so `rtol` is not the tight bound
+    on the returned solution that it is for scipy's methods.
+
+    info = {"method", "backend", "iterations", "converged", "residual"}
+    ("backend" only for method="petsc").  An iterative method that does
+    not reach `rtol` within `maxiter` RAISES LinearSolveError rather than
+    returning the unconverged iterate.
     """
     if method not in _METHODS:
         raise ValueError(
@@ -408,6 +587,67 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
             float(np.linalg.norm(b)), 1e-300)
         return x, {"method": "gpu_direct", "iterations": 1,
                    "converged": True, "residual": resid}
+
+    if method == "petsc":
+        # Backend choice, in this order and for this reason: the compiled
+        # one when it exists (that is what P3b built, and it is the path
+        # the later distributed/DMPlex phases extend), petsc4py when it
+        # does not.  PYTCAD_ACCEL=0 forces the Python backend -- which is
+        # how tests/test_accel_parity.py gets to run both in one process
+        # and diff them.
+        use_cpp = _accel.have_petsc()
+        if not use_cpp and not _HAVE_PETSC4PY:
+            raise LinearSolveError(
+                "petsc requested but neither backend is available: the "
+                "compiled backend (M31 P3b) needs pytcad._core built "
+                "against PETSc, and the Python backend (P3a) needs "
+                "petsc4py. conda-forge is the supported channel for both "
+                "(`conda install -c conda-forge petsc4py`); pip has no "
+                "practical PETSc wheel (M31-CPP-ARCHITECTURE-PLAN.md "
+                "sec 2/5). Callers already fall back to "
+                "method='direct'/'gmres' on LinearSolveError, so this "
+                "alone keeps a PETSc-less environment working.")
+        if not sp.issparse(A):
+            A = sp.csr_matrix(A)
+        A = A.tocsr()
+        # Canonicalize ONCE, here, so both backends are handed the
+        # identical matrix -- which is what lets the parity gate use
+        # np.array_equal rather than a tolerance. Not a bug fix: PETSc
+        # 3.25's MatSeqAIJSetPreallocationCSR was checked directly and
+        # does sort a reversed-index CSR correctly. It is insurance,
+        # because sorted-within-row is what PETSc's CSR contract asks
+        # for and scipy does not guarantee it, and it removes a way the
+        # two backends could ever be handed different matrices. Copy
+        # only when the flag says it is needed, so a caller's (already
+        # canonical) assembled Jacobian is never mutated behind its back.
+        if not A.has_canonical_format:
+            A = A.copy()
+            A.sum_duplicates()          # sorts indices as well
+        _check_finite(A, b, method)
+        backend = _solve_petsc_cpp if use_cpp else _solve_petsc_py
+        x, iters, reason = backend(
+            A, b, rtol=rtol, atol=atol or 1e-50, maxiter=maxiter,
+            # PETSc's own default restart of 30 stalls on this codebase's
+            # coupled device Jacobians; clamped here, once, so neither
+            # backend has to know the rule.
+            restart=min(restart or 100, A.shape[0]),
+            block_size=block_size, x0=x0)
+        # The acceptance test is deliberately OUTSIDE both backends: one
+        # residual, one threshold, one message, so "converged" means
+        # exactly the same thing whichever one ran.
+        bnorm = max(float(np.linalg.norm(b)), 1e-300)
+        resid = float(np.linalg.norm(A @ x - b)) / bnorm
+        converged = (reason > 0) and np.all(np.isfinite(x)) and resid <= max(
+            rtol, 1e-6)
+        if not converged:
+            raise LinearSolveError(
+                f"petsc did not converge within {maxiter} iterations "
+                f"(KSPConvergedReason={reason}, relative residual="
+                f"{resid:.3e}, target rtol={rtol:.3e}) -- refusing to "
+                f"return the unconverged iterate")
+        return x, {"method": "petsc",
+                   "backend": "cpp" if use_cpp else "petsc4py",
+                   "iterations": iters, "converged": True, "residual": resid}
 
     # Only the iterative methods need a consistent format (CSR, for
     # the preconditioner/matvec machinery below) -- "direct" above

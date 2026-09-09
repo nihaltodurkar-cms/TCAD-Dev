@@ -19,8 +19,11 @@
 #include "tcad/base/errors.hpp"
 #include "tcad/runtime/threads.hpp"
 
-// Defined in mesh_bindings.cpp -- one module, several translation units.
+// Defined in mesh_bindings.cpp / solver_bindings.cpp -- one module,
+// several translation units.
 void register_mesh(nanobind::module_& m);
+void register_solver(nanobind::module_& m);
+void register_process(nanobind::module_& m);
 
 namespace nb = nanobind;
 
@@ -67,11 +70,14 @@ NB_MODULE(_core, m) {
         if (w == "linsolve")    throw tcad::LinearSolveFailure("singular matrix");
         if (w == "convergence") throw tcad::ConvergenceFailure("did not converge", 42, 1.5e-3);
         if (w == "argument")    throw tcad::InvalidArgument("bad shape");
+        if (w == "index")       throw tcad::IndexOutOfRange("node 7 is out of range");
         throw std::runtime_error("unmapped");
     }, nb::arg("which"),
        "Raise one C++ exception of each mapped kind. Test hook only.");
 
     register_mesh(m);
+    register_solver(m);
+    register_process(m);
 
     nb::register_exception_translator(
         [](const std::exception_ptr& p, void*) {
@@ -93,6 +99,11 @@ NB_MODULE(_core, m) {
                 }
             } catch (const tcad::InvalidArgument& e) {
                 PyErr_SetString(PyExc_ValueError, e.what());
+            } catch (const tcad::IndexOutOfRange& e) {
+                // numpy raises IndexError for an out-of-range fancy index,
+                // so the accelerated path must too -- the CLASS is the
+                // contract, the message text deliberately is not.
+                PyErr_SetString(PyExc_IndexError, e.what());
             }
             // Anything unmapped falls through to nanobind's default.
         });

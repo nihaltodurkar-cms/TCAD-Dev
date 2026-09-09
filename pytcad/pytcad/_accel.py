@@ -29,7 +29,8 @@ no module-scope warnings.
 """
 import os
 
-__all__ = ["HAVE_ACCEL", "use_accel", "core", "status"]
+__all__ = ["HAVE_ACCEL", "use_accel", "core", "status", "have_petsc",
+           "as_csr_index", "as_field"]
 
 try:
     from . import _core as _core_mod
@@ -69,12 +70,44 @@ def use_accel():
     return HAVE_ACCEL
 
 
+def have_petsc():
+    """True if the COMPILED PETSc solver backend is available and enabled.
+
+    Three independent things have to hold, and each fails softly (M31
+    P3b): the extension exists, it was compiled against PETSc (CMake's
+    TCAD_WITH_PETSC found it -- the existing pip-only CI job builds
+    without), and PYTCAD_ACCEL has not forced the Python path.  A False
+    here is never an error: linsolve.solve_linear(method="petsc") then
+    runs the petsc4py backend instead, which is the P3a reference and
+    stays the oracle the compiled path is diffed against.
+
+    getattr, not a bare attribute: an extension built before P3b has no
+    petsc_available, and a stale .so must degrade rather than crash.
+    """
+    if not HAVE_ACCEL:
+        return False
+    probe = getattr(_core_mod, "petsc_available", None)
+    if probe is None or not probe():
+        return False
+    return use_accel()
+
+
 def status():
     """A one-line human-readable summary, for test output and bug reports."""
     if not HAVE_ACCEL:
         return "pytcad._core: not built (pure-Python reference path)"
+    petsc = getattr(_core_mod, "petsc_available", None)
+    if petsc is not None and petsc():
+        # The index width is worth printing: conda-forge's default PETSc
+        # is 32-bit, which is a real ceiling (>2^31 nonzeros) rather than
+        # a detail, and it is invisible from Python otherwise.
+        where = (f"petsc={_core_mod.petsc_version()}"
+                 f"/{_core_mod.petsc_index_bytes() * 8}-bit-int")
+    else:
+        where = "petsc=no"
     return (f"pytcad._core: {_core_mod.__version__}, "
-            f"threads={_core_mod.thread_count()}, PYTCAD_ACCEL={_mode()}")
+            f"threads={_core_mod.thread_count()}, {where}, "
+            f"PYTCAD_ACCEL={_mode()}")
 
 
 # ----------------------------------------------------------------------
@@ -129,6 +162,39 @@ def as_edge_list(a):
     if a.size == 0:
         return _np.zeros((0, 2), dtype=_np.int64)
     return as_idx(a, 2)
+
+
+def as_csr_index(a):
+    """A c-contiguous 1-D int64 view of a CSR indptr/indices array.
+
+    int64 even though conda-forge's PETSc uses a 32-bit PetscInt: the
+    boundary rule above applies here too, and the C++ side converts once
+    (range-checked) rather than every caller having to ask how PETSc was
+    configured.  scipy hands out int32 CSR indices for small matrices and
+    int64 for large ones, so SOME normalization was going to happen
+    either way -- doing it here keeps it visible and in one place.
+    """
+    a = _np.ascontiguousarray(a, dtype=_np.int64)
+    if a.ndim != 1:
+        raise ValueError(f"CSR index array must be 1-D, got {a.shape}")
+    return a
+
+
+def as_field(a):
+    """A c-contiguous 1-D float64 view of a nodal or cell field.
+
+    The P4 kernels (indicators, diffusion) take several of these, and
+    they take them ALREADY TRANSFORMED where a transcendental is
+    involved -- `np.log(n)` rather than `n`, the nodal Debye lengths
+    rather than the doping.  That split is deliberate: numpy's `log`
+    and C++'s are two independent implementations, and the parity gate
+    compares with `np.array_equal`, so the only defensible thing to do
+    is compute such a value ONCE, in numpy, and hand the result down.
+    """
+    a = _np.ascontiguousarray(a, dtype=_np.float64)
+    if a.ndim != 1:
+        raise ValueError(f"field must be 1-D, got {a.shape}")
+    return a
 
 
 def match_empty_edges(edges):

@@ -1,8 +1,53 @@
 # M31 -- C++ / Python / Qt production architecture
 
-Status as of 2026-09-09: **P0, P1 and P2 LANDED.** P3a next.
-P2 was NOT run against the full suite before hand-off -- see
-"Outstanding" at the end of the P2 section.
+Status as of 2026-09-09: **P0, P1, P2, P2b, P3a, P3b and P4 LANDED.**
+P5 next.
+P2's full-suite validation (see "Outstanding" at the end of the P2
+section) has now been run: `PYTCAD_ACCEL=0` fast suite (1404 passed,
+1 xfailed, 39 warnings), `PYTCAD_ACCEL=1` fast suite (identical: 1404
+passed, 1 xfailed, 39 warnings -- gate G-B confirmed, no golden/digest
+drift), the slow gate battery (22 passed, 11 warnings), and
+`tests/test_accel_parity.py` incl. slow floors (27 passed). All green,
+zero regressions. The winding-sensitivity defect in
+`build_unstructured_stencil` (see the P2 section) has since been fixed
+on both paths -- that is P2b below.
+
+P3a (`method="petsc"` in `linsolve.py` via petsc4py) landed and was
+verified against a REAL petsc4py, not just the not-installed fallback:
+`petsc4py` 3.25.4 was installed into the `TCAD` conda env from
+conda-forge (the plan's own predicted channel -- pip has no practical
+PETSc wheel). That pulled conda-forge's `numpy` (MKL-backed `libblas`)
+on top of this env's previously pip-installed `numpy`/`scipy` -- a real
+BLAS-backend swap, not a no-op -- so the full fast suite
+(`tests/ gui/tests/ -n 6 -m "not slow"`) was re-run after the install
+specifically to catch any fallout: **1407 passed, 1 skipped, 1 xfailed,
+39 warnings**, zero regressions (the 1 skip is the new
+petsc4py-not-installed fallback test, correctly skipping now that it
+IS installed; net +4 tests over P2's 1404 -- 3 new `TestPetscMethod`
+cases plus that skip). See `tests/test_m22_linsolve.py`'s
+`TestPetscMethod` class and `test_petsc_without_petsc4py_raises_not_importerror`.
+
+Implementation notes: `solve_linear(method="petsc")` builds a plain
+`MATAIJ` from this module's existing scalar CSR (not a true `MATBAIJ` --
+that constructor wants block-row indptr/block-column indices/block-dense
+data, a reformat this phase didn't need), then calls
+`Mat.setBlockSize(block_size)` before assembly to get the same
+point-block `PCPBJACOBI` preconditioning the plan's sec 2 target names,
+confirmed sufficient without true BAIJ storage. GMRES restart needed
+raising from PETSc's default (30) to `min(restart or 100, n)`, the same
+stall this file's scipy `gmres` branch already documents on the
+coupled 3D device Jacobian. And PETSc's internal GMRES convergence test
+runs on the (left-)preconditioned residual, not the plain
+`||Ax-b||/||b||` this module reports as `info["residual"]` -- the two
+can differ by roughly an order of magnitude at a requested
+`rtol=1e-8` (confirmed: ~4e-6 actual vs. 1e-8 requested on the 1D
+diode Jacobian test), so don't read `rtol=` as a tight bound on the
+returned solution's actual accuracy the way it is for scipy's methods.
+All three carried over unchanged into P3b's C++ backend.
+
+P3b (the same configuration in `core/solver/`) landed; see the P3b
+section at the end of this document for what moved, what deliberately
+did not, and the measurement that says what it was and was not worth.
 
 Governing documents this one sits under: `Architecture_Master_Plan.md`
 section 2 (the six-layer north star), section 37 (*"Do not rewrite the
@@ -70,10 +115,11 @@ be checked.
 | **P0** | Foundations: packaging, CI, boundary tests, the empty `_core` | **LANDED** |
 | **P1** | De-couple and de-duplicate, still pure Python | **LANDED** |
 | **P2** | `mesh/` + `geom/` kernels -- the measured blocker | **LANDED** |
-| P3a | `method="petsc"` in `linsolve.py` via petsc4py (no C++ needed) | next |
-| P3b | the same configuration moved into `core/solver/` | |
-| P4 | process/particle kernels (MC implant, TED, diffusion, AMR indicators) | |
-| P5 | assembly + Newton in C++; the `pytcad_cpp` backend appears | |
+| P2b | the winding-sensitivity defect P2 surfaced, fixed on both paths | **LANDED** |
+| P3a | `method="petsc"` in `linsolve.py` via petsc4py (no C++ needed) | **LANDED** |
+| P3b | the same configuration moved into `core/solver/` | **LANDED** |
+| P4 | process/particle kernels (MC implant, TED, diffusion, AMR indicators) | **LANDED** |
+| P5 | assembly + Newton in C++; the `pytcad_cpp` backend appears | next -- **see adjoint gates below** |
 | P6 | native `QQuickVTKItem` 3D viewport | |
 | P7 | MPI + GPU via PETSc; `DMPlex` | |
 | P8 | Qt shell hardening (split `AppController`, structured progress channel) | |
@@ -175,7 +221,15 @@ the SHA-256 state digests), `test_m13_fermi.py` and
 
 * PETSc and VTK-with-Qt raise the deployment cost; conda-forge becomes
   the supported channel for the C++ build. P3a (petsc4py) is the cheap
-  way to test that bet before committing C++ to it.
+  way to test that bet before committing C++ to it. **Outcome, now that
+  P3a and P3b have both landed:** the bet held on Linux/conda-forge, and
+  the deployment cost turned out to be containable because PETSc is
+  optional *inside* the extension (`TCAD_WITH_PETSC=AUTO`) rather than a
+  precondition for building it -- a pip-only build still compiles, still
+  passes, and still gets `method="petsc"` via petsc4py. What P3b did NOT
+  buy is speed: the compiled and petsc4py backends are within 2% of each
+  other, so the justification is entirely architectural. See the P3b
+  section.
 * Windows: the current stack is Windows-verified; PETSc + VTK-Qt + MSVC
   is materially harder. Either commit to conda-forge there too, or
   accept the C++ engine is Linux-first and say so.
@@ -299,4 +353,439 @@ the dictionary work they replace was.
   Gate G-B in particular: `tests/goldens/m13,m14` and the SHA-256
   digests are structured-mesh solves that P2 does not touch, so **any**
   movement there means something is wrong.
-* Decide what to do about the winding defect above.
+* ~~Decide what to do about the winding defect above.~~ Decided and
+  done -- see the P2b section.
+
+
+---
+
+## P2b -- LANDED
+
+The winding-sensitivity defect P2 surfaced, and deliberately did not
+fix, is fixed. One line on each path:
+
+```python
+# pytcad/unstructured_assembly.py, _cot
+-    return dot / cross
++    return dot / abs(cross)
+```
+```cpp
+// core/include/tcad/geom/simplex.hpp, geom::cot
+-    return dot / cross;
++    return dot / std::fabs(cross);
+```
+
+**Why that is the right fix, not a clamp.** `_cot` returns the
+cotangent of the *undirected* angle at a vertex, subtended by rays to
+the other two. That angle lies in `(0, pi)`, so its sine is positive by
+definition and the cotangent's sign belongs entirely to the dot product.
+The signed cross product in the denominator was importing the
+triangle's orientation into a quantity that has none -- which is why
+reversing a non-obtuse triangle flipped all three of its dual-area
+contributions negative while `tri_area` (an `abs`) did not follow, and
+the partition identity failed by exactly 2x.
+
+**Blast radius: none.** `fabs` on a positive double is the identity, so
+on counter-clockwise input -- every gmsh mesh, every fixture, every
+golden -- the result is bit-for-bit what it was. Measured, not argued:
+the full suite moved by exactly the four tests this change adds and
+removes, with the m13/m14 goldens and SHA-256 digests unmoved (gate
+G-B) and the warning count unchanged at 39.
+
+**What the gate looks like now.**
+`test_winding_sensitivity_is_reproduced_faithfully` -- which pinned the
+defect -- is replaced by `test_winding_is_irrelevant_to_the_dual_areas`
+(acute / right / obtuse triangles, all six vertex orderings, checking
+the partition identity and positivity per triangle) and
+`test_an_inverted_mesh_still_partitions_exactly` (every triangle in a
+20x20 jittered grid reversed).
+
+One thing that had to be got right in the test rather than assumed: all
+six orderings agree, but only a REVERSAL is expected to agree
+bit-for-bit. `_triangle_area2` is a difference of two products; a
+reversal negates it exactly, whereas a cyclic rotation recomputes it
+from different coordinate differences and lands a ulp or two away. That
+has nothing to do with this defect and would have been there before it.
+So the test compares reversals with `np.array_equal` and rotations at
+`rel=1e-14`, and says which is which and why.
+
+**Honest scope.** The 3D path was checked and needs nothing: its dual
+volumes are a barycentric quarter-split of `fabs(tet_volume)`, which
+carries no orientation. The obtuse branch in 2D was likewise never
+affected (it splits `tri_area`, already an `abs`) -- it is in the new
+test anyway, so that a future "fix" that broke it would be caught.
+
+### Validation
+
+| run | result | vs. P3b |
+|---|---|---|
+| fast suite, compiled backend | **1428 passed, 2 skipped, 1 xfailed, 39 warnings** | +3 passed |
+| fast suite, `PYTCAD_ACCEL=0` | **1420 passed, 10 skipped, 1 xfailed, 39 warnings** | +3 passed |
+| slow gate battery | **22 passed, 11 warnings** | unchanged |
+
+---
+
+## P3b -- LANDED
+
+The PETSc `KSP`/`PC` configuration now lives in
+`core/src/solver/petsc_ksp.cpp`, reached through `_core.petsc_solve_csr`.
+`solve_linear(method="petsc")` has two interchangeable backends and says
+which one ran in `info["backend"]`:
+
+| backend | what it is | when it runs |
+|---|---|---|
+| `"cpp"` | `core/solver/`, this phase | extension built against PETSc, `PYTCAD_ACCEL` not `0` |
+| `"petsc4py"` | P3a, kept forever | anything else, including `PYTCAD_ACCEL=0` |
+
+### The result that matters
+
+**The two backends are bit-identical.** `np.array_equal`, not a
+tolerance -- the same bar P2's mesh kernels cleared, which is not
+usually available for a Krylov solve and is here only because both paths
+call the *same* `libpetsc.so` with the same KSP type, restart, PC,
+tolerances and matrix. Checked on random systems at n = 30 / 300 / 600 /
+2001, on the real interleaved psi/n/p 1D diode Jacobian (399 iterations,
+identical residual to the last bit), and with a nonzero initial guess.
+Iteration counts and residuals match exactly too, not just the answers.
+
+That is the whole reason the split below was drawn where it was.
+
+### What moved, and what deliberately did not
+
+Moved to C++: which Krylov method (`KSPGMRES`), the restart, which
+preconditioner (`PCPBJACOBI` when `block_size` divides the system,
+`PCBJACOBI` otherwise), the tolerances, `MatSetBlockSize`,
+`KSPSetInitialGuessNonzero`, and PETSc's own start-up.
+
+Stayed in Python, on purpose:
+
+* **The acceptance test.** Both backends return a raw
+  `(x, iterations, KSPConvergedReason)` and judge nothing.
+  `solve_linear` recomputes the true residual and raises the one
+  `LinearSolveError` with the one message. Two backends that disagreed
+  about when a solve "converged" would be a parity hole no test could
+  paper over, and there is no version of that bug that is cheap to find
+  later.
+* **CSR canonicalization.** Done once, before dispatch, so both are
+  handed the identical matrix. (Not a bug fix: PETSc 3.25's
+  `MatSeqAIJSetPreallocationCSR` was checked directly and sorts a
+  reversed-index CSR correctly. It removes a way the two could ever
+  diverge.) It copies only when scipy's `has_canonical_format` says it
+  must, so a caller's assembled Jacobian is never mutated behind its
+  back -- gated by `test_the_callers_matrix_is_never_mutated`.
+
+### A real defect, found and fixed on both paths at once
+
+**P3a's `x0` was silently ignored.** It seeded the PETSc solution vector
+but never called `KSPSetInitialGuessNonzero`, and PETSc zeroes that
+vector at the top of `KSPSolve` unless the flag is set. Measured rather
+than reasoned: an *exact* initial guess produced the same iteration count
+and the bit-identical answer as no guess at all. With the flag it costs
+0 iterations. Fixed in the petsc4py backend and the C++ backend in this
+change, so the two cannot disagree about it, and pinned by
+`test_nonzero_initial_guess_is_actually_used`. No caller passed `x0`
+with `method="petsc"`, so nothing downstream changes.
+
+### Honest accounting of the payoff
+
+Warm (PETSc already initialized), on the 603-unknown device Jacobian,
+best of 8: **3.30 ms compiled vs 3.38 ms petsc4py.** There is no
+speedup, and none was expected -- PETSc does the arithmetic either way
+and the petsc4py wrapper was never the cost. The first-call difference
+(~1 s) is PETSc/MPI start-up, paid once per process by whichever backend
+runs first, not by the backend.
+
+So P3b is justified by section 1's third conclusion and by the
+"Recorded dissent" counter-argument above -- a single engine is what
+makes a distributed `Mat`/`DMPlex` reachable in P7 -- and by nothing
+else. It should be held to that standard rather than a performance one,
+and the same question should be asked again at P5.
+
+### PETSc is optional at build time too
+
+Gate G-F applies one level down. `TCAD_WITH_PETSC` is `AUTO` by default:
+found via pkg-config -> compiled backend; absent -> the extension still
+builds, `have_petsc()` is false, and `method="petsc"` runs petsc4py (or
+raises `LinearSolveError` naming *both* recovery routes if that is
+missing too). `petsc_ksp.cpp` is in the source list either way, so the
+no-PETSc configuration is a compiled stub that is actually exercised
+rather than a branch nobody builds. Verified by building both ways:
+with PETSc **74 passed, 2 skipped**; with `-DTCAD_WITH_PETSC=OFF`
+**66 passed, 10 skipped**, the skips being exactly the backend-vs-backend
+gates that cannot run with one backend.
+
+pkg-config, not a hand-written `FindPETSc.cmake`, because PETSc's own
+build writes the include/link line for *that* installation -- which
+BLAS, which MPI, 32- or 64-bit indices -- and second-guessing it is how
+mismatched PETSc builds get linked together.
+
+### Boundary decisions worth knowing before P7
+
+* **The array boundary is int64 in both directions**, matching the rule
+  `_accel.py` states for every kernel (numpy's `dtype=int` is int64 on
+  Linux, int32 on Windows). conda-forge's PETSc is built with a 32-bit
+  `PetscInt`, so the C++ side converts once, range-checked -- an index
+  that does not fit is a thrown `LinearSolveError`, never a truncation
+  that would corrupt the matrix into something that still solves and
+  still returns a plausible answer. `_accel.status()` now prints the
+  width, because 32-bit is a real ceiling (>2^31 nonzeros) and is
+  otherwise invisible from Python.
+* **PETSc initialization is shared, carefully.** The C++ side calls
+  `PetscInitialized` first and initializes only if nobody has, so it
+  never fights petsc4py in the same interpreter (which is exactly what
+  the parity tests do); it registers `PetscFinalize` at exit only if it
+  was the initializer; and it never touches the global error-handler
+  stack, because petsc4py owns that and pushing ours would break the
+  Python backend's error reporting. The cost is that a genuine PETSc
+  error prints its traceback to stderr before being translated --
+  identical to what the petsc4py path already does.
+* **Whole solves are serialized** under one mutex. PETSc's default build
+  is not thread-safe and the binding releases the GIL; a nanosecond lock
+  around a millisecond solve is free, and it matches
+  `runtime/threads.hpp`'s single-threaded default. Revisit at P7, where
+  the parallelism is MPI ranks rather than threads anyway.
+* **The compiled path reports better errors.** On a matrix PETSc cannot
+  precondition it raises `LinearSolveError: petsc KSPSolve failed
+  (PetscErrorCode 73: Object is in wrong state)` where petsc4py gives
+  only `error code 73`. The parity gate therefore pins the exception
+  *class* across backends, not the message -- unlike P2's mesh kernels,
+  where identical message text was the point.
+
+### CI
+
+The existing `accelerated` job builds from a plain pip environment,
+which has no PETSc -- so it is now the standing proof that the
+PETSc-less configuration works, and it would have skipped every P3b gate
+in silence forever. A third job, `petsc`, installs `petsc`/`petsc4py`
+from conda-forge, builds with `-DTCAD_WITH_PETSC=ON`, asserts
+`_accel.have_petsc()`, and runs the solver gates. The bit-identity claim
+can only be checked where both backends exist, so that is the only place
+it is checked.
+
+### Validation
+
+Full battery, run both ways per AGENTS.md, all green, zero regressions:
+
+| run | result | vs. P3a |
+|---|---|---|
+| fast suite, compiled backend | **1425 passed, 2 skipped, 1 xfailed, 39 warnings** | +18 passed |
+| fast suite, `PYTCAD_ACCEL=0` | **1417 passed, 10 skipped, 1 xfailed, 39 warnings** | — |
+| slow gate battery | **22 passed, 11 warnings** | unchanged |
+| `tests/test_accel_parity.py` incl. slow floors | **35 passed** | +11 |
+
+The 8-test gap between the two fast runs is exactly the
+backend-vs-backend gates, which need both backends and correctly skip
+when `PYTCAD_ACCEL=0` leaves only one. Warning count is identical to
+P2's and P3a's (39), and gate G-B is intact -- `tests/goldens/m13,m14`
+and the SHA-256 digests did not move, which they must not, since a
+linear-solve backend that changes a structured-mesh golden is wrong by
+construction.
+
+Test files:
+`tests/test_m22_linsolve.py` (P3a/P3b method gates, backend selection),
+`tests/test_accel_parity.py` (the bit-identity gates + binding argument
+validation), `tests/test_accel_boundary.py` (capability reporting on all
+three optional layers), `tests/test_architecture_boundaries.py`
+(`linsolve.py` now imports `_accel`, which is the sanctioned route and
+still passes `test_only_accel_imports_the_extension`).
+
+
+---
+
+## P4 -- LANDED
+
+Five kernels moved to `core/src/process/`, reached through
+`_core.{indicator_curvature_tri, indicator_log_density_tri,
+debye_ratio_tri, diffuse1d_const, diffuse1d_enhanced}`. Two of the
+things the phase line named did NOT move, and the reason in each case
+is a measurement rather than a scope call -- see "What deliberately did
+not move" below.
+
+### What moved, and what it bought
+
+Measured on this machine, best of 3, `-n 1`, against the Python bodies
+that are kept as the oracle:
+
+| kernel | reference | compiled | |
+|---|---|---|---|
+| `indicator_curvature_tri` | 0.27 Mtri/s | **227 Mtri/s** | 835x |
+| `debye_ratio_tri` | 0.28 Mtri/s | **242 Mtri/s** | 874x |
+| `indicator_log_density_tri` | 0.80 Mtri/s | **99 Mtri/s** | 123x |
+| `process.diffuse_numeric` (n=4000, 1800 s) | 0.325 s | **0.098 s** | 3.3x |
+| `ted.diffuse_with_defects` (same) | 24.6 s | **6.07 s** | 4.1x |
+
+The indicators are the P2 shape exactly: a per-triangle Python loop
+calling `np.linalg.norm` on two-element vectors, run over every triangle
+on every AMR pass. `indicator_log_density_tri` gains "only" 123x because
+its compiled path still pays for `np.log` over every node, which stays
+in numpy on purpose (below).
+
+The diffusion loops are a different shape and give a correspondingly
+honest 3-4x: they were never doing too much arithmetic, they were paying
+~10 numpy dispatches per timestep against a step count the explicit
+stability bound drives into the tens of thousands. Removing the
+interpreter round trip is the whole change. At n=4000 the arrays are
+large enough that the dispatch is no longer most of the cost, which is
+why this is 3-4x and not 800x -- stated because a reader comparing the
+two halves of that table deserves to know they are not the same kind of
+win.
+
+### The split that makes bit-identity structural
+
+Every transcendental acting on a whole array stays on the numpy side and
+only its RESULT crosses: `np.log(n)`/`np.log(p)` for the log-density
+indicator, `mesh.debye_length(...)` for the Debye ratio, the peak `scale`
+for curvature. numpy's `log` and C++'s are independent implementations,
+and the gate is `np.array_equal`, so the only defensible move is to
+compute such a value once and hand it down. Same reasoning as P3b's
+"C++ owns configuration, Python owns the acceptance test".
+
+There is exactly one exception, and it is measured rather than assumed:
+the TED supersaturation's scalar `exp`. Keeping it in Python would mean
+materializing one double per timestep -- millions on a fine grid --
+purely to hand back. So it was checked directly: over 400k arguments
+spanning the range the decay reaches, `std::exp` and `np.exp` agreed
+bit-for-bit on every one, through both numpy's array path and its 0-d
+scalar path (which is what `ted_supersaturation` actually calls). It is
+also gated at runtime by `test_ted_exp_matches_numpy`, which sweeps tau
+deep into the tail rather than staying near 0 where any two exps agree.
+
+Reproducing Python's builtin `max`/`min` was the other place bit-identity
+had to be earned rather than assumed. These reduce with `if item >
+current`, so with a NaN operand the FIRST value wins; `std::max` and
+`std::fmax` do not both behave that way. `py_max`/`py_min` in
+`indicators.cpp` are written to the reference's rule, so a NaN
+propagates the same way rather than the same way "on finite input".
+
+### A defect the port surfaced, in a module it was not porting
+
+`process2d.implant_2d` smooths each depth row with
+`_gaussian_smooth_1d`, which builds a dense (Nx, Nx) kernel matrix. The
+kernel depends only on `(x, sigma)` -- and it was being rebuilt, with an
+(Nx, Nx) `exp`, once per row. The call was O(Ny * Nx^2) in
+transcendentals where it is O(Nx^2). Hoisting it out of the loop:
+
+| Nx x Ny | before | after | |
+|---|---|---|---|
+| 80 x 120 | 4.3 ms | 0.6 ms | 7x |
+| 200 x 300 | 124 ms | 8.1 ms | 15x |
+| 400 x 600 | 939 ms | 15.1 ms | **62x** |
+
+Bit-identical by construction (the identical matrix, into the identical
+rows, in the identical order) and verified as such against a
+transcription of the pre-hoist body, not merely argued.
+
+### What deliberately did not move, and why
+
+* **Monte-Carlo implant (`mc_implant.mc_implant_bca`).** Two independent
+  reasons, both measured. (a) It is already vectorized over ions, not
+  over steps: throughput is flat at 61-81k ion/s from 500 to 100k ions,
+  i.e. array-bound rather than dispatch-bound, so there is little of the
+  P4 win available. (b) A C++ port could not be gated: bit-identity
+  would require replicating numpy's PCG64 stream, its ziggurat
+  `standard_exponential`, and its bounded-uniform algorithm exactly, and
+  a Monte-Carlo kernel whose stream differs cannot be compared with
+  `np.array_equal` at all -- it would be the first kernel in this
+  migration with no oracle. Not attempted. If it is ever wanted, the way
+  in is to draw the random arrays in numpy and consume them in C++, and
+  that should be a decision taken on its own merits.
+* **`implant_2d`'s lateral smoothing.** What remains after the hoist is
+  a BLAS `dgemv`. C++ cannot reproduce it bit-identically (different
+  blocking) and has no reason to try to beat it. The 62x above is the
+  whole available win and it is already taken.
+
+### Also in this phase
+
+* **`tcad::IndexOutOfRange` -> Python `IndexError`**, the fourth mapped
+  exception. The reference gets this free from numpy fancy-indexing; a
+  kernel dereferencing a raw pointer would read out of bounds instead.
+  So every kernel taking connectivity validates the index range in one
+  O(n) pass up front. The CLASS matches the reference, which is what a
+  caller catches; the message text deliberately does not try to
+  reproduce numpy's wording.
+* **CI gap closed.** The G-E throughput floors are marked `slow`, and
+  the `python-only` job's slow battery skips the whole parity file (no
+  extension to measure). They therefore ran NOWHERE. The `accelerated`
+  job now has a `-m slow` step.
+
+### Validation
+
+| run | result | vs. P2b |
+|---|---|---|
+| fast suite, compiled backend | **1444 passed, 2 skipped, 1 xfailed, 39 warnings** | +16 passed |
+| fast suite, `PYTCAD_ACCEL=0` | **1436 passed, 10 skipped, 1 xfailed, 39 warnings** | +16 passed |
+| slow gate battery | **25 passed, 10 warnings** | +3 passed, -1 warning |
+| `tests/test_accel_parity.py` | **55 passed** | +16 |
+
+Both fast runs move by exactly +16 -- the 14 new non-slow parity tests
+plus the 2 new boundary tests -- with the skip, xfail and warning counts
+unchanged. Gate G-B is the one that matters for a phase touching process
+code: the m13/m14 goldens and SHA-256 digests are structured-mesh solves
+that none of these kernels participate in, so any movement would mean
+the change is wrong. There was none.
+
+**The slow battery's warning count went 11 -> 10, and that is not a
+behaviour change.** It was chased rather than waved past: re-running the
+slow battery with only the three new floor tests deselected gives back
+exactly `22 passed, 11 warnings`. pytest de-duplicates warnings per
+xdist WORKER, so adding three tests reshuffles the `-n 6` distribution
+and two tests that previously emitted the same warning on two different
+workers can land on one. No existing test changed what it warns about,
+and in particular the compiled kernels are not swallowing a numpy
+warning the Python loop used to raise.
+
+### Optionality, re-checked at all three layers
+
+| configuration | result |
+|---|---|
+| `-DTCAD_WITH_PETSC=OFF` build | `petsc=no`; 96 passed, 10 skipped |
+| no `_core.so` at all (gate G-F) | `not built`; parity/boundary 13 passed, 65 skipped; `test_m22_linsolve` + `test_m21_phase3` 53 passed, 2 skipped |
+
+The P4 kernels are PETSc-independent, so the middle layer is only
+confirming that adding them did not accidentally couple them to it.
+
+---
+
+## P5 addendum -- adjoint-readiness gates (added 2026-09-09)
+
+`ARCHITECTURE.md` section 4e names differentiable simulation / adjoint
+sensitivities as the single differentiator neither Sentaurus nor Atlas
+can answer architecturally. That capability (M47-M50) is incremental
+IF the C++ assembly is built to support it, and a second rewrite if it
+is not.
+
+**P5 has not started, so this decision is currently free. It stops
+being free the moment the assembler lands.** Two gates are therefore
+added to P5:
+
+1. **The assembler must be transposable.** An adjoint solve applies
+   `J^T`. PETSc gives that essentially free for `MATAIJ`/`MATBAIJ` --
+   but only if the ASSEMBLY has not baked in something that destroys
+   it. **It currently has.** Today's Dirichlet handling zeroes the
+   contact rows and writes a unit diagonal
+   (`unstructured_dd.py:337`, `device2d.py:920`), which is not
+   transpose-friendly: the transpose of a row-eliminated matrix does
+   not impose the same constraint on the adjoint problem. The C++ path
+   must use a symmetric constraint elimination instead (eliminate both
+   row and column, moving the known value to the RHS), which is
+   standard, preserves symmetry of the constraint, and costs nothing
+   extra in the forward solve.
+   *Gate:* on a converged bias point, `J^T x` computed by the
+   assembler matches a dense-transpose reference to `rtol <= 1e-12`,
+   and the forward solve remains bit-identical to the Python oracle.
+
+2. **The residual must be parameterized.** `dR/dp` is only meaningful
+   if `p` is a named vector the assembler knows about (doping
+   magnitudes, mobility coefficients, lifetimes, geometry scalars),
+   rather than values closed over inside Python. `ResidualAssembler`
+   takes an explicit parameter vector and can report which entries a
+   given residual row depends on.
+   *Gate:* for at least one parameter of each kind, the assembled
+   `dR/dp` column matches a finite-difference column to the `5e-5`
+   relative tolerance `tests/test_m13_solver.py:127`'s FD-Jacobian
+   probe already uses.
+
+Neither gate requires implementing adjoints in P5 -- only not
+foreclosing them. If P5 ships without these, record it as a deliberate
+decision with its cost (M47 becomes a rewrite of P5, not an addition),
+rather than discovering it later.

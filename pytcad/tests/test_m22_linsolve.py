@@ -486,3 +486,208 @@ def test_schur_builder_refuses_mismatched_structure():
                  data_rvs=lambda k: rng.standard_normal(k)).tocsr()
     A = A + sp.diags(np.arange(60) + 10.0)
     assert linsolve._build_schur_preconditioner(A, 2) is None
+
+
+# ------------------------------------------------------------- P3a/P3b (petsc)
+# method="petsc" has two interchangeable backends: the compiled one
+# (M31 P3b, core/src/solver/petsc_ksp.cpp) and petsc4py (P3a, and the
+# oracle the compiled path is diffed against in
+# tests/test_accel_parity.py).  The tests in this section are about the
+# METHOD and must pass on whichever backend the environment provides;
+# the backend-vs-backend gate lives in test_accel_parity.py.
+def _have_any_petsc():
+    from pytcad import _accel
+    return linsolve._HAVE_PETSC4PY or _accel.have_petsc()
+
+
+def test_petsc_without_any_backend_raises_not_importerror():
+    """A PETSc-less environment must stay working: method='petsc' fails
+    with the documented LinearSolveError (which callers already catch
+    and fall back to 'direct'/'gmres' on), never a bare ImportError
+    leaking out of solve_linear."""
+    if _have_any_petsc():
+        pytest.skip("a petsc backend is available in this environment")
+    A, b = _random_spd_system(20, 42)
+    with pytest.raises(linsolve.LinearSolveError, match="petsc4py"):
+        linsolve.solve_linear(A, b, method="petsc")
+
+
+@pytest.mark.skipif(not _have_any_petsc(),
+                    reason="no petsc backend: neither petsc4py nor a "
+                          "PETSc-enabled pytcad._core (conda-forge only, "
+                          "see M31-CPP-ARCHITECTURE-PLAN.md sec 2/5)")
+class TestPetscMethod:
+    """G3-style parity gate for M31 P3a/P3b: method='petsc' must agree
+    with the direct solve within rtol, same as gmres/bicgstab above --
+    this is a new solver STACK (PETSc's KSP, not scipy's), not a new
+    physics path, so it is held to the identical correctness bar."""
+
+    def test_petsc_agrees_with_direct_on_random_systems(self):
+        for n, seed in ((30, 20), (300, 21), (2000, 22)):
+            A, b = _random_spd_system(n, seed)
+            ref = spsolve(A.tocsc(), b)
+            x, info = linsolve.solve_linear(A, b, method="petsc",
+                                            rtol=1e-10)
+            assert info["converged"]
+            assert info["method"] == "petsc"
+            rel = np.linalg.norm(x - ref) / max(np.linalg.norm(ref), 1e-300)
+            assert rel <= 1e-6, f"petsc n={n} rel={rel:.3e}"
+
+    def test_petsc_point_block_path_on_a_real_device_jacobian(self):
+        """block_size=3 must take the point-block PCPBJACOBI branch on
+        the actual interleaved psi/n/p Jacobian this codebase produces
+        -- not just a synthetic random system.
+
+        (Named MATBAIJ when first written; both backends in fact build a
+        MATAIJ and call MatSetBlockSize, which is all PCPBJACOBI needs.
+        See the plan's P3a implementation notes.)"""
+        from pytcad import Device1D, Models
+
+        from pytcad.mesh import uniform_mesh
+
+        x = uniform_mesh(6.0e-4, 200)
+        dop = np.where(x < 3.0e-4, -1e16, 1e17)
+        dev = Device1D(x, dop, T=300.0, models=Models(srh=True))
+        dev.solve_equilibrium()
+        bc = dev._contact_values([0.3, 0.0])
+        psi, n, p = dev.psi.copy(), dev.n.copy(), dev.p.copy()
+        psi[0], n[0], p[0] = bc[0]
+        psi[-1], n[-1], p[-1] = bc[1]
+        F, J, _, _ = dev._residual_jacobian(psi, n, p, bc)
+
+        ref = spsolve(J.tocsc(), -F)
+        x_petsc, info = linsolve.solve_linear(
+            J, -F, method="petsc", rtol=1e-8, maxiter=500, block_size=3)
+        assert info["converged"]
+        rel = np.linalg.norm(x_petsc - ref) / max(np.linalg.norm(ref), 1e-300)
+        # PETSc's internal GMRES convergence test uses the (left-)
+        # preconditioned residual, not the plain ||Ax-b||/||b|| this
+        # module recomputes for its own `resid`/rtol gate -- the two
+        # can differ by an order of magnitude or so at a requested
+        # rtol=1e-8, confirmed directly (~4e-6 here); 1e-5 is a
+        # meaningful accuracy bar without being a flaky pin to that gap.
+        assert rel <= 1e-5, f"petsc point-block path rel={rel:.3e}"
+
+    def test_petsc_singular_input_raises(self):
+        A = sp.csr_matrix(np.zeros((10, 10)))
+        b = np.ones(10)
+        with pytest.raises(linsolve.LinearSolveError):
+            linsolve.solve_linear(A, b, method="petsc", maxiter=20)
+
+    def test_info_names_the_backend_that_ran(self):
+        """P3b: which of the two PETSc backends ran is reportable, not
+        guesswork -- a caller comparing timings or filing a bug needs to
+        know, and the parity gate needs it to assert it really exercised
+        both."""
+        from pytcad import _accel
+
+        A, b = _random_spd_system(40, 31)
+        _, info = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        assert info["method"] == "petsc"
+        assert info["backend"] == ("cpp" if _accel.have_petsc() else "petsc4py")
+
+    def test_nonzero_initial_guess_is_actually_used(self):
+        """Regression, both backends: seeding the PETSc solution vector
+        does nothing unless KSPSetInitialGuessNonzero is also set --
+        PETSc zeroes it at the top of KSPSolve otherwise.  The P3a code
+        set only the vector, so x0 was silently ignored.  An exact guess
+        must now cost zero iterations."""
+        A, b = _random_spd_system(120, 32)
+        exact = spsolve(A.tocsc(), b)
+        _, cold = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        _, warm = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10,
+                                        x0=exact)
+        assert cold["iterations"] > 0
+        assert warm["iterations"] == 0, (
+            f"x0 ignored: {warm['iterations']} iterations from an exact "
+            f"initial guess (cold solve took {cold['iterations']})")
+
+    def test_non_canonical_csr_solves_correctly(self):
+        """solve_linear canonicalizes before handing the matrix to
+        PETSc, so a CSR whose column indices are not sorted -- which
+        scipy permits and PETSc's CSR contract does not ask for -- still
+        describes the same operator to the solver."""
+        A, b = _random_spd_system(80, 33, density=0.1)
+        ref = spsolve(A.tocsc(), b)
+        idx, dat = A.indices.copy(), A.data.copy()
+        for r in range(A.shape[0]):
+            s, e = A.indptr[r], A.indptr[r + 1]
+            idx[s:e] = A.indices[s:e][::-1]
+            dat[s:e] = A.data[s:e][::-1]
+        U = sp.csr_matrix((dat, idx, A.indptr.copy()), shape=A.shape)
+        U.has_sorted_indices = False
+        assert not U.has_canonical_format
+        x, info = linsolve.solve_linear(U, b, method="petsc", rtol=1e-12)
+        assert info["converged"]
+        rel = np.linalg.norm(x - ref) / np.linalg.norm(ref)
+        assert rel <= 1e-8, f"non-canonical CSR rel={rel:.3e}"
+
+    def test_the_callers_matrix_is_never_mutated(self):
+        """Canonicalizing must not be a side effect on the caller's
+        object: an assembled Jacobian is reused across a Newton step."""
+        A, b = _random_spd_system(50, 34)
+        before = (A.indptr.copy(), A.indices.copy(), A.data.copy())
+        linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        assert np.array_equal(A.indptr, before[0])
+        assert np.array_equal(A.indices, before[1])
+        assert np.array_equal(A.data, before[2])
+
+
+# --------------------------------------------------- P3b backend selection
+# Which backend runs is a policy decision, and policy that is not tested
+# rots quietly: the failure mode here is not a wrong answer but a silent
+# one -- the compiled backend never actually running in an environment
+# that has it, so P3b would appear to work while the petsc4py path did
+# all the solving.
+class TestPetscBackendSelection:
+
+    def test_compiled_backend_is_preferred_when_it_exists(self, monkeypatch):
+        from pytcad import _accel
+
+        monkeypatch.delenv("PYTCAD_ACCEL", raising=False)
+        if not _accel.have_petsc():
+            pytest.skip("pytcad._core was not built against PETSc")
+        A, b = _random_spd_system(40, 35)
+        _, info = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        assert info["backend"] == "cpp"
+
+    def test_pytcad_accel_0_forces_the_python_backend(self, monkeypatch):
+        """PYTCAD_ACCEL=0 is the repo-wide 'use the reference path'
+        switch, and it must reach this method too -- it is exactly the
+        lever tests/test_accel_parity.py pulls to run both backends in
+        one process."""
+        if not linsolve._HAVE_PETSC4PY:
+            pytest.skip("petsc4py not installed")
+        monkeypatch.setenv("PYTCAD_ACCEL", "0")
+        A, b = _random_spd_system(40, 36)
+        _, info = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        assert info["backend"] == "petsc4py"
+
+    def test_an_extension_without_petsc_falls_back_silently(self, monkeypatch):
+        """The pip-only CI job builds pytcad._core with no PETSc at all.
+        That is a supported configuration, not a degraded one: the
+        method keeps working on petsc4py and says so."""
+        if not linsolve._HAVE_PETSC4PY:
+            pytest.skip("petsc4py not installed")
+        from pytcad import _accel
+
+        monkeypatch.setattr(_accel, "have_petsc", lambda: False)
+        A, b = _random_spd_system(40, 37)
+        x, info = linsolve.solve_linear(A, b, method="petsc", rtol=1e-10)
+        assert info["backend"] == "petsc4py"
+        assert info["converged"]
+
+    def test_no_backend_at_all_names_both_recovery_routes(self, monkeypatch):
+        """The message a user actually hits has to say which two things
+        could be installed, since 'petsc is missing' has two different
+        fixes now."""
+        from pytcad import _accel
+
+        monkeypatch.setattr(_accel, "have_petsc", lambda: False)
+        monkeypatch.setattr(linsolve, "_HAVE_PETSC4PY", False)
+        A, b = _random_spd_system(20, 38)
+        with pytest.raises(linsolve.LinearSolveError) as exc:
+            linsolve.solve_linear(A, b, method="petsc")
+        msg = str(exc.value)
+        assert "petsc4py" in msg and "pytcad._core" in msg
+        assert "conda-forge" in msg

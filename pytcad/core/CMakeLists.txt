@@ -33,6 +33,17 @@ endif()
 option(TCAD_INPLACE_OUTPUT "Write the extension into ../pytcad/ for in-place dev use" OFF)
 option(TCAD_BUILD_TESTS    "Build the Catch2 C++ unit tests"                          OFF)
 
+# PETSc (M31 P3b) is OPTIONAL, and AUTO is the honest default: found ->
+# used, absent -> the extension still builds and pytcad falls back to the
+# petsc4py backend, or to method="direct"/"gmres" if that is absent too.
+# This is gate G-F applied one level down -- the existing `accelerated`
+# CI job builds from a plain pip environment that has no PETSc at all and
+# must stay green.  Set OFF to force the fallback even where PETSc
+# exists (useful for reproducing that CI job locally); ON to fail the
+# configure loudly if it cannot be found.
+set(TCAD_WITH_PETSC "AUTO" CACHE STRING "Link the PETSc solver backend: AUTO, ON or OFF")
+set_property(CACHE TCAD_WITH_PETSC PROPERTY STRINGS AUTO ON OFF)
+
 find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
 
 # nanobind ships its own CMake config; ask the interpreter where it is
@@ -51,14 +62,50 @@ find_package(nanobind CONFIG REQUIRED)
 # workbench/batch.py's per-worker OPENBLAS_NUM_THREADS=1 pin).
 find_package(OpenMP COMPONENTS CXX)
 
+# PETSc ships a pkg-config file and nothing else machine-readable, so
+# that is what we ask.  Deliberately NOT a find_package with a bundled
+# FindPETSc.cmake: PETSc's own build writes lib/pkgconfig/petsc.pc with
+# the exact include/link line for THAT installation (which BLAS, which
+# MPI, 32- or 64-bit indices), and second-guessing it is how mismatched
+# PETSc builds get linked together.
+if(NOT TCAD_WITH_PETSC STREQUAL "OFF")
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PETSC IMPORTED_TARGET petsc)
+  endif()
+  if(NOT PETSC_FOUND AND TCAD_WITH_PETSC STREQUAL "ON")
+    message(FATAL_ERROR
+      "TCAD_WITH_PETSC=ON but pkg-config could not find petsc. Install it "
+      "(conda-forge: `conda install -c conda-forge petsc`) and point "
+      "PKG_CONFIG_PATH at <prefix>/lib/pkgconfig, or set "
+      "TCAD_WITH_PETSC=OFF to build the petsc4py-only fallback.")
+  endif()
+endif()
+
 add_library(tcad_core OBJECT
   src/runtime/threads.cpp
   src/mesh/stencil.cpp
+  src/solver/petsc_ksp.cpp
+  src/process/indicators.cpp
+  src/process/diffuse.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(OpenMP_CXX_FOUND)
   target_link_libraries(tcad_core PUBLIC OpenMP::OpenMP_CXX)
   target_compile_definitions(tcad_core PUBLIC TCAD_HAVE_OPENMP=1)
+endif()
+# petsc_ksp.cpp is in the build EITHER WAY -- with PETSc it is the real
+# backend, without it it is a have_petsc()==false stub that throws a
+# message naming both recovery routes.  One source list, no conditional
+# compilation of whole files, so the no-PETSc configuration is exercised
+# by the same code the PETSc one is.
+if(PETSC_FOUND)
+  target_link_libraries(tcad_core PUBLIC PkgConfig::PETSC)
+  target_compile_definitions(tcad_core PUBLIC TCAD_HAVE_PETSC=1)
+  message(STATUS "PETSc ${PETSC_VERSION} found -- compiled solver backend enabled")
+else()
+  message(STATUS "PETSc not found -- building without the compiled solver "
+                 "backend (pytcad falls back to petsc4py)")
 endif()
 
 # ONE extension module, with the libs linked in as OBJECT targets --
@@ -68,6 +115,8 @@ endif()
 nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/module.cpp
   bindings/mesh_bindings.cpp
+  bindings/solver_bindings.cpp
+  bindings/process_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
 

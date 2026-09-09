@@ -60,12 +60,19 @@ inline double triangle_area2(const Vec2& p0, const Vec2& p1, const Vec2& p2) {
 }
 
 /// _cot: cot of the angle at p_apex subtended by rays to p_a and p_b.
+///
+/// |cross|, not cross: the undirected angle between two rays is in
+/// (0, pi), so its sine is positive and the sign of the cotangent comes
+/// from the dot product alone. The signed form made the dual areas in
+/// stencil.cpp winding-sensitive (M31 P2b). fabs() on a positive value
+/// is exact, so counter-clockwise input -- which is everything gmsh
+/// emits, and everything the goldens contain -- is bit-identical.
 inline double cot(const Vec2& apex, const Vec2& a, const Vec2& b) {
     const Vec2 v1 = sub2(a, apex);
     const Vec2 v2 = sub2(b, apex);
     const double cross = v1.x * v2.y - v1.y * v2.x;
     const double dot = v1.x * v2.x + v1.y * v2.y;
-    return dot / cross;
+    return dot / std::fabs(cross);
 }
 
 /// _tet_volume: SIGNED volume (the caller takes abs, as Python does).

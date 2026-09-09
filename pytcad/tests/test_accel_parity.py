@@ -14,6 +14,9 @@ The gates in this file:
   G-C  identical exception TYPE and MESSAGE on degenerate/non-manifold input
   G-D  identical results at PYTCAD_NUM_THREADS in {1, 2, 4, 8}
   G-E  absolute throughput floors (marked slow)
+
+Covering, in order: the mesh geometry kernels (P2), the two PETSc
+solver backends (P3b), and the process/adaptivity kernels (P4).
 """
 import os
 import subprocess
@@ -138,14 +141,14 @@ def test_partition_identities_still_hold():
     """The reference's own G7 gate: the dual measures partition the mesh
     exactly. Checked on the compiled path, not just inherited.
 
-    Jitter is kept small enough that no triangle INVERTS. That is not
-    incidental: `_cot` returns dot/cross with a SIGNED cross, while
-    `tri_area` uses abs(), so on a clockwise-wound triangle the
-    non-obtuse (cotangent) branch contributes negative dual areas and
-    the identity fails by exactly 2x. gmsh emits consistently
-    counter-clockwise triangles, so no real caller hits it -- see
-    test_winding_sensitivity_is_reproduced_faithfully below, which pins
-    the behavior rather than pretending it is absent.
+    The fixture is deliberately untangled (every triangle
+    counter-clockwise), which used to be load-bearing: `_cot` divided by
+    a SIGNED cross while `tri_area` took abs(), so an inverted triangle
+    broke the identity by exactly 2x. That is fixed (M31 P2b) and
+    test_winding_is_irrelevant_to_the_dual_areas below now gates the
+    fix, but the untangled assertion is kept: it makes a fixture that
+    silently starts producing inverted triangles fail HERE, saying so,
+    instead of quietly weakening this gate.
     """
     nodes, tris = tri_grid(30, 0.05, 3)
     assert all(ua._triangle_area2(nodes[t][:, :2]) > 0 for t in tris), \
@@ -160,30 +163,91 @@ def test_partition_identities_still_hold():
     assert vol.sum() == pytest.approx(tot, rel=1e-12)
 
 
-def test_winding_sensitivity_is_reproduced_faithfully():
-    """A bit-identical port reproduces the reference's quirks too.
+#  The three ways to write a triangle, each paired with its REVERSAL
+#  (same first vertex, other two swapped). All six describe the same
+#  triangle, so all six must produce the same dual areas -- but only
+#  within a pair is that expected BIT-for-bit, and the distinction is
+#  not pedantry: `_triangle_area2` is a difference of two products, and
+#  a reversal merely negates it (exact), while a cyclic rotation
+#  recomputes it from different coordinate differences and lands a ulp
+#  or two away. So a pair is compared with array_equal and the pairs
+#  with each other only to 1e-14.
+_WINDING_PAIRS = [((0, 1, 2), (0, 2, 1)),
+                  ((1, 2, 0), (1, 0, 2)),
+                  ((2, 0, 1), (2, 1, 0))]
 
-    `build_unstructured_stencil` is winding-sensitive: reverse a
-    non-obtuse triangle's vertex order and its three dual-area
-    contributions flip sign, because `_cot`'s denominator is a signed
-    cross product while `tri_area` is an absolute value. This is a
-    latent defect in the REFERENCE (surfaced by fuzzing the compiled
-    path against it), not something introduced here -- and the correct
-    behavior for this phase is to reproduce it exactly, so the parity
-    gate stays meaningful. Fixing it would change physics and belongs
-    in its own change, on both paths at once.
+
+@pytest.mark.parametrize("label,pts", [
+    # Non-obtuse: takes the cotangent branch, which is where the defect
+    # lived. Obtuse: takes the 1/2-1/4-1/4 branch, which never had it --
+    # included so the test would catch a "fix" that broke that branch.
+    ("acute", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.4, 1.0, 0.0]]),
+    ("right", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+    ("obtuse", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-0.8, 0.3, 0.0]]),
+])
+def test_winding_is_irrelevant_to_the_dual_areas(label, pts):
+    """M31 P2b: the dual areas depend on the triangle, not on the order
+    its vertices were listed in.
+
+    This was a real defect, surfaced by fuzzing the compiled path
+    against the reference on a mesh jittered hard enough to invert a
+    triangle: `_cot` divided by a SIGNED cross product while `tri_area`
+    took abs(), so reversing a non-obtuse triangle flipped all three of
+    its dual-area contributions negative and the partition identity
+    failed by exactly 2x. It was pinned rather than fixed in P2 because
+    fixing it changes physics and had to land on both paths at once --
+    which is what this test now gates.
+
+    Reversing a triangle is bit-exact, and asking only for `approx`
+    there would hide a genuine reordering bug: the reversal negates
+    every `cross` (and `abs` of a negated double is exact), leaves
+    `dot` alone (it is symmetric in its arguments), leaves the squared
+    side lengths alone (a negated difference squares identically), and
+    merely swaps the order of the two terms each node receives. See
+    _WINDING_PAIRS for why a cyclic ROTATION is the looser comparison.
     """
-    ccw = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.4, 1.0, 0.0]])
-    tri_ccw = np.array([[0, 1, 2]])
-    tri_cw = np.array([[0, 2, 1]])
-    assert ua._triangle_area2(ccw[tri_ccw[0]][:, :2]) > 0
-    assert ua._triangle_area2(ccw[tri_cw[0]][:, :2]) < 0
+    nodes = np.array(pts)
+    first = None
+    for ccw, cw in _WINDING_PAIRS:
+        got = {}
+        for order in (ccw, cw):
+            tri = np.array([order], dtype=int)
+            signed = ua._triangle_area2(nodes[tri[0]][:, :2])
+            _, areas = ua.build_unstructured_stencil(nodes, tri)
+            _, areas_py = ua._build_unstructured_stencil_py(nodes, tri)
+            assert_exact(f"{label} {order} compiled vs reference", areas, areas_py)
+            # The partition identity, per triangle: what used to fail by 2x.
+            assert areas.sum() == pytest.approx(0.5 * abs(signed), rel=1e-14)
+            assert np.all(areas > 0.0), "a dual area is never negative"
+            got[order] = (areas, signed)
 
-    _, a_ccw = ua.build_unstructured_stencil(ccw, tri_ccw)
-    _, a_cw = ua.build_unstructured_stencil(ccw, tri_cw)
-    _, r_cw = ua._build_unstructured_stencil_py(ccw, tri_cw)
-    assert_exact("clockwise node_areas", a_cw, r_cw)
-    assert a_ccw.sum() > 0 and a_cw.sum() < 0     # the quirk, pinned
+        assert got[ccw][1] > 0 and got[cw][1] < 0, "the pair must differ in winding"
+        assert_exact(f"{label} {cw} vs {ccw}", got[cw][0], got[ccw][0])
+
+        if first is None:
+            first = got[ccw][0]
+        else:
+            assert got[ccw][0] == pytest.approx(first, rel=1e-14)
+
+
+def test_an_inverted_mesh_still_partitions_exactly():
+    """The whole-mesh version of the above: reverse EVERY triangle and
+    the dual areas are unchanged, so the G7 partition identity survives
+    a mesh generator that winds the other way.
+
+    The flip keeps each triangle's first vertex, so the comparison can
+    be bit-exact -- see _WINDING_PAIRS.
+    """
+    nodes, tris = tri_grid(20, 0.05, 7)
+    flipped = np.ascontiguousarray(tris[:, [0, 2, 1]])
+    assert all(ua._triangle_area2(nodes[t][:, :2]) < 0 for t in flipped)
+
+    _, areas = ua.build_unstructured_stencil(nodes, tris)
+    _, areas_flipped = ua.build_unstructured_stencil(nodes, flipped)
+    assert_exact("flipped node_areas", areas_flipped, areas)
+
+    total = sum(0.5 * abs(ua._triangle_area2(nodes[t][:, :2])) for t in tris)
+    assert areas_flipped.sum() == pytest.approx(total, rel=1e-12)
 
 
 # ----------------------------------------------------------------------
@@ -358,3 +422,376 @@ def test_throughput_floor(name, floor, build):
         ua3.build_edge_flux_geometry3d(P, tets, e)
         rate = len(tets) / (time.perf_counter() - t0)
     assert rate >= floor, f"{name}: {rate:.3g}/s below floor {floor:.3g}/s"
+
+
+# ----------------------------------------------------------------------
+#  G-A for the solver: the two PETSc backends (M31 P3b)
+# ----------------------------------------------------------------------
+# The mesh kernels above earn np.array_equal because their numpy
+# primitives were measured to be plain scalar arithmetic.  A Krylov
+# solve has no such argument -- and does not need one.  Both backends
+# call the SAME libpetsc.so, with the same KSP type, restart, PC,
+# tolerances and canonicalized matrix; the only thing P3b changed is
+# WHERE those calls are made from.  So the honest bar is still exact
+# equality, and it is met: measured bit-identical on random systems, on
+# a real interleaved psi/n/p device Jacobian, and with a nonzero initial
+# guess.
+#
+# The lever is PYTCAD_ACCEL, read per call by _accel.use_accel(), so
+# both backends run in this one process against the same fixtures --
+# which is the only way a parity test is cheap enough to run every time.
+import scipy.sparse as _sp                                   # noqa: E402
+from scipy.sparse.linalg import spsolve as _spsolve          # noqa: E402
+
+from pytcad import linsolve                                  # noqa: E402
+
+_petsc_both = pytest.mark.skipif(
+    not (_accel.have_petsc() and linsolve._HAVE_PETSC4PY),
+    reason="needs BOTH petsc backends: a PETSc-enabled pytcad._core and "
+           "petsc4py (conda-forge)")
+
+
+def _spd(n, seed, density=0.02):
+    rng = np.random.default_rng(seed)
+    A = _sp.random(n, n, density=density, random_state=rng,
+                   data_rvs=lambda k: rng.standard_normal(k)).tocsr()
+    A = A + A.T
+    A = A + _sp.diags(np.abs(A).sum(axis=1).A1 + 1.0)
+    return A.tocsr(), rng.standard_normal(n)
+
+
+def _device_jacobian():
+    """The matrix that actually matters: unknowns interleaved per node as
+    (psi, n, p), which is what block_size=3 and PCPBJACOBI exist for."""
+    from pytcad import Device1D, Models
+    from pytcad.mesh import uniform_mesh
+
+    xs = uniform_mesh(6.0e-4, 200)
+    dop = np.where(xs < 3.0e-4, -1e16, 1e17)
+    dev = Device1D(xs, dop, T=300.0, models=Models(srh=True))
+    dev.solve_equilibrium()
+    bc = dev._contact_values([0.3, 0.0])
+    psi, n, p = dev.psi.copy(), dev.n.copy(), dev.p.copy()
+    psi[0], n[0], p[0] = bc[0]
+    psi[-1], n[-1], p[-1] = bc[1]
+    F, J, _, _ = dev._residual_jacobian(psi, n, p, bc)
+    return J, -F
+
+
+def _both_backends(monkeypatch, A, b, **kw):
+    """(cpp_result, py_result), each an (x, info) pair."""
+    monkeypatch.setenv("PYTCAD_ACCEL", "1")
+    cpp = linsolve.solve_linear(A, b, method="petsc", **kw)
+    monkeypatch.setenv("PYTCAD_ACCEL", "0")
+    py = linsolve.solve_linear(A, b, method="petsc", **kw)
+    assert cpp[1]["backend"] == "cpp"
+    assert py[1]["backend"] == "petsc4py"
+    return cpp, py
+
+
+@_petsc_both
+@pytest.mark.parametrize("n,seed,block_size", [
+    (30, 20, None), (300, 21, None), (600, 23, 3), (2001, 22, 3),
+])
+def test_petsc_backends_are_bit_identical(monkeypatch, n, seed, block_size):
+    (xc, ic), (xp, ip) = _both_backends(
+        monkeypatch, *_spd(n, seed), rtol=1e-10, block_size=block_size)
+    assert ic["iterations"] == ip["iterations"]
+    assert ic["residual"] == ip["residual"]
+    assert_exact(f"petsc n={n} bs={block_size}", xc, xp)
+
+
+@_petsc_both
+def test_petsc_backends_are_bit_identical_on_a_device_jacobian(monkeypatch):
+    """The random systems above converge in a handful of iterations; this
+    one takes hundreds, so it is the case where any divergence between
+    the two configurations would have room to show up."""
+    J, rhs = _device_jacobian()
+    (xc, ic), (xp, ip) = _both_backends(
+        monkeypatch, J, rhs, rtol=1e-8, maxiter=500, block_size=3)
+    assert ic["iterations"] == ip["iterations"] > 10
+    assert_exact("petsc device jacobian", xc, xp)
+
+
+@_petsc_both
+def test_petsc_backends_agree_with_a_nonzero_initial_guess(monkeypatch):
+    """x0 goes through KSPSetInitialGuessNonzero on both sides -- the
+    P3a code set only the vector, so the flag is new on both paths and
+    has to be gated on both."""
+    A, b = _spd(200, 24)
+    exact = _spsolve(A.tocsc(), b)
+    (xc, ic), (xp, ip) = _both_backends(monkeypatch, A, b, rtol=1e-10, x0=exact)
+    assert ic["iterations"] == ip["iterations"] == 0
+    assert_exact("petsc x0", xc, xp)
+
+
+@_petsc_both
+def test_petsc_backends_fail_the_same_way(monkeypatch):
+    """G-C for the solver: a matrix PETSc cannot precondition must raise
+    the same CLASS from both backends.  Not the same message -- the
+    compiled path reports PETSc's own error text ("Object is in wrong
+    state") where petsc4py reports only a numeric code, which is an
+    improvement rather than a divergence, so only the class is pinned.
+    """
+    A = _sp.csr_matrix(np.zeros((10, 10)))
+    b = np.ones(10)
+    for mode in ("1", "0"):
+        monkeypatch.setenv("PYTCAD_ACCEL", mode)
+        with pytest.raises(linsolve.LinearSolveError):
+            linsolve.solve_linear(A, b, method="petsc", maxiter=20)
+
+
+@pytest.mark.skipif(not _accel.have_petsc(),
+                    reason="pytcad._core was not built against PETSc")
+def test_petsc_solve_csr_rejects_mismatched_arrays():
+    """The binding validates shapes rather than trusting them: a wrong
+    length here would be an out-of-bounds read inside PETSc, not an
+    exception."""
+    core = _accel.core
+    ip = np.array([0, 1], dtype=np.int64)
+    idx = np.array([0], dtype=np.int64)
+    val = np.array([2.0])
+    rhs = np.array([1.0])
+    with pytest.raises(ValueError):
+        core.petsc_solve_csr(ip, idx, np.array([2.0, 3.0]), rhs, None,
+                             1e-10, 1e-50, 10, 10, 0)
+    with pytest.raises(ValueError):
+        core.petsc_solve_csr(ip, idx, val, np.array([1.0, 2.0]), None,
+                             1e-10, 1e-50, 10, 10, 0)
+    with pytest.raises(ValueError):
+        core.petsc_solve_csr(ip, idx, val, rhs, np.array([1.0, 2.0]),
+                             1e-10, 1e-50, 10, 10, 0)
+
+
+# ----------------------------------------------------------------------
+#  G-A for the process/adaptivity kernels (M31 P4)
+# ----------------------------------------------------------------------
+# Same bar as the mesh kernels: np.array_equal, on both the AMR
+# indicators and the 1D diffusion time loops.
+#
+# What makes that achievable is the split documented in
+# core/include/tcad/process/kernels.hpp -- every transcendental that acts
+# on a whole array (np.log for the log-density indicator,
+# mesh.debye_length for the Debye ratio, the peak normalisation for
+# curvature) is computed in numpy and only its RESULT crosses the
+# boundary, so the kernels are pure comparison-and-arithmetic reductions.
+# The one exception, the TED supersaturation's scalar exp, is covered by
+# test_ted_exp_matches_numpy below rather than by assertion.
+from pytcad import adapt_unstructured as _au                 # noqa: E402
+from pytcad import process as _proc                          # noqa: E402
+from pytcad import process2d as _p2d                         # noqa: E402
+from pytcad import ted as _ted                               # noqa: E402
+
+
+class _Mesh:
+    """The two attributes the indicators actually read. Deliberately not
+    a real UnstructuredMesh2D: these kernels have no business needing
+    one, and a stub proves it."""
+    def __init__(self, nodes, triangles):
+        self.nodes, self.triangles = nodes, triangles
+
+
+def _indicator_mesh(n=40, jitter=0.3, seed=5):
+    nodes, tris = tri_grid(n, jitter, seed)
+    return _Mesh(nodes, tris)
+
+
+def _fields(mesh, seed=11):
+    """psi / n / p / doping with the dynamic range a real device has --
+    n and p span ~30 decades across a junction, which is exactly where a
+    sloppy log or a reordered max would show up."""
+    rng = np.random.default_rng(seed)
+    xy = mesh.nodes[:, :2]
+    psi = 0.8 * np.tanh((xy[:, 0] - 0.5) * 12.0) + 0.05 * rng.standard_normal(len(xy))
+    n = 1e17 * np.exp(psi / 0.02585)
+    p = 1e17 * np.exp(-psi / 0.02585)
+    C = np.where(xy[:, 0] < 0.5, -1e16, 1e18)
+    return psi, n, p, C
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.3])
+def test_amr_indicators_are_bit_identical(jitter):
+    mesh = _indicator_mesh(jitter=jitter)
+    psi, n, p, C = _fields(mesh)
+    assert_exact("curvature",
+                 _au.indicator_curvature_tri(mesh, psi),
+                 _au._indicator_curvature_tri_py(mesh, psi))
+    assert_exact("log_density",
+                 _au.indicator_log_density_tri(mesh, n, p),
+                 _au._indicator_log_density_tri_py(mesh, n, p))
+    assert_exact("debye_ratio",
+                 _au.debye_ratio_tri(mesh, C),
+                 _au._debye_ratio_tri_py(mesh, C))
+
+
+def test_amr_indicators_agree_on_the_degenerate_edges_of_their_domain():
+    """The clamps are part of the contract, not defensive padding:
+    `n`/`p` are floored at 1e-300 before the log, and the Debye ratio
+    divides by max(ld_min, 1e-300). A kernel that clamped differently
+    would still look right on ordinary input."""
+    mesh = _indicator_mesh(n=12, jitter=0.0)
+    N = len(mesh.nodes)
+    zero = np.zeros(N)
+    tiny = np.full(N, 1e-320)          # subnormal, below the 1e-300 floor
+    assert_exact("log_density at zero",
+                 _au.indicator_log_density_tri(mesh, zero, tiny),
+                 _au._indicator_log_density_tri_py(mesh, zero, tiny))
+    assert_exact("debye at zero doping",
+                 _au.debye_ratio_tri(mesh, zero),
+                 _au._debye_ratio_tri_py(mesh, zero))
+    # A constant psi makes every edge difference exactly 0, so `scale`
+    # falls back on its own 1e-300 floor and the result is 0/1e-300.
+    flat = np.zeros(N)
+    assert_exact("curvature on a flat field",
+                 _au.indicator_curvature_tri(mesh, flat),
+                 _au._indicator_curvature_tri_py(mesh, flat))
+
+
+def test_an_out_of_range_node_index_raises_instead_of_reading_memory():
+    """The reference gets this from numpy fancy-indexing. The kernels
+    dereference raw pointers, so they validate the index range once up
+    front -- and must raise the SAME class, since that is what a caller
+    can catch. The message text is not claimed to match numpy's."""
+    mesh = _indicator_mesh(n=6, jitter=0.0)
+    N = len(mesh.nodes)
+    bad = _Mesh(mesh.nodes, np.array([[0, 1, N]]))       # one past the end
+    psi = np.zeros(N)
+    with pytest.raises(IndexError):
+        _au.indicator_curvature_tri(bad, psi)
+    with pytest.raises(IndexError):
+        _au.debye_ratio_tri(bad, np.full(N, 1e16))
+    with pytest.raises(IndexError):
+        _au.indicator_log_density_tri(bad, np.full(N, 1e10), np.full(N, 1e10))
+
+
+def _diffusion_case(n=250, L=2.0e-4):
+    x = np.linspace(0.0, L, n)
+    return x, _proc.implant(x, "B", 50.0, 1e15)
+
+
+@pytest.mark.parametrize("reflecting", [True, False])
+@pytest.mark.parametrize("t_s", [1.0, 60.0])
+def test_diffuse_numeric_is_bit_identical(monkeypatch, reflecting, t_s):
+    x, C = _diffusion_case()
+    monkeypatch.setenv("PYTCAD_ACCEL", "0")
+    ref = _proc.diffuse_numeric(x, C, "B", 1000.0, t_s, reflecting=reflecting)
+    monkeypatch.setenv("PYTCAD_ACCEL", "1")
+    got = _proc.diffuse_numeric(x, C, "B", 1000.0, t_s, reflecting=reflecting)
+    assert_exact(f"diffuse_numeric t={t_s} reflecting={reflecting}", got, ref)
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(n_total=None, ted_S0=25.0, ted_tau_s=8.0, oed_boost=0.0),
+    dict(n_total="doped", ted_S0=0.0, ted_tau_s=None, oed_boost=0.4),
+    dict(n_total="doped", ted_S0=25.0, ted_tau_s=8.0, oed_boost=0.4),
+])
+def test_diffuse_with_defects_is_bit_identical(monkeypatch, kwargs):
+    """Covers all three enhancement mechanisms, and in particular the
+    ted_S0 == 0 short circuit -- where the reference never evaluates the
+    exponential at all and ted_tau_s is legitimately None, so the kernel
+    must not read it either."""
+    x, C = _diffusion_case()
+    kw = dict(kwargs)
+    if kw["n_total"] == "doped":
+        kw["n_total"] = np.full_like(x, 5e19)
+
+    monkeypatch.setenv("PYTCAD_ACCEL", "0")
+    ref = _ted.diffuse_with_defects(x, C, "B", 1000.0, 30.0, **kw)
+    monkeypatch.setenv("PYTCAD_ACCEL", "1")
+    got = _ted.diffuse_with_defects(x, C, "B", 1000.0, 30.0, **kw)
+    assert_exact(f"diffuse_with_defects {kwargs}", got, ref)
+
+
+def test_the_diffusion_kernels_never_write_through_to_the_caller():
+    """The reference copies C before the loop. A kernel that mutated the
+    caller's array instead would pass every value comparison above and
+    still be a behavioural difference between the two paths."""
+    x, C = _diffusion_case(n=120)
+    before = C.copy()
+    _proc.diffuse_numeric(x, C, "B", 1000.0, 5.0)
+    assert_exact("caller's C after diffuse_numeric", C, before)
+    _ted.diffuse_with_defects(x, C, "B", 1000.0, 5.0, ted_S0=10.0, ted_tau_s=3.0)
+    assert_exact("caller's C after diffuse_with_defects", C, before)
+
+
+def test_ted_exp_matches_numpy(monkeypatch):
+    """The ONE transcendental the C++ side computes for itself.
+
+    Everything else is handed down already evaluated. This one is not,
+    because keeping it in Python would mean materializing one double per
+    timestep -- millions of them on a fine grid -- purely to hand back.
+    So the agreement is checked directly, over the argument range the
+    decay actually reaches, instead of being assumed.
+    """
+    x, C = _diffusion_case(n=60)
+    # tau small against the anneal time, so -t/tau sweeps deep into the
+    # tail rather than staying near 0 where any two exps agree.
+    for tau in (0.05, 1.0, 50.0):
+        monkeypatch.setenv("PYTCAD_ACCEL", "0")
+        ref = _ted.diffuse_with_defects(x, C, "B", 1000.0, 20.0,
+                                        ted_S0=1e3, ted_tau_s=tau)
+        monkeypatch.setenv("PYTCAD_ACCEL", "1")
+        got = _ted.diffuse_with_defects(x, C, "B", 1000.0, 20.0,
+                                        ted_S0=1e3, ted_tau_s=tau)
+        assert_exact(f"ted exp tau={tau}", got, ref)
+
+
+def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
+    """M31 P4 made implant_2d build its smoothing matrix once instead of
+    once per depth row (939 ms -> 15 ms at 400x600). That is a pure
+    hoist, so it has to be BIT-identical, and this reconstructs the old
+    per-row form to prove it rather than trusting the argument."""
+    Nx, Ny = 90, 70
+    x = np.linspace(0.0, 2.0e-4, Nx)
+    y = np.linspace(0.0, 1.0e-4, Ny)
+    geom = _p2d.ProcessGeometry2D(x)
+    geom.surface_um = np.linspace(0.0, 0.2, Nx)
+    mask = np.zeros(Nx, dtype=bool)
+    mask[Nx // 4:3 * Nx // 4] = True
+
+    got = _p2d.implant_2d(x, y, geom, "B", 50.0, 1e15, mask=mask)
+
+    # The pre-hoist body, transcribed.
+    Rp, dRp = _proc.implant_moments("B", 50.0)
+    ref = np.zeros((Ny, Nx))
+    surf_cm = -geom.surface_um * 1e-4
+    for i in range(Nx):
+        if not mask[i]:
+            continue
+        depth = y - surf_cm[i]
+        ref[:, i] = 1e15 / (np.sqrt(2.0 * np.pi) * dRp) * np.exp(
+            -((depth - Rp) ** 2) / (2.0 * dRp ** 2))
+    sigma = 0.8 * dRp
+    for j in range(Ny):
+        xx = np.asarray(x, dtype=float)
+        dx = xx[:, None] - xx[None, :]
+        k = np.exp(-0.5 * (dx / sigma) ** 2)
+        k /= k.sum(axis=1, keepdims=True)
+        ref[j, :] = k @ ref[j, :]
+
+    assert_exact("implant_2d after the hoist", got, ref)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name,floor", [
+    ("curvature", 5.0e7),
+    ("log_density", 2.0e7),
+    ("debye_ratio", 5.0e7),
+])
+def test_indicator_throughput_floor(name, floor):
+    """G-E for P4. Absolute, and set roughly 4x below what was measured
+    when these landed (227M / 99M / 242M tri/s), so this fails on a
+    regression and not on a slower machine. Python reference rates for
+    the same three: 0.27M, 0.80M, 0.28M tri/s.
+    """
+    import time
+    mesh = _indicator_mesh(n=200, jitter=0.0)
+    psi, n, p, C = _fields(mesh)
+    fn = {"curvature": lambda: _au.indicator_curvature_tri(mesh, psi),
+          "log_density": lambda: _au.indicator_log_density_tri(mesh, n, p),
+          "debye_ratio": lambda: _au.debye_ratio_tri(mesh, C)}[name]
+    fn()                                     # warm
+    t0 = time.perf_counter()
+    fn()
+    rate = len(mesh.triangles) / (time.perf_counter() - t0)
+    assert rate >= floor, f"{name}: {rate:.3g} tri/s below floor {floor:.3g}"

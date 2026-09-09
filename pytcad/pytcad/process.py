@@ -19,6 +19,11 @@ import numpy as np
 from scipy.special import erfc
 
 from .constants import KB_EV
+# The compiled-kernel dispatch shim (M31 P4, for diffuse_numeric's time
+# loop). Importing _accel is the sanctioned downward dependency -- it is
+# the ONLY module allowed to touch pytcad._core, and it never raises at
+# import time even when the extension is absent.
+from . import _accel
 
 # ----------------------------------------------------------------------
 #  Implantation
@@ -174,6 +179,28 @@ def diffuse_numeric(x, C, species, T_C, t_s, n_steps=2000,
     dV[0] = xm[0] - x[0]
     dV[-1] = x[-1] - xm[-1]
 
+    # M31 P4: only the TIME LOOP is dispatched. Everything above -- the
+    # diffusivity, the stability bound that resolves n_steps, the dual-
+    # cell widths -- stays here, so the two paths cannot enter the loop
+    # disagreeing about the problem.
+    if _accel.use_accel() and C.size >= 2:
+        return _accel.core.diffuse1d_const(
+            _accel.as_field(C), _accel.as_field(h), _accel.as_field(dV),
+            float(D), float(dt), int(n_steps), bool(reflecting))
+    return _diffuse_loop_py(C, h, dV, D, dt, n_steps, reflecting)
+
+
+def _diffuse_loop_py(C, h, dV, D, dt, n_steps, reflecting):
+    """The explicit time loop, constant D -- the ORACLE for
+    `_core.diffuse1d_const` (M31 P4 gate G-A).
+
+    Split out of diffuse_numeric so the C++ kernel has a Python
+    counterpart with the SAME arguments to be diffed against, rather
+    than only being reachable through a function that also decides the
+    step count. The set-up above it is deliberately not duplicated: both
+    paths get their `h`, `dV`, `D` and `dt` from the one place that
+    computes them.
+    """
     for _ in range(n_steps):
         flux = -D * np.diff(C) / h          # flux on interfaces
         dC = np.zeros_like(C)

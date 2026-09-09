@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from pytcad import _accel
@@ -104,6 +105,49 @@ def test_convergence_failure_carries_diagnostics_not_state(core):
     assert exc.value.residual == pytest.approx(1.5e-3)
 
 
+def test_petsc_capability_is_answerable_without_the_extension():
+    """M31 P3b added a THIRD optional layer -- extension present, and
+    built against PETSc, and not overridden by PYTCAD_ACCEL -- and every
+    combination has to answer cleanly rather than raise.  A checkout
+    with no compiler must still be able to ask."""
+    assert isinstance(_accel.have_petsc(), bool)
+    assert isinstance(_accel.status(), str)
+    if not _accel.HAVE_ACCEL:
+        assert _accel.have_petsc() is False
+
+
+@needs_core
+def test_petsc_capability_reporting_is_self_consistent(core):
+    """petsc_available() and the index width must agree: a build with
+    PETSc reports a real version and a real sizeof(PetscInt); a build
+    without reports neither, and that is a supported configuration."""
+    available = core.petsc_available()
+    assert isinstance(available, bool)
+    if available:
+        assert core.petsc_version().count(".") == 2, core.petsc_version()
+        # 4 on conda-forge's default build, 8 with --with-64-bit-indices.
+        # Anything else means the probe is reading the wrong thing.
+        assert core.petsc_index_bytes() in (4, 8)
+        assert "petsc=" in _accel.status()
+    else:
+        assert core.petsc_version() == ""
+        assert core.petsc_index_bytes() == 0
+
+
+@needs_core
+def test_petsc_solve_without_petsc_names_both_recovery_routes(core):
+    """A _core built without PETSc must not merely fail -- it has to say
+    which of the two things to install, since the method has two
+    independent backends now."""
+    if core.petsc_available():
+        pytest.skip("this extension was built with PETSc")
+    with pytest.raises(LinearSolveError) as exc:
+        core.petsc_solve_csr(np.array([0], dtype=np.int64),
+                             np.zeros(0, dtype=np.int64), np.zeros(0),
+                             np.zeros(0), None, 1e-10, 1e-50, 10, 10, 0)
+    assert "petsc4py" in str(exc.value)
+
+
 @needs_core
 def test_default_thread_count_is_one():
     """Not a style preference -- see tcad/runtime/threads.hpp.
@@ -135,3 +179,34 @@ def test_thread_count_honors_the_environment(var):
         capture_output=True, text=True, env=env,
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     assert out.stdout.strip() == "4", out.stderr
+
+
+@needs_core
+def test_index_errors_stay_index_errors(core):
+    """M31 P4 added a fourth mapped exception.
+
+    The reference gets IndexError for free from numpy fancy-indexing; a
+    kernel dereferencing a raw pointer would read out of bounds instead,
+    so the process kernels validate the index range and raise this. It
+    has to arrive as IndexError, not ValueError -- a caller distinguishes
+    "you passed a broken mesh" from "you passed the wrong shape".
+    """
+    with pytest.raises(IndexError):
+        core._raise_for_test("index")
+
+
+def test_process_kernels_run_on_the_python_path(monkeypatch):
+    """Gate G-F for P4 from the Python side: the diffusion entry points
+    must work with the compiled path forced OFF, which is what a
+    checkout with no compiler gets. Values are compared against the
+    compiled path in tests/test_accel_parity.py; what is checked here is
+    only that the fallback is REACHABLE and returns."""
+    from pytcad import process, ted
+    monkeypatch.setenv("PYTCAD_ACCEL", "0")
+    x = np.linspace(0.0, 2.0e-4, 40)
+    C = process.implant(x, "B", 50.0, 1e15)
+    out = process.diffuse_numeric(x, C, "B", 1000.0, 1.0)
+    assert out.shape == x.shape and np.all(np.isfinite(out))
+    out = ted.diffuse_with_defects(x, C, "B", 1000.0, 1.0,
+                                   ted_S0=5.0, ted_tau_s=2.0)
+    assert out.shape == x.shape and np.all(np.isfinite(out))

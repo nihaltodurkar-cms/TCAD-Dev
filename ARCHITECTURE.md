@@ -118,7 +118,11 @@ but the numeric constants are blocked on the 1988 primary source, which
 is paywalled with zero open-access copies (verified via Unpaywall);
 G-B/G-C/driving_force/catalog not started.
 FUTURE: capability growth is governed by section 4b below (M13
-Fermi-Dirac statistics through M30 system-level; three parity tiers).
+Fermi-Dirac statistics through M30 system-level; three parity tiers)
+and by section 4c (M31 onward: the C++/Python/Qt re-architecture,
+then the proposed M32-M40 map).  4b is essentially closed -- all of
+M13-M30 has landed to its disclosed slice level except M14's G-A and
+M30 Part II.  Read 4c for what is actually next.
 The M1-M10 roadmap below is retained as the shipped architecture
 record; sections 5-7 track the live queue.
 
@@ -385,7 +389,11 @@ changes, bit-identity when a model is off, no hidden failures.
 4b.0 HONEST FRAMING -- what "same level" can mean
 ------------------------------------------------------------------------
 Sentaurus is ~30 person-decades of engineering. Literal feature parity
-is not a plan, it is a fantasy. What IS plannable is parity in tiers,
+is not a plan, it is a fantasy.  (The stated ambition is now to be
+BETTER than Sentaurus/Atlas, not level with them -- that is not a
+contradiction of this paragraph but a consequence of it: see section
+4e, which picks the axes where their ARCHITECTURE cannot compete
+rather than trying to out-feature 30 person-decades.) What IS plannable is parity in tiers,
 where each tier is a device/process class we can simulate END-TO-END
 with published-value validation at the same fidelity Sentaurus users
 actually exercise. This roadmap defines three parity tiers and the
@@ -1567,6 +1575,464 @@ Phase 3's completion (M21-PHASE3-MESHING-PLAN.md). Still not done: a
 3D repeat of the conformality check (a materially harder case,
 solid-solid rather than curve-curve) -- 3D unstructured meshing
 remains out of scope (Phase 3's own stated exclusions).
+
+------------------------------------------------------------------------
+4c. FUTURE: POST-M31 ROADMAP (M31-M40)
+------------------------------------------------------------------------
+Section 4b took the project from M13 to M30 and is essentially closed:
+everything there has landed to its disclosed slice level except M14's
+G-A (blocked on a paywalled source) and M30 Part II (planned in full in
+pytcad/M30-WORKBENCH-PLAN.md, in progress). This section is what comes
+after.
+
+STATUS OF THIS SECTION: 4c.1 (M31) is REAL -- planned, gated, and
+partly landed, with its own plan doc. 4c.2 (M32-M40) is a PROPOSED
+map, not a decided one. It is grounded in gaps this repo has already
+written down -- 4b.1's remaining [missing]/[partial] rows, the
+"honest limits" section every M*-PLAN.md carries, and
+Architecture_Master_Plan.md sections 34/35 -- rather than in a generic
+TCAD wishlist. Sizes and ordering are estimates; nothing below is
+committed until it has its own plan doc and gates, per rule 4b.4.
+
+------------------------------------------------------------------------
+4c.1 M31 -- C++ / PYTHON / QT PRODUCTION ARCHITECTURE  [XL, IN PROGRESS]
+------------------------------------------------------------------------
+Full spec, gates and honest limits: pytcad/M31-CPP-ARCHITECTURE-PLAN.md.
+Progressive extraction per Architecture_Master_Plan.md section 37 --
+explicitly NOT a rewrite.
+
+  P0  build system + CI + C++/Python boundary          LANDED 2026-09-09
+  P1  de-couple device.py; two latent bugs fixed       LANDED 2026-09-09
+  P2  mesh/geom kernels -- the measured blocker        LANDED 2026-09-09
+  P3a linsolve method="petsc" via petsc4py (no C++)    NEXT
+  P3b the same configuration moved into core/solver/
+  P4  process/particle kernels (MC implant, TED, AMR indicators)
+  P5  assembly + Newton in C++; the pytcad_cpp backend appears
+  P6  native QQuickVTKItem 3D viewport
+  P7  MPI + GPU via PETSc; DMPlex
+  P8  Qt shell hardening (split AppController, structured progress)
+  P9  promote pytcad_cpp to default; Python core retained as oracle
+
+THE MEASUREMENT THAT ORDERED THESE PHASES -- do not re-derive it:
+  - Structured 3D assembly is NOT the bottleneck. A 24^3 equilibrium
+    solve spends 98% of wall time in _superlu.gssv; assembly is 0.011s
+    of 0.494s. Porting device*.py's assembly buys ~2%.
+  - The direct-LU wall is ALGORITHMIC, not linguistic: the existing
+    pure-Python node-block-Jacobi GMRES already does 68,921 nodes
+    (206,763 unknowns) in 4.71s.
+  - The genuine blocker was unstructured mesh geometry: ~80k tri/s (2D)
+    and ~3.5k tets/s (3D), i.e. ~5 minutes of Python dict overhead on a
+    1M-tet mesh before any physics ran. P2 closed it: 3.16M tri/s and
+    1.99M tets/s, bit-identical, that 1M-tet mesh now 0.71s.
+That is why P2 went first and P5 is deliberately LAST among the solver
+phases -- and why the plan doc records a design review's dissent that
+P5 may be negative value at all.
+
+OPEN DECISION carried out of P2: build_unstructured_stencil is
+winding-sensitive (_cot divides by a SIGNED cross product while
+tri_area takes abs(), so a clockwise-wound non-obtuse triangle
+contributes NEGATIVE dual-cell areas). gmsh emits consistently CCW
+triangles so no real caller hits it; the compiled path reproduces the
+quirk faithfully and it is PINNED by a test rather than papered over.
+Fixing it changes physics and must land on both paths at once.
+
+------------------------------------------------------------------------
+4c.2 PROPOSED M32-M40
+------------------------------------------------------------------------
+Each row names the 4b.1 gap or plan-doc limitation it retires, so the
+justification is checkable rather than asserted.
+
+M32  BENCHMARK SUITE & PERFORMANCE DASHBOARD              [M]
+     Architecture_Master_Plan.md section 34 defines cases B1-B7 (1D
+     Poisson -> 3D SiC MOSFET -> 3D GaN HEMT -> large synthetic 3D)
+     and section 35 a dashboard (DOF, NNZ, memory, assembly/residual/
+     Jacobian/solve times, Newton iterations, strong/weak scaling, GPU
+     speedup). NEITHER IS IMPLEMENTED. Section 36's rule -- no
+     "HPC-ready" claim without correctness + scaling + memory +
+     reproducibility in a table -- cannot currently be satisfied by
+     anything. This is the smallest milestone here and it gates the
+     honesty of every performance claim M31 P7 will want to make.
+     Do it EARLY, not after P7. Depends: M31 P3a.
+
+M33  SURFACE/INTERFACE PHYSICS COMPLETION                 [L]
+     Retires three long-standing 4b.1 [missing] rows: surface
+     recombination velocity, D_it in the MOS module, and the
+     thermionic-emission heterojunction interface model (M11's own
+     deferral). Also the natural home for M14's G-A once a non-
+     paywalled calibration source is found. Depends: nothing in M31.
+
+M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)             [L]
+     M16 shipped LOCAL Kane BTBT and explicitly deferred the nonlocal
+     line-integral variant; M15 likewise states nonlocal (driving-
+     force-integral) ionization out of scope. Both are the standard
+     next tier and both need path integration along field lines --
+     which is exactly the kind of per-element loop that is unusable in
+     Python and cheap in C++. Depends: M31 P4.
+
+M35  3D PROCESS SIMULATION                                [XL]
+     M23/M26 shipped structured-mesh slices. Still missing from 4b.1:
+     2D moving-boundary oxidation (LOCOS/STI bird's beak), the
+     deposition/etch topology engine, masks, silicidation, epitaxy,
+     CMP -- and none of it in 3D. Needs a real topology/level-set
+     engine, hence XL. Depends: M31 P2 (geometry kernels), M35 is the
+     single biggest remaining Sentaurus-parity gap.
+
+M36  STRESS / STRAIN COUPLING                             [L]
+     4b.1 lists "no stress coupling" under oxidation; strain-modified
+     mobility and bandgap are table stakes for any modern node. Needs
+     a mechanical solve alongside the electrical one -- the first real
+     test of whether M31's engine can host a SECOND physics, which is
+     the architectural claim P5 is justified by. Depends: M31 P5.
+
+M37  RELIABILITY & TRAP DYNAMICS                          [L]
+     BTI, hot-carrier injection, TDDB. Builds on M33's D_it and M17's
+     transient machinery. Not in 4b.1 (the roadmap predates it) but
+     the obvious capability gap for a tool claiming device-engineering
+     use. Depends: M33, M17.
+
+M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION               [M]
+     M27 shipped mixed-mode device+circuit; the inverse -- fitting a
+     compact model to simulated I-V/C-V and emitting a netlist -- is
+     what makes TCAD useful to a circuit designer. Reuses M30 Part I's
+     calibration/Nelder-Mead machinery directly. Depends: M30 Part I
+     (landed), M27 (landed). Cheapest real-world payoff on this list.
+
+M39  QUANTUM TRANSPORT (NEGF, 1D)                         [XL]
+     M12-S3/M20 shipped density-gradient and Schrodinger-Poisson but
+     equilibrium-only; DG transport is explicitly out of scope. NEGF
+     is the honest way to do quantum TRANSPORT rather than a
+     correction. 1D first, per this repo's own "1D first, then 2D"
+     precedent (M19). Depends: M31 P5, M32.
+
+M40  OPTICAL GENERATION / PHOTONICS                       [L]
+     Absorption-driven carrier generation, then a real optical solve.
+     Opens solar/photodetector/image-sensor devices, none of which are
+     reachable today. No dependency on the C++ work beyond meshing.
+
+------------------------------------------------------------------------
+4c.3 SUGGESTED ORDER AND TRACKS
+------------------------------------------------------------------------
+Spine:  M31 P3a -> M32 -> M31 P4..P7 -> M35
+        (the spine is "make it fast, PROVE it, then spend the speed")
+
+M32 sits deliberately INSIDE M31 rather than after it: P7's whole
+purpose is scaling claims, and section 36 forbids making them without
+a benchmark table. Building the dashboard after the thing it is meant
+to police is the standard way to end up with unfalsifiable numbers.
+
+Parallelizable (independent of the C++ track):
+  physics:   M33 -> M37          (surface/interface, then reliability)
+  system:    M30 Part II -> M38  (workbench GUI, then compact models)
+  optics:    M40                 (standalone)
+C++-gated:
+  M34 (needs P4), M36 and M39 (need P5), M35 (needs P2, has it)
+
+Cheapest-payoff-first, if optimizing for usefulness per session:
+  M32 (small, unblocks honest claims) -> M38 (reuses landed machinery)
+  -> M33 -> M34.
+
+------------------------------------------------------------------------
+4c.4 WHAT IS PERMANENTLY OUT OF SCOPE
+------------------------------------------------------------------------
+Stated so no future session rediscovers these as "gaps":
+  - p-refinement and r-refinement (node motion) -- M21's own exclusion.
+  - Device3D AC analysis -- out of scope entirely across every M18
+    phase.  SUPERSEDED: see 4d.3 M45.  That decision was made while
+    3D died at ~27k nodes, and M31 exists to remove exactly that
+    constraint, so it is a deferral after all and should be
+    re-costed once P3b lands -- not inherited as permanent.
+  - Bit-identity with commercial tools. Parity means published-value
+    agreement within stated tolerances, never matching Sentaurus'
+    floating point.
+  - Any performance claim without the section 36 table. This is a
+    rule, not a milestone.
+
+------------------------------------------------------------------------
+4d. THE ROAD TO 3D -- DIMENSIONAL COVERAGE AND THE DEBT TO CLOSE
+------------------------------------------------------------------------
+The stated destination is large 3D semiconductor TCAD.  Sections 4b and
+4c are organized by CAPABILITY; this one is organized by DIMENSION,
+because the honest obstacle is not a missing feature list -- it is that
+much of the physics that exists only reaches 1D or 2D, and that debt is
+invisible when the roadmap is read capability-by-capability.
+
+Verified against the tree on 2026-09-09 by reading the imports and the
+NotImplementedError sites, not inferred from filenames.
+
+4d.1 COVERAGE MATRIX (Y = works, - = absent, R = REFUSES loudly)
+
+  capability                       1D    2D    3D    gap owner
+  --------------------------------------------------------------------
+  Drift-diffusion, structured       Y     Y     Y    --
+  Drift-diffusion, unstructured     -     Y     Y    -- (1D moot)
+  Fermi-Dirac statistics            Y     Y     Y    --
+  Incomplete ionization             Y     R     R    M41
+  Impact ionization (coupled)       Y     Y     Y    --
+  BTBT, local Kane                  Y     Y     Y    --
+  BTBT, nonlocal                    -     -     -    M34
+  Trap-assisted tunneling           Y     Y     Y    --
+  Density gradient / quantum        Y     -     -    M42
+  Self-heating (lattice T)          Y     -     -    M43
+  Hydrodynamic / energy balance     Y*    -     -    M44
+  Transient                         Y     Y     -    M45
+  Small-signal AC                   Y     Y     -    M45  (see 4c.4)
+  Adaptive refinement, structured   Y     Y     Y    --
+  Adaptive refinement, unstructured -     Y     Y    --
+  Process: implant/diffuse/oxide    Y     Y     -    M35
+  Process: TED, MC implant          Y     -     -    M35
+  Mixed-mode circuit                Y     Y     Y    --
+  Schottky / tunnel contacts        Y*    -     -    M46
+
+  Y* = exists as a standalone/analysis module but is NOT coupled into
+       any device Newton core (hydrodynamic.py and schottky.py are
+       imported by __init__.py and nothing else).
+  R  = Device2D/Device3D raise NotImplementedError rather than silently
+       ignoring the flag (device3d.py:242) -- the right behavior, and
+       exactly why this debt is countable instead of hidden.
+
+4d.2 WHAT THIS MEANS
+
+Three observations that change how the remaining roadmap should be read:
+
+1. The DD SPINE IS ALREADY 3D.  Drift-diffusion, Fermi-Dirac, impact
+   ionization, local BTBT, TAT, AMR and mixed-mode all reach 3D on both
+   structured and unstructured meshes.  The foundation is not the
+   problem; M31 is about making it FAST at 3D, not making it exist.
+
+2. THE DEBT IS CONCENTRATED IN THE LATER PHYSICS.  Everything added
+   after the DD core -- quantum corrections, self-heating, hydrodynamic,
+   transient, AC -- stopped at 1D or 2D, each for a defensible
+   per-milestone reason ("1D first, then 2D"), and nobody has since
+   gone back.  Five milestones' worth of "then 2D/3D" was deferred and
+   never scheduled.  That is what 4d.3 schedules.
+
+3. PROCESS IS THE WIDEST GAP.  Device physics is largely 3D; process
+   simulation is 2D at best and 1D for TED/MC implant.  A 3D device
+   built from a 2D process flow is only as 3D as its weakest input,
+   which is why M35 is XL and why it dominates any real parity claim.
+
+4d.3 THE DIMENSIONAL-LIFT MILESTONES (M41-M46)
+
+These are deliberately SEPARATE from 4c.2's capability milestones: each
+one lifts an EXISTING, already-validated 1D/2D implementation to a
+higher dimension, which is a fundamentally cheaper and lower-risk kind
+of work than adding new physics.  Each inherits its 1D/2D gates as the
+dimensional-reduction identity it must satisfy -- the technique
+examples/05_3d_reduces_to_2d.py and tests/test_validation_2d.py already
+use (a 3D solve with no z-variation must reproduce the 2D answer to
+floating-point noise; measured 1.11e-16 V on the existing reduction).
+That makes every milestone below self-gating: the reference is not a
+published number, it is the lower-dimensional code that already passed.
+
+  M41  Incomplete ionization -> 2D/3D                       [S]
+       Currently refused at device3d.py:242.  Pure port; the 1D
+       physics and its goldens are the gate.  Smallest item here.
+
+  M42  Density gradient / quantum correction -> 2D/3D       [L]
+       M20 shipped 1D coupled-Newton DG.  The 2D/3D lift is the
+       prerequisite for any credible FinFET/GAA claim, where
+       confinement is the whole point.  Depends: M31 P5.
+
+  M43  Self-heating -> 2D/3D                                [L]
+       M19 phase 1 is steady-state 1D and states 2D as out of scope.
+       thermal.py also carries the one non-vectorized structured
+       assembly loop in the tree (a scalar `for i in range(1, N-1)`),
+       so this pairs naturally with M31 P4.
+
+  M44  Hydrodynamic -> coupled, then 2D/3D                  [XL]
+       Two steps, not one: hydrodynamic.py is not wired into ANY
+       Newton core today, so it must first become a coupled 1D model
+       before any dimensional lift is meaningful.  Velocity overshoot
+       is a 3D short-channel effect; 1D-only energy balance cannot
+       deliver it.
+
+  M45  Transient and AC -> 3D                               [XL]
+       transient2d.py and ac2d.py exist; there is no 3D form of
+       either, and 4c.4 currently lists Device3D AC as permanently out
+       of scope.  THAT EXCLUSION SHOULD BE REVISITED, not silently
+       inherited: it was decided when 3D died at ~27k nodes, and M31's
+       whole purpose is removing that constraint.  A 3D AC solve is a
+       factorize-once-per-frequency operation on the same Jacobian
+       PETSc will already be factorizing -- much cheaper than it looked
+       in 2026-08.  Depends: M31 P3b/P7.
+
+  M46  Schottky / tunnel contacts -> coupled, then 2D/3D    [L]
+       Same shape as M44: M28 shipped a standalone-module slice that
+       no device core calls.  Couple it first, then lift.
+
+4d.4 ORDERING, AND THE ONE RULE
+
+Cheapest first, and each is independently shippable:
+     M41 [S] -> M43 [L] -> M42 [L] -> M46 [L] -> M45 [XL] -> M44 [XL]
+M35 (3D process) runs as its own track throughout; it is the widest gap
+and the least coupled to the others.
+
+THE RULE, which is what makes this section a plan rather than a wish:
+no dimensional lift lands without its reduction identity as a gate.  A
+3D implementation whose z-uniform case does not reproduce the validated
+2D answer to floating-point noise is not a 3D implementation, it is a
+second, unvalidated code path -- and this project already owns the
+tooling to prove the difference.
+
+------------------------------------------------------------------------
+4e. COMPETITIVE STRATEGY -- HOW TO ACTUALLY BEAT SENTAURUS AND ATLAS
+------------------------------------------------------------------------
+Stated goal: be BETTER than Synopsys Sentaurus and Silvaco Atlas, not
+merely reach parity.  4b.0 already says literal feature parity is a
+fantasy; this section says what the non-fantasy version of "better"
+is, and what it costs.
+
+4e.1 THE STRATEGIC MISTAKE TO AVOID
+
+You do not beat a 30-year incumbent by out-featuring it.  Sentaurus has
+model libraries calibrated against foundry silicon that no open project
+can reproduce, because the calibration data is proprietary and the
+person-decades are already spent.  A roadmap that says "add every
+Sentaurus feature, then one more" loses by construction: it fights on
+the axis where the incumbent's accumulated investment is the entire
+moat, and it never finishes.
+
+You beat an incumbent by choosing axes where its ARCHITECTURE -- not
+its effort -- prevents it from competing, and winning those decisively.
+For a 1990s-vintage Fortran/C simulator with a proprietary deck
+language, those axes exist and are identifiable.
+
+4e.2 WHERE WE CAN GENUINELY WIN (structural, not effort-based)
+
+W1  DIFFERENTIABLE SIMULATION / ADJOINT SENSITIVITIES.  The big one.
+    Sentaurus and Atlas cannot give you dJ/dp for arbitrary parameters
+    p; they were not built for it and retrofitting adjoints into a
+    30-year-old solver is a rewrite.  Consequences if we have it:
+      - gradient-based DEVICE OPTIMIZATION (doping profiles, geometry)
+        instead of their DOE-and-sweep;
+      - CALIBRATION that costs O(1) solves per iteration instead of
+        O(n_params) finite-difference solves -- for a 20-parameter fit
+        that is a ~20x speedup on the single most common industrial
+        TCAD workflow;
+      - uncertainty quantification and sensitivity ranking for free;
+      - gradients to train ML surrogates, which is where the field is
+        going and where neither incumbent has an answer.
+    THIS IS THE DIFFERENTIATOR.  Everything else on this list is
+    incremental by comparison.
+
+W2  MODERN PARALLEL NUMERICS.  Sentaurus' 3D scaling is widely
+    reported as mediocre and Atlas is worse; both predate GPU compute.
+    M31 puts us on PETSc, which brings MPI + CUDA + AMG as
+    configuration rather than as a project.  A credible "solves a 3D
+    device faster on one workstation GPU than Sentaurus does on a
+    licensed cluster" claim is reachable, and unlike W1 it is mostly
+    already scheduled (M31 P7).
+
+W3  REPRODUCIBILITY AND PROVENANCE.  Commercial TCAD is notoriously
+    bad here: results are hard to re-derive months later.  We already
+    stamp git commits into study manifests (workbench/study_manifest.py)
+    and carry per-run provenance (RunRecord).  Finishing this into
+    "any published figure regenerates bit-identically from its
+    manifest" is a genuine advantage for research users, and cheap
+    because most of it is built.
+
+W4  INSPECTABLE, CITED PHYSICS.  Every model in this tree carries its
+    published reference and an honest-limits statement, and the tests
+    gate against published values.  Sentaurus is a black box with a
+    manual.  For research, teaching, and any regulated/auditable use,
+    "you can read exactly what was solved and why" is a feature the
+    incumbents structurally cannot offer.
+
+W5  PYTHON-NATIVE EXTENSIBILITY.  Adding a model to Sentaurus means
+    their PMI (C, clunky ABI, recompile).  Here it is a Python
+    function, and after M31 optionally a C++ kernel with a bit-identity
+    gate against the Python one.  Time-to-new-model is a real axis and
+    we win it by a wide margin.
+
+W6  COST AND ACCESS.  Zero licence cost, no seat limits, runs in CI.
+    Not a technical advantage, but it is why W1-W5 can be adopted.
+
+4e.3 WHERE PARITY IS THE HONEST CEILING
+
+  - Core device physics breadth (DD, statistics, mobility, generation/
+    recombination, quantum corrections).  4b's tiers already target
+    this and it is achievable.  Aim to MATCH, not exceed.
+  - Process simulation.  M35 is XL precisely because this is where
+    30 years of implant tables and diffusion calibrations live.
+    Parity on the common flows is an ambitious, honest target.
+
+4e.4 WHERE TO CONCEDE, EXPLICITLY
+
+Stated so no session burns effort trying to win these:
+  - FOUNDRY-CALIBRATED MODEL LIBRARIES.  The calibration data is
+    proprietary.  We can offer a calibration FRAMEWORK (and with W1 a
+    better one), never a pre-calibrated 5nm FinFET deck.
+  - INDUSTRIAL QUALIFICATION, SUPPORT, TRAINING, AND ECOSYSTEM.
+  - BREADTH OF SPECIALIZED VERTICAL MODULES (power, memory, imagers,
+    photonics) -- each is its own multi-year product line.
+  - The out-of-scope list in 4b.0 stands unchanged.
+
+4e.5 WHAT THIS CHANGES IN THE ROADMAP
+
+One structural consequence, and it is time-critical:
+
+  ADJOINT CAPABILITY MUST BE DESIGNED INTO M31 P5, NOT RETROFITTED.
+  An adjoint solve needs the TRANSPOSE of the Jacobian and the
+  derivative of the residual with respect to parameters.  If the C++
+  assembly is written to expose dR/dp and to apply J^T, adjoints are
+  incremental afterwards.  If it is not, W1 becomes a second rewrite
+  of the thing we just wrote.  P5 has not started -- this is exactly
+  the moment the decision is free.  Add to P5's acceptance gates:
+    - the assembler can apply J^T (PETSc gives this for MATAIJ/MATBAIJ
+      essentially free, but the ASSEMBLY must not bake in
+      row-elimination that destroys transposability -- note today's
+      Dirichlet handling zeroes rows and sets a unit diagonal, which
+      is NOT transpose-friendly and must be revisited);
+    - the residual assembler is parameterized by a named parameter
+      vector p, so dR/dp is meaningful.
+
+  New milestones, sequenced after M31 P5:
+
+  M47  ADJOINT SENSITIVITY ENGINE                            [L]
+       dQoI/dp for arbitrary QoI and parameter set, via one forward
+       solve plus one adjoint solve.  Gate: agreement with
+       finite-difference gradients to the same 5e-5 relative tolerance
+       tests/test_m13_solver.py already uses for its FD-Jacobian probe
+       -- the tooling and the standard both already exist here.
+       Depends: M31 P5 with the P5 gates above.
+
+  M48  GRADIENT-BASED CALIBRATION AND OPTIMIZATION            [M]
+       Replace M30's Nelder-Mead with gradient descent/L-BFGS driven
+       by M47.  Gate: same calibration targets, >=5x fewer forward
+       solves, same fitted parameters within tolerance.  This is the
+       milestone that turns W1 from a capability into a user-visible
+       win.  Depends: M47, M30 Part I (landed).
+
+  M49  UNCERTAINTY QUANTIFICATION AND SENSITIVITY RANKING     [M]
+       Parameter sensitivity ranking and error bars on simulated
+       characteristics, from M47's gradients.  Neither incumbent
+       offers this.  Depends: M47.
+
+  M50  ML SURROGATE / DIFFERENTIABLE COUPLING                 [L]
+       Export gradients through a standard interface so a surrogate
+       can be trained on, or coupled into, the simulation loop.
+       Depends: M47, M32 (benchmarks, to prove the surrogate's error).
+
+4e.6 HOW WE WILL KNOW -- FALSIFIABLE CRITERIA
+
+Per section 36, no claim without a table.  "Better than Sentaurus" is
+only meaningful as a set of falsifiable statements, each with a
+benchmark case from M32's B1-B7:
+
+  C1  Given the same device and the same published-value targets, our
+      calibration reaches the same fit in >=5x fewer forward solves.
+      (W1/M48.  Directly measurable; nothing proprietary needed.)
+  C2  On B7 (large synthetic 3D), time-to-solution on one GPU
+      workstation beats a documented Sentaurus multi-core result at
+      equal DOF and equal converged accuracy.  (W2/M31 P7.)
+  C3  Any figure we publish regenerates bit-identically from its study
+      manifest on a clean checkout.  (W3.)
+  C4  Time-to-add-a-new-physics-model, measured end to end including
+      its validation gate, is under one working session.  (W5.)
+
+C1 and C4 are the ones to chase first: both are fully within our
+control, neither needs a Sentaurus licence to demonstrate, and both
+are true differentiators rather than catch-up.
 
 ------------------------------------------------------------------------
 5. NEXT IMPLEMENTATION MILESTONE

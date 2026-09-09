@@ -137,6 +137,42 @@ These are already-enforced house rules and must be treated as **hard governance*
 
 Build an open-source TCAD platform capable of solving **large, realistic 3D semiconductor multiphysics problems** while retaining a clean Python-facing development environment.
 
+> **Amendment (2026-09-09).** This document predates M31 and never mentions
+> C++. That is now out of date, but the objective above is *unchanged* and
+> M31 does not contradict it: Python remains the API, scripting, workflow
+> and post-processing surface -- the "clean Python-facing development
+> environment" this sentence commits to -- while a C++ engine (`pytcad/core/`)
+> takes the numerically intensive layer underneath it. The engine is
+> *optional at every step*: `pytcad/_accel.py` soft-imports it and falls back
+> to the pure-Python reference, which is also the oracle the compiled path is
+> diffed against with `np.array_equal`. Section 37's "do not rewrite the
+> project -- progressive extraction" is the rule M31 is executing, not an
+> exception to it.
+>
+> Two things in this document have since been overtaken by measurement and
+> should be read with that in mind:
+>
+> - Section 21's "do not CUDA-port the entire project, profile first" was
+>   followed, and the profile says the assembly is **not** the bottleneck
+>   (98% of a 3D solve is in `_superlu.gssv`; assembly is 0.011s of 0.494s).
+>   The real blocker was unstructured mesh geometry at ~3.5k tets/s, now
+>   1.99M tets/s. See `ARCHITECTURE.md` 4c.1.
+> - Sections 34/35 (benchmark suite B1-B7, performance dashboard) are still
+>   **not implemented**, and section 36 forbids performance claims without
+>   them. That gap is now scheduled as M32 and deliberately placed *inside*
+>   M31 rather than after it, for the reason section 36 exists.
+
+> **Ambition amendment (2026-09-09).** The stated goal is now to be *better*
+> than Sentaurus/Atlas, not level with them. `ARCHITECTURE.md` section 4e
+> sets out how that is meant to be true without fighting 30 person-decades
+> on their own axis -- principally differentiable simulation / adjoint
+> sensitivities (M47-M50), which neither incumbent can offer
+> architecturally, plus modern parallel numerics, provenance, and
+> inspectable physics. Section 42's API-stability list should be read
+> alongside 4e.5's requirement that the residual assembler be
+> *parameterized*, since `dR/dp` is part of the public surface if adjoints
+> are.
+
 ## Strategic specialization
 
 The strongest initial differentiation should be:

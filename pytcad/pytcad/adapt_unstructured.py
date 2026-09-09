@@ -122,7 +122,7 @@ def _tri_gradient(mesh, values):
     return grad
 
 
-def indicator_curvature_tri(mesh, psi):
+def _indicator_curvature_tri_py(mesh, psi):
     """Per-triangle smoothness indicator: max over the triangle's 3
     edges of h_edge^2 * |dpsi/h_edge| = h_edge*|dpsi| -- the 2D-
     unstructured analogue of adapt.py's indicator_curvature (which
@@ -146,7 +146,7 @@ def indicator_curvature_tri(mesh, psi):
     return out
 
 
-def indicator_log_density_tri(mesh, n, p):
+def _indicator_log_density_tri_py(mesh, n, p):
     """Per-triangle max(|d ln n|, |d ln p|) over the triangle's 3 edges
     -- direct 2D-unstructured analogue of adapt.py's indicator_log_
     density (per-edge |d ln n| there is already mesh-topology-agnostic;
@@ -305,7 +305,7 @@ def indicator_solver_residual_tri(mesh, residual_node_history, tail_frac=0.5):
     return per_tri / peak
 
 
-def debye_ratio_tri(mesh, C, eps_r=11.7, T=300.0):
+def _debye_ratio_tri_py(mesh, C, eps_r=11.7, T=300.0):
     """Per-triangle raw (UN-normalised) spacing-to-Debye-length ratio
     h_K / L_D, the unstructured-2D analogue of mesh.check_mesh /
     adapt.indicator_debye's h/L_D convention, ported to a triangle
@@ -343,6 +343,63 @@ def debye_ratio_tri(mesh, C, eps_r=11.7, T=300.0):
         ld_min = min(LD_node[a], LD_node[b], LD_node[c])
         out[k] = h / max(ld_min, 1e-300)
     return out
+
+
+# ----------------------------------------------------------------------
+#  Compiled dispatch (M31 P4)
+# ----------------------------------------------------------------------
+# The three indicators above are per-triangle Python loops that call
+# np.linalg.norm on two-element vectors -- the same shape P2 found in
+# the mesh geometry, and the same result: measured at 249k tri/s
+# (curvature), 750k (log density) and 253k (Debye ratio), against a
+# compiled 2D stencil that already does >2M tri/s.  They run once per
+# AMR pass on every triangle, so this is the adaptivity loop's floor.
+#
+# The three bodies are KEPT as `_<name>_py` and remain the oracle;
+# tests/test_accel_parity.py compares both paths with np.array_equal.
+#
+# Every transcendental stays on this side of the boundary and only its
+# RESULT crosses -- np.log here, mesh.debye_length below.  The kernels
+# are pure comparison-and-arithmetic reductions, so bit-identity is
+# structural rather than a claim that two libm builds agree.
+from . import _accel
+
+
+def indicator_curvature_tri(mesh, psi):
+    psi = np.asarray(psi, dtype=float)
+    if not _accel.use_accel():
+        return _indicator_curvature_tri_py(mesh, psi)
+    # np.max on an empty psi raises, and it must raise from HERE so the
+    # message is the reference's own -- hence scale first, kernel second.
+    scale = max(float(np.max(np.abs(psi))), 1e-300)
+    return _accel.core.indicator_curvature_tri(
+        _accel.as_nodes3(mesh.nodes), _accel.as_idx(mesh.triangles, 3),
+        _accel.as_field(psi), scale)
+
+
+def indicator_log_density_tri(mesh, n, p):
+    if not _accel.use_accel():
+        return _indicator_log_density_tri_py(mesh, n, p)
+    n = np.maximum(np.asarray(n, dtype=float), 1e-300)
+    p = np.maximum(np.asarray(p, dtype=float), 1e-300)
+    return _accel.core.indicator_log_density_tri(
+        _accel.as_idx(mesh.triangles, 3),
+        _accel.as_field(np.log(n)), _accel.as_field(np.log(p)))
+
+
+def debye_ratio_tri(mesh, C, eps_r=11.7, T=300.0):
+    if not _accel.use_accel():
+        return _debye_ratio_tri_py(mesh, C, eps_r, T)
+    from .mesh import debye_length as _debye_length
+    LD_node = _debye_length(np.abs(np.asarray(C, dtype=float)), eps_r, T)
+    return _accel.core.debye_ratio_tri(
+        _accel.as_nodes3(mesh.nodes), _accel.as_idx(mesh.triangles, 3),
+        _accel.as_field(LD_node))
+
+
+indicator_curvature_tri.__doc__ = _indicator_curvature_tri_py.__doc__
+indicator_log_density_tri.__doc__ = _indicator_log_density_tri_py.__doc__
+debye_ratio_tri.__doc__ = _debye_ratio_tri_py.__doc__
 
 
 def indicator_debye_tri(mesh, C, eps_r=11.7, T=300.0):

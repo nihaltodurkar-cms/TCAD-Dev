@@ -116,6 +116,64 @@ jobs:
         env:
           PYTCAD_ACCEL: "1"
         run: python -m pytest tests/test_accel_boundary.py tests/test_architecture_boundaries.py -q
+      # The G-E throughput floors are marked slow, and the `python-only`
+      # job's slow battery skips this whole file (there is no extension
+      # there to measure). So without this step they run nowhere and
+      # would rot silently. The floors are absolute and set ~4x under the
+      # measured rates, so a slower CI runner does not trip them.
+      - name: Throughput floors (G-E)
+        working-directory: pytcad
+        env:
+          PYTCAD_ACCEL: "1"
+        run: python -m pytest tests/test_accel_parity.py -q -m slow
+
+  # The two jobs above both build WITHOUT PETSc -- pip has no practical
+  # PETSc wheel, which is exactly why M31-CPP-ARCHITECTURE-PLAN.md sec 2
+  # names conda-forge as the supported channel for the C++ build. That
+  # makes `accelerated` above the standing proof that the PETSc-less
+  # configuration works, and this job the only place the compiled solver
+  # backend (P3b) is exercised at all. Without it, tests/
+  # test_accel_parity.py's petsc gates would skip in CI forever and
+  # nobody would notice they had stopped running.
+  petsc:
+    name: compiled PETSc backend (conda-forge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash -el {0}       # -l so conda's env activation is applied
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.11"
+          miniforge-version: latest
+          activate-environment: tcad
+      - name: Install PETSc, petsc4py and the build toolchain
+        run: |
+          conda install -y -c conda-forge petsc petsc4py pkg-config cmake ninja \
+                                          numpy scipy nanobind
+          pip install pytest pytest-xdist pytest-timeout
+      - name: Build the extension against PETSc
+        working-directory: pytcad
+        run: |
+          cmake -S core -B build/dev -G Ninja \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                -DTCAD_INPLACE_OUTPUT=ON \
+                -DTCAD_WITH_PETSC=ON \
+                -DPython_EXECUTABLE="$(which python)"
+          cmake --build build/dev
+          python -c "from pytcad import _accel; assert _accel.have_petsc(), _accel.status(); print(_accel.status())"
+      # Only the solver gates: this environment deliberately does not
+      # install the GUI or meshing extras, so the full suite is not what
+      # it is here to prove. What it proves is that the compiled backend
+      # is bit-identical to petsc4py, which is a claim that can only be
+      # checked where BOTH exist.
+      - name: Solver parity gates
+        working-directory: pytcad
+        run: |
+          python -m pytest tests/test_accel_parity.py -q -k petsc
+          python -m pytest tests/test_m22_linsolve.py tests/test_accel_boundary.py -q
 
   wheel:
     name: wheel builds

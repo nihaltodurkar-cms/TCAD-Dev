@@ -130,6 +130,67 @@ tests/           analytic-limit validation + published-value physics
 
 ---
 
+## 0. The optional C++ engine (M31)
+
+As of 2026-09-09 the numerically intensive layer is being extracted into
+a C++ engine under `pytcad/core/`, exposed as the single extension module
+`pytcad._core`. **It is optional at every step.** `pytcad/_accel.py`
+soft-imports it and falls back to the pure-Python path, which stays the
+*reference implementation* -- every ported function keeps its Python body
+as `_<name>_py`, and the compiled path is gated against it with
+`np.array_equal`, not a tolerance. Deleting the built `.so` must leave
+the whole test suite green.
+
+```bash
+# optional: build it (nothing is installed; the .so lands in pytcad/)
+cmake -S core -B build/dev -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DTCAD_INPLACE_OUTPUT=ON
+cmake --build build/dev
+python -c "from pytcad import _accel; print(_accel.status())"
+```
+
+`PYTCAD_ACCEL=auto|0|1` selects the path (`auto` = use it if present).
+`PYTCAD_NUM_THREADS` defaults to **1**, deliberately: parallel
+floating-point reductions are not reproducible, and this project gates
+on bit-identity.
+
+What it buys so far, measured rather than asserted. First the
+unstructured mesh geometry precompute (M31 P2), which was the hard
+blocker for large 3D:
+
+| kernel | Python | C++ | |
+|---|---|---|---|
+| `build_unstructured_stencil` (2D) | 77k tri/s | 3.16M tri/s | 41x |
+| `build_unstructured_stencil3d` | 48k tet/s | 1.20M tet/s | 25x |
+| `build_edge_flux_geometry3d` | 3.7k tet/s | 1.99M tet/s | **539x** |
+
+A 998,250-tet mesh builds its full edge-flux geometry in **0.71 s**;
+the Python path extrapolates to ~285 s.
+
+Then the adaptivity indicators and 1D process diffusion (P4):
+
+| kernel | Python | C++ | |
+|---|---|---|---|
+| `indicator_curvature_tri` | 0.27M tri/s | 227M tri/s | **835x** |
+| `debye_ratio_tri` | 0.28M tri/s | 242M tri/s | **874x** |
+| `indicator_log_density_tri` | 0.80M tri/s | 99M tri/s | 123x |
+| `process.diffuse_numeric` | 0.325 s | 0.098 s | 3.3x |
+| `ted.diffuse_with_defects` | 24.6 s | 6.07 s | 4.1x |
+
+The last two are a smaller win on purpose: those loops were never doing
+too much arithmetic, only paying ~10 numpy dispatches per timestep, so
+removing the interpreter round trip is all there was to get.
+
+`method="petsc"` also has a compiled backend (P3b), which is
+bit-identical to the petsc4py one and no faster -- it exists to put the
+solver configuration where distributed matrices can reach it later, and
+the plan says so rather than claiming a speedup.
+
+Scope, plan, gates and honest limits: `pytcad/M31-CPP-ARCHITECTURE-PLAN.md`.
+Roadmap beyond it: `ARCHITECTURE.md` sections 4c (M31-M40), 4d (the
+dimensional debt and the road to full 3D) and 4e (how this is meant to
+beat Sentaurus/Atlas, and where it deliberately concedes).
+
 ## 1. The device equations
 
 We solve the steady-state van Roosbroeck system self-consistently:
