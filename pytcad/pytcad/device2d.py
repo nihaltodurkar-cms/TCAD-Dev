@@ -40,6 +40,10 @@ from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
                      fd_ddensity_deta, fd_node_factors, fd_ohmic_values,
                      Models, NewtonOptions)
 from .fermi import FERMI_ETA_MAX
+# Moved to contacts.py (the unstructured solvers import it and should
+# not have to import a structured solver to get it).  Re-exported
+# under both names so existing import sites keep working.
+from .contacts import ohmic_values, _ohmic_values
 from .mesh2d import Mesh2D, control_volume_widths
 from .moscap import EPS_OX_R
 
@@ -66,24 +70,6 @@ class GateBC:
         self.kappa = float(kappa)
         self.Vfb = float(Vfb)
         self.Vg = float(Vg)
-
-
-def _ohmic_values(C, nie, V, VT):
-    """Ohmic contact: local charge neutrality + thermal equilibrium.
-    Vectorized version of device.py's _contact_values body -- always
-    evaluate the MAJORITY carrier from the quadratic and get the minority
-    one from the mass-action law, to avoid cancellation.
-    """
-    C = np.asarray(C, dtype=float)
-    nie = np.asarray(nie, dtype=float)
-    root = np.sqrt(C * C + 4.0 * nie * nie)
-    n0_if_n = 0.5 * (C + root)
-    p0_if_p = 0.5 * (-C + root)
-    is_n = C >= 0.0
-    n0 = np.where(is_n, n0_if_n, nie * nie / np.maximum(p0_if_p, 1e-300))
-    p0 = np.where(is_n, nie * nie / np.maximum(n0_if_n, 1e-300), p0_if_p)
-    psi0 = V / VT + np.log(n0 / nie)
-    return psi0, n0, p0
 
 
 def _edge_pairs_x(Nx, Ny):

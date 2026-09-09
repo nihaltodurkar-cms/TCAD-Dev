@@ -145,60 +145,12 @@ from .materials import (
     nie_effective, lifetime_scharfetter, recombination,
 )
 
-D0_REF = 1.0  # reference diffusivity for scaling [cm^2/s]
-
-
-# ----------------------------------------------------------------------
-#  M13 Fermi-Dirac helpers (asymmetric eta policy -- see docstrings)
-# ----------------------------------------------------------------------
-def fd_density(nc, eta):
-    """n = nc * F_{1/2}(eta) with the M13 asymmetric eta policy.
-
-    Below eta = -35 the integral switches to its EXACT Boltzmann tail
-    exp(eta): the FD deviation there is exp(eta)/2^{3/2} <= 2.5e-16
-    RELATIVE -- below double precision and MORE accurate than evaluating
-    the quadrature on a 1e-12-scale value (minority carriers reach
-    eta ~ -170 at cryogenic temperature).  Above FERMI_ETA_MAX we refuse
-    loudly -- beyond +40 the parabolic-band model itself is invalid (G7
-    applicability); no silent extrapolation.  The branches agree to
-    ~2e-16 at the crossover."""
-    eta = np.asarray(eta, dtype=float)
-    if np.any(eta > FERMI_ETA_MAX):
-        raise ValueError(
-            f"FD density argument eta={eta.max():.1f} exceeds "
-            f"+{FERMI_ETA_MAX:.0f}: outside the validated Fermi-integral "
-            f"range (M13 G7 applicability).  Refusing to extrapolate.")
-    shp = np.broadcast_shapes(np.shape(nc), eta.shape)
-    e1 = np.broadcast_to(np.asarray(eta, dtype=float), shp).ravel()
-    c1 = np.broadcast_to(np.asarray(nc, dtype=float), shp).ravel()
-    lo = e1 < -35.0
-    # f_half's fixed-node quadrature is vectorized over 1-D inputs
-    # only -- flatten, evaluate, restore (any-shape grids supported).
-    out = np.where(lo,
-                   c1 * np.exp(np.minimum(e1, 700.0)),
-                   c1 * f_half(np.clip(e1, FERMI_ETA_MIN,
-                                       FERMI_ETA_MAX)))
-    return out.reshape(shp)
-
-
-def fd_ddensity_deta(nc, eta):
-    """d(nc F(eta))/d(eta) matching fd_density piecewise: f_mhalf
-    inside the validated range, the exact tail derivative nc*exp(eta)
-    below FERMI_ETA_MIN, loud refusal above."""
-    eta = np.asarray(eta, dtype=float)
-    if np.any(eta > FERMI_ETA_MAX):
-        raise ValueError(
-            f"FD density argument eta={eta.max():.1f} exceeds "
-            f"+{FERMI_ETA_MAX:.0f} (M13 G7 applicability).")
-    shp = np.broadcast_shapes(np.shape(nc), eta.shape)
-    e1 = np.broadcast_to(np.asarray(eta, dtype=float), shp).ravel()
-    c1 = np.broadcast_to(np.asarray(nc, dtype=float), shp).ravel()
-    lo = e1 < -35.0
-    tail = np.exp(np.minimum(e1, 700.0))
-    out = np.where(lo, c1 * tail,
-                   c1 * f_mhalf(np.clip(e1, FERMI_ETA_MIN,
-                                        FERMI_ETA_MAX)))
-    return out.reshape(shp)
+# Moved to kernels.py -- pure, mesh-free, vectorized primitives that
+# device2d/device3d/unstructured_dd*/moscap were importing out of this
+# module.  Re-exported here so every existing import site keeps working.
+from .kernels import (  # noqa: E402  (re-export, must follow the imports above)
+    D0_REF, bernoulli, dbernoulli, fd_density, fd_ddensity_deta,
+)
 
 
 def fd_node_factors(nc_s, nv_s, n, p):
@@ -274,33 +226,6 @@ def fd_ohmic_values(C, nc_s, nv_s, ln_gn, eg_kt, V, VT):
     n0, p0 = dens(e0)
     psi0 = V / VT + e0 + ln_gn
     return psi0, n0, p0
-
-
-# ----------------------------------------------------------------------
-#  Bernoulli function and its derivative (numerically stable)
-# ----------------------------------------------------------------------
-def bernoulli(x):
-    """B(x) = x / (exp(x) - 1), with B(0) = 1."""
-    x = np.clip(np.asarray(x, dtype=float), -700.0, 700.0)
-    small = np.abs(x) < 1e-4
-    xs = np.where(small, 1.0, x)          # dummy to avoid 0/0
-    out = np.where(small,
-                   1.0 - x / 2.0 + x * x / 12.0,
-                   xs / np.expm1(xs))
-    return out
-
-
-def dbernoulli(x):
-    """dB/dx, computed as B(x) [1/x - 1/(1 - e^-x)] for stability."""
-    x = np.clip(np.asarray(x, dtype=float), -700.0, 700.0)
-    small = np.abs(x) < 1e-4
-    xs = np.where(small, 1.0, x)
-    B = np.where(small, 1.0, xs / np.expm1(xs))
-    em = -np.expm1(-xs)                   # 1 - exp(-x)
-    em = np.where(np.abs(em) < 1e-300, 1e-300, em)
-    full = B * (1.0 / xs - 1.0 / em)
-    series = -0.5 + x / 6.0 - x**3 / 180.0
-    return np.where(small, series, full)
 
 
 # ----------------------------------------------------------------------

@@ -160,6 +160,30 @@ def test_mesh_edits_are_undoable_and_dirty(qapp):
     assert app.mesh_model.nx == original_nx
 
 
+def test_set_mesh_nx_ny_on_a_preset_example_reports_an_error_not_a_silent_noop(qapp):
+    """Real bug: a device loaded via loadExample() (every built-in
+    example, including all 3D ones -- gui/services/examples.py) leaves
+    mesh_model None, since it is a raw DeviceSpec with no Structure/
+    Mesh model to edit. setMeshNxNy() used to unconditionally do
+    self.mesh_model.nx = ..., raising AttributeError on None -- a Qt
+    Slot swallows that silently, so the Mesh Editor's Apply button
+    visibly did nothing. It must now report an actionable errorRaised
+    instead of failing silently, and meshEditable must say so upfront."""
+    app = AppController()
+    app.loadExample("resistor_3d")
+    assert app.structure is None and app.mesh_model is None
+    assert app.meshEditable is False
+
+    errors = []
+    app.errorRaised.connect(lambda summary, detail: errors.append(summary))
+    app.setMeshNxNy(50, 30)
+    assert errors, "setMeshNxNy on an example must report an error, not no-op silently"
+    assert app.mesh_model is None    # still nothing to corrupt
+
+    app.setMeshGrading("graded")
+    assert len(errors) == 2
+
+
 def test_run_solves_the_loaded_structure_end_to_end(qapp):
     """A real gap found during Task 13's DoD walk: run() only ever used
     self.spec (the v0.1 loadExample() pathway) -- a structure built

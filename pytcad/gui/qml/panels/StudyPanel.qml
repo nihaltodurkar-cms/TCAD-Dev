@@ -97,6 +97,38 @@ Rectangle {
             placeholderText: "tox_cm = 7e-7, 8e-7, 9e-7"
         }
 
+        // M30 Phase 12: remote execution. Plain hostnames, one per
+        // line -- empty goes back to local-only. Per-host user/port/
+        // identity-file overrides are library-level only
+        // (workbench.remote_executor.RemoteHost directly); the GUI
+        // covers the common "a few lab machines, my own SSH keys" case.
+        Label { text: "Remote hosts (SSH, one per line -- empty = run locally)"; color: Theme.textDim }
+        RowLayout {
+            spacing: Theme.padSm
+            TextArea {
+                id: remoteHostsArea
+                objectName: "studyRemoteHostsArea"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 44
+                placeholderText: "lab-gpu-1\nlab-gpu-2"
+                onTextChanged: {
+                    if (!root.controller) return
+                    var hosts = remoteHostsArea.text.split("\n")
+                        .map(function (h) { return h.trim() })
+                        .filter(function (h) { return h.length > 0 })
+                    root.controller.setRemoteHosts(hosts)
+                }
+            }
+            Label {
+                objectName: "studyRemoteHostsStatusLabel"
+                color: Theme.textFaint
+                font.pixelSize: Theme.fsTiny
+                text: root.controller && root.controller.remoteHosts.length
+                      ? root.controller.remoteHosts.length + " remote host(s)"
+                      : "local"
+            }
+        }
+
         RowLayout {
             spacing: Theme.padSm
 

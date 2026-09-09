@@ -31,3 +31,10 @@ env/
 # Superpowers brainstorming visual-companion scratch (mockups, session state)
 .superpowers/
 
+
+# C++ engine build output (M31). The extension is written straight into
+# pytcad/ by the in-place dev build so the repo's existing sys.path
+# convention finds it; it is a build artifact, never checked in.
+pytcad/_core*.so
+pytcad/_core*.pyd
+build/

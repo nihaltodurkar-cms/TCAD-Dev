@@ -1,9 +1,11 @@
 # M30 — Workbench System Features + Interop — Implementation Plan
 
-Status (2026-09-07): Part I Phases 1, 2, 3, 4 LANDED -- see section 8c
-below for what actually shipped and where the gates live. Part II
-(Phases 5-12, the GUI/product layer) is PLANNED ONLY, not yet
-implemented -- see PART II below.
+Status (2026-09-09): ALL 12 phases LANDED. Part I (Phases 1-4) landed
+2026-09-07 -- see section 8c below for what shipped and where the
+gates live. Part II (Phases 5-12, the GUI/product layer) landed
+2026-09-07 (Phases 5-11) and 2026-09-09 (Phase 12, remote execution)
+-- see each phase's own "Status:" line under PART II below for
+specifics. M30 is complete.
 
 Environment note: this repo must be run under the `TCAD` conda env
 (`conda run -n TCAD ...`), not `base` anaconda3 -- `base`'s Qt6 install
@@ -743,6 +745,68 @@ treatment).
   calls, not a parallel reimplementation).
 
 ### 16. Phase 12 — Remote execution
+
+Status: LANDED 2026-09-09. `workbench/executor.py` (`Executor` protocol,
+`LocalExecutor`) pulls Phase 4's dispatch surface into the seam this
+phase needed; `workbench/remote_executor.py` (`RemoteHost`, `Transport`
+protocol, `SSHTransport`, `RemoteExecutor`) is the SSH backend --
+transport decided with the user (SSH to lab machines, reusing the same
+`python -m gui.services.solver_runner <job.json> <out.npz>` entry point
+local jobs already use, over the user's own SSH keys via
+`BatchMode=yes`; no credential storage or new auth surface). No
+"job" concept change: `DeviceSpec` JSON is pushed/pulled
+byte-for-byte, only WHERE it runs changes.
+`workbench.batch.solve_split_matrix` gained an optional `executor=`
+param (defaults to the existing local `ProcessPoolExecutor` path when
+omitted, so no existing caller changes). Gates:
+`tests/test_m30_remote_executor.py`, 7/7 green --
+G-PROTOCOL-PARITY (`RemoteExecutor` and `LocalExecutor` produce
+bit-identical solver results through the same `solve_split_matrix`
+call), G-PARTIAL-FAILURE (a host whose remote solve fails is reported
+as that row's own error, never a hang, and does not lose a good host's
+results), G-NO-TRANSPORT-IN-DEVICESPEC (the job JSON received
+remotely is byte-identical to the one written locally). No real
+SSH/network in the test env: a `_LoopbackTransport` test double stands
+in for a remote worker (runs the same subprocess entry point locally
+instead of over ssh), per this section's own suggested test strategy.
+Full suite after the library-level portion of this phase: 1352 passed
+/ 1 xfailed (`tests/ gui/tests/`, `-n 6`, `-m "not slow"`), 0
+failures, same 39 pre-existing warnings.
+
+**GUI wiring (2026-09-09, same day, follow-up request)**:
+`gui/services/remote_job_runner.py` (`RemoteJobRunner`) gives
+`StudyController` (Phase 5) a QProcess-chained equivalent of
+`SSHTransport` -- mkdir -> push -> run -> pull, each its own QProcess,
+chained through `finished` so nothing blocks the Qt event loop --
+sharing `JobRunner`'s exact public surface (`start(spec)`, `cancel()`,
+`running`, `finished`/`failed`/`canceled` signals) so
+`StudyController._dispatch_next`/`_on_row_*` needed NO changes; only
+`runStudy()`'s pool-creation branch chooses `RemoteJobRunner` (bound to
+a host, round-robin) over `JobRunner` when
+`StudyController.setRemoteHosts([...])` has configured at least one
+host. Also mirrors `RemoteJobRunner.cancel()`'s grace-kill against a
+possibly-deleted QProcess after
+`JobRunner.cancel()`'s own `shiboken6.isValid()` fix (Phase 5's own
+adversarial-testing finding), applied here from the start rather than
+discovered again. `StudyPanel.qml` gained a "Remote hosts" text area
+(one hostname per line, empty = local -- same plain-text style as the
+base-parameter/splits fields) plus a host-count status label. Gates:
+`gui/tests/test_m30_study_controller_remote.py`, 4/4 green --
+setRemoteHosts/remoteHosts round-trip, a real remote-dispatched study
+completing every row with a genuine result (no faked data), a bad
+host's rows reported failed without hanging or losing a good host's
+rows (G-PARTIAL-FAILURE restated at the GUI layer), and the QML field
+existing in the tree. No real SSH/network: `RemoteJobRunner` is
+constructed, at the exact seam `StudyController.runStudy()` uses (a
+monkeypatched factory), with its `ssh_cmd`/`scp_cmd` pointed at local
+stand-ins (`gui/tests/fixtures/fake_ssh*.py`/`fake_scp.py`) instead of
+the real binaries -- same "local process pretending to be remote"
+strategy as the library-level gates, applied at the GUI's own
+construction seam. Full suite after GUI wiring: 1356 passed / 1
+xfailed (+4), 0 failures, same 39 pre-existing warnings. Per-host
+overrides (user/port/identity file/remote workdir) are
+library-level-only (`workbench.remote_executor.RemoteHost` directly);
+the GUI field covers plain hostnames only.
 
 **Prerequisite**: Phase 4 (batch parallelism) -- remote execution is
 "replace/augment the executor's worker pool with remote workers," not

@@ -1,0 +1,60 @@
+# Packaging for pytcad.
+#
+# This file is NEW: the project had no pyproject.toml or setup.py at all
+# and ran entirely in-place, with each test doing sys.path.insert() up to
+# this directory.  That convention still works and is still the default
+# development mode -- see [tool.scikit-build] below and the TCAD_INPLACE_
+# OUTPUT option in core/CMakeLists.txt.  Nothing here forces an install.
+#
+# DISTRIBUTION NOTE, stated rather than discovered later: the pure-Python
+# path installs from requirements.txt with plain pip on Linux and Windows
+# and has no compiler requirement.  The C++-accelerated build is
+# additionally gated on a C++17 toolchain, and the later PETSc/VTK-Qt
+# phases are not practically pip-wheelable -- conda-forge is the
+# supported channel for those.  The extension is optional at every step:
+# pytcad/_accel.py soft-imports it.
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pytcad"
+version = "0.6.0"
+description = "Validated 1D/2D/3D TCAD device and process simulation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "../LICENSE" }
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.14",
+]
+
+# Optional dependencies stay optional, matching requirements.txt's
+# existing soft-import policy: the code imports gmsh/devsim/mpmath/pyamg
+# at the call site, not at module load, so their absence skips a feature
+# rather than failing the install.  cupy and mpi4py are deliberately
+# absent even here -- cupy's package name is pinned to the local CUDA
+# major version, and mpi4py's wheel BUILD needs real MPI headers, so
+# either one would break `pip install` on a machine without the hardware.
+[project.optional-dependencies]
+mesh    = ["gmsh>=4.15"]
+solvers = ["pyamg>=5.0", "devsim>=2.11"]
+gui     = ["PySide6>=6.11", "matplotlib>=3.9", "pyvista>=0.48", "pyvistaqt>=0.12"]
+test    = ["pytest>=9.0", "pytest-xdist>=3.8", "pytest-timeout>=2.4", "mpmath>=1.4"]
+
+[tool.scikit-build]
+cmake.source-dir = "core"
+cmake.version = ">=3.26"
+build-dir = "build/{wheel_tag}"
+# gui/ is deliberately NOT packaged yet: it carries gui/tests/ and a QML
+# resource tree, and how to ship those is an independent decision from
+# this one.  Running the app from a source checkout is unaffected.
+wheel.packages = ["pytcad", "workbench"]
+sdist.include = ["core/**", "pytcad/**", "workbench/**"]
+sdist.exclude = ["**/__pycache__", "build/**", "*.png", "*.npz"]
+
+[tool.scikit-build.cmake.define]
+TCAD_BUILD_TESTS = "OFF"
+
+[tool.scikit-build.editable]
+rebuild = true

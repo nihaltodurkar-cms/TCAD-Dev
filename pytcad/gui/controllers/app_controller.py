@@ -836,6 +836,13 @@ class AppController(QObject):
     def isDirty(self):
         return self._undo_stack.is_dirty
 
+    @Property(bool, notify=structureChanged)
+    def meshEditable(self):
+        """False for a device loaded via loadExample() (self.mesh_model
+        stays None -- see setMeshNxNy's guard): MeshEditor.qml disables
+        Nx/Ny/grading editing instead of letting Apply silently no-op."""
+        return self.mesh_model is not None
+
     @Property(list, notify=structureChanged)
     def meshInfo(self):
         if self.structure is None or self.mesh_model is None:
@@ -1145,6 +1152,22 @@ class AppController(QObject):
 
     @Slot(int, int)
     def setMeshNxNy(self, nx, ny):
+        # A device loaded via loadExample() (every built-in example,
+        # 3D ones included -- see gui/services/examples.py) is a raw
+        # DeviceSpec with self.mesh_model left None; there is no
+        # Structure/Mesh model to edit. Without this guard the Apply
+        # button in MeshEditor.qml silently no-ops: the Slot call
+        # raises AttributeError on None.nx, PySide6 swallows it, and
+        # nothing visible happens -- report it as an actionable error
+        # instead, same "Nothing to run" pattern run() already uses.
+        if self.mesh_model is None:
+            self.errorRaised.emit(
+                "No editable mesh",
+                "This device was loaded from a preset example, which "
+                "has no editable Structure/Mesh model. Build the "
+                "device in the Structure/Device Builder tab to edit "
+                "Nx/Ny.")
+            return
         old = (self.mesh_model.nx, self.mesh_model.ny)
         def apply(vals):
             self.mesh_model.nx, self.mesh_model.ny = vals
@@ -1152,6 +1175,14 @@ class AppController(QObject):
 
     @Slot(str)
     def setMeshGrading(self, grading):
+        if self.mesh_model is None:
+            self.errorRaised.emit(
+                "No editable mesh",
+                "This device was loaded from a preset example, which "
+                "has no editable Structure/Mesh model. Build the "
+                "device in the Structure/Device Builder tab to edit "
+                "mesh grading.")
+            return
         old = self.mesh_model.grading
         self._push(lambda: setattr(self.mesh_model, "grading", grading),
                   lambda: setattr(self.mesh_model, "grading", old), "set mesh grading")

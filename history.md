@@ -3753,3 +3753,169 @@ manifest resume," never "checkpoint," since that word already names a
 different, existing per-process-step concept in
 `gui/services/process_runner.py`) -- but NOT YET implemented, pending
 the user's go-ahead now that Part I is landed.
+
+## STATE ADDENDUM -- M31 P0/P1/P2: C++ NUMERICAL ENGINE, FOUNDATIONS
+## AND THE UNSTRUCTURED GEOMETRY KERNELS (2026-09-09)
+
+New milestone, planned in full in `pytcad/M31-CPP-ARCHITECTURE-PLAN.md`:
+re-architect toward C++ (numerical engine) + Python (API/workflows) +
+Qt (GUI), by progressive extraction per `Architecture_Master_Plan.md`
+section 37 -- NOT a rewrite. P0, P1, P2 landed this session; P3a next.
+
+### The measurement that reshaped the plan (do not skip this)
+
+The premise "the numerics are Python, so port them to C++ for speed" is
+only partly true here, and the phase order is built on what was
+measured rather than on that assumption:
+
+- Structured 3D assembly is **not** the bottleneck. Profiling a 24^3
+  equilibrium solve put **98% of wall time in `_superlu.gssv`**;
+  assembly was 0.011 s of 0.494 s. A C++ port of `device*.py`'s
+  assembly buys ~2%.
+- The direct-LU wall (3.0 s @ 8k nodes -> 51.8 s @ 27k -> 64k never
+  completing) is **algorithmic, not linguistic**: the existing
+  PURE-PYTHON node-block-Jacobi GMRES already does 68,921 nodes
+  (206,763 unknowns) in 4.71 s.
+- The genuine hard blocker is **unstructured mesh geometry**: measured
+  ~80k triangles/s (2D) and **~3.5k tets/s** (3D), i.e. a 1M-tet mesh
+  spent ~5 minutes in Python dict/loop overhead before any physics ran.
+
+So P2 (geometry kernels) went first, P5 (`device*.py`) is deliberately
+LAST among the solver phases, and `M31-...-PLAN.md` records a design
+review's dissent that P5 may be negative value at all.
+
+### P0 -- build system, CI, and the C++/Python boundary
+
+The project had **no build system and no CI whatsoever**. Added
+`pytcad/pyproject.toml` (scikit-build-core + nanobind) and
+`pytcad/core/CMakeLists.txt`, in two modes, both verified: an in-place
+dev build (`-DTCAD_INPLACE_OUTPUT=ON` writes the `.so` into `pytcad/`,
+so the repo's existing `sys.path.insert(...)` convention finds it and
+**no test file changed**), and a wheel
+(`pytcad-0.6.0-cp311-*.whl`, extension included, `gui/` deliberately
+excluded for now). `.github/workflows/ci.yml`: a pure-Python job that
+ASSERTS the extension is absent, an accelerated job that builds it and
+reruns the same suite, and a wheel job.
+
+Two boundary rules, both now test-enforced:
+
+- **The Python exception class is the authority.** A C++ kernel raising
+  `tcad::DegenerateMesh` surfaces as `pytcad.errors.DegenerateMeshError`
+  -- the very class existing `pytest.raises(...)` sites already catch.
+  No parallel C++-side type. Message TEXT is contractual too, since
+  `tests/test_m21_phase3.py` uses `match="degenerate"` and
+  `match="non-manifold|shared by"`.
+- **Default thread count is 1**, for two reasons and the second is the
+  hard one: (a) `workbench/batch.py` pins `OPENBLAS_NUM_THREADS=1` per
+  pool worker precisely to stop oversubscription, and (b) parallel FP
+  reductions are not reproducible, which is fatal against this repo's
+  `np.array_equal` goldens. A kernel may thread ONLY if it is
+  bit-identical across thread counts.
+
+`pytcad/_accel.py` soft-imports the extension; every ported function
+keeps its Python body as `_<name>_py`. **Deleting the `.so` must leave
+the suite green** (gate G-F) -- that is the migration's undo button and
+the reason an oracle still exists to diff against.
+
+### P1 -- two real fixes, plus decoupling
+
+1. **`DegenerateMeshError` was declared TWICE, as unrelated classes**
+   (`unstructured_assembly.py`, `unstructured_assembly3d.py`), so
+   `except DegenerateMeshError` imported from one silently failed to
+   catch the other. Now one class in `pytcad/errors.py`; both
+   re-export, no call site changed.
+2. **`np.linalg.solve` removed from `tetrahedron_circumcenter`.** It
+   routes to LAPACK `dgesv`, whose result depends on the BLAS build, so
+   it could never have been reproduced bit-for-bit in C++. This was
+   MEASURED before acting: an unblocked `dgetf2` replication matched
+   numpy on only **72.6%** of 20k random 3x3 systems, and no FMA
+   variant did better -- the ~60 lines of C++ the plan had budgeted for
+   this would have been written and then failed. Replaced with a
+   fixed-order Cramer's rule, verified numerically neutral (worst
+   equidistance violation 4.182e-10 vs 4.184e-10 for LAPACK over 200k
+   random device-scale tets). This DELETED P2's top risk rather than
+   mitigating it.
+
+Also extracted `bernoulli`/`dbernoulli`/`fd_density`/`fd_ddensity_deta`/
+`D0_REF` out of the 1947-line `device.py` into `pytcad/kernels.py`, and
+`_ohmic_values` out of `device2d.py` into `pytcad/contacts.py` (five
+modules were importing these by private name). Both re-export;
+`device.py` is now 1872 lines.
+
+### P2 -- the geometry kernels
+
+Five kernels ported to `pytcad/core/` (`geom/simplex.hpp`,
+`mesh/stencil.cpp`), all **bit-identical** (`np.array_equal`, not a
+tolerance), single-threaded:
+
+| kernel | reference | compiled | speedup |
+|---|---|---|---|
+| `build_unstructured_stencil` (2D) | 77k tri/s | **3.16M tri/s** | 41x |
+| `build_unstructured_stencil3d` | 48k tet/s | **1.20M tet/s** | 25x |
+| `build_edge_flux_geometry3d` | 3.7k tet/s | **1.99M tet/s** | **539x** |
+
+**A 998,250-tet mesh now builds its full edge-flux geometry in 0.71 s**
+(extrapolated Python: ~285 s). The blocker is gone.
+
+Bit-identity came free because the numpy primitives were measured
+BEFORE any C++ was written: `np.linalg.norm`, `np.dot`, `np.cross` and
+`np.sum` at these sizes are plain scalar arithmetic with no BLAS
+dispatch (20k-40k random inputs each, all exact). All five kernels
+matched on the first run. The real subtleties were ORDERING:
+
+- owners must come out in ascending element index (the 3D flux kernel
+  accumulates `area += a1 + a2` over them, and float addition is not
+  associative) -- reproduced by sorting incidence records on
+  `(lo, hi, elem)`;
+- Python reports the non-manifold entity via `next(iter(bad))` on an
+  INSERTION-ordered dict, i.e. the first ENCOUNTERED, not the
+  lexicographically smallest -- so each record carries the sequence
+  number at which the dict would first have seen its key;
+- `np.array(sorted({}), dtype=int)` has shape `(0,)`, not `(0, 2)`;
+- the reference's `dtype=int` is C `long` -- int64 on Linux but
+  **int32 on Windows** -- so the boundary is pinned to int64.
+
+`build_edge_flux_geometry3d` parallelizes over OUTPUT edges with a
+thread-private accumulator, so it is bit-identical at any thread count
+(gate G-D, checked at 1/2/4/8). The stencil builders accumulate node
+measures in element order and stay serial for exactly that reason.
+
+### Two defects surfaced by P2, NEITHER introduced by it
+
+1. The 3D degenerate-tet message leaked a numpy repr under numpy 2.x
+   (`[np.int64(0), ...]` from `f"{list(verts)}"`). Fixed to plain ints
+   on both paths; still satisfies the existing `match=` assertions.
+2. **`build_unstructured_stencil` is winding-sensitive.** `_cot`
+   divides by a SIGNED cross product while `tri_area` takes `abs()`, so
+   a clockwise-wound non-obtuse triangle contributes NEGATIVE dual-cell
+   areas and the partition identity fails by exactly 2x. Found by
+   fuzzing the compiled path against the reference on a jittered mesh
+   whose jitter was large enough to INVERT a triangle. gmsh emits
+   consistently counter-clockwise triangles, so no real caller hits it;
+   the compiled path reproduces the quirk faithfully and it is pinned
+   by `test_winding_sensitivity_is_reproduced_faithfully` rather than
+   papered over. **NOT FIXED HERE** -- fixing it changes physics and
+   must land on both paths at once, in its own change. Open decision.
+
+### Regression status -- INCOMPLETE, read before claiming M31 P2 done
+
+P0/P1 were fully verified: fast suite **1380 passed** with the
+extension (baseline 1357 + exactly the 23 new tests, same 39
+pre-existing warnings), **1370 passed / 7 skipped** with the `.so`
+DELETED (gate G-F), slow gate battery **19 passed**, m13/m14 goldens
+and the SHA-256 digests unmoved, examples 01/03/05/13 OK.
+
+**P2 was NOT run against the full suite** -- the session ended first.
+Targeted runs only: `tests/test_m21_phase3.py` +
+`test_accel_boundary.py` + `test_architecture_boundaries.py` = 45
+passed; new `tests/test_accel_parity.py` = 24 passed (its `slow`
+throughput floors not yet run). Before claiming P2 complete, run both
+ways per AGENTS.md, and note that **gate G-B** matters most: the
+m13/m14 goldens and SHA-256 digests are STRUCTURED-mesh solves that P2
+never touches, so ANY movement there means something is wrong.
+
+New files: `pytcad/core/**`, `pytcad/pyproject.toml`,
+`pytcad/pytcad/{_accel,errors,kernels,contacts}.py`,
+`pytcad/tests/test_{accel_boundary,accel_parity,architecture_boundaries,
+public_api_surface}.py`, `.github/workflows/ci.yml`,
+`pytcad/M31-CPP-ARCHITECTURE-PLAN.md`.

@@ -19,6 +19,17 @@ per-row isolation) never reaches a JobRunner at all; a row that solves
 successfully or fails during Run is tracked the same way, so Phase 6's
 matrix viewer has one consistent status vocabulary to render:
 "build_error" | "pending" | "running" | "done" | "failed".
+
+M30 Phase 12 (GUI wiring): when `setRemoteHosts()` has configured one
+or more remote hosts, runStudy() pools `RemoteJobRunner`s (SSH-backed,
+gui/services/remote_job_runner.py) instead of local `JobRunner`s --
+each worker slot is bound to one host, round-robin, at pool-creation
+time. Both runner classes share the same `start(spec)` /
+`finished`/`failed`/`canceled` surface, so `_dispatch_next` and the
+`_on_row_*` handlers below are unchanged either way; only the pool
+factory in `runStudy()` chooses which class to instantiate. No remote
+host configured -> unchanged local-only behavior (empty list is the
+default, same as before this phase).
 """
 import tempfile
 
@@ -26,6 +37,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
 from ..services.job_runner import JobRunner
+from ..services.remote_job_runner import RemoteJobRunner
 
 
 class StudyController(QObject):
@@ -43,6 +55,7 @@ class StudyController(QObject):
         self._pending = []       # row indices still queued
         self._canceled = False
         self._work_dir = None
+        self._remote_hosts = []  # workbench.remote_executor.RemoteHost list
 
     # -- configuration ----------------------------------------------------
     @Slot(str, "QVariant", "QVariant", result=bool)
@@ -84,6 +97,25 @@ class StudyController(QObject):
         2's calibration convention); a dict -> that fixed bias point."""
         self._bias = dict(bias) if bias else None
 
+    # -- M30 Phase 12: remote hosts ---------------------------------------
+    @Slot("QVariant")
+    def setRemoteHosts(self, hosts):
+        """`hosts`: a list of hostname strings (plain -- same
+        "type what you mean" style as the base-parameter/splits text
+        areas), or empty/None to go back to local-only. Each host gets
+        `workbench.remote_executor.RemoteHost` defaults (current SSH
+        user, port 22, `python` on PATH, /tmp/pytcad-remote scratch
+        dir) -- per-host overrides are not exposed in the GUI; use the
+        library-level `RemoteExecutor` directly for that."""
+        from workbench.remote_executor import RemoteHost
+        names = [str(h).strip() for h in (hosts or []) if str(h).strip()]
+        self._remote_hosts = [RemoteHost(host=name) for name in names]
+        self.studyChanged.emit()
+
+    @Property(list, notify=studyChanged)
+    def remoteHosts(self):
+        return [h.host for h in self._remote_hosts]
+
     # -- run / cancel -------------------------------------------------
     @Slot()
     def runStudy(self):
@@ -95,12 +127,25 @@ class StudyController(QObject):
             return
         self._canceled = False
         self._work_dir = tempfile.mkdtemp(prefix="pytcad-study-")
-        from workbench.batch import default_worker_count
-        n_workers = default_worker_count(len(self._pending))
+
+        if self._remote_hosts:
+            # I/O-bound dispatch (ssh/scp waiting on the network), so
+            # more workers than hosts is fine and useful; still capped,
+            # same conservative spirit as default_worker_count's own
+            # "-n 6" reasoning, since an unbounded ssh fan-out is its
+            # own hazard.
+            n_workers = min(len(self._pending), max(1, len(self._remote_hosts)) * 4, 12)
+        else:
+            from workbench.batch import default_worker_count
+            n_workers = default_worker_count(len(self._pending))
 
         self._runners = []
-        for _ in range(n_workers):
-            runner = JobRunner(parent=self, work_dir=self._work_dir)
+        for i in range(n_workers):
+            if self._remote_hosts:
+                host = self._remote_hosts[i % len(self._remote_hosts)]
+                runner = RemoteJobRunner(host, parent=self, work_dir=self._work_dir)
+            else:
+                runner = JobRunner(parent=self, work_dir=self._work_dir)
             runner.finished.connect(
                 lambda path, r=runner: self._on_row_finished(r, path))
             runner.failed.connect(

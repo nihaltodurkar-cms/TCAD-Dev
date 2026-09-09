@@ -12,15 +12,34 @@ ColumnLayout {
         from: 2; to: 2000
     }
 
+    // A device loaded from a preset example (see gui/services/
+    // examples.py) has no editable Structure/Mesh model -- Nx/Ny/
+    // grading controls are disabled rather than silently no-opping
+    // when Apply is clicked (see AppController.meshEditable/
+    // setMeshNxNy's own guard).
+    property bool editable: !!controller && controller.meshEditable
+
+    Label {
+        objectName: "meshNotEditableLabel"
+        visible: !!controller && !controller.meshEditable
+        text: "Loaded from a preset example -- build in Structure/Device " +
+              "Builder to edit the mesh."
+        color: Theme.textFaint
+        font.pixelSize: Theme.fsTiny
+        wrapMode: Text.WordWrap
+        Layout.fillWidth: true
+    }
+
     RowLayout {
         Label { text: "Nx"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        MeshSpinBox { id: nxBox; objectName: "meshNxBox"; value: 80 }
+        MeshSpinBox { id: nxBox; objectName: "meshNxBox"; value: 80; enabled: editable }
         Label { text: "Ny"; color: Theme.textDim; Layout.preferredWidth: 40 }
-        MeshSpinBox { id: nyBox; objectName: "meshNyBox"; value: 40 }
+        MeshSpinBox { id: nyBox; objectName: "meshNyBox"; value: 40; enabled: editable }
         Button {
             id: meshApplyButton
             objectName: "meshApplyButton"
             text: "Apply"
+            enabled: editable
             onClicked: if (controller) controller.setMeshNxNy(nxBox.value, nyBox.value)
             background: Rectangle {
                 radius: Theme.radiusSm
@@ -29,6 +48,7 @@ ColumnLayout {
                        : Theme.panelRaised
                 border.width: 1
                 border.color: Theme.border
+                opacity: meshApplyButton.enabled ? 1.0 : 0.5
                 Behavior on color { ColorAnimation { duration: Theme.animFast } }
             }
         }
@@ -40,6 +60,7 @@ ColumnLayout {
             id: gradingBox
             objectName: "meshGradingBox"
             Layout.preferredWidth: 100
+            enabled: editable
             model: ["uniform", "graded"]
             onActivated: if (controller) controller.setMeshGrading(currentText)
         }

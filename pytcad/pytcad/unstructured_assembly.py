@@ -30,10 +30,11 @@ not by tuning a tolerance.
 """
 import numpy as np
 
-
-class DegenerateMeshError(ValueError):
-    """A triangle mesh violates a structural invariant this module
-    requires (degenerate triangle, non-manifold edge)."""
+# One shared class, not a second same-named one: see pytcad/errors.py for
+# why (an `except` on the 2D name used not to catch the 3D module's).
+# Re-exported here so every existing `from .unstructured_assembly import
+# DegenerateMeshError` keeps working.
+from .errors import DegenerateMeshError
 
 
 def _triangle_area2(pts):
@@ -51,7 +52,7 @@ def _cot(p_apex, p_a, p_b):
     return dot / cross
 
 
-def build_unstructured_stencil(nodes, triangles, min_area=1e-30):
+def _build_unstructured_stencil_py(nodes, triangles, min_area=1e-30):
     """Build the unique undirected edge list and per-node dual-cell
     (Voronoi/mixed) areas for a triangle mesh.
 
@@ -162,7 +163,7 @@ def triangle_circumcenter(pts):
     return np.array([Ux, Uy])
 
 
-def build_edge_flux_geometry(nodes, triangles, edge_list):
+def _build_edge_flux_geometry_py(nodes, triangles, edge_list):
     """Two-Point Flux Approximation (TPFA) geometry factor per INTERIOR
     mesh edge: dual_facet_length / primal_edge_length, where
     dual_facet_length is the distance between the two owning triangles'
@@ -204,3 +205,34 @@ def build_edge_flux_geometry(nodes, triangles, edge_list):
     return (np.array(interior_edges, dtype=int) if interior_edges
            else np.zeros((0, 2), dtype=int),
            np.array(trans, dtype=float))
+
+
+# ----------------------------------------------------------------------
+#  Compiled dispatch (M31 P2)
+# ----------------------------------------------------------------------
+# The two functions above are the REFERENCE. They are kept, reachable,
+# and exercised by tests/test_accel_parity.py, which compares them
+# against the compiled kernels with np.array_equal -- not a tolerance.
+# Measured on a 318k-triangle mesh: 77k tri/s reference, 3.16M tri/s
+# compiled (41x).
+from . import _accel
+
+
+def build_unstructured_stencil(nodes, triangles, min_area=1e-30):
+    if _accel.use_accel():
+        edges, areas = _accel.core.build_stencil2d(
+            _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3), float(min_area))
+        return _accel.match_empty_edges(edges), areas
+    return _build_unstructured_stencil_py(nodes, triangles, min_area)
+
+
+def build_edge_flux_geometry(nodes, triangles, edge_list):
+    if _accel.use_accel():
+        return _accel.core.build_flux_geometry2d(
+            _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3),
+            _accel.as_edge_list(edge_list))
+    return _build_edge_flux_geometry_py(nodes, triangles, edge_list)
+
+
+build_unstructured_stencil.__doc__ = _build_unstructured_stencil_py.__doc__
+build_edge_flux_geometry.__doc__ = _build_edge_flux_geometry_py.__doc__

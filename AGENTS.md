@@ -84,6 +84,72 @@ QT_QPA_PLATFORM=offscreen python3 -m gui.app          # live app
 python3 examples/01_pn_diode.py            # examples 01..05
 ```
 
+## Gotcha: line endings are MIXED, and no .gitattributes guards them
+
+`pytcad/pytcad/` is 18 CRLF files and 28 LF files, and there is no
+`.gitattributes`.  `device.py`, `device2d.py` and `AGENTS.md` are CRLF.
+
+So a script that does the obvious thing --
+
+```python
+s = open(path).read();  ...;  open(path, "w").write(s)
+```
+
+-- silently rewrites the WHOLE FILE, because Python's universal-newline
+read turns `\r\n` into `\n` and the write does not put it back.  The
+edit is correct, the diff is 3,800 lines, and the real change is
+invisible inside it.  This has already happened once.
+
+When editing one of the CRLF files programmatically, either use binary
+mode (`open(p, "rb")` / `"wb"`) or restore the endings afterwards, and
+check `git diff --stat` before believing the change is small.  Do not
+"fix" this by adding a repo-wide `.gitattributes` mid-branch: renormalizing
+would touch every CRLF file at once and bury whatever else is in flight.
+
+## The C++ engine (M31) -- optional, and must stay optional
+
+`pytcad/core/` is a C++ numerical engine exposed as the single extension
+module `pytcad._core`. It is **always optional**: `pytcad/_accel.py`
+soft-imports it and falls back to the pure-Python reference path, so a
+checkout with no compiler still passes the full suite. That is
+deliberate and load-bearing -- it is the migration's undo button, and
+the Python bodies (kept as `_<name>_py`) are the ORACLE the compiled
+path is diffed against with `np.array_equal`.
+
+```bash
+# in-place dev build -- nothing installed; the .so lands in pytcad/ so
+# the existing sys.path convention finds it and no test file changes
+cmake -S core -B build/dev -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DTCAD_INPLACE_OUTPUT=ON \
+      -DPython_EXECUTABLE="$(conda run -n TCAD which python)"
+cmake --build build/dev
+conda run -n TCAD python -c "from pytcad import _accel; print(_accel.status())"
+
+# remove it again (this must leave the suite green -- gate G-F)
+rm -f pytcad/_core*.so
+
+# wheel / editable install
+conda run -n TCAD python -m build --wheel
+conda run -n TCAD pip install --no-build-isolation -ve .
+```
+
+Two environment variables govern the boundary:
+
+| var | effect |
+|---|---|
+| `PYTCAD_ACCEL` | `auto` (default) use `_core` if importable; `0` force Python; `1` require `_core` |
+| `PYTCAD_NUM_THREADS` | kernel threads. **Defaults to 1** -- threads would oversubscribe `workbench/batch.py`'s pool workers AND make scatter-add reductions non-reproducible, which breaks the `np.array_equal` goldens |
+
+Run the suite **both ways** before claiming a change is done:
+
+```bash
+for A in 0 1; do PYTCAD_ACCEL=$A OPENBLAS_NUM_THREADS=1 \
+  conda run -n TCAD python -m pytest tests/ gui/tests/ -n 6 -m "not slow" -q; done
+```
+
+CI (`.github/workflows/ci.yml`) enforces exactly this: one job with no
+extension at all, one that builds it and reruns the same suite.
+
 One `pip install -r requirements.txt` (repo root: `pytcad/requirements.txt`)
 covers the library, GUI, tests, and all optional deps (gmsh, devsim,
 mpmath) -- verified on Linux and Windows. Run it once.

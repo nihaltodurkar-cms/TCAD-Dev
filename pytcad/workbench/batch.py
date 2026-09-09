@@ -90,13 +90,20 @@ def run_jobs_parallel(jobs, max_workers=None):
     return outcomes
 
 
-def solve_split_matrix(run, work_dir=None, max_workers=None):
+def solve_split_matrix(run, work_dir=None, max_workers=None, executor=None):
     """Build every row of `run`'s split matrix (workbench.splits.
     run_split_matrix) and solve the ones that built successfully, in
     parallel.  Returns a list of (SplitRow, BatchOutcome | None) pairs
     in row order -- BatchOutcome is None for a row whose SplitRow.error
     is already set, since it never reaches the solver at all (the same
-    build/solve isolation boundary Phase 1 established)."""
+    build/solve isolation boundary Phase 1 established).
+
+    `executor`: an optional `workbench.executor.Executor` (M30 Phase
+    12) -- defaults to the local `ProcessPoolExecutor` path via
+    `run_jobs_parallel` when omitted, so existing callers are
+    unaffected. Pass a `workbench.remote_executor.RemoteExecutor` to
+    dispatch the same rows to remote workers instead
+    (G-PROTOCOL-PARITY: this function does not change either way)."""
     from .adapters.spec import spec_from_domain
     from .splits import run_split_matrix
 
@@ -118,7 +125,10 @@ def solve_split_matrix(run, work_dir=None, max_workers=None):
         jobs.append((job_path, out_path))
         solvable_idx.append(i)
 
-    outcomes = run_jobs_parallel(jobs, max_workers=max_workers)
+    if executor is None:
+        outcomes = run_jobs_parallel(jobs, max_workers=max_workers)
+    else:
+        outcomes = executor.run_jobs(jobs, max_workers=max_workers)
     paired = [None] * len(rows)
     for idx, outcome in zip(solvable_idx, outcomes):
         paired[idx] = outcome
