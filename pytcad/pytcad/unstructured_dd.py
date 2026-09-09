@@ -59,6 +59,10 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
+# M31 P4b: symmetric Dirichlet elimination (row AND column), so the
+# assembled Jacobian is transposable -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from .constants import Q, EPS0
 from .device import (
     NewtonOptions, thermal_voltage, bernoulli, dbernoulli, D0_REF,
@@ -339,9 +343,14 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
             rows = 3 * contact_idx + comp
             Jl[rows, :] = 0.0
             Jl[rows, rows] = 1.0
-        Jc = Jl.tocsc()
+        # Symmetric elimination -- see pytcad/dirichlet.py. All three
+        # components of every contact node are constrained, so the
+        # eliminated column set is the union over comp.
+        contact_rows = np.concatenate(
+            [3 * contact_idx + comp for comp in range(3)])
+        Jc, rhs = eliminate_csr(Jl.tocsr(), -F3.ravel(), contact_rows)
 
-        du = spsolve(Jc, -F3.ravel())
+        du = spsolve(Jc.tocsc(), rhs)
         dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
         dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
         n_old, p_old = n, p

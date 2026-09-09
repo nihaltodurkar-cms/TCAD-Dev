@@ -29,6 +29,9 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+# M31 P4b: symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
@@ -622,6 +625,9 @@ class Device2D:
             vals = np.concatenate([vals, np.ones_like(contact_k, dtype=float)])
 
         J = csr_matrix((vals, (rows, cols)), shape=(N, N))
+        self._dirichlet_rows_poisson = (
+            np.asarray(contact_k, dtype=int) if len(contact_k)
+            else np.zeros(0, dtype=int))
         return F, J
 
     # ------------------------------------------------------------------
@@ -639,7 +645,9 @@ class Device2D:
             # J.tocsc() this always used keeps this bit-identical while
             # adding the finiteness/singularity checks every other
             # Newton loop in this file already goes through.
-            d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(), method="direct")
+            Jd, rhs = eliminate_csr(J, -F.ravel(),
+                                    self._dirichlet_rows_poisson)
+            d, _ = linsolve.solve_linear(Jd.tocsc(), rhs, method="direct")
             d = d.reshape(Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
@@ -940,6 +948,13 @@ class Device2D:
             vals = np.concatenate([vals] + extra_vals)
 
         J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        # `strip_rows` is exactly the set of GENUINELY Dirichlet rows:
+        # the S_n/S_p branches above append to it only when S == 0, so a
+        # Robin row (which has real off-diagonal entries and is an
+        # equation, not a constraint) is correctly excluded. Recorded
+        # here so the solve site cannot re-derive it differently.
+        self._dirichlet_rows = (
+            strip_rows if strip_rows_list else np.zeros(0, dtype=int))
         # F_n, F_p (returned raw, pre-Dirichlet-overwrite, shape (Ny,Nx),
         # scaled units) are the box-integration continuity residuals.  At an
         # interior node they are ~0 by construction of the Newton solve; AT
@@ -980,11 +995,15 @@ class Device2D:
             if self.models.surface_mobility:
                 self._update_surface_mobility(psi)
             F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
+            # Symmetric Dirichlet elimination; F is left alone because
+            # the convergence test below reads it. See
+            # pytcad/dirichlet.py.
+            Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
             if opts.linsolve == "direct":
-                du = spsolve(J.tocsc(), -F)
+                du = spsolve(Jd.tocsc(), rhs)
             else:
                 du, _ = linsolve.solve_linear(
-                    J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
+                    Jd, rhs, method=opts.linsolve, rtol=opts.linsolve_rtol,
                     block_size=3)
             dpsi = du[0::3].reshape(self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Ny, self.Nx)

@@ -163,6 +163,30 @@ If you add a kernel, follow that; do not assume two libm builds agree
 without measuring it (as `core/src/process/diffuse.cpp` documents for the
 one exception).
 
+## Performance claims (M32)
+
+There is a benchmark suite. Use it.
+
+```bash
+cd pytcad
+OPENBLAS_NUM_THREADS=1 conda run -n TCAD python -m benchmarks            # quick
+OPENBLAS_NUM_THREADS=1 conda run -n TCAD python -m benchmarks --size full
+```
+
+`Architecture_Master_Plan.md` section 36 forbids claiming the solver is
+"HPC-ready" (or fast, or scalable) without correctness + scaling + memory
++ reproducibility in a table. `benchmarks/` is how that table gets made,
+and `benchmarks/BASELINE.md` is the checked-in reference to compare a
+change against. **A performance number that did not come from a
+benchmark run does not belong in a plan doc or a commit message** -- the
+project already has a drawer of one-off measurements that cannot be
+re-run, which is the problem M32 exists to end.
+
+Read `benchmarks/README.md` before quoting a column: `assembly` is
+residual and Jacobian together, `asm calls` is NOT the Newton iteration
+count, and `py peak MB` is a floor rather than a measurement. Each of
+those has a reason, and each is gated so it cannot be quietly dropped.
+
 Two environment variables govern the boundary:
 
 | var | effect |

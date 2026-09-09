@@ -19,6 +19,10 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
+# M31 P4b: symmetric Dirichlet elimination (row AND column), so the
+# assembled Jacobian is transposable -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from .constants import Q, EPS0
 from .device import NewtonOptions, thermal_voltage
 from .device2d import _ohmic_values
@@ -133,9 +137,14 @@ def solve_poisson_equilibrium(nodes, triangles, edge_list, node_areas,
         J = J.tolil()
         J[contact_idx, :] = 0.0
         J[contact_idx, contact_idx] = 1.0
-        J = J.tocsc()
+        # Symmetric elimination: drop the constrained COLUMNS too,
+        # substituting their known contribution into the rhs. Same
+        # system, same solution -- but J^T now imposes the same
+        # constraint, which row-only elimination does not. See
+        # pytcad/dirichlet.py.
+        J, rhs = eliminate_csr(J.tocsr(), -F, contact_idx)
 
-        d = spsolve(J, -F)
+        d = spsolve(J.tocsc(), rhs)
         d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
         psi = psi + d
         if opts.verbose:

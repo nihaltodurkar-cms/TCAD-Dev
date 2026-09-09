@@ -142,6 +142,10 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
+# M31 P4b: symmetric Dirichlet elimination (row AND column), so the
+# assembled Jacobian is transposable -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from .constants import Q, EPS0
 from .device import NewtonOptions, thermal_voltage, bernoulli, dbernoulli, D0_REF
 from .device2d import _ohmic_values
@@ -287,9 +291,11 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
         F[contact_idx] = psi[contact_idx] - contact_psi0
         J[contact_idx, :] = 0.0
         J[contact_idx, contact_idx] = 1.0
+        # Symmetric elimination -- see pytcad/dirichlet.py.
+        J, poisson_rhs = eliminate_csr(J.tocsr(), -F, contact_idx)
         J = J.tocsc()
 
-        d = spsolve(J, -F)
+        d = spsolve(J, poisson_rhs)
         d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
         psi = psi + d
         if opts.verbose:
@@ -529,9 +535,12 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             rows = 3 * contact_idx + comp
             Jl[rows, :] = 0.0
             Jl[rows, rows] = 1.0
-        Jc = Jl.tocsc()
+        # Symmetric elimination -- see pytcad/dirichlet.py.
+        contact_rows = np.concatenate(
+            [3 * contact_idx + comp for comp in range(3)])
+        Jc, rhs = eliminate_csr(Jl.tocsr(), -F3.ravel(), contact_rows)
 
-        du = spsolve(Jc, -F3.ravel())
+        du = spsolve(Jc.tocsc(), rhs)
         dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
         dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
         n_old, p_old = n, p

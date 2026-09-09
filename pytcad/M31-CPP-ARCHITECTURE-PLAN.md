@@ -1,7 +1,8 @@
 # M31 -- C++ / Python / Qt production architecture
 
-Status as of 2026-09-09: **P0, P1, P2, P2b, P3a, P3b and P4 LANDED.**
-P5 next.
+Status as of 2026-09-10: **P0, P1, P2, P2b, P3a, P3b, P4 and P4b
+LANDED.** P5 next -- and P4b has now cleared its first adjoint-readiness
+gate on the Python path.
 P2's full-suite validation (see "Outstanding" at the end of the P2
 section) has now been run: `PYTCAD_ACCEL=0` fast suite (1404 passed,
 1 xfailed, 39 warnings), `PYTCAD_ACCEL=1` fast suite (identical: 1404
@@ -119,6 +120,7 @@ be checked.
 | P3a | `method="petsc"` in `linsolve.py` via petsc4py (no C++ needed) | **LANDED** |
 | P3b | the same configuration moved into `core/solver/` | **LANDED** |
 | P4 | process/particle kernels (MC implant, TED, diffusion, AMR indicators) | **LANDED** |
+| P4b | symmetric Dirichlet elimination, Python path (adjoint-readiness) | **LANDED** |
 | P5 | assembly + Newton in C++; the `pytcad_cpp` backend appears | next -- **see adjoint gates below** |
 | P6 | native `QQuickVTKItem` 3D viewport | |
 | P7 | MPI + GPU via PETSc; `DMPlex` | |
@@ -743,6 +745,120 @@ warning the Python loop used to raise.
 
 The P4 kernels are PETSc-independent, so the middle layer is only
 confirming that adding them did not accidentally couple them to it.
+
+---
+
+## P4b -- LANDED (symmetric Dirichlet elimination, Python path)
+
+Closes the FIRST of the two P5 adjoint-readiness gates below, on the
+Python path, **before** P5 starts -- which is the whole point: that
+addendum says the decision is free until the assembler lands and a
+rewrite afterwards.
+
+### Amendment record
+
+This edits `pytcad/pytcad`'s frozen numerical core, so it goes through
+the M11-S3 amendment mechanism:
+
+* **Sign-off:** requested explicitly by the user (2026-09-10), scoped as
+  "an isolated Python-path change, before M31 P5", with deliberate
+  golden re-baselining authorised.
+* **Goldens committed before the edit:** **NO -- and it is not possible
+  to satisfy this rule as written.** `.gitignore:29` excludes `*.npz`,
+  so `tests/goldens/**` has never been tracked by git and no commit has
+  ever contained a golden. (This was mis-stated during the work as
+  "HEAD holds the pre-edit set"; it does not.) Regenerating therefore
+  overwrote the only copies on disk.
+
+  What was done instead, and is stronger than a git diff: the pre-edit
+  goldens were RECONSTRUCTED by shimming `eliminate_csr` back to
+  row-only behaviour and re-running the regeneration. All six files came
+  back byte-identical to their pre-edit md5sums. That proves both that
+  the old baseline is recoverable on demand and that this change is the
+  SOLE cause of the difference -- nothing else in the tree contributed.
+
+  **Process gap, worth fixing separately:** a hard rule in `AGENTS.md`
+  requires goldens to be "committed before the edit", and `.gitignore`
+  makes that impossible. Either carve `tests/goldens/**` out of the
+  `*.npz` ignore, or rewrite the rule to say what is actually achievable
+  (reconstruct-and-compare, as done here). Right now the rule reads as
+  satisfied by a step nobody can perform.
+* **FD-Jacobian-first:** the substitution is proved exact in
+  `tests/test_dirichlet_elimination.py` (25 gates) before any core used
+  it, and every existing FD-Jacobian gate still passes unchanged.
+* **Bit-identity off-path:** N/A -- there is no "off" path here; instead
+  the equilibrium goldens are bit-identical (below), which is the
+  strongest available equivalent.
+
+### What changed
+
+`J[k,:] = 0; J[k,k] = 1` (row only) became row **and column**
+elimination with the known value substituted into the RHS. One shared
+helper, `pytcad/dirichlet.py`, applied at every Dirichlet site in the
+core: `device.py` (equilibrium Poisson, coupled bias, DG-coupled
+equilibrium), `device2d.py` (x2), `device3d.py` (x2), `moscap.py` (x2),
+`unstructured_poisson.py`, `unstructured_dd.py`, `unstructured_dd3d.py`
+(x2).
+
+Three things were deliberately NOT done:
+
+1. **`F` is never modified.** The substitution changes the RHS only, at
+   the solve site. Folding it into the residual would have been tidier
+   but `F` is read by M15's backtracking merit function and by every
+   convergence test, so it would have changed damping decisions rather
+   than only the arithmetic.
+2. **Robin rows are never eliminated.** M14's `S_n`/`S_p` surface
+   recombination replaces the Dirichlet density rows with a flux
+   balance. A Robin row is an EQUATION, not a constraint; eliminating
+   its column would delete real physics. The Dirichlet set is recorded
+   by the assembler itself (`self._dirichlet_rows`) rather than
+   re-derived at the solve site, so the two cannot drift apart, and
+   `test_robin_rows_are_never_eliminated` pins it: 6 constrained rows at
+   `S=0`, exactly 2 (the psi rows) when `S != 0`.
+3. **The C++ path is untouched**, per the requested scope.
+
+### Why the physics is unchanged, and why goldens still moved
+
+Symmetric elimination is a SUBSTITUTION of known values, so it solves
+the identical system -- same solution, exactly, in exact arithmetic.
+What changes is which matrix reaches SuperLU, hence pivoting, hence
+roundoff.
+
+That prediction is borne out precisely:
+
+| golden | moved? | why |
+|---|---|---|
+| `m13/diode1d_eq.npz` | **no, byte-identical** | at equilibrium psi starts exactly at the contact value, so the substituted term is identically zero |
+| `m13/hetero1d_eq.npz` | **no, byte-identical** | same |
+| `m13/resistor3d_eq.npz` | **no, byte-identical** | same |
+| `m13/diode1d_fwd.npz` | yes | bias: the contact value moves, so the substitution is non-trivial |
+| `m13/diode2d_eq.npz` | yes | the 2D initial guess is not exactly at the contact value |
+| `TAT_FW_DIGEST`, `HETERO_FW_DIGEST` | yes | bias paths |
+| `TAT_EQ_DIGEST` | **no** | equilibrium |
+
+### The measurement that justified the re-baseline
+
+State variables moved by at most **2.1e-15** relative (psi <= 1.1e-14).
+Currents moved more -- `Jp` by 4.3e-05 on the heterojunction path -- and
+that was chased rather than waved through, because the worst case sits
+at the PEAK current, not on a cancelling near-zero value.
+
+The answer: those currents are inherently that badly conditioned. A
+**one-ulp** perturbation of the converged `psi`, pushed through the
+unchanged current code, moves `Jn` by **5.6e-04** and `Jp` by
+**2.4e-04** relative to peak -- an order of magnitude MORE than the
+elimination change produced. The change is smaller than one ulp of input
+noise on a quantity whose conditioning is ~1e-4/ulp.
+
+### A finding worth acting on separately
+
+**`tests/goldens/m14/` is read by no test.** Only `test_m13_goldens.py`
+and `test_m22_linsolve.py` load goldens, both from `m13/`. The four
+files in `m14/` (`diode1d_eq`, `diode1d_fwd`, `diode2d_eq`,
+`mosfet_eq`, 515 KB) are dead artifacts gating nothing. They are
+therefore unaffected by this change -- by not being wired up, not by
+being insensitive to it. Either wire them into a gate or delete them;
+leaving them looks like coverage that does not exist.
 
 ---
 

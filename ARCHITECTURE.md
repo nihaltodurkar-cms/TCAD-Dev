@@ -1642,17 +1642,21 @@ Fixing it changes physics and must land on both paths at once.
 Each row names the 4b.1 gap or plan-doc limitation it retires, so the
 justification is checkable rather than asserted.
 
-M32  BENCHMARK SUITE & PERFORMANCE DASHBOARD              [M]
+M32  BENCHMARK SUITE & PERFORMANCE DASHBOARD              [M]  LANDED
      Architecture_Master_Plan.md section 34 defines cases B1-B7 (1D
      Poisson -> 3D SiC MOSFET -> 3D GaN HEMT -> large synthetic 3D)
      and section 35 a dashboard (DOF, NNZ, memory, assembly/residual/
      Jacobian/solve times, Newton iterations, strong/weak scaling, GPU
-     speedup). NEITHER IS IMPLEMENTED. Section 36's rule -- no
-     "HPC-ready" claim without correctness + scaling + memory +
-     reproducibility in a table -- cannot currently be satisfied by
-     anything. This is the smallest milestone here and it gates the
-     honesty of every performance claim M31 P7 will want to make.
-     Do it EARLY, not after P7. Depends: M31 P3a.
+     speedup). BOTH NOW EXIST: `pytcad/benchmarks/`, run with
+     `python -m benchmarks`, gated by tests/test_m32_benchmarks.py,
+     with a checked-in baseline at benchmarks/BASELINE.md. Section 36's
+     rule -- no "HPC-ready" claim without correctness + scaling +
+     memory + reproducibility in a table -- is now satisfiable.
+     Plan and honest limits: pytcad/M32-BENCHMARK-PLAN.md. Three
+     section-35 columns are deliberately NOT reported as specified
+     (residual/Jacobian split, Newton iterations, true memory) because
+     they cannot be measured honestly from outside the frozen core --
+     see the plan doc. Depends: M31 P3a (landed).
 
 M33  SURFACE/INTERFACE PHYSICS COMPLETION                 [L]
      Retires three long-standing 4b.1 [missing] rows: surface
@@ -1714,6 +1718,10 @@ M40  OPTICAL GENERATION / PHOTONICS                       [L]
 ------------------------------------------------------------------------
 Spine:  M31 P3a -> M32 -> M31 P4..P7 -> M35
         (the spine is "make it fast, PROVE it, then spend the speed")
+        STATUS: P3a, P3b, P4 and M32 have landed. P5 is next.
+        M32 landed AFTER P4 rather than before it -- so P4's own
+        speedups were measured by hand, not by the harness, and should
+        be re-measured through it before being quoted again.
 
 M32 sits deliberately INSIDE M31 rather than after it: P7's whole
 purpose is scaling claims, and section 36 forbids making them without

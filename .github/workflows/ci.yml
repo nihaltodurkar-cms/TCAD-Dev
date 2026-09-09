@@ -126,6 +126,23 @@ jobs:
         env:
           PYTCAD_ACCEL: "1"
         run: python -m pytest tests/test_accel_parity.py -q -m slow
+      # M32. Not a timing gate -- a CI runner's absolute speed is not
+      # reproducible enough to assert on, and a threshold that fails on a
+      # noisy runner teaches everyone to ignore it. What this proves is
+      # that every case still BUILDS AND RUNS and that the dashboard is
+      # still produced, which is what stops the suite rotting the way the
+      # G-E floors above silently did.
+      - name: Benchmark suite runs (M32)
+        working-directory: pytcad
+        run: |
+          python -m benchmarks --json benchmark-report.json --out benchmark-report.md
+          cat benchmark-report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: |
+            pytcad/benchmark-report.md
+            pytcad/benchmark-report.json
 
   # The two jobs above both build WITHOUT PETSc -- pip has no practical
   # PETSc wheel, which is exactly why M31-CPP-ARCHITECTURE-PLAN.md sec 2

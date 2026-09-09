@@ -66,6 +66,10 @@ M_E_CONST = 9.1093837015e-31      # kg
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+# M31 P4b: symmetric Dirichlet elimination (row AND column) so the
+# assembled Jacobian is transposable -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
@@ -781,6 +785,13 @@ class Device1D:
                                    np.arange(1, self.N)])
             vals = np.concatenate([main, lower, upper])
             A = csr_matrix((vals, (rows, cols)), shape=(self.N, self.N))
+            # Symmetric Dirichlet elimination: both contact ROWS are
+            # already e_k (main[0]=main[-1]=1, upper[0]=lower[-1]=0),
+            # but their COLUMNS still carry the neighbour couplings
+            # lower[0] and upper[-1]. Substituting those out leaves the
+            # same system with a transposable matrix -- see
+            # pytcad/dirichlet.py.
+            A, eq_rhs = eliminate_csr(A, -F, np.array([0, self.N - 1]))
 
             # linsolve.solve_linear(method="direct") no longer
             # reformats A before calling spsolve (that reformatting was
@@ -788,7 +799,7 @@ class Device1D:
             # actually bit-identical to the raw spsolve(A, -F) call
             # while adding the finiteness/singularity checks every
             # other Newton loop in this file already goes through.
-            d, _ = linsolve.solve_linear(A, -F, method="direct")
+            d, _ = linsolve.solve_linear(A, eq_rhs, method="direct")
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
             psi = psi + d
             if opts.verbose:
@@ -947,6 +958,12 @@ class Device1D:
                     pref[i] * ddd_dgip1 * dg_dLam_ip1)
 
         J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        # Pinned rows of the coupled (psi, Lambda_n, Lambda_p) system:
+        # psi at both ohmic contacts, Lambda at both ends (the Lambda=0
+        # boundary the quantum potential is defined with).
+        self._dg_dirichlet_rows_eq = np.array(
+            [3 * 0, 3 * (N - 1),
+             1, 2, 3 * (N - 1) + 1, 3 * (N - 1) + 2], dtype=int)
         return F, J
 
     def _dg_newton_solve_eq(self, psi, Lam_n, Lam_p, bc, gamma, max_iter, tol):
@@ -956,8 +973,9 @@ class Device1D:
         step; reports via the `converged` flag instead."""
         for _ in range(max_iter):
             F, J = self._dg_residual_jacobian_eq(psi, Lam_n, Lam_p, bc, gamma=gamma)
+            Jd, rhs = eliminate_csr(J, -F, self._dg_dirichlet_rows_eq)
             try:
-                d, _ = linsolve.solve_linear(J.tocsc(), -F, method="direct")
+                d, _ = linsolve.solve_linear(Jd.tocsc(), rhs, method="direct")
             except linsolve.LinearSolveError:
                 return psi, Lam_n, Lam_p, False
             if not np.all(np.isfinite(d)):
@@ -1564,10 +1582,17 @@ class Device1D:
         # (test_m14_surface_mobility.py).
         S_n_s = self.models.S_n * self.LD / D0_REF
         S_p_s = self.models.S_p * self.LD / D0_REF
+        # Which rows are GENUINELY Dirichlet -- recorded here rather
+        # than re-derived at the solve site, so the S_n/S_p branch below
+        # cannot drift out of step with it. A Robin row (S != 0) has
+        # real off-diagonal entries and must NOT be eliminated: it is
+        # not a constraint, it is an equation.
+        dirichlet_rows = []
         for k, node in enumerate((0, N - 1)):
             psi0, n0, p0 = bc[k]
             F[3 * node] = psi[node] - psi0
             add(3 * node, 3 * node, 1.0)
+            dirichlet_rows.append(3 * node)
             edge = 0 if node == 0 else N - 2   # the one edge touching this node
             other = node + 1 if node == 0 else node - 1
             left = node == 0                   # is `node` the LEFT end of `edge`?
@@ -1576,6 +1601,7 @@ class Device1D:
             if S_n_s == 0.0:
                 F[3 * node + 1] = n[node] - n0
                 add(3 * node + 1, 3 * node + 1, 1.0)
+                dirichlet_rows.append(3 * node + 1)
             else:
                 F[3 * node + 1] = Jn[edge] + bsign_n * S_n_s * (n[node] - n0)
                 dpsi_node = -dJn_dpsiR[edge] if left else dJn_dpsiR[edge]
@@ -1604,6 +1630,7 @@ class Device1D:
             if S_p_s == 0.0:
                 F[3 * node + 2] = p[node] - p0
                 add(3 * node + 2, 3 * node + 2, 1.0)
+                dirichlet_rows.append(3 * node + 2)
             else:
                 F[3 * node + 2] = Jp[edge] + bsign_p * S_p_s * (p[node] - p0)
                 dpsi_node = -dJp_dpsiR[edge] if left else dJp_dpsiR[edge]
@@ -1627,6 +1654,7 @@ class Device1D:
         J = csr_matrix((np.concatenate(vals),
                         (np.concatenate(rows), np.concatenate(cols))),
                        shape=(3 * N, 3 * N))
+        self._dirichlet_rows = np.array(sorted(dirichlet_rows), dtype=int)
         return F, J, Jn, Jp
 
     # ------------------------------------------------------------------
@@ -1707,12 +1735,19 @@ class Device1D:
                     self._set_edge_diffusivity(mu_n, mu_p)
 
                 F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
+                # Symmetric Dirichlet elimination. F itself is left
+                # ALONE -- the backtracking merit below and the
+                # convergence test both read it, and folding the
+                # substitution into it would change damping decisions
+                # rather than only the arithmetic. See
+                # pytcad/dirichlet.py.
+                Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
                 if opts.linsolve == "direct":
-                    du = spsolve(J.tocsc(), -F)
+                    du = spsolve(Jd.tocsc(), rhs)
                 else:
                     du, _ = linsolve.solve_linear(
-                        J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
-                        block_size=3)
+                        Jd, rhs, method=opts.linsolve,
+                        rtol=opts.linsolve_rtol, block_size=3)
                 dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
 
                 dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)

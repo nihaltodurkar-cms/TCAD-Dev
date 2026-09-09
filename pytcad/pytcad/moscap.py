@@ -48,6 +48,9 @@ import warnings
 import numpy as np
 from scipy.sparse import diags, csr_matrix
 
+# M31 P4b: symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from . import linsolve
 from .constants import KB_EV, Q, EPS0, thermal_voltage, trapz
 from .device import fd_density, fd_ddensity_deta
@@ -272,12 +275,17 @@ class MOSCapacitor:
             lo[-1] = 0.0
 
             A = diags([lo, main, up], [-1, 0, 1], format="csc")
+            # Symmetric Dirichlet elimination. ONLY the far node: node 0
+            # carries the gate (Robin) row -- kappa/dit coupling -- and
+            # eliminating it would delete real physics, not a
+            # constraint. See pytcad/dirichlet.py.
+            A, mos_rhs = eliminate_csr(A.tocsr(), -F, [n_nodes - 1])
             # linsolve.solve_linear(method="direct") no longer
             # reformats A before calling spsolve, so this stays
             # bit-identical to the raw spsolve(A, -F) call while adding
             # the finiteness/singularity checks a raw call silently
             # skips.
-            d, _ = linsolve.solve_linear(A, -F, method="direct")
+            d, _ = linsolve.solve_linear(A.tocsc(), mos_rhs, method="direct")
             d = np.clip(d, -3.0, 3.0)
             psi = psi + d
             if np.abs(d).max() < tol:
@@ -492,6 +500,11 @@ class MOSCapacitor:
                     pref * ddd_dgip1 * dg_dLam_ip1)
 
         J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        # The pinned rows of the coupled (psi, Lambda_n, Lambda_p)
+        # system: psi at the far node, and Lambda at BOTH ends (the
+        # Lambda=0 boundary the quantum potential is defined with).
+        self._dg_dirichlet_rows = np.array(
+            [3 * (N - 1), 1, 2, 3 * (N - 1) + 1, 3 * (N - 1) + 2], dtype=int)
         return F, J
 
     # ------------------------------------------------------------------
@@ -507,8 +520,9 @@ class MOSCapacitor:
         for _ in range(max_iter):
             F, J = self._dg_residual_jacobian(
                 psi, Lam_n, Lam_p, Vg_s, Vfb_s, h, dV, gamma=gamma)
+            Jd, rhs = eliminate_csr(J, -F, self._dg_dirichlet_rows)
             try:
-                d, _ = linsolve.solve_linear(J.tocsc(), -F, method="direct")
+                d, _ = linsolve.solve_linear(Jd.tocsc(), rhs, method="direct")
             except linsolve.LinearSolveError:
                 return psi, Lam_n, Lam_p, False
             if not np.all(np.isfinite(d)):

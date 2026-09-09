@@ -36,6 +36,9 @@ import warnings
 import numpy as np
 from scipy.sparse import csr_matrix
 
+# M31 P4b: symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+from .dirichlet import eliminate_csr
+
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
@@ -548,6 +551,9 @@ class Device3D:
             vals = np.concatenate([vals, np.ones_like(contact_k, dtype=float)])
 
         J = csr_matrix((vals, (rows, cols)), shape=(N, N))
+        self._dirichlet_rows_poisson = (
+            np.asarray(contact_k, dtype=int) if len(contact_k)
+            else np.zeros(0, dtype=int))
         return F, J
 
     # ------------------------------------------------------------------
@@ -606,8 +612,11 @@ class Device3D:
             # opts.linsolve="direct" never enters the except branch at
             # all, so this is bit-identical unless the caller opts in,
             # exactly as solve_bias below already does.
+            # Symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+            Jd, rhs = eliminate_csr(J, -F.ravel(),
+                                    self._dirichlet_rows_poisson)
             try:
-                d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
+                d, _ = linsolve.solve_linear(Jd.tocsc(), rhs,
                                              method=opts.linsolve,
                                              rtol=opts.linsolve_rtol)
             except linsolve.LinearSolveError:
@@ -617,7 +626,7 @@ class Device3D:
                     print(f"    eq it {it:2d}  {opts.linsolve} did not "
                           "converge -- falling back to direct for this "
                           "iteration")
-                d, _ = linsolve.solve_linear(J.tocsc(), -F.ravel(),
+                d, _ = linsolve.solve_linear(Jd.tocsc(), rhs,
                                              method="direct")
             d = d.reshape(Nz, Ny, Nx)
             d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
@@ -938,6 +947,11 @@ class Device3D:
                 vals = np.concatenate([vals, np.ones_like(r, dtype=float)])
 
         J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        # Every component of every contact node is Dirichlet here (3D has
+        # no S_n/S_p Robin variant), so the eliminated set is the full
+        # all_contact_rows. See pytcad/dirichlet.py.
+        self._dirichlet_rows = (
+            all_contact_rows if len(contact_k) else np.zeros(0, dtype=int))
         return F3.ravel(), J, Jn_x, Jn_y, Jn_z, Jp_x, Jp_y, Jp_z, F_n, F_p
 
     # ------------------------------------------------------------------
@@ -974,6 +988,8 @@ class Device3D:
 
         for it in range(opts.max_iter):
             F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
+            # Symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+            Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
             if opts.linsolve == "direct":
                 # linsolve.solve_linear(method="direct") is documented
                 # bit-identical to a raw spsolve call (see its own
@@ -981,7 +997,7 @@ class Device3D:
                 # calling spsolve directly, buys the MatrixRankWarning-
                 # as-error guard for free with no behavior change,
                 # matching solve_equilibrium's primary direct branch.
-                du, _ = linsolve.solve_linear(J, -F, method="direct")
+                du, _ = linsolve.solve_linear(Jd, rhs, method="direct")
             else:
                 # Same fallback contract as solve_equilibrium above: a
                 # requested iterative method is tried first for speed,
@@ -999,14 +1015,14 @@ class Device3D:
                 # the next Newton iteration.
                 try:
                     du, _ = linsolve.solve_linear(
-                        J, -F, method=opts.linsolve, rtol=opts.linsolve_rtol,
-                        block_size=3)
+                        Jd, rhs, method=opts.linsolve,
+                        rtol=opts.linsolve_rtol, block_size=3)
                 except linsolve.LinearSolveError:
                     if opts.verbose:
                         print(f"    solve_bias it {it:2d}  {opts.linsolve} "
                               "did not converge -- falling back to direct "
                               "for this iteration")
-                    du, _ = linsolve.solve_linear(J, -F, method="direct")
+                    du, _ = linsolve.solve_linear(Jd, rhs, method="direct")
             dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)

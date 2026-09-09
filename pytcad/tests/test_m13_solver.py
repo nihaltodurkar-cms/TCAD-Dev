@@ -361,10 +361,25 @@ def test_g6b_fd_on_nondegenerate_equivalence():
 # a dedicated commit stating so.
 TAT_EQ_DIGEST = ("8339b19ccd5944acd7d20768c16c5379"
                  "364548397effee35b78eb38fcfde7db5")
-TAT_FW_DIGEST = ("3a49e10df26a11c99f9f64b833bf9de6"
-                 "56ca7212e09a9940c1be2730a0537fe4")
-HETERO_FW_DIGEST = ("3594c906ad475c858442c393526b6763"
-                    "25ddbbd1adac6fe0535f0b3ccde829b6")
+# RE-BASELINED 2026-09-10 for symmetric Dirichlet elimination (M31 P4b,
+# pytcad/dirichlet.py). The two FORWARD-BIAS digests moved; TAT_EQ_DIGEST
+# above did NOT, because at equilibrium psi starts exactly at the contact
+# value, so the substituted term is identically zero and the arithmetic
+# is untouched.
+#
+# The move is roundoff, and that was MEASURED rather than assumed. State
+# variables shifted by <= 2.1e-15 relative (psi <= 1.1e-14). The currents
+# moved more in relative terms (Jn 3.6e-07, Jp 1.4e-06 on the TAT path;
+# Jp 4.3e-05 on the hetero path) -- but a ONE-ULP perturbation of the
+# converged psi, through the unchanged current code, moves those same
+# currents by 5.6e-04 (Jn) and 2.4e-04 (Jp). The elimination's effect is
+# therefore SMALLER than one ulp of input noise on a quantity whose
+# conditioning is ~1e-4/ulp; it is not a change in the physics, which is
+# exactly what the substitution argument in pytcad/dirichlet.py predicts.
+TAT_FW_DIGEST = ("029c2637d792a4b48c2d05a08088fd76"
+                 "44bcfc16bce11719e1cb1812a5ac6267")
+HETERO_FW_DIGEST = ("5828f729ec2eb91358e1b84cad07ad09"
+                    "24b23df69e0f5f5352794eb4c53d2788")
 # Re-captured 2026-09-04 on THIS machine's own numpy/scipy/BLAS build --
 # a prior re-capture (2026-09-03) was done in a different sandbox and its
 # digests did not reproduce here bit-for-bit (confirmed: same code, same
