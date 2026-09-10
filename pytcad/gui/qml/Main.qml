@@ -161,7 +161,8 @@ ApplicationWindow {
                                 { "label": "AC", "icon": "ac" },
                                 { "label": "Physics Lab", "icon": "physicsLab" },
                                 { "label": "Builder",   "icon": "builder" },
-                                { "label": "Study",     "icon": "study" }
+                                { "label": "Study",     "icon": "study" },
+                                { "label": "Compact Model", "icon": "builder" }
                             ]
                             delegate: TabButton {
                                 id: tabDelegate
@@ -319,6 +320,12 @@ ApplicationWindow {
                             Layout.fillHeight: true
                             controller: appController.studyManager
                             hostController: appController
+                        }
+                        CompactModelPanel {
+                            objectName: "compactModelPanel"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            controller: appController.compactModel
                         }
                     }
                 }

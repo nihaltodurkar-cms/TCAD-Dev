@@ -1,8 +1,9 @@
 # M38 -- TCAD-to-SPICE COMPACT MODEL EXTRACTION
 
 STATUS: Phases 1-3 LANDED 2026-09-10, all 33 gates green (see
-section 5 for the measured numbers). Phase 4 (GUI /
-deck statement) named but NOT in scope for this slice.
+section 5 for the measured numbers). Phase 4 (GUI panel + deck
+statement), left unscoped here, LANDED 2026-09-10 as its own slice --
+see `M38-PHASE4-PLAN.md` for its scope and gates.
 
 Parent roadmap: `ARCHITECTURE.md` section 4c.2 (M38) and 4c.3, whose
 cheapest-payoff-first ordering reads `M32 -> M38 -> M33 -> M34`. M32
@@ -52,7 +53,8 @@ OUT (named, so nobody assumes otherwise):
     that did not come from a benchmark run. Either it earns a
     `benchmarks/cases.py` row or the number is not quoted. This slice
     does not quote it.
-  * Phase 4: a GUI panel and a `workbench/workflow.py` deck statement.
+  * Phase 4: a GUI panel and a `workbench/workflow.py` deck statement --
+    LANDED 2026-09-10 as its own slice, see `M38-PHASE4-PLAN.md`.
 
 NO FROZEN-CORE EDIT. Everything lands in `workbench/compact.py` and
 `tests/test_m38_compact_model.py`. In particular `pytcad/mosfet.py` has

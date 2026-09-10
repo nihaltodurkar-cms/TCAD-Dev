@@ -190,6 +190,14 @@ class Device2D:
                 "Device1D only (M13 plan section 3.3).  Refusing rather "
                 "than silently ignoring the flag."
             )
+        if getattr(self.models, "thermionic", False):
+            raise NotImplementedError(
+                "Thermionic-emission interface flux "
+                "(Models(thermionic=True)) is implemented in Device1D "
+                "only (M33-S2 scope; a 2D port is a follow-up slice).  "
+                "Refusing rather than silently ignoring the flag -- a "
+                "silently dropped physics model is a hidden failure."
+            )
 
         self.fd = bool(getattr(self.models, "fd", False))
         if self.Ntot.max() > 1e19 and not self.fd:
@@ -281,6 +289,28 @@ class Device2D:
         self.ln_gn = np.log(self.nc_s / (self.nie / self.Ns))
         self.ln_gp = np.log(self.nv_s / (self.nie / self.Ns))
         self.eg_kt = egkt_f.reshape(shp)
+
+        # --- M33-S4: band-alignment shift, ported from Device1D's S1
+        # (device.py's own band_shift construction; see
+        # M33-S4-PLAN.md section 1 for the full derivation). ONE
+        # per-node offset referenced to node (0, 0), identically zero
+        # for a homojunction, so the default "nie" gauge stays
+        # bit-identical BY CONSTRUCTION (every new term below is an
+        # exact + 0.0), not by tolerance. ---
+        self.chi_arr = np.array([m.chi for m in self.mats]).reshape(shp)
+        if self.models.band_offset == "affinity":
+            if self.fd:
+                raise NotImplementedError(
+                    "Models(band_offset='affinity') with fd is refused: "
+                    "the FD eta-space contact solver and neutral-guess "
+                    "bisection both carry their own ln(Nc/nie) offset, "
+                    "and composing them with the affinity shift has not "
+                    "been derived or gated here (Device1D's S1 gives the "
+                    "same refusal for the same reason).")
+            s = self.ln_gn + self.chi_arr / self.VT
+            self.band_shift = s - s.flat[0]
+        else:
+            self.band_shift = np.zeros(shp)
 
         def hmean(lo, hi):
             return 2.0 * lo * hi / (lo + hi)
@@ -484,20 +514,31 @@ class Device2D:
     def _bc_contact_values(self, bc, V):
         """Ohmic values at a contact's nodes (M11-S4 per-node materials;
         M13: FD-aware -- the FD bisection reduces exactly to the
-        Boltzmann closed form)."""
+        Boltzmann closed form). M33-S4: n0/p0 come from local
+        neutrality + mass action and are gauge-free; only psi0's
+        reference moves, by -band_shift[j,i] (identical reasoning to
+        Device1D's _contact_values)."""
         j, i = bc.j, bc.i
         if self.fd:
-            return fd_ohmic_values(self.C[j, i], self.nc_s[j, i],
-                                   self.nv_s[j, i], self.ln_gn[j, i],
-                                   self.eg_kt[j, i], V, self.VT)
-        return _ohmic_values(self.C[j, i], self.nie_s[j, i], V, self.VT)
+            psi0, n0, p0 = fd_ohmic_values(
+                self.C[j, i], self.nc_s[j, i], self.nv_s[j, i],
+                self.ln_gn[j, i], self.eg_kt[j, i], V, self.VT)
+        else:
+            psi0, n0, p0 = _ohmic_values(
+                self.C[j, i], self.nie_s[j, i], V, self.VT)
+        return psi0 - self.band_shift[j, i], n0, p0
 
     def _bulk_psi_guess(self):
         """Neutral-bulk potential per node: eta-space root under FD
         (the Boltzmann arcsinh guess overshoots the FD gauge), the
         classic arcsinh otherwise."""
         if not self.fd:
-            return np.arcsinh(self.C / (2.0 * self.nie_s))
+            # M33-S4: the neutral guess is a statement about the
+            # CARRIER law, so it is derived in the shifted variable;
+            # -band_shift brings it back to the electrostatic
+            # potential the Poisson flux is written in (identical
+            # reasoning to Device1D's own equilibrium guess).
+            return np.arcsinh(self.C / (2.0 * self.nie_s)) - self.band_shift
         lo = -self.eg_kt - 80.0
         hi = float(FERMI_ETA_MAX)
 
@@ -553,8 +594,12 @@ class Device2D:
         if self.fd:
             n, p, dnp = self._fd_slaved_densities(psi)
         else:
-            n = nie * np.exp(np.clip(psi, -700, 700))
-            p = nie * np.exp(np.clip(-psi, -700, 700))
+            # M33-S4: carriers are slaved to psi + band_shift, not psi
+            # alone (identical to Device1D's own psi_c). Identically
+            # psi on the default "nie" gauge.
+            psi_c = psi + self.band_shift
+            n = nie * np.exp(np.clip(psi_c, -700, 700))
+            p = nie * np.exp(np.clip(-psi_c, -700, 700))
             dnp = n + p
 
         # M11-S4: position-dependent eps enters Poisson in FLUX form
@@ -599,8 +644,12 @@ class Device2D:
                 # neutral-bulk potential under the gate is psi_b, not 0 --
                 # matches moscap.py's validated arcsinh(C/(2*nie_s)) term,
                 # generalized to per-node doping (see moscap.py:135 and the
-                # code review that flagged this omission).
-                psi_b_local = np.arcsinh(self.C[bc.j, bc.i] / (2.0 * self.nie_s[bc.j, bc.i]))
+                # code review that flagged this omission). M33-S4: same
+                # -band_shift reference as _bulk_psi_guess; identically 0
+                # on the default "nie" gauge.
+                psi_b_local = (np.arcsinh(self.C[bc.j, bc.i]
+                                          / (2.0 * self.nie_s[bc.j, bc.i]))
+                               - self.band_shift[bc.j, bc.i])
                 F.ravel()[kk] += bc.kappa * w * (Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows = np.concatenate([rows, kk])
                 cols = np.concatenate([cols, kk])
@@ -676,8 +725,11 @@ class Device2D:
                     "applicability).  Refusing to extrapolate.")
             self.n, self.p, _ = self._fd_slaved_densities(psi)
         else:
-            self.n = self.nie_s * np.exp(np.clip(psi, -700, 700))
-            self.p = self.nie_s * np.exp(np.clip(-psi, -700, 700))
+            # M33-S4: matches _residual_jacobian_poisson's own psi_c
+            # slaving above; identically psi on the default gauge.
+            psi_c = psi + self.band_shift
+            self.n = self.nie_s * np.exp(np.clip(psi_c, -700, 700))
+            self.p = self.nie_s * np.exp(np.clip(-psi_c, -700, 700))
         return self
 
     # ------------------------------------------------------------------
@@ -706,14 +758,23 @@ class Device2D:
         # balance).  Composes additively with the fd nu-factors. ---
         dlnnie_x = np.log(self.nie_s[:, 1:] / self.nie_s[:, :-1])
         dlnnie_y = np.log(self.nie_s[1:, :] / self.nie_s[:-1, :])
+        # M33-S4: the affinity gauge adds ONE edge term, the SAME sign
+        # for both carriers (unlike dlnnie's opposite carrier signs --
+        # a rigid band shift moves both carriers' reference together;
+        # see device.py's own `ds` for the identical 1D argument).
+        # Constant under the Newton update exactly like dlnnie, so no
+        # Jacobian column changes. Identically zero on the default
+        # "nie" gauge and for a homojunction.
+        ds_x = self.band_shift[:, 1:] - self.band_shift[:, :-1]
+        ds_y = self.band_shift[1:, :] - self.band_shift[:-1, :]
 
         # --- Scharfetter-Gummel currents, per axis ---
-        dx = psi[:, 1:] - psi[:, :-1] + dlnnie_x
+        dx = psi[:, 1:] - psi[:, :-1] + dlnnie_x + ds_x
         if fd:
             dx = dx + (Ln[:, 1:] - Ln[:, :-1])
         Bp_x, Bm_x = bernoulli(dx), bernoulli(-dx)
         dBp_x, dBm_x = dbernoulli(dx), dbernoulli(-dx)
-        dxp = psi[:, 1:] - psi[:, :-1] - dlnnie_x
+        dxp = psi[:, 1:] - psi[:, :-1] - dlnnie_x + ds_x
         if fd:
             dxp = dxp - (Lp[:, 1:] - Lp[:, :-1])
         Bpx_h, Bmx_h = bernoulli(dxp), bernoulli(-dxp)
@@ -723,12 +784,12 @@ class Device2D:
         Jn_x = an_x * (n[:, 1:] * Bp_x - n[:, :-1] * Bm_x)
         Jp_x = -ap_x * (p[:, 1:] * Bmx_h - p[:, :-1] * Bpx_h)
 
-        dy = psi[1:, :] - psi[:-1, :] + dlnnie_y
+        dy = psi[1:, :] - psi[:-1, :] + dlnnie_y + ds_y
         if fd:
             dy = dy + (Ln[1:, :] - Ln[:-1, :])
         Bp_y, Bm_y = bernoulli(dy), bernoulli(-dy)
         dBp_y, dBm_y = dbernoulli(dy), dbernoulli(-dy)
-        dyp = psi[1:, :] - psi[:-1, :] - dlnnie_y
+        dyp = psi[1:, :] - psi[:-1, :] - dlnnie_y + ds_y
         if fd:
             dyp = dyp - (Lp[1:, :] - Lp[:-1, :])
         Bpy_h, Bmy_h = bernoulli(dyp), bernoulli(-dyp)
@@ -881,8 +942,11 @@ class Device2D:
                 w = dVx[bc.i]     # face length the gate flux crosses, per node
                 # see the matching comment in _residual_jacobian_poisson --
                 # psi is intrinsic-referenced, so the neutral-bulk potential
-                # under the gate is psi_b, not 0.
-                psi_b_local = np.arcsinh(self.C[bc.j, bc.i] / (2.0 * self.nie_s[bc.j, bc.i]))
+                # under the gate is psi_b, not 0. M33-S4: same -band_shift
+                # reference; identically 0 on the default "nie" gauge.
+                psi_b_local = (np.arcsinh(self.C[bc.j, bc.i]
+                                          / (2.0 * self.nie_s[bc.j, bc.i]))
+                               - self.band_shift[bc.j, bc.i])
                 F.reshape(N, 3)[kk, 0] += bc.kappa * w * (Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows.append(3 * kk); cols.append(3 * kk); vals.append(-bc.kappa * w)
 

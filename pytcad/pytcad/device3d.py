@@ -248,6 +248,13 @@ class Device3D:
                 "Device1D only (M13 plan section 3.3).  Refusing rather "
                 "than silently ignoring the flag."
             )
+        if getattr(self.models, "thermionic", False):
+            raise NotImplementedError(
+                "Thermionic-emission interface flux (Models(thermionic="
+                "True)) is implemented in Device1D only (M33-S2 scope; "
+                "2D/3D ports are a follow-up slice).  Refusing rather "
+                "than silently ignoring the flag."
+            )
 
         self.fd = bool(getattr(self.models, "fd", False))
         if self.Ntot.max() > 1e19 and not self.fd:
@@ -323,6 +330,28 @@ class Device3D:
         self.ln_gp = np.log(self.nv_s / self.nie_s)
         self.eg_kt = egkt_f.reshape(shp)
 
+        # --- M33-S5: band-alignment shift, ported from Device2D's S4
+        # (device2d.py's own band_shift construction; see
+        # M33-S5-PLAN.md section 0 for the full derivation). ONE
+        # per-node offset referenced to node (0, 0, 0), identically
+        # zero for a homojunction, so the default "nie" gauge stays
+        # bit-identical BY CONSTRUCTION (every new term below is an
+        # exact +0.0), not by tolerance. ---
+        self.chi_arr = np.array([m.chi for m in self.mats]).reshape(shp)
+        if self.models.band_offset == "affinity":
+            if self.fd:
+                raise NotImplementedError(
+                    "Models(band_offset='affinity') with fd is refused: "
+                    "the FD eta-space contact solver and neutral-guess "
+                    "bisection both carry their own ln(Nc/nie) offset, "
+                    "and composing them with the affinity shift has not "
+                    "been derived or gated here (Device1D's S1/Device2D's "
+                    "S4 give the same refusal for the same reason).")
+            s = self.ln_gn + self.chi_arr / self.VT
+            self.band_shift = s - s.flat[0]
+        else:
+            self.band_shift = np.zeros(shp)
+
         self.mu_n0 = mu_n_f.reshape(shp)
         self.mu_p0 = mu_p_f.reshape(shp)
 
@@ -386,7 +415,12 @@ class Device3D:
         """Neutral-bulk potential per node (FD eta-space root or the
         classic arcsinh)."""
         if not self.fd:
-            return np.arcsinh(self.C / (2.0 * self.nie_s))
+            # M33-S5: the neutral guess is a statement about the
+            # CARRIER law, so it is derived in the shifted variable;
+            # -band_shift brings it back to the electrostatic
+            # potential the Poisson flux is written in (identical
+            # reasoning to Device1D/2D's own equilibrium guess).
+            return np.arcsinh(self.C / (2.0 * self.nie_s)) - self.band_shift
         lo0 = -self.eg_kt - 80.0
         hi = np.full(self.C.shape, float(FERMI_ETA_MAX))
 
@@ -433,20 +467,24 @@ class Device3D:
         M13 FD-aware).  Memoized per (bc, V): pure function of fixed
         per-node data and the requested V (see the cache comment in
         __init__) -- callers hit this every Newton iteration with the
-        SAME V, so recomputation here would be pure waste."""
+        SAME V, so recomputation here would be pure waste.  M33-S5:
+        n0/p0 are gauge-free, only psi0's reference moves, by
+        -band_shift[k,j,i] (identical reasoning to Device1D/2D's own
+        contact-value fix)."""
         key = (id(bc), float(V))
         cached = self._bc_value_cache.get(key)
         if cached is not None:
             return cached
         k, j, i = bc.k, bc.j, bc.i
         if self.fd:
-            out = fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
+            psi0, n0, p0 = fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
                                   self.nv_s[k, j, i],
                                   self.ln_gn[k, j, i],
                                   self.eg_kt[k, j, i], V, self.VT)
         else:
-            out = _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
+            psi0, n0, p0 = _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
                                 V, self.VT)
+        out = (psi0 - self.band_shift[k, j, i], n0, p0)
         self._bc_value_cache[key] = out
         return out
 
@@ -472,8 +510,12 @@ class Device3D:
         if self.fd:
             n, p, dnp = self._fd_slaved_densities(psi)
         else:
-            n = nie * np.exp(np.clip(psi, -700, 700))
-            p = nie * np.exp(np.clip(-psi, -700, 700))
+            # M33-S5: carriers are slaved to psi + band_shift, not psi
+            # alone (identical to Device1D/2D's own psi_c). Identically
+            # psi on the default "nie" gauge.
+            psi_c = psi + self.band_shift
+            n = nie * np.exp(np.clip(psi_c, -700, 700))
+            p = nie * np.exp(np.clip(-psi_c, -700, 700))
             dnp = n + p
 
         # M11-S4: position-dependent eps in flux form (uniform => 1.0)
@@ -521,8 +563,11 @@ class Device3D:
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
                 w = self._gate_face_weight(bc)
                 Vg_s, Vfb_s = 0.0, bc.Vfb / self.VT   # equilibrium: gate at zero bias too
-                psi_b_local = np.arcsinh(
+                # M33-S5: same -band_shift reference as _bulk_psi_guess;
+                # identically 0 on the default "nie" gauge.
+                psi_b_local = (np.arcsinh(
                     self.C[bc.k, bc.j, bc.i] / (2.0 * self.nie_s[bc.k, bc.j, bc.i]))
+                    - self.band_shift[bc.k, bc.j, bc.i])
                 F_flat[kk] += bc.kappa * w * (
                     Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows = np.concatenate([rows, kk])
@@ -673,8 +718,14 @@ class Device3D:
                     "applicability).  Refusing to extrapolate.")
             self.n, self.p, _ = self._fd_slaved_densities(psi)
         else:
-            self.n = self.nie_s * np.exp(np.clip(psi, -700, 700))
-            self.p = self.nie_s * np.exp(np.clip(-psi, -700, 700))
+            # M33-S5: matches _residual_jacobian_poisson's own psi_c
+            # slaving (see M33-S4-PLAN.md section 4 for why Device1D's
+            # own equivalent final assignment does NOT do this -- a
+            # known, deliberately-unfixed asymmetry not replicated
+            # into new code here).
+            psi_c = psi + self.band_shift
+            self.n = self.nie_s * np.exp(np.clip(psi_c, -700, 700))
+            self.p = self.nie_s * np.exp(np.clip(-psi_c, -700, 700))
         return self
 
     # ------------------------------------------------------------------
@@ -704,15 +755,26 @@ class Device3D:
         dlnnie_y = np.log(self.nie_s[:, 1:, :] / self.nie_s[:, :-1, :])
         dlnnie_z = np.log(self.nie_s[1:, :, :] / self.nie_s[:-1, :, :])
 
+        # M33-S5: the affinity gauge adds ONE edge term, the SAME sign
+        # for both carriers (unlike dlnnie's opposite carrier signs --
+        # a rigid band shift moves both carriers' reference together;
+        # see device2d.py's own ds_x/ds_y for the identical 2D
+        # argument). Constant under the Newton update exactly like
+        # dlnnie, so no Jacobian column changes. Identically zero on
+        # the default "nie" gauge and for a homojunction.
+        ds_x = self.band_shift[:, :, 1:] - self.band_shift[:, :, :-1]
+        ds_y = self.band_shift[:, 1:, :] - self.band_shift[:, :-1, :]
+        ds_z = self.band_shift[1:, :, :] - self.band_shift[:-1, :, :]
+
         # --- Scharfetter-Gummel currents, per axis ---
-        dx = psi[:, :, 1:] - psi[:, :, :-1] + dlnnie_x
+        dx = psi[:, :, 1:] - psi[:, :, :-1] + dlnnie_x + ds_x
         if fd:
             dx = dx + (Ln[:, :, 1:] - Ln[:, :, :-1])
         Bp_x, Bm_x = bernoulli(dx), bernoulli(-dx)
         dBp_x, dBm_x = dbernoulli(dx), dbernoulli(-dx)
         an_x = self.dn_edge_x / hx[None, None, :]
         ap_x = self.dp_edge_x / hx[None, None, :]
-        dxp = psi[:, :, 1:] - psi[:, :, :-1] - dlnnie_x
+        dxp = psi[:, :, 1:] - psi[:, :, :-1] - dlnnie_x + ds_x
         if fd:
             dxp = dxp - (Lp[:, :, 1:] - Lp[:, :, :-1])
         Bpx_h, Bmx_h = bernoulli(dxp), bernoulli(-dxp)
@@ -722,12 +784,12 @@ class Device3D:
         Jn_x = an_x * (n[:, :, 1:] * Bp_x - n[:, :, :-1] * Bm_x)
         Jp_x = -ap_x * (p[:, :, 1:] * Bmx_h - p[:, :, :-1] * Bpx_h)
 
-        dy = psi[:, 1:, :] - psi[:, :-1, :] + dlnnie_y
+        dy = psi[:, 1:, :] - psi[:, :-1, :] + dlnnie_y + ds_y
         if fd:
             dy = dy + (Ln[:, 1:, :] - Ln[:, :-1, :])
         Bp_y, Bm_y = bernoulli(dy), bernoulli(-dy)
         dBp_y, dBm_y = dbernoulli(dy), dbernoulli(-dy)
-        dyp = psi[:, 1:, :] - psi[:, :-1, :] - dlnnie_y
+        dyp = psi[:, 1:, :] - psi[:, :-1, :] - dlnnie_y + ds_y
         if fd:
             dyp = dyp - (Lp[:, 1:, :] - Lp[:, :-1, :])
         Bpy_h, Bmy_h = bernoulli(dyp), bernoulli(-dyp)
@@ -737,12 +799,12 @@ class Device3D:
         Jn_y = an_y * (n[:, 1:, :] * Bp_y - n[:, :-1, :] * Bm_y)
         Jp_y = -ap_y * (p[:, 1:, :] * Bmy_h - p[:, :-1, :] * Bpy_h)
 
-        dz = psi[1:, :, :] - psi[:-1, :, :] + dlnnie_z
+        dz = psi[1:, :, :] - psi[:-1, :, :] + dlnnie_z + ds_z
         if fd:
             dz = dz + (Ln[1:, :, :] - Ln[:-1, :, :])
         Bp_z, Bm_z = bernoulli(dz), bernoulli(-dz)
         dBp_z, dBm_z = dbernoulli(dz), dbernoulli(-dz)
-        dzp = psi[1:, :, :] - psi[:-1, :, :] - dlnnie_z
+        dzp = psi[1:, :, :] - psi[:-1, :, :] - dlnnie_z + ds_z
         if fd:
             dzp = dzp - (Lp[1:, :, :] - Lp[:-1, :, :])
         Bpz_h, Bmz_h = bernoulli(dzp), bernoulli(-dzp)
@@ -926,8 +988,11 @@ class Device3D:
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
                 w = self._gate_face_weight(bc)
                 Vg_s, Vfb_s = bc.Vg / self.VT, bc.Vfb / self.VT
-                psi_b_local = np.arcsinh(
+                # M33-S5: same -band_shift reference as the
+                # equilibrium Robin term above.
+                psi_b_local = (np.arcsinh(
                     self.C[bc.k, bc.j, bc.i] / (2.0 * self.nie_s[bc.k, bc.j, bc.i]))
+                    - self.band_shift[bc.k, bc.j, bc.i])
                 F.reshape(N, 3)[kk, 0] += bc.kappa * w * (
                     Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows.append(3 * kk); cols.append(3 * kk); vals.append(-bc.kappa * w)

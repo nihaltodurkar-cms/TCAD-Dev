@@ -1660,12 +1660,25 @@ M32  BENCHMARK SUITE & PERFORMANCE DASHBOARD              [M]  LANDED
      they cannot be measured honestly from outside the frozen core --
      see the plan doc. Depends: M31 P3a (landed).
 
-M33  SURFACE/INTERFACE PHYSICS COMPLETION                 [L]
+M33  SURFACE/INTERFACE PHYSICS COMPLETION      [L] S1-S5 LANDED, FULLY DONE
      Retires three long-standing 4b.1 [missing] rows: surface
      recombination velocity, D_it in the MOS module, and the
      thermionic-emission heterojunction interface model (M11's own
      deferral). Also the natural home for M14's G-A once a non-
      paywalled calibration source is found. Depends: nothing in M31.
+     S1 (chi-aware band alignment) + S2 (thermionic emission) + S3
+     (cosmetic gate/comment fix) LANDED 2026-09-10 in Device1D --
+     `M33-INTERFACE-PLAN.md`. S4 (the same chi-aware alignment ported
+     to Device2D) LANDED 2026-09-10/11 -- `M33-S4-PLAN.md`, 16 gates,
+     suite green both ways, all `tests/goldens/m13/*.npz` md5-identical
+     off-path. S5 (the same port to Device3D and `unstructured_dd.py`)
+     LANDED 2026-09-11 -- `M33-S5-PLAN.md`, 21 gates, suite green both
+     ways; also found that `unstructured_dd.py`'s non-equilibrium-
+     slaved formulation makes an isotype junction's terminal current
+     PROVABLY gauge-invariant (an exact identity, not a numerical
+     coincidence -- see the plan doc). `unstructured_dd3d.py` stays
+     out of scope (no heterojunction mechanism to port at all). M33 is
+     now fully landed; no open piece remains on this line.
 
 M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)             [L]
      M16 shipped LOCAL Kane BTBT and explicitly deferred the nonlocal
@@ -1696,13 +1709,13 @@ M37  RELIABILITY & TRAP DYNAMICS                          [L]
      the obvious capability gap for a tool claiming device-engineering
      use. Depends: M33, M17.
 
-M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION      [M] PHASES 1-3 LANDED
+M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION           [M] ALL 4 PHASES LANDED
      M27 shipped mixed-mode device+circuit; the inverse -- fitting a
      compact model to simulated I-V/C-V and emitting a netlist -- is
      what makes TCAD useful to a circuit designer. Reuses M30 Part I's
      calibration/Nelder-Mead machinery directly. Depends: M30 Part I
      (landed), M27 (landed). Cheapest real-world payoff on this list.
-     LANDED 2026-09-10 (plan and every measured number:
+     Phases 1-3 LANDED 2026-09-10 (plan and every measured number:
      pytcad/M38-COMPACT-MODEL-PLAN.md; 33 gates in
      tests/test_m38_compact_model.py; all new code in
      workbench/compact.py, NO frozen-core edit). Fits circuit.py's own
@@ -1710,10 +1723,22 @@ M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION      [M] PHASES 1-3 LANDED
      and closes the loop through circuit.Circuit's MNA solver -- no
      external SPICE. Measured: a Device1D pn diode extracts N = 1.0031;
      a 2D Device2D MOSFET fits to 2.90% relative RMS with Vt0 within
-     0.91% of the closed-form long-channel threshold. NOT done, and
-     named as such: Phase 4 (GUI panel + workflow.py deck statement),
-     BSIM-class models, temperature/geometry scaling, AC/C-V
-     extraction. No performance claim is made -- section 36 forbids one
+     0.91% of the closed-form long-channel threshold. Phase 4 (GUI
+     panel + workflow.py deck statement) LANDED 2026-09-10 as its own
+     slice (pytcad/M38-PHASE4-PLAN.md; 13 gates across
+     gui/tests/test_compact_runner.py, gui/tests/test_compact_model_panel.py
+     and tests/test_m38_phase4_deck.py): a new
+     gui/services/compact_runner.py subprocess builds a real
+     Device1D/Device2D from scalar geometry, sweeps it, and fits
+     workbench/compact.py against the result; a new "Compact Model"
+     GUI tab (CompactModelController + CompactModelPanel.qml) drives it
+     end to end and shows the extracted parameters plus the emitted
+     .MODEL card; workflow.py gained a PARSE-ONLY `EXTRACT
+     model=diode|mosfet1 scale=<value>` deck statement, deliberately
+     not yet wired into batch/study execution. NOT done, and named as
+     such: BSIM-class models, temperature/geometry scaling, AC/C-V
+     extraction, PMOS in the GUI panel, and EXTRACT-driven batch
+     execution. No performance claim is made -- section 36 forbids one
      without a benchmark row, and M38 has none.
 
 M39  QUANTUM TRANSPORT (NEGF, 1D)                         [XL]
@@ -1776,12 +1801,13 @@ C++-gated:
 Cheapest-payoff-first, if optimizing for usefulness per session:
   M32 (small, unblocks honest claims) -> M38 (reuses landed machinery)
   -> M33 -> M34.
-  STATUS (2026-09-10): M32 LANDED, M38 Phases 1-3 LANDED. Next on this
-  line is M33 (surface/interface completion -- the thermionic-emission
-  heterojunction interface is the real remaining gap now that M14
-  landed D_it and S_n/S_p), then M34. Note that M33 DOES touch the
-  frozen numerical core and so needs the M11-S3 amendment mechanism,
-  unlike M32/M38, which did not.
+  STATUS (2026-09-11): M32 LANDED, M38 LANDED (all 4 phases -- see the
+  M38 entry above for Phase 4). M33 is now FULLY LANDED (S1-S5 --
+  Device1D's affinity gauge + thermionic emission, and the same
+  affinity-gauge port to Device2D, Device3D, and `unstructured_dd.py`;
+  see history.md's 2026-09-10/11 entries): M34 is next on this line.
+  Note that M33 DID touch the frozen numerical core and so needed the
+  M11-S3 amendment mechanism throughout, unlike M32/M38, which did not.
 
 ------------------------------------------------------------------------
 4c.4 WHAT IS PERMANENTLY OUT OF SCOPE

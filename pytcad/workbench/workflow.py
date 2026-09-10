@@ -15,17 +15,28 @@ from dataclasses import dataclass, field
 from .core.templates import get_template
 
 
+#: Compact models `EXTRACT` may name -- matches workbench/compact.py's
+#: two extractors (extract_diode/extract_mosfet1).
+_EXTRACT_MODELS = ("diode", "mosfet1")
+
+
 @dataclass
 class DeckRun:
     """Everything a deck can express: the template-built device plus the
     run configuration statements (bias/sweep).  `sweep` mirrors the
     SweepSpec vocabulary so it arms the GUI's existing sweep machinery
-    verbatim."""
+    verbatim.
+
+    `extract` (M38 Phase 4) is PARSE-ONLY: `{"model": ..., "scale": ...}`
+    once an EXTRACT statement is present, else None.  It is not wired
+    into batch/study execution in this slice -- see
+    `M38-PHASE4-PLAN.md` section 2's OUT list."""
     template_id: str = ""
     device: object = None
     bias: dict = field(default_factory=dict)
     sweep: dict = None
     splits: dict = field(default_factory=dict)
+    extract: dict = None
 
 
 def _parse_split_args(rest):
@@ -49,6 +60,32 @@ def _parse_split_args(rest):
     if not values:
         raise ValueError(f"SPLIT {key!r} needs at least one value")
     return key, values
+
+
+def _parse_extract_args(rest):
+    """'model=diode scale=1e-4' -> {"model": "diode", "scale": 1e-4};
+    raises ValueError on an unknown model or a non-positive scale."""
+    out = {}
+    for tok in rest.replace(",", " ").split():
+        key, sep, val = tok.partition("=")
+        if not sep:
+            raise ValueError(f"EXTRACT argument {tok!r} needs KEY=value")
+        out[key.strip().lower()] = val.strip()
+    missing = {"model", "scale"} - set(out)
+    if missing:
+        raise ValueError(f"EXTRACT statement missing {sorted(missing)}")
+    model = out["model"].lower()
+    if model not in _EXTRACT_MODELS:
+        raise ValueError(f"EXTRACT model must be one of {_EXTRACT_MODELS}, "
+                         f"got {out['model']!r}")
+    try:
+        scale = float(out["scale"])
+    except ValueError:
+        raise ValueError(f"EXTRACT scale {out['scale']!r} is not a number")
+    if not (scale > 0.0):   # False for NaN too, so no separate NaN check
+        raise ValueError(f"EXTRACT scale must be a positive number, "
+                         f"got {scale!r}")
+    return {"model": model, "scale": scale}
 
 
 def _parse_sweep_args(args):
@@ -93,7 +130,7 @@ def run_deck_full(text):
                 problems.append((lineno, "duplicate TEMPLATE statement"))
             run.template_id = rest.strip() or None
             continue
-        if "=" in line and head not in ("bias", "sweep", "split"):
+        if "=" in line and head not in ("bias", "sweep", "split", "extract"):
             key, _, val = line.partition("=")
             try:
                 # plain parameter lines carry no prefix keyword
@@ -121,6 +158,14 @@ def run_deck_full(text):
             args = rest.split()
             try:
                 sweep_line = (lineno, _parse_sweep_args(args))
+            except ValueError as exc:
+                problems.append((lineno, str(exc)))
+            continue
+        if head == "extract":
+            try:
+                if run.extract is not None:
+                    raise ValueError("duplicate EXTRACT statement")
+                run.extract = _parse_extract_args(rest)
             except ValueError as exc:
                 problems.append((lineno, str(exc)))
             continue

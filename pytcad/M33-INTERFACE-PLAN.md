@@ -384,13 +384,21 @@ one a type checker or an import smoke test would find.
 
 ## 8. What is NOT done, for the next session
 
-* **2D and 3D remain in the legacy nie gauge.** `device2d.py`,
-  `device3d.py` and `unstructured_dd.py` do not reference `chi` at all,
-  so every 2D/3D heterostructure -- including the HBT and HEMT
-  templates -- still solves a symmetric dEg split. This is the single
-  biggest remaining piece of M33 and it is a straight port of S1's
-  `band_shift` (one per-node array; the edge term is the same
-  `+ ds` on both carriers).
+* **M33 is now FULLY LANDED (S1-S5) -- Device1D, Device2D, Device3D,
+  and `unstructured_dd.py` all support the chi-aware affinity gauge.**
+  Device2D: `M33-S4-PLAN.md` (LANDED 2026-09-10/11, 16 gates). Device3D
+  and `unstructured_dd.py`: `M33-S5-PLAN.md` (LANDED 2026-09-11, 21
+  gates -- suite green both ways throughout). `unstructured_dd3d.py`
+  remains explicitly out of scope: it has no heterojunction mechanism
+  of any kind (no `materials_per_node`/`dlnnie`) to extend, so adding
+  one would be new-feature work, not a port of an existing one. S5 also
+  found a genuine, investigated (not assumed) physics result:
+  `unstructured_dd.py`'s coupled (non-equilibrium-slaved) Newton
+  formulation makes the terminal current of a uniformly-doped isotype
+  junction PROVABLY gauge-invariant (an exact SG-Bernoulli-identity
+  argument, not a numerical coincidence) -- see `M33-S5-PLAN.md`
+  section 3 for the derivation; this is why that module's own G2 gate
+  differs in shape from Device1D/2D/3D's.
 * **G-7, the absolute published benchmark, was NOT done** and nothing
   is claimed for it. Section 5 flagged it as the milestone's real risk
   and that judgement stands: G-1..G-6 are self-contained limit and

@@ -75,7 +75,7 @@ from .unstructured_poisson import evaluate_doping_at_nodes  # re-exported
 
 def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
                        eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p, material,
-                       Ns, srh=True, auger=False, dlnnie=None):
+                       Ns, srh=True, auger=False, dlnnie=None, ds=None):
     """Scaled coupled residual/Jacobian for the INTERIOR physics only
     (no Dirichlet contact rows -- solve_bias overwrites those after
     calling this, the same split phase 3b's Poisson solver uses).
@@ -95,6 +95,11 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
     dlnnie: per-INTERIOR-EDGE ln(nie_s[j]/nie_s[i]) heterojunction band-
     offset shift (device2d.py's own Anderson-offset SG term); None or
     all-zero reproduces the homojunction current exactly.
+    ds: per-INTERIOR-EDGE affinity-gauge band-shift term (M33-S5;
+    device2d.py's own ds_x/ds_y), SAME sign for both carriers (unlike
+    dlnnie's opposite signs -- a rigid band shift moves both carriers'
+    reference together). None or all-zero reproduces the dlnnie-only
+    current exactly.
     """
     N = psi.shape[0]
     n_phys, p_phys = n * Ns, p * Ns
@@ -149,8 +154,11 @@ def _residual_jacobian(psi, n, p, C_s, nie_s, node_areas_s, interior_edges,
     # (opposite signs -- a shared-sign delta breaks hole detailed
     # balance). dlnnie is exactly zero for a homojunction.
     dz = 0.0 if dlnnie is None else dlnnie
-    delta_n = psi[j_idx] - psi[i_idx] + dz
-    delta_p = psi[j_idx] - psi[i_idx] - dz
+    # M33-S5: the affinity gauge's edge term, SAME sign both carriers
+    # (see this function's own docstring for `ds`).
+    dsv = 0.0 if ds is None else ds
+    delta_n = psi[j_idx] - psi[i_idx] + dz + dsv
+    delta_p = psi[j_idx] - psi[i_idx] - dz + dsv
     Bp, Bm = bernoulli(delta_n), bernoulli(-delta_n)
     dBp, dBm = dbernoulli(delta_n), dbernoulli(-delta_n)
     Bp_h, Bm_h = bernoulli(delta_p), bernoulli(-delta_p)
@@ -199,7 +207,7 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
               trans_geom, C_phys, contacts, bias, material=SILICON,
               T=300.0, opts=None, srh=True, auger=False,
               doping_mobility=False, Ntot_phys=None, materials_per_node=None,
-              init=None, return_diagnostics=False):
+              band_offset="nie", init=None, return_diagnostics=False):
     """Newton-solve the coupled unstructured drift-diffusion system at
     an applied bias.
 
@@ -221,6 +229,14 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     `material` itself is still used for the overall scaling
     constants (Ns/LD/VT normalization reference), matching device2d.py's
     "first material is the scaling reference" convention.
+
+    band_offset: "nie" (default) is the legacy symmetric-Eg-split
+    gauge (the `dlnnie` term above). "affinity" (M33-S5; see
+    M33-S5-PLAN.md) is the physical, chi-sensitive gauge -- ONE
+    per-node shift `s = log(Nc/nie) + chi/VT`, referenced to node 0
+    (`band_shift = s - s[0]`), identically zero for a homojunction so
+    the "nie" gauge stays bit-identical BY CONSTRUCTION. Any other
+    value raises ValueError.
 
     init: OPTIONAL {"psi": (N,), "n": (N,), "p": (N,)} SCALED initial
     guess (same node ordering/count as `nodes`), used INSTEAD of the
@@ -244,6 +260,9 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     Default False preserves the ORIGINAL 5-tuple return signature
     exactly -- existing callers are unaffected.
     """
+    if band_offset not in ("nie", "affinity"):
+        raise ValueError(
+            f"band_offset must be 'nie' or 'affinity', got {band_offset!r}")
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
     eps = material.eps_r * EPS0
@@ -259,6 +278,18 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     C_s = C_phys / Ns
     nie_s = nie_node / Ns          # per-NODE (array; uniform => old scalar)
     areas_s = node_areas / LD ** 2
+
+    # --- M33-S5: band-alignment shift, ported from device2d.py's S4
+    # (see M33-S5-PLAN.md section 0). ONE per-node offset referenced
+    # to node 0, identically zero for a homojunction, so the default
+    # "nie" gauge stays bit-identical BY CONSTRUCTION. ---
+    if band_offset == "affinity":
+        nc_node = np.array([m.Nc(T) for m in mats])
+        chi_node = np.array([m.chi for m in mats])
+        s_node = np.log(nc_node / nie_node) + chi_node / VT
+        band_shift = s_node - s_node[0]
+    else:
+        band_shift = np.zeros(N)
     eps_trans = trans_geom * eps
     tau_n = np.full_like(C_phys, material.tau_n0)
     tau_p = np.full_like(C_phys, material.tau_p0)
@@ -289,6 +320,9 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     D_n_s = hmean(mu_n_node[i_e], mu_n_node[j_e]) * VT / D0_REF
     D_p_s = hmean(mu_p_node[i_e], mu_p_node[j_e]) * VT / D0_REF
     dlnnie = np.log(nie_s[j_e] / nie_s[i_e])
+    # M33-S5: per-INTERIOR-EDGE affinity shift, same sign both
+    # carriers (unlike dlnnie's opposite signs); zero on "nie".
+    ds_edge = band_shift[j_e] - band_shift[i_e]
 
     contact_node_bias = {}
     for name, edges in contacts.items():
@@ -300,13 +334,21 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     contact_V = np.array([contact_node_bias[k] for k in contact_idx])
     psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_s[contact_idx],
                                  contact_V, VT)
+    # M33-S5: n0/p0 are gauge-free, only psi0's reference moves
+    # (identical reasoning to every structured core's contact-value
+    # fix). Zero on the default "nie" gauge.
+    psi0 = psi0 - band_shift[contact_idx]
 
     # warm start: equilibrium first (V=0 everywhere), matching
     # Device1D/Device2D.solve_bias's own convention -- UNLESS `init`
     # supplies an explicit (already-scaled) guess (adaptive-refinement
     # warm start from a coarser mesh's converged solution).
     if init is None:
-        psi = np.arcsinh(C_s / (2.0 * nie_s))
+        # M33-S5: -band_shift brings the neutral-bulk guess back to
+        # the electrostatic psi convention the Poisson flux is written
+        # in (identical reasoning to every structured core's own
+        # equilibrium guess). Zero on the default "nie" gauge.
+        psi = np.arcsinh(C_s / (2.0 * nie_s)) - band_shift
         n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
                     nie_s ** 2 / np.maximum(
                         0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
@@ -340,7 +382,7 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
         F, J, Jn, Jp = _residual_jacobian(
             psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
             D_n_s, D_p_s, R0, tau_n, tau_p, material, Ns, srh=srh,
-            auger=auger, dlnnie=dlnnie)
+            auger=auger, dlnnie=dlnnie, ds=ds_edge)
         F3 = F.reshape(N, 3)
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
@@ -408,7 +450,7 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     _, _, Jn, Jp = _residual_jacobian(
         psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
         D_n_s, D_p_s, R0, tau_n, tau_p, material, Ns, srh=srh, auger=auger,
-        dlnnie=dlnnie)
+        dlnnie=dlnnie, ds=ds_edge)
 
     terminal_current = {}
     for name, edges in contacts.items():

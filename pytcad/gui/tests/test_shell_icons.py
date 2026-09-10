@@ -33,7 +33,7 @@ TOOLBAR_QML = os.path.join(
     "qml", "components", "MainToolBar.qml",
 )
 
-EXPECTED_TAB_COUNT = 13   # M30 Phase 5 added the "Study" tab
+EXPECTED_TAB_COUNT = 14   # M38 Phase 4 added the "Compact Model" tab
 
 
 def _sidebar_tab_icon_names():

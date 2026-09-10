@@ -33,20 +33,26 @@ by actual computation. Never fake, never mock, never weaken tests.
 
 ---
 
-## CURRENT STATE (2026-09-10)
+## CURRENT STATE (2026-09-11)
 
 **Suite, run both ways per CLAUDE.md:**
 
 | run | result |
 |---|---|
-| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1624 passed, 5 skipped, 1 xfailed, 39 warnings |
-| fast, pure Python (`PYTCAD_ACCEL=0`) | 1616 passed, 13 skipped, 1 xfailed, 39 warnings |
+| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1674 passed, 5 skipped, 1 xfailed, 39 warnings |
+| fast, pure Python (`PYTCAD_ACCEL=0`) | 1666 passed, 13 skipped, 1 xfailed, 39 warnings |
 
-(the 2026-09-09 figures were 1444/1436 and the pre-M38 figures were
-1548/1556; +33 for M38's gate file, then +19 for P5-1 Phase A-2's minus
-5 from narrowing Phase D's parameterization. Everything before that:
-M32's 19 gates, P4b's 25, 6 benchmark/harness gates, P5-0's 18 and
-P5-1's 45 across phases B/C/D.)
+(+21 for M33-S5's gate file (`tests/test_m33_s5_3d_and_unstructured_
+interface.py`, `M33-S5-PLAN.md`), landed after the 1653/1645 figures
+below. Those were +16 for M33-S4's gate file
+(`tests/test_m33_s4_2d_interface.py`, `M33-S4-PLAN.md`), landed after
+the 1637/1629 figures below that. Those were +13 for M38 Phase 4's gate
+files (`M38-PHASE4-PLAN.md`), landed after the 1624/1616 figures below
+that. Those were: the 2026-09-09 figures were 1444/1436 and the
+pre-M38 figures were 1548/1556; +33 for M38's gate file, then +19 for
+P5-1 Phase A-2's minus 5 from narrowing Phase D's parameterization.
+Everything before that: M32's 19 gates, P4b's 25, 6 benchmark/harness
+gates, P5-0's 18 and P5-1's 45 across phases B/C/D.)
 
 **The slow battery and `test_accel_parity.py` were finally re-run on
 2026-09-10**, both ways, for the first time since P4 -- and the
@@ -68,6 +74,207 @@ blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
 **Working tree is UNCOMMITTED.** Nothing has been pushed.
+
+### 2026-09-11 -- M33-S5 LANDED: chi-aware band alignment ported to Device3D and unstructured_dd.py -- M33 FULLY DONE
+
+Plan: `pytcad/M33-S5-PLAN.md` (written before implementation, per the
+amendment mechanism). `M33-INTERFACE-PLAN.md` section 8 named this
+port "the single biggest remaining piece of M33" once S4 landed; this
+slice closes it, so M33 (S1-S5) is now fully landed.
+
+Scope: **Device3D (structured)** and **`unstructured_dd.py`'s
+standalone `solve_bias`** (the 2D unstructured coupled DD core).
+`unstructured_dd3d.py` was deliberately excluded -- it has no
+`materials_per_node`/`dlnnie` heterojunction mechanism of any kind to
+extend, so adding one would be new-feature work, not a port of an
+existing one.
+
+**Device3D matched S4's derivation exactly, one more axis.**
+`chi_arr`/`band_shift` built on the `(Nz,Ny,Nx)` grid, referenced to
+node `(0,0,0)`; `ds_x`/`ds_y`/`ds_z` added with the SAME sign to all
+six SG deltas (unlike `dlnnie`'s opposite carrier signs);
+`_bc_contact_values`/`_bulk_psi_guess`/both GateBC Robin terms get
+`-band_shift`. A pre-existing gap was also closed in passing:
+Device3D never checked `Models.thermionic` at all (silently ignoring
+it) -- it now refuses with `NotImplementedError`, matching the
+Device1D/2D convention. 16 gates (mirroring S4's own G1-G7 shapes)
+all green on first run; `tests/goldens/m13/*.npz` (all six files,
+including the one Device3D golden `resistor3d_eq.npz`) came back
+md5-IDENTICAL to the pre-edit baseline.
+
+**`unstructured_dd.py` gained a new `band_offset` kwarg** ("nie"
+default / "affinity"), since this module has no `Models` object to
+hang the flag on. `_residual_jacobian` gained a `ds` parameter (verified
+directly against a synthetic 4-node/3-edge probe before touching the
+Newton loop: `Jn`/`Jp` responded correctly to a nonzero `ds`); contact
+`psi0` and the cold-start guess get `-band_shift`, same reasoning as
+every other core. Bit-identity off-path confirmed (default/explicit
+`"nie"` bit-identical to each other and to the pre-existing call
+signature; homojunction bit-identical between gauges) and by an
+FD-Jacobian on the interface edges.
+
+**One genuine, investigated (not assumed) physics finding changed two
+of the originally-planned empirical gates.** The naive port of
+Device2D/3D's own "isotype junction current is maximised at zero
+chi-offset" gate FAILED here -- not a near-miss, the terminal current
+agreed across a chi sweep from 3.85 to 6.05 eV to every printed digit.
+Root cause, found by direct investigation rather than guessed:
+`unstructured_dd.py` has no separate equilibrium-only residual (no
+analytic `n = nie*exp(psi_c)` carrier slaving the way Device1D/2D/3D's
+`_residual_jacobian_poisson` provides) -- `solve_bias` always solves
+the fully-coupled system with `n`, `p` as free unknowns, even at
+`bias={}`. For a UNIFORMLY doped isotype junction, `n=C, p~0` satisfies
+Poisson pointwise for ANY psi, and the SG Bernoulli identity
+`B(x)-B(-x)=x` then makes `Jn` EXACTLY LINEAR in `psi+band_shift` when
+`n` is uniform; since the contact fix makes that shifted variable equal
+the gauge-free value at BOTH contacts, the terminal current is
+PROVABLY gauge-invariant for this geometry -- an exact identity, not a
+numerical coincidence. Confirmed directly that Device2D's own isotype
+gate avoids this because its `solve_equilibrium` slaves carriers
+analytically (a real interface spike in `n`, measured: range 0.45-1.59
+vs. this module's flat 1.0 for the nominally same setup) before
+`solve_bias` ever runs. The isotype gate now asserts this bit-identity
+directly (the correct gate for this module's actual mathematics); the
+"pn direction is physical" gate was dropped rather than kept with a
+fudged tolerance, since the measured effect there was at Newton's own
+convergence floor -- "chi genuinely moves psi" (`>1e-3`, real) remains
+this module's G2 evidence that the term is live.
+
+Suite green both ways: `PYTCAD_ACCEL=1` 1674 passed/5 skipped/1
+xfailed (573.87s), `PYTCAD_ACCEL=0` 1666 passed/13 skipped/1 xfailed
+(572.54s), 39 warnings and zero failures in both -- the pre-S5
+baselines (1653/1645) plus exactly these 21 gates.
+
+**M33 (S1-S5) is now fully landed.** No open piece remains on this
+milestone line; M34 is next.
+
+### 2026-09-10/11 -- M33-S4 LANDED: chi-aware band alignment ported to Device2D
+
+Plan: `pytcad/M33-S4-PLAN.md` (written before implementation, per the
+amendment mechanism). `M33-INTERFACE-PLAN.md` section 8 named the
+2D/3D port "the single biggest remaining piece of M33"; this slice does
+Device2D only (structured path) -- Device3D and `unstructured_dd.py`
+are deferred to a follow-up S5, the same "one dimensionality at a time"
+precedent M18/M19/S1 already used.
+
+**Straight port of S1's `band_shift` derivation, node-wise on the
+`(Ny, Nx)` grid** (`s = ln(Nc/nie) + chi/VT`, referenced to node
+`(0,0)`): `__init__` builds `chi_arr`/`band_shift`;
+`_bc_contact_values`/`_bulk_psi_guess` subtract it from `psi0`/the
+neutral guess; `_residual_jacobian_poisson`'s carrier slaving and BOTH
+GateBC Robin terms (equilibrium's and the bias Jacobian's -- S1 had no
+gate-BC analogue, so this is genuinely new territory) use
+`psi + band_shift`; the SG edge deltas in `_residual_jacobian` gain
+`ds_x`/`ds_y` with the SAME sign on both carriers (unlike `dlnnie`'s
+opposite signs), constant under the Newton update so no Jacobian
+column changes. Two refusals added, matching S1/S2's shape:
+`Models.thermionic` on Device2D, and `band_offset="affinity"` with
+`self.fd`.
+
+**Physics reproduces the validated 1D shape.** Isotype (no p-n
+built-in) junction current maximised at zero chi offset and falling
+for BOTH signs (0.5135 A/cm at dchi=0 vs 0.4999 at +-0.20eV) -- the
+sign-symmetric signature a symmetric-nie gauge cannot produce, same as
+1D's 6.42e3/4.34e3/3.11e3 A/cm^2 finding. p-n junction current falls
+monotonically as chi rises on the far side, ~1% per 0.1eV, matching 1D's
+own magnitude and explanation (a rigid one-side shift is mostly
+absorbed by the built-in potential re-equilibrating).
+
+**Reconstruct-and-compare: all six `tests/goldens/m13/*.npz` files
+came back md5-IDENTICAL** to the pre-edit baseline recorded in the
+plan. Nothing moved, because `band_shift` is identically `np.zeros` on
+the default `"nie"` gauge -- every new term an exact `+0.0`.
+
+**One finding, deliberately not fixed here.** Device1D's own
+`solve_equilibrium` stores its FINAL `self.n`/`self.p` as
+`nie*exp(psi)` with no `band_shift`, even though the SAME method's
+Newton loop uses `psi_c = psi + band_shift` mid-iteration -- an
+asymmetry confirmed by reading `device.py` directly while porting the
+pattern to 2D. Untested by any M33 gate (G1/G2 read `psi`/`J` via
+`solve_bias`, never the raw equilibrium snapshot), so no gated
+behavior is wrong -- but Device1D's post-`solve_equilibrium()` `.n`/
+`.p` under `band_offset="affinity"` on a heterojunction are not what
+the milestone's own derivation says they should be. This Device2D
+port uses the mathematically correct form for its own equivalent
+assignment rather than replicating the 1D asymmetry; fixing 1D's own
+copy is a separate one-line change needing its own sign-off (frozen
+core) and is not folded into this slice. See `M33-S4-PLAN.md` section 4.
+
+16 new gates in `tests/test_m33_s4_2d_interface.py` (G1 equilibrium
+detailed balance per carrier/both edge axes; G2 chi moves the solution,
+both junction types; G3 FD-Jacobian on the interface edges
+SPECIFICALLY, not a random sample; G4 bit-identity off-path; G5 the
+new GateBC-Robin-term check S1 had no analogue for; G6/G7 the two
+refusals). Suite green both ways: `PYTCAD_ACCEL=1` 1653 passed/5
+skipped/1 xfailed, `PYTCAD_ACCEL=0` 1645 passed/13 skipped/1 xfailed,
+39 warnings and zero failures in both -- the pre-S4 baselines
+(1637/1629) plus exactly these 16 gates. `ARCHITECTURE.md`'s M33 entry
+and 4c.3 status line updated (S1-S4 landed, S5 open).
+
+### 2026-09-10 -- M38 PHASE 4 LANDED: compact-model GUI panel + deck statement
+
+Plan: `pytcad/M38-PHASE4-PLAN.md` (written before implementation --
+M38 Phases 1-3 named this phase but left it unscoped). Closes the last
+open item on M38's own list.
+
+Three pieces, no frozen-core edit:
+
+* **`gui/services/compact_runner.py`**, a new JobRunner subprocess
+  module (same `RESULT_PATH=`/`.tmp.json` contract as
+  `process_runner.py`, not the npz/ResultStore one -- a fitted
+  parameter set is not sweep/mesh data). Builds a REAL `Device1D` p-n
+  diode or `Device2D` n-MOSFET directly from scalar geometry, sweeps
+  it, and fits `workbench.compact.extract_diode`/`extract_mosfet1`
+  against the result -- the same construction
+  `tests/test_m38_compact_model.py`'s own G1-TCAD/G2-TCAD gates use.
+* **`gui/controllers/compact_model_controller.py`** +
+  **`gui/qml/panels/CompactModelPanel.qml`**, a new "Compact Model" tab
+  (14th in `Main.qml`'s `workbenchTabs`) that drives the runner end to
+  end and displays the extracted parameters plus the emitted SPICE
+  `.MODEL` card.
+* **`workbench/workflow.py`** gained a PARSE-ONLY `EXTRACT
+  model=diode|mosfet1 scale=<value>` deck statement, stored on
+  `DeckRun.extract`. Deliberately NOT wired into
+  `batch.py`/`study_manifest.py` execution -- that needs its own
+  reference-curve convention and is a separate, larger decision, named
+  as such in the plan so nobody assumes a deck with an EXTRACT line
+  drives batch extraction yet.
+
+Two findings from the hard-debug pass:
+
+1. **`build_mosfet`'s own default junction sharpness doesn't reproduce
+   a clean Id-Vg/Id-Vd family.** The runner's first cut used
+   `build_mosfet`'s own `sigma_y=sigma_lat=Lg/4` default and
+   `extract_mosfet1` refused the result outright (`G2-REFUSE`, an
+   apparent ~9.7 V overdrive). `test_m38_compact_model.py`'s own
+   validated fixture uses much sharper junctions
+   (`sigma_y=sigma_lat=0.05e-4` cm, `nx=48, ny=28`); the runner's
+   defaults now match that fixture exactly rather than guessing.
+2. **`Property(object, notify=...)` returning a Python dict/None
+   handed QML a stale, effectively-empty value on every read**,
+   confirmed by instrumenting the binding directly
+   (`typeof r === "object"`, `!r === false`, `r.kind === undefined` --
+   even on the evaluation after a real, successful extraction). Root
+   cause not fully isolated (a PySide6 QVariant-marshalling quirk on
+   this environment, not reproduced against a minimal case); worked
+   around by exposing the manifest as a JSON-encoded `Property(str)`
+   (`resultJson`) and parsing it QML-side with `JSON.parse`, which
+   is unaffected. See `M38-PHASE4-PLAN.md` section 4 -- a future
+   `Property(object)` returning a Python dict on this stack should be
+   treated as suspect until proven otherwise.
+
+Also caught by the full-suite run (not by this phase's own new
+tests): `gui/tests/test_shell_icons.py`'s `EXPECTED_TAB_COUNT` is a
+hardcoded literal every new sidebar tab must bump (13 -> 14).
+
+13 new gates (3 `gui/tests/test_compact_runner.py`, 3
+`gui/tests/test_compact_model_panel.py`, 7
+`tests/test_m38_phase4_deck.py`). Suite green both ways: `PYTCAD_ACCEL=0`
+1629 passed/13 skipped/1 xfailed, `PYTCAD_ACCEL=1` 1637 passed/5
+skipped/1 xfailed, 39 warnings and zero failures in both -- the
+pre-Phase-4 baselines (1616/1624) plus exactly these 13 gates.
+`ARCHITECTURE.md`'s M38 entry and 4c.3 status line updated to LANDED
+(all 4 phases).
 
 ### 2026-09-10 -- M33 S1/S2/S3 LANDED: heterojunction affinity + thermionic emission
 
@@ -632,11 +839,13 @@ numpy's BLAS otherwise spawns a thread pool PER xdist worker.
    a pointer into git history, not a broken link.
 5. **M32-M40** are PROPOSED in `ARCHITECTURE.md` 4c.2, not decided --
    nothing is committed until each has its own plan doc and gates.
-   EXCEPT M32 (landed) and **M38, whose Phases 1-3 landed 2026-09-10**
-   (`pytcad/M38-COMPACT-MODEL-PLAN.md`). M38 Phase 4 -- a GUI panel and
-   a `workbench/workflow.py` deck statement -- is named in that plan
-   and NOT started. Neither are BSIM-class models, temperature or
-   geometry scaling, or AC/C-V parameter extraction.
+   EXCEPT M32 (landed) and **M38, now LANDED for all 4 phases**
+   (`pytcad/M38-COMPACT-MODEL-PLAN.md` for Phases 1-3,
+   `pytcad/M38-PHASE4-PLAN.md` for Phase 4, landed 2026-09-10 -- a
+   compact-model GUI panel plus a parse-only `EXTRACT` deck statement,
+   see that day's entry above). Still not done: BSIM-class models,
+   temperature or geometry scaling, AC/C-V parameter extraction, PMOS
+   in the GUI panel, and EXTRACT-driven batch/study execution.
 6. **E-auto is now the obvious next proposal, and its blocker is
    gone.** M31 P5-1 Phase A-2 (2026-09-10) measured every one of the
    eight `select_auto` cells a caller can reach, which is exactly what
@@ -651,6 +860,12 @@ numpy's BLAS otherwise spawns a thread pool PER xdist worker.
 7. **Housekeeping still owed:** the working tree remains fully
    UNCOMMITTED, and the slow battery plus `tests/test_accel_parity.py`
    have not been re-run since P4.
+8. **M33 is now FULLY LANDED (S1-S5).** `M33-S5-PLAN.md`: the
+   chi-aware band-alignment gauge ported to Device3D and
+   `unstructured_dd.py`, 21 gates, suite green both ways, all
+   `tests/goldens/m13/*.npz` md5-identical off-path (see the
+   2026-09-11 entry above). No open piece remains on this milestone
+   line; M34 is next per ARCHITECTURE.md 4c.3.
 
 ---
 

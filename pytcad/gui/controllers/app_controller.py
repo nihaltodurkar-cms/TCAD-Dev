@@ -174,6 +174,10 @@ class AppController(QObject):
         self.study = StudyController(self, parent=self)
         from .cv_controller import CVController
         self.cv = CVController(self, parent=self)
+        # M38 Phase 4: TCAD-to-SPICE compact-model extraction. Same
+        # ownership pattern as cv above.
+        from .compact_model_controller import CompactModelController
+        self.compact_model = CompactModelController(self, parent=self)
         # Virtual Probe Station: DC/RF device characterization sweeps and
         # extraction (Vth, SS, gds/ro, breakdown voltage, fT). Same
         # ownership pattern as cv/family above.
@@ -378,6 +382,10 @@ class AppController(QObject):
     @Property(QObject, constant=True)
     def cvSweep(self):
         return self.cv
+
+    @Property(QObject, constant=True)
+    def compactModel(self):
+        return self.compact_model
 
     @Property(QObject, constant=True)
     def probeStation(self):
