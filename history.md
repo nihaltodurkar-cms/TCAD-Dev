@@ -39,8 +39,8 @@ by actual computation. Never fake, never mock, never weaken tests.
 
 | run | result |
 |---|---|
-| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1600 passed, 5 skipped, 1 xfailed, 39 warnings |
-| fast, pure Python (`PYTCAD_ACCEL=0`) | 1592 passed, 13 skipped, 1 xfailed, 39 warnings |
+| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1624 passed, 5 skipped, 1 xfailed, 39 warnings |
+| fast, pure Python (`PYTCAD_ACCEL=0`) | 1616 passed, 13 skipped, 1 xfailed, 39 warnings |
 
 (the 2026-09-09 figures were 1444/1436 and the pre-M38 figures were
 1548/1556; +33 for M38's gate file, then +19 for P5-1 Phase A-2's minus
@@ -68,6 +68,120 @@ blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
 **Working tree is UNCOMMITTED.** Nothing has been pushed.
+
+### 2026-09-10 -- M33 S1/S2/S3 LANDED: heterojunction affinity + thermionic emission
+
+Plan, every number, and the handoff list: `pytcad/M33-INTERFACE-PLAN.md`
+(section 7 results, section 8 what is left).
+
+**M33 turned out to be smaller than the roadmap says AND to contain
+something bigger than its own scope.** Two of its three items were
+already done -- M14 landed S_n/S_p surface recombination AND D_it -- so
+only the heterojunction item remained. Investigating that found this:
+
+**Device1D's heterojunction transport ignored electron affinity
+entirely.** Verified by measurement, not by reading: two devices
+identical except for a STEP in chi at the junction gave
+`max|dpsi| = 0.000e+00` and `J/J_ref = 1.000000` for steps of -0.20,
+-0.50 and +0.50 eV. Exactly zero, bit-for-bit, for a half-eV
+conduction-band step. Cause: transport is parameterised by `nie` alone,
+and `ni = sqrt(Nc*Nv)*exp(-Eg/2kT)` contains no chi. `chi_arr` was
+built in `__init__` and read by exactly one function --
+`band_diagram()`, a post-processing accessor. `device2d.py`,
+`device3d.py` and `unstructured_dd.py` never mention chi at all.
+Consequences: the offset actually solved was a SYMMETRIC dEg split (the
+real AlGaAs/GaAs split is ~62:38); `device.py`'s own comment claiming
+"chi/Eg enter the currents through position-dependent nie" was false
+for chi; and `test_hemt_band_step_at_interface` gated a 0.20 eV step
+measured THROUGH `band_diagram()`, i.e. a quantity the solver never
+used. That test had already been caught once as a false negative
+(wrong diff axis, fixed 2026-08-28); this deeper problem survived it.
+
+TE was therefore built on a prerequisite, not in parallel: thermionic
+emission's entire content is the flux limit imposed by dEc.
+
+**S1 -- the affinity gauge collapses to ONE per-node shift.**
+`s = ln(Nc/nie) + chi/VT`, giving `n = nie*exp(psi+s)`,
+`p = nie*exp(-(psi+s))` -- the legacy gauge with `psi -> psi+s` in the
+carrier law and `psi` alone in the Poisson flux. So `n*p = nie^2`
+identically (mass action is gauge-free, nothing downstream changes),
+and BOTH carriers take the SAME sign of correction, unlike M11-S3's
+opposite `ln(nie)` factors -- a rigid band shift moves Ec and Ev
+together, a gap change moves them apart. Derived two independent ways
+which agree because `ln_gn + ln_gp == Eg/kT` identically. `s` is
+referenced to node 0, so it is identically zero for a homojunction and
+the legacy path is bit-identical BY CONSTRUCTION (`+ 0.0` exactly),
+not by tolerance. Behind `Models(band_offset="nie"|"affinity")`,
+default legacy.
+
+**S2 -- thermionic emission**, `Models(thermionic=True)`, requiring the
+affinity gauge. Flux derived FROM detailed balance, not quoted, which
+is what fixes the Nc factor; a single emission velocity is used because
+the two-velocity form is only detailed-balanced when A*1 == A*2.
+Written into the SAME five slots the SG flux uses, so the whole
+Jacobian assembly below -- including the M15 impact coupling -- is
+untouched. TE -> DD as the velocity grows (0.976 -> 1.0032) and cuts
+current at the real velocity, more so as the barrier deepens.
+
+**Physics confirmed in two independent configurations.** Forward-biased
+p-n diode: J falls monotonically with chi on the n-side, ~1% per
+0.1 eV -- small and CORRECT, because a rigid shift of both edges on one
+side is largely absorbed by the built-in potential re-equilibrating.
+Isotype n-N junction (no p-n built-in to absorb it): J is MAXIMISED at
+zero offset and falls for BOTH signs, 6.42e3 -> 4.34e3 and 3.11e3, a
+factor ~2. That sign-symmetric shape is the signature of a real band
+barrier and is what the legacy gauge cannot produce at all.
+
+**Reconstruct-and-compare: all six m13 goldens md5-IDENTICAL** to the
+baseline recorded in the plan before the first edit, after S1 and again
+after S2, with all 33 m13 tests green including the three hardcoded
+digests. Nothing moved, because on the default path every new term is
+an exact `+ 0.0`.
+
+Four things worth carrying forward:
+
+1. **An adversarial probe caught a VACUOUS gate of my own.** G1 first
+   normalised the equilibrium residual by the device's own forward
+   current. Injecting a deliberate sign error into the hole delta moved
+   zero-bias |Jp| from 3.2e-10 to 1.354e-01 -- NINE ORDERS -- but the
+   forward current rose to 1.1e+03 too, so the RATIO came out 1.75e-07,
+   BETTER than the correct code. The gate now uses an absolute floor
+   justified by measuring the legacy homojunction's Newton floor
+   (1.09e-9). Normalising by a quantity the bug also corrupts is a
+   general trap, not a one-off.
+2. **A silent, syntactically-valid regression.** Inserting a refusal at
+   the wrong indent CLOSED the affinity branch, left `s = ...` as dead
+   code after a `raise`, and rebound the `else` -- so `band_shift`
+   became all-zeros and S1 reverted entirely, while still importing
+   cleanly. Caught on the next test run (every chi giving an identical
+   J), not by any import or lint.
+3. **A latent defect in my own S1**: `_ii_compute_gs_frozen` recomputes
+   the SG deltas independently of `_residual_jacobian`, so it needed
+   the same shift or `affinity + impact` would have driven impact
+   ionization off nie-gauge currents. Fixed. If you add an edge term,
+   grep for OTHER places that rebuild the same quantity.
+4. **`emission_velocity` is good to a factor ~2 on silicon, knowingly.**
+   It derives m_DOS from the material's own Nc; a tabulated Richardson
+   A* gives 1.92x more, because A* is set by the Richardson mass and
+   Si's six-valley band separates the two (Nc -> 1.09 m0, A*=252 ->
+   2.1 m0). Both are pinned by a gate. The A* table is also keyed on
+   short names ("Si") that never match `Semiconductor.name`
+   ("Silicon"), so `richardson_a_star(mat.name, ...)` KeyErrors on
+   every real material object -- latent today because every caller
+   passes the literal string.
+
+Suite green both ways after all three slices: `PYTCAD_ACCEL=0` 1616
+passed/13 skipped/1 xfailed, `PYTCAD_ACCEL=1` 1624 passed/5 skipped/1
+xfailed, 39 warnings and zero failures in both -- the pre-M33 baselines
+(1592/1600) plus exactly M33's 24 gates. All six m13 goldens re-checked
+md5-identical in that same run.
+
+**NOT DONE, and not claimed:** 2D/3D stay in the legacy gauge (a
+straight port of `band_shift`, and the single biggest remaining piece);
+G-7, the absolute published benchmark, was never attempted -- section 5
+flagged it as the milestone's real risk before starting and that
+judgement stands, so all seven green gates are limit/consistency gates
+and none pins an absolute current against literature.
 
 ### 2026-09-10 -- M31 P5-1 PHASE A-2: all 8 reachable solver-selection cells measured
 
@@ -166,9 +280,10 @@ on absence, and it would have FAILED had 2D come out iterative, which
 is why it was left in place rather than rewritten.
 
 New gate file `tests/test_m31_p51_phase_a2.py` (19 gates). Suite green
-both ways: `PYTCAD_ACCEL=0` 1592 passed/13 skipped/1 xfailed,
-`PYTCAD_ACCEL=1` 1600 passed/5 skipped/1 xfailed, 39 warnings and zero
-failures in both.
+both ways at the time it landed: `PYTCAD_ACCEL=0` 1592 passed/13
+skipped/1 xfailed, `PYTCAD_ACCEL=1` 1600 passed/5 skipped/1 xfailed,
+39 warnings and zero failures in both. (The CURRENT STATE table above
+carries the later post-M33 totals.)
 
 ### 2026-09-10 -- THE OWED SLOW BATTERY, RUN BOTH WAYS, FOUND A REAL BUG
 

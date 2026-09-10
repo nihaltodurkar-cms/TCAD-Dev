@@ -66,6 +66,46 @@ M_E_CONST = 9.1093837015e-31      # kg
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+
+def emission_velocity(N_dos_cm3, T):
+    """M33-S2: thermionic emission velocity [cm/s] for a band whose
+    effective DOS is `N_dos_cm3` (Nc for electrons, Nv for holes).
+
+        v = sqrt(kT / (2 pi m_DOS))
+
+    m_DOS is recovered from the material's OWN band DOS through
+    `N = 2 (2 pi m kT / h^2)^{3/2}`, so this needs no new material
+    constant and cannot drift away from the Nc/Nv the rest of the
+    solver uses. Algebraically it is the familiar `v = A* T^2 / (q N)`
+    with `A* = 4 pi q m k^2 / h^3` -- the same formula, expressed
+    through the mass that N itself implies.
+
+    IT DOES NOT REPRODUCE A TABULATED A*, AND THAT IS EXPECTED RATHER
+    THAN A DEFECT. Measured for silicon at 300 K: this returns
+    2.575e6 cm/s where `richardson_a_star("Si","n") * T^2 / (q Nc)`
+    gives 4.950e6 -- a factor 1.92. The cause is exactly what
+    `schottky.py`'s own module docstring warns about: A* is governed by
+    the RICHARDSON mass, not the DOS mass, and silicon's six-valley
+    conduction band separates the two. Nc = 2.86e19 implies
+    m_DOS = 1.09 m0, while A* = 252 A/(cm^2 K^2) implies 2.1 m0, and
+    2.1/1.09 = 1.92. So a tabulated A* is the more accurate number for
+    Si SPECIFICALLY, while this form is the one that stays consistent
+    with the Nc the solver actually uses and is defined for every
+    material including alloys. Treat the velocity as good to about a
+    factor of two on silicon; see M33-INTERFACE-PLAN.md section 7.
+
+    Deriving m_DOS from N rather than reading a tabulated A* also
+    sidesteps a real trap: that table is keyed on SHORT names ("Si",
+    "GaAs") while Semiconductor.name holds full ones ("Silicon"), so
+    richardson_a_star(mat.name, "n") raises KeyError for every real
+    material object -- and an alloy like AlGaAs has no entry at all.
+    """
+    N_si = np.asarray(N_dos_cm3, dtype=float) * 1.0e6          # m^-3
+    h = 2.0 * np.pi * HBAR_CONST
+    kT = KB_EV * Q_E_CONST * T                                 # J
+    m_dos = (N_si / 2.0) ** (2.0 / 3.0) * h * h / (2.0 * np.pi * kT)
+    return np.sqrt(kT / (2.0 * np.pi * m_dos)) * 100.0         # cm/s
+
 # M31 P4b: symmetric Dirichlet elimination (row AND column) so the
 # assembled Jacobian is transposable -- see pytcad/dirichlet.py.
 from .dirichlet import eliminate_csr
@@ -282,6 +322,23 @@ class Models:
     # "quasi_fermi": grad(quasi-Fermi) = grad(phi_n) or grad(phi_p),
     # the Sentaurus convention for multi-directional current flow.
     driving_force: str = "field"
+    # M33-S1: which band-alignment gauge the heterojunction edge terms
+    # use.  "nie" (default) is the PRE-M33 behaviour, kept bit-identical:
+    # transport is parameterised by the effective intrinsic
+    # concentration alone, which encodes Nc/Nv/Eg but NOT electron
+    # affinity, so it splits a band offset symmetrically between Ec and
+    # Ev.  "affinity" uses the physical band edges, so chi actually
+    # reaches the equations.  See pytcad/M33-INTERFACE-PLAN.md sec 2 for
+    # the measurement that found the gap (a 0.5 eV chi step moved the
+    # solution by EXACTLY zero).
+    band_offset: str = "nie"
+    # M33-S2: thermionic-emission interface flux at an abrupt
+    # heterointerface, replacing the drift-diffusion (Scharfetter-
+    # Gummel) flux on material-change edges ONLY. Requires
+    # band_offset="affinity": TE's entire content is the flux limit
+    # imposed by dEc, so running it in a gauge that cannot represent
+    # dEc would be calibrating a barrier the equations do not have.
+    thermionic: bool = False
     # M14: surface recombination velocity at contacts [cm/s], Robin BC
     # Jn.n_hat = q*S_n*(n-n0), Jp.n_hat = q*S_p*(p-p0). S_n = S_p = 0
     # (default) => no surface recombination, bit-identical to the plain
@@ -301,6 +358,20 @@ class Models:
         # Refuse loudly rather than silently no-op, same as
         # impact/incomplete_ion do for a dimensionality that can't honor
         # them.
+        if self.thermionic and self.band_offset != "affinity":
+            raise ValueError(
+                "Models(thermionic=True) requires band_offset='affinity'. "
+                "Thermionic emission is a statement about the band "
+                "discontinuity; the legacy 'nie' gauge cannot represent "
+                "one (a chi step moves nothing there), so the barrier "
+                "would be fictitious. Refusing rather than silently "
+                "modelling a barrier of zero.")
+        if self.band_offset not in ("nie", "affinity"):
+            raise ValueError(
+                f"Models.band_offset={self.band_offset!r} is not "
+                "recognised -- use 'nie' (legacy symmetric-nie gauge) "
+                "or 'affinity' (physical band edges). Refusing rather "
+                "than silently picking one.")
         if self.driving_force != "field":
             raise NotImplementedError(
                 f"Models.driving_force={self.driving_force!r} is not "
@@ -402,9 +473,17 @@ class Device1D:
         # M11-S3: a single Semiconductor keeps the classic behavior; a
         # per-node sequence defines a heterostructure.  All material
         # fields below become node arrays in that case, and eps(x)
-        # enters the Poisson flux form while chi/Eg enter the currents
-        # through position-dependent nie (band offsets ride ln(nie)
-        # edge factors -- see _residual_jacobian).
+        # enters the Poisson flux form.
+        #
+        # M33 CORRECTION: this comment used to say "chi/Eg enter the
+        # currents through position-dependent nie". That is true of Eg
+        # and FALSE of chi. `nie` is sqrt(Nc*Nv)*exp(-Eg/2kT) and
+        # contains no affinity at all, so under the default
+        # band_offset="nie" gauge a step in chi changes the solution by
+        # EXACTLY zero (measured: 0.000e+00 for a 0.5 eV step) and the
+        # band offset actually solved is a symmetric split of dEg.
+        # Set Models(band_offset="affinity") for the physical band
+        # edges -- see M33-INTERFACE-PLAN.md section 2.
         if isinstance(material, Semiconductor):
             self.mats = [material] * len(np.atleast_1d(doping))
         else:
@@ -501,6 +580,100 @@ class Device1D:
             self.ln_gp[nodes] = np.log(
                 self.nv_s[nodes] / self.nie_s[nodes])
             self.eg_kt[nodes] = m.Eg(T) / (KB_EV * T)
+        # --- M33-S1: band-alignment shift `s` -------------------------
+        # The whole affinity gauge is ONE per-node offset. With
+        #   s = ln(Nc/nie) + chi/VT
+        # the carrier laws become n = nie*exp(psi + s) and
+        # p = nie*exp(-(psi + s)), i.e. exactly the legacy nie-gauge
+        # forms with psi -> psi + s. Two consequences worth stating:
+        #   * n*p = nie^2 still, identically -- mass action is gauge
+        #     free, so nothing downstream of the densities changes.
+        #   * BOTH carriers take the SAME sign of correction, unlike
+        #     M11-S3's ln(nie) factors which are opposite. That is the
+        #     physics: a rigid band shift moves Ec and Ev together,
+        #     whereas a gap change moves them apart. (Cross-check that
+        #     the two derivations agree: ln_gn + ln_gp == Eg/kT
+        #     identically, which is what makes the per-carrier and
+        #     unified forms the same expression.)
+        # Only DIFFERENCES of s are physical, so it is referenced to
+        # node 0 -- which also keeps psi numerically comparable between
+        # gauges (chi/VT alone is ~156) and makes s identically 0 for a
+        # homojunction, so the legacy path is bit-identical by
+        # construction rather than by tolerance.
+        if self.models.band_offset == "affinity":
+            if getattr(self.models, "fd", False) or \
+                    getattr(self.models, "incomplete_ion", False):
+                raise NotImplementedError(
+                    "Models(band_offset='affinity') with fd/"
+                    "incomplete_ion is refused: the FD eta-space "
+                    "contact solver and the neutral-guess bisection "
+                    "both carry their own ln(Nc/nie) offsets, and "
+                    "composing them with the affinity shift has not "
+                    "been derived or gated here. Refusing rather than "
+                    "shipping an unvalidated composition (the M20 "
+                    "dg+fd precedent).")
+            if getattr(self.models, "dg", False):
+                raise NotImplementedError(
+                    "Models(band_offset='affinity', dg=True) is refused "
+                    "(unvalidated composition).")
+            s = self.ln_gn + self.chi_arr / self.VT
+            self.band_shift = s - s[0]
+        else:
+            self.band_shift = np.zeros(self.N)
+
+        if self.models.thermionic and getattr(self.models, "impact", False):
+            # The frozen-generation path drives impact ionization off
+            # per-edge |J| computed through the drift-diffusion form
+            # only; composing a TE interface flux with it was not
+            # derived or gated here.
+            raise NotImplementedError(
+                "Models(thermionic=True, impact=True) is refused: the "
+                "frozen impact-ionization source is built from the "
+                "drift-diffusion edge currents and does not know about "
+                "the thermionic interface flux (unvalidated "
+                "composition).")
+
+        # --- M33-S2: thermionic-emission interface edges ---------------
+        # An edge is a heterointerface iff its two nodes carry different
+        # Semiconductor objects. Identity, not equality: two materials
+        # with the same numbers but built separately are still one
+        # interface as far as the user's model is concerned, and this
+        # matches how `seen_mats` above already groups nodes.
+        self._te_edge = np.array(
+            [self.mats[i] is not self.mats[i + 1]
+             for i in range(self.N - 1)], dtype=bool)
+        if self.models.thermionic:
+            if not self._te_edge.any():
+                raise ValueError(
+                    "Models(thermionic=True) but the device is a "
+                    "homojunction -- there is no interface to apply a "
+                    "thermionic flux to. Refusing rather than silently "
+                    "doing nothing.")
+            nc = self.nc_s * self.Ns          # physical Nc [cm^-3]
+            nv = self.nv_s * self.Ns
+            vn = emission_velocity(nc, T)
+            vp = emission_velocity(nv, T)
+            # Harmonic mean of the two sides' emission velocities. Any
+            # SINGLE velocity keeps the flux detailed-balanced (the
+            # Nc1/Nc2 factor in the interface coefficients is what does
+            # that), so the choice is a modelling one -- and the
+            # harmonic mean is the one that is symmetric under reversing
+            # the mesh, which a one-sided choice is not, and it matches
+            # the hmean convention `dn_edge` already uses for edge
+            # diffusivities.
+            def _hmean(a):
+                return 2.0 * a[:-1] * a[1:] / (a[:-1] + a[1:])
+            # K = v * LD / D0_REF is the exact analogue of the
+            # drift-diffusion edge coefficient an = (D/D0_REF)/h_scaled,
+            # with an emission velocity replacing D/length. Derived from
+            # J0 = q*D0_REF*Ns/LD: K = q*v*Ns/J0.
+            self._te_Kn = _hmean(vn) * self.LD / D0_REF
+            self._te_Kp = _hmean(vp) * self.LD / D0_REF
+            self._te_dlnNc = np.log(self.nc_s[1:] / self.nc_s[:-1])
+            self._te_dlnNv = np.log(self.nv_s[1:] / self.nv_s[:-1])
+            self._te_rNc = self.nc_s[:-1] / self.nc_s[1:]
+            self._te_rNv = self.nv_s[:-1] / self.nv_s[1:]
+
         # M13 incomplete ionization: dopant split from the net doping.
         # Single-species assumption (majority side carries all dopants);
         # documented in Models.incomplete_ion.
@@ -718,7 +891,10 @@ class Device1D:
             else:                            # p-type: holes are majority
                 p0 = 0.5 * (-C + root)
                 n0 = nie * nie / p0
-            psi0 = V[0 if i == 0 else 1] / self.VT + np.log(n0 / nie)
+            # M33-S1: n0/p0 come from local neutrality + mass action and
+            # are gauge-free; only psi0's reference moves, by -s[i].
+            psi0 = (V[0 if i == 0 else 1] / self.VT + np.log(n0 / nie)
+                    - self.band_shift[i])
             out.append((psi0, n0, p0))
         return out
 
@@ -764,7 +940,11 @@ class Device1D:
             # cryogenic T); psi = eta + ln(Nc/nie) per node.
             psi = self._fd_neutral_eta(C) + self.ln_gn
         else:
-            psi = np.arcsinh(C / (2.0 * nie))      # neutral-bulk guess
+            # M33-S1: the neutral guess is a statement about the
+            # CARRIER law, so it lands in the shifted variable; -s
+            # brings it back to the electrostatic potential the Poisson
+            # flux below is written in.
+            psi = np.arcsinh(C / (2.0 * nie)) - self.band_shift
         bc = self._contact_values([0.0, 0.0])
         psi[0], psi[-1] = bc[0][0], bc[1][0]
 
@@ -788,8 +968,10 @@ class Device1D:
                 dnp = (fd_ddensity_deta(self.nc_s, en)
                        + fd_ddensity_deta(self.nv_s, ep))
             else:
-                n = nie * np.exp(np.clip(psi, -700, 700))
-                p = nie * np.exp(np.clip(-psi, -700, 700))
+                # M33-S1: carriers are slaved to psi + s, not psi.
+                psi_c = psi + self.band_shift
+                n = nie * np.exp(np.clip(psi_c, -700, 700))
+                p = nie * np.exp(np.clip(-psi_c, -700, 700))
                 dnp = n + p
             # M13: incomplete ionization under EITHER statistics;
             # rho = n - p - C_ion with the slaved-density chain
@@ -1174,8 +1356,14 @@ class Device1D:
         # overstates the generation source by ~13 orders of magnitude
         # (impact+fd ran away at -12 V before this was matched).
         dlnnie = np.log(self.nie_s[1:] / self.nie_s[:-1])
-        delta = (psi[1:] - psi[:-1]) + dlnnie
-        delta_p = (psi[1:] - psi[:-1]) - dlnnie
+        # M33-S1: the frozen-generation path recomputes the SG deltas
+        # independently of _residual_jacobian, so it needs the same
+        # band-alignment shift or an affinity-gauge run would drive
+        # impact ionization off the WRONG edge currents. Identically
+        # zero on the legacy path.
+        _ds = self.band_shift[1:] - self.band_shift[:-1]
+        delta = (psi[1:] - psi[:-1]) + dlnnie + _ds
+        delta_p = (psi[1:] - psi[:-1]) - dlnnie + _ds
         if getattr(self.models, "fd", False):
             Ln, Lp, _wn, _wp = self._fd_factors(n, p)
             delta = delta + (Ln[1:] - Ln[:-1])
@@ -1217,8 +1405,16 @@ class Device1D:
         #   electron: delta_n = dpsi + dln(nie_s)
         #   hole:     delta_p = dpsi - dln(nie_s)
         dlnnie = np.log(self.nie_s[1:] / self.nie_s[:-1])
-        delta = (psi[1:] - psi[:-1]) + dlnnie          # electrons
-        delta_p = (psi[1:] - psi[:-1]) - dlnnie        # holes
+        # M33-S1: the affinity gauge adds ONE edge term, the SAME for
+        # both carriers (see band_shift's construction in __init__ for
+        # why the sign is shared here and opposite for dlnnie). It is
+        # identically zero in the legacy gauge and for a homojunction,
+        # so the off-path is bit-identical by construction. Like
+        # dlnnie it is constant under the Newton update, so no Jacobian
+        # column changes -- the same argument M11-S3 makes above.
+        ds = self.band_shift[1:] - self.band_shift[:-1]
+        delta = (psi[1:] - psi[:-1]) + dlnnie + ds     # electrons
+        delta_p = (psi[1:] - psi[:-1]) - dlnnie + ds   # holes
         # --- M13: Fermi-Dirac nu-factor SG (plan section 3.2bis) ---
         # eta recovered from the density iterate; the SG argument gains
         # the degeneracy-factor edge difference with CARRIER-SPECIFIC
@@ -1250,6 +1446,57 @@ class Device1D:
 
         an = dn_e / h
         ap = dp_e / h
+        if self.models.thermionic:
+            # ---- M33-S2: thermionic-emission interface flux ----------
+            # On a material-change edge the drift-diffusion flux is
+            # REPLACED by an emission-limited one. It is written into
+            # the SAME five slots the SG flux uses (a, B+, B-, dB+, dB-)
+            # so every downstream Jacobian expression -- including the
+            # M15 impact coupling -- works unchanged and no new branch
+            # appears anywhere below this point.
+            #
+            # Form (electrons), derived from detailed balance rather
+            # than quoted, because getting the Nc factor wrong is
+            # invisible except at equilibrium:
+            #     Jn = K [ n2 * g2 - n1 * g1 ]
+            #     g1 = min(1, e^u),  g2 = (Nc1/Nc2) min(1, e^-u)
+            #     u  = delta_n - dln(Nc)   ( = -dEc/kT )
+            # g1/g2 = (Nc2/Nc1) e^u = e^delta_n identically, and
+            # delta_n IS d(ln n) at equilibrium, so the flux vanishes
+            # there for ANY Nc1, Nc2 -- which is why a single emission
+            # velocity is used rather than one per side (a two-velocity
+            # form is only detailed-balanced when A*1 == A*2).
+            # min()/max() make this C0 but not C1 at u = 0; the kink is
+            # mild (the derivative drops to zero on one side) and the
+            # existing Newton backtracking handles it.
+            te = self._te_edge
+            u = delta - self._te_dlnNc
+            g1 = np.minimum(1.0, np.exp(np.clip(u, -700, 700)))
+            g2 = self._te_rNc * np.minimum(
+                1.0, np.exp(np.clip(-u, -700, 700)))
+            # dJn/d(delta) must enter as an*(n2*dBp + n1*dBm), so
+            # dBp = dg2/ddelta and dBm = -dg1/ddelta. Both are <= 0,
+            # matching the sign of the Bernoulli derivatives they
+            # replace (B' < 0 everywhere).
+            dg2 = np.where(u > 0.0, -g2, 0.0)
+            dg1 = np.where(u < 0.0, -g1, 0.0)
+            w = -delta_p - self._te_dlnNv
+            h1 = np.minimum(1.0, np.exp(np.clip(w, -700, 700)))
+            h2 = self._te_rNv * np.minimum(
+                1.0, np.exp(np.clip(-w, -700, 700)))
+            dh2 = np.where(w > 0.0, -h2, 0.0)
+            dh1 = np.where(w < 0.0, -h1, 0.0)
+
+            an = np.where(te, self._te_Kn, an)
+            ap = np.where(te, self._te_Kp, ap)
+            Bp = np.where(te, g2, Bp)
+            Bm = np.where(te, g1, Bm)
+            dBp = np.where(te, dg2, dBp)
+            dBm = np.where(te, dg1, dBm)
+            Bm_h = np.where(te, h2, Bm_h)
+            Bp_h = np.where(te, h1, Bp_h)
+            dBm_h = np.where(te, dh2, dBm_h)
+            dBp_h = np.where(te, dh1, dBp_h)
         Jn = an * (n[1:] * Bp - n[:-1] * Bm)
         Jp = -ap * (p[1:] * Bm_h - p[:-1] * Bp_h)
 

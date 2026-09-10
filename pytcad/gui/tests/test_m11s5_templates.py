@@ -117,8 +117,23 @@ def test_templates_solve_end_to_end(tid):
 def test_hemt_band_step_at_interface():
     """T5: the solved HEMT shows the AlGaAs/GaAs conduction-band step:
     electron affinity differs by 0.85*x eV (x=0.3 -> ~0.26 eV), visible
-    as a discontinuity in Ec = -psi*VT - chi between adjacent columns
-    straddling the interface."""
+    as a discontinuity in Ec = -psi*VT - chi between adjacent rows
+    straddling the interface.
+
+    WHAT THIS GATE DOES AND DOES NOT PROVE (M33, 2026-09-10). It checks
+    that the TEMPLATE assigns the right materials and that the
+    band-diagram accessor reports the offset. It does NOT prove the
+    solver used it: `chi` enters `Ec` here purely through this
+    post-processing expression, and `Device2D` does not reference `chi`
+    anywhere in its residual or Jacobian. M33-S1 made affinity reach
+    the equations in `Device1D` only (Models(band_offset="affinity"));
+    2D is explicitly out of that slice. So the step measured below is
+    real as a band-alignment statement and cosmetic as a transport one.
+
+    This test has already been wrong once in a related way -- it used to
+    diff along axis=1, where chi is constant, so it was always exactly
+    zero (fixed 2026-08-28). Stating the remaining limit here rather
+    than leaving a second reader to rediscover it."""
     from pytcad import Device2D, Models
     from pytcad.mesh2d import Mesh2D
     dev = get_template("hemt").build({"nx": 40, "ny": 32})
