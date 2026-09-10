@@ -133,10 +133,13 @@ def solve_poisson_equilibrium(nodes, triangles, edge_list, node_areas,
     N = psi.shape[0]
     linsolve_fallbacks = 0
     # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here. This
-    # is the SCALAR 2D unstructured equilibrium path -- Phase A never
-    # measured it (only unstructured_dd.solve_bias's coupled path, B8),
-    # so this always resolves to "direct" today (Gate D-3's refusal
-    # path). See linsolve.select_auto's own docstring for the evidence.
+    # is the SCALAR 2D unstructured equilibrium path, and Phase A-2
+    # (U2DP) measured it: petsc is 12x faster than direct at 11,341 DOF,
+    # making this the ONLY 2D cell where an iterative solve wins. It is
+    # not a contradiction of B8's "direct wins in 2D" -- B8 is the
+    # COUPLED psi/n/p path through unstructured_dd.solve_bias, which
+    # never calls this function. Coupling, not dimension, is what
+    # decides. See linsolve.select_auto's own docstring.
     resolved_linsolve, auto_reason = (
         select_auto(dim=2, unstructured=True, coupled=False, dof=N)
         if opts.linsolve == "auto" else (opts.linsolve, None))

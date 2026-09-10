@@ -33,6 +33,33 @@ from pytcad import unstructured_assembly3d as ua3
 pytestmark = pytest.mark.skipif(
     not _accel.HAVE_ACCEL, reason="compiled extension not built")
 
+# The guard above asks whether the extension is BUILT (`HAVE_ACCEL` is an
+# import-time constant). Most tests in this file are parity checks that
+# set PYTCAD_ACCEL themselves via monkeypatch, so that is the right
+# question for them. It is NOT the right question for the absolute
+# throughput floors (G-E): those time whatever path the AMBIENT
+# PYTCAD_ACCEL selects, and a floor calibrated on the compiled kernel is
+# meaningless against the Python reference path.
+#
+# Found by actually running the owed `-m slow` battery both ways
+# (2026-09-10): under `PYTCAD_ACCEL=0` on a machine where the extension
+# IS built, `test_indicator_throughput_floor[curvature]` measured
+# 2.54e5 tri/s against its 5.0e7 floor -- which is not a regression and
+# not CPU contention, it is exactly the 0.27M tri/s PYTHON reference
+# rate that test's own docstring records for that kernel. Same story for
+# test_throughput_floor[flux3d]: 3.51e3/s against a 3.0e5 floor.
+#
+# `use_accel()` is the per-call reader of PYTCAD_ACCEL, and it RAISES
+# when PYTCAD_ACCEL=1 with no extension -- so short-circuit on
+# HAVE_ACCEL first rather than letting that raise at import time.
+_ACCEL_ACTIVE = _accel.HAVE_ACCEL and _accel.use_accel()
+
+needs_active_accel = pytest.mark.skipif(
+    not _ACCEL_ACTIVE,
+    reason="absolute throughput floors time the compiled path; "
+           "PYTCAD_ACCEL=0 selects the Python reference path, against "
+           "which these floors are meaningless by construction")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -389,6 +416,7 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
 # ----------------------------------------------------------------------
 #  G-E: absolute throughput floors
 # ----------------------------------------------------------------------
+@needs_active_accel
 @pytest.mark.slow
 @pytest.mark.parametrize("name,floor,build", [
     ("stencil2d", 2.0e6, "2d"),
@@ -772,6 +800,7 @@ def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
     assert_exact("implant_2d after the hoist", got, ref)
 
 
+@needs_active_accel
 @pytest.mark.slow
 @pytest.mark.parametrize("name,floor", [
     ("curvature", 5.0e7),

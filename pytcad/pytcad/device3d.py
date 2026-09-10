@@ -1007,10 +1007,14 @@ class Device3D:
         # This is the COUPLED 3D structured solve -- Phase A never
         # measured it (only B4's equilibrium-only path), so
         # select_auto's own evidence table has no entry for
-        # (dim=3, unstructured=False, coupled=True) and this always
-        # resolves to "direct" today (Gate D-3's refusal path). Wired
-        # in anyway so opts.linsolve="auto" is never an unrecognized
-        # method here -- see linsolve.select_auto's docstring.
+        # (dim=3, unstructured=False, coupled=True). Phase A-2 MEASURED
+        # this cell (S3D) and it is the largest coupled win in the
+        # study: 44.56s direct -> 1.60s at 27,783 DOF (27.9x), so "auto"
+        # resolves to "gmres" here at or above 6,591 DOF and refuses to
+        # direct below. The iterative branch below therefore IS
+        # reachable through "auto" now -- which is why its existing
+        # per-iterate fallback matters. See linsolve.select_auto's
+        # docstring.
         resolved_linsolve, auto_reason = (
             linsolve.select_auto(dim=3, unstructured=False, coupled=True,
                                  dof=3 * self.Nz * self.Ny * self.Nx)

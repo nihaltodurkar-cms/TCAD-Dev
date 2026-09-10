@@ -279,9 +279,12 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     N = psi.shape[0]
     linsolve_fallbacks = 0
     # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here. This
-    # is the SCALAR 3D unstructured equilibrium path -- Phase A never
-    # measured it (only solve_bias3d's coupled path, B9), so this
-    # always resolves to "direct" today (Gate D-3's refusal path).
+    # is the SCALAR 3D unstructured equilibrium path. Phase A-2 measured
+    # it (U3DP) and found a real size crossover: petsc is 4.0x faster
+    # than direct at 2,488 DOF but 24x SLOWER at 963, where KSP/PC setup
+    # dominates. So "auto" resolves to petsc at or above 2,488 rows and
+    # refuses to direct below -- B9 does NOT cover this cell, its
+    # solve_bias3d cold-starts and never calls this function.
     resolved_linsolve, auto_reason = (
         select_auto(dim=3, unstructured=True, coupled=False, dof=N)
         if opts.linsolve == "auto" else (opts.linsolve, None))

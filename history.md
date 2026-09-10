@@ -39,15 +39,26 @@ by actual computation. Never fake, never mock, never weaken tests.
 
 | run | result |
 |---|---|
-| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1589 passed, 2 skipped, 1 xfailed, 39 warnings |
-| fast, pure Python (`PYTCAD_ACCEL=0`) | 1581 passed, 10 skipped, 1 xfailed, 39 warnings |
+| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1600 passed, 5 skipped, 1 xfailed, 39 warnings |
+| fast, pure Python (`PYTCAD_ACCEL=0`) | 1592 passed, 13 skipped, 1 xfailed, 39 warnings |
 
-(the 2026-09-09 figures were 1444/1436, and the pre-M38 figures were
-1548/1556; the +33 is M38's gate file. Everything before that: M32's 19
-gates, P4b's 25, 6 benchmark/harness gates, P5-0's 18 and P5-1's 45
-across phases B/C/D. The slow battery and `test_accel_parity.py` were
-last run at P4 -- 25 passed and 55 passed -- and have not been re-run
-since; neither M31 P5-1 nor M38 touches a compiled kernel.)
+(the 2026-09-09 figures were 1444/1436 and the pre-M38 figures were
+1548/1556; +33 for M38's gate file, then +19 for P5-1 Phase A-2's minus
+5 from narrowing Phase D's parameterization. Everything before that:
+M32's 19 gates, P4b's 25, 6 benchmark/harness gates, P5-0's 18 and
+P5-1's 45 across phases B/C/D.)
+
+**The slow battery and `test_accel_parity.py` were finally re-run on
+2026-09-10**, both ways, for the first time since P4 -- and the
+`PYTCAD_ACCEL=0` half found a real skip-guard bug (see the 2026-09-10
+entry below and the first GOTCHAS item). After the fix:
+
+| slow battery | result |
+|---|---|
+| `PYTCAD_ACCEL=1` | 26 passed, 0 failed |
+| `PYTCAD_ACCEL=0` | 20 passed, 6 skipped (the compiled-path throughput floors) |
+
+`tests/test_accel_parity.py` on its own: 55 passed.
 
 The 8-test gap between the two fast runs is exactly the PETSc
 backend-vs-backend gates, which need both backends present.
@@ -57,6 +68,116 @@ blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
 **Working tree is UNCOMMITTED.** Nothing has been pushed.
+
+### 2026-09-10 -- M31 P5-1 PHASE A-2: all 8 reachable solver-selection cells measured
+
+Plan and every number: `pytcad/M31-P5-1-SOLVER-SELECTION-PLAN.md`,
+"Phase A-2". Phase E had blocked E-auto on exactly one thing: Phase A
+produced evidence for THREE `(dim, unstructured, coupled)` cells, so
+`linsolve.select_auto` refused every other one by name. Phase A-2
+measured the rest. `_AUTO_EVIDENCE` went from 3 entries to 8 -- every
+cell a caller can actually reach through `auto`.
+
+**No default moved.** `NewtonOptions.linsolve` still defaults to
+`"direct"`; adding entries changes only what `auto` RESOLVES TO, so no
+existing caller's behaviour moves and no golden can shift.
+`test_a2_no_default_moved` is the gate that makes "Phase A-2 did not
+quietly take E-auto" checkable. E-auto remains a separate proposal.
+
+**The headline is that Phase A's own summary was wrong.** Three cells
+suggested "3D favours iterative, 1D/2D favour direct". With eight, the
+discriminator is COUPLING, not dimension:
+  * SCALAR (one-unknown-per-node Poisson) systems favour iterative once
+    big enough to amortise setup -- INCLUDING IN 2D. U2DP measures 12x
+    at 11,341 DOF. B3 and B8 both being COUPLED is what made 2D look
+    uniformly direct.
+  * COUPLED psi/n/p systems favour direct in 1D and 2D and iterative
+    only in 3D. B2 is the extreme: six of seven iterative configs do
+    not converge on a 1D coupled Jacobian at all, and the survivor is
+    ~300x slower than direct. B3 stays direct even at 72,912 DOF.
+  * SIZE cuts across both. U3DP is 4.0x FASTER with petsc at 2,488 DOF
+    and 24x SLOWER at 963 -- the first `min_dof` in either phase set by
+    a measured CROSSOVER rather than by "smallest size tried".
+A naive "use petsc in 3D" rule would have been wrong for small 3D
+meshes and would have missed a 12x win in 2D. Same lesson as the M22
+MPI-Schwarz split-axis picker, in a new place.
+
+Largest new win: **S3D (3D structured coupled bias, `device3d.py:1015`)
+44.56s -> 1.60s at 27,783 DOF, 27.9x**, and the ABSOLUTE saving grows
+with size (1.3s at 6,591 DOF, 43s at 27,783) -- not the
+share-rises-because-the-rest-got-faster trap that closed M31 P5.
+
+**One entry was decided by dependency, not by the stopwatch.** For
+(3, False, True) `gmres/block_jacobi` (1.60s) and `petsc` (1.67s) tie
+within noise. The entry says `gmres`: petsc is an OPTIONAL dependency
+`select_auto` cannot see, so on a checkout without it every Newton
+iterate would pay a failed attempt PLUS a direct solve. `gmres` with
+NewtonOptions' defaults is pure scipy and is exactly the measured
+configuration (`_build_preconditioner` routes a non-None `block_size`
+to node block-Jacobi before ILU/AMG, confirmed by reading it). U2DP is
+the contrast -- petsc there is 4x better than the best scipy option,
+not tied, so it earns its dependency.
+
+**Three methodology defects found and fixed before any number was
+recorded** (the reason these numbers are trustworthy and the first
+run's were not):
+1. **Forcing `block_size=3` onto a SCALAR cell measures a
+   preconditioner no caller can build.**
+   `_build_block_jacobi_preconditioner` only refuses when
+   `n % block_size != 0`, so a scalar system whose node count divides
+   by 3 gets 3x3 "node blocks" carved from three UNRELATED rows --
+   silently. `device.py`'s own `NewtonOptions.block_size` comment says
+   this. Phase A-2 therefore builds each case with REAL
+   `NewtonOptions` and lets the core decide what to pass; the patch
+   only RECORDS. Phase A's forcing methodology is left untouched since
+   its numbers are published. Validation that it worked: on U3DP the
+   three scipy "preconditioner variants" report IDENTICAL times,
+   because the scalar call site passes neither `block_size` nor
+   `precond` and they collapse to one call.
+2. **`Device1D`/`Device2D.solve_bias`'s DIRECT branch calls `spsolve`
+   outright**, not `linsolve.solve_linear` -- so a sweep patched only
+   at `solve_linear` recorded ZERO calls and reported the baseline as
+   FREE. `instrument.py` already carried this same patch list with the
+   same warning. `device3d.py` by contrast DOES route direct through
+   `solve_linear`; the cores genuinely differ.
+3. **A wrong claim in Phase A's own harness comment, disproved by
+   measurement.** `CASE_MODULES` said B9's `solve_bias3d` "calls its
+   own equilibrium sub-solve first". It does not --
+   `solve_poisson_equilibrium3d` is a separate PUBLIC entry point and
+   `solve_bias3d` cold-starts from an analytic Boltzmann guess. Caught
+   by the new `IterRecord.dof` field: B9's whole sweep came back
+   `dof=[2889]` with no 963-row scalar solve anywhere. Without it,
+   Phase A-2 would have recorded B9's COUPLED numbers as evidence for
+   a cell they never touched. The scalar 3D cell needed its own
+   fixture (`U3DP`).
+
+**Seven stale comments across five core files** claimed "Phase A never
+measured this, so auto always resolves to direct" -- every one false
+the moment its entry landed. All updated. `device.py`'s now also
+records that its deliberately-missing Phase C fallback stays safe ONLY
+because dim=1 measured as direct, and that a future re-measurement
+must add the fallback first. Phase D's
+`test_unmeasured_combinations_refuse_to_direct` narrowed from 7
+combinations to the 2 that remain genuinely unreachable
+(`Device1D`/`Device2D.solve_equilibrium` hardcode `method="direct"` and
+never read `opts.linsolve`, so no selection rule can reach them).
+Phase D's bit-identity gate still passes -- now on evidence rather than
+on absence, and it would have FAILED had 2D come out iterative, which
+is why it was left in place rather than rewritten.
+
+New gate file `tests/test_m31_p51_phase_a2.py` (19 gates). Suite green
+both ways: `PYTCAD_ACCEL=0` 1592 passed/13 skipped/1 xfailed,
+`PYTCAD_ACCEL=1` 1600 passed/5 skipped/1 xfailed, 39 warnings and zero
+failures in both.
+
+### 2026-09-10 -- THE OWED SLOW BATTERY, RUN BOTH WAYS, FOUND A REAL BUG
+
+`tests/test_accel_parity.py` and the `-m slow` battery had not been run
+since P4. Run both ways at last: `PYTCAD_ACCEL=1` 26 passed,
+`PYTCAD_ACCEL=0` **6 failed**. The 6 were the absolute throughput
+floors, and the cause was a SKIP GUARD TESTING THE WRONG THING -- see
+the new entry at the top of GOTCHAS. Fixed with a `needs_active_accel`
+mark; `ACCEL=0` now 6 skipped, `ACCEL=1` still 6 passed.
 
 ### 2026-09-10 -- M38 PHASES 1-3 LANDED (TCAD-to-SPICE extraction)
 
@@ -401,13 +522,16 @@ numpy's BLAS otherwise spawns a thread pool PER xdist worker.
    a `workbench/workflow.py` deck statement -- is named in that plan
    and NOT started. Neither are BSIM-class models, temperature or
    geometry scaling, or AC/C-V parameter extraction.
-6. **Not started, and worth knowing about before picking the next
-   item:** M31 P5-1's `E-auto` (making `linsolve="auto"` the DEFAULT
-   rather than opt-in) is still deliberately untaken -- its plan's
-   section 4 says it needs more of Phase A's matrix measured first,
-   starting with `device3d.py`'s coupled `solve_bias` and structured
-   1D/2D. The prize behind it is Phase A's largest number, B4's
-   179 s -> 1.5 s, which no caller reaches today without typing an
+6. **E-auto is now the obvious next proposal, and its blocker is
+   gone.** M31 P5-1 Phase A-2 (2026-09-10) measured every one of the
+   eight `select_auto` cells a caller can reach, which is exactly what
+   Phase E said it was waiting for. Making `linsolve="auto"` the
+   DEFAULT is still NOT taken and still needs its own sign-off: it is a
+   behaviour change for every existing caller including the GUI and
+   `examples/`, and the cells where `auto` now resolves to something
+   other than direct (B4, S3D, B9, U2DP, U3DP) would stop being
+   bit-identical to today. The prize is real -- B4 179s -> 1.5s, S3D
+   44.6s -> 1.6s -- and no caller reaches it today without typing an
    option they will not discover.
 7. **Housekeeping still owed:** the working tree remains fully
    UNCOMMITTED, and the slow battery plus `tests/test_accel_parity.py`
@@ -448,6 +572,28 @@ Plan -> user approves -> TDD (tests red first) -> implement -> hard debug
 Consolidated from every session. These each cost real debugging time.
 
 ### Verification discipline
+
+- **A skip guard must test the LEVER, not the CAPABILITY.**
+  `tests/test_accel_parity.py` guarded the whole module on
+  `_accel.HAVE_ACCEL` -- "is the compiled extension BUILT" -- which is
+  an import-time constant. The actual lever is `_accel.use_accel()`,
+  the per-call reader of `PYTCAD_ACCEL`. On a machine where the
+  extension IS built, `PYTCAD_ACCEL=0 pytest -m slow` therefore timed
+  the PURE-PYTHON path against absolute throughput floors calibrated
+  on the C++ kernels, and "failed" by exactly the known Python-vs-C++
+  ratio: `test_indicator_throughput_floor[curvature]` measured
+  2.54e5 tri/s against its 5.0e7 floor, and 0.27M tri/s is the Python
+  reference rate that test's OWN DOCSTRING records for that kernel.
+  6 failures, one cause. Found 2026-09-10 the first time the slow
+  battery was run both ways since P4 -- it had never been run under
+  `PYTCAD_ACCEL=0` at all. Fixed with a separate `needs_active_accel`
+  mark on the two absolute-floor tests (the parity tests proper set
+  `PYTCAD_ACCEL` themselves via monkeypatch and are correctly guarded
+  by the module-level mark). The mark short-circuits on `HAVE_ACCEL`
+  first, because `use_accel()` deliberately RAISES when
+  `PYTCAD_ACCEL=1` with no extension and that would become a
+  collection error. Verified: `ACCEL=0` 6 skipped (was 6 failed),
+  `ACCEL=1` 6 passed (unchanged).
 
 - **A "COMPLETE, all gates green" status claim is not evidence.** It was
   wrong for M15 in an inherited tree, and M16/M20/M22-Schur all sat at

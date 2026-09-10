@@ -1,0 +1,3657 @@
+{
+  "environment": {
+    "python": "3.11.16",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "processor": "unknown",
+    "cpu_count": 10,
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "unset",
+    "PYTCAD_ACCEL": "unset",
+    "accel": "pytcad._core: 0.1.0, threads=1, petsc=3.25.4/32-bit-int, PYTCAD_ACCEL=auto",
+    "timestamp": "2026-09-10 16:35:34"
+  },
+  "rows": [
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "direct",
+      "method": "direct",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0005476359983731527,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0004521609989751596,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.0005356859983294271,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.00042394400225020945,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.0003993480022472795,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.0004099180005141534,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.0004201699994155206,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.0004243629991833586,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.00042012899939436466,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.00039736499820719473,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        }
+      ],
+      "total_s": 0.012753502000123262,
+      "aborted": ""
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "gmres/block_jacobi",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 40.59468018599728,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=2.548e-06, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 40.59536568800104,
+      "aborted": "LinearSolveError: gmres did not converge within 2000 iterations (scipy code=2000, relative residual=2.548e-06, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "gmres/ilu",
+      "method": "gmres",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0035779720019490924,
+          "converged": true,
+          "iterations": 2,
+          "residual": 9.608137505306272e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.004408538999996381,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=1.196e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 0.009401146999152843,
+      "aborted": "LinearSolveError: gmres did not converge within 2000 iterations (scipy code=2000, relative residual=1.196e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "gmres/schur",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.011620138000580482,
+          "converged": true,
+          "iterations": 77,
+          "residual": 7.09471999454929e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.015720429000793956,
+          "converged": true,
+          "iterations": 91,
+          "residual": 8.861639419773777e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.06588351499885903,
+          "converged": true,
+          "iterations": 301,
+          "residual": 3.880957922528443e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.1521196419998887,
+          "converged": true,
+          "iterations": 656,
+          "residual": 9.008180410613115e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.2169962910011236,
+          "converged": true,
+          "iterations": 933,
+          "residual": 9.704401167525787e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.276398453002912,
+          "converged": true,
+          "iterations": 1164,
+          "residual": 8.138948431985849e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.29684379500031355,
+          "converged": true,
+          "iterations": 1274,
+          "residual": 9.871965294911581e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.3474915710030473,
+          "converged": true,
+          "iterations": 1491,
+          "residual": 9.135246222556639e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.3607485460015596,
+          "converged": true,
+          "iterations": 1549,
+          "residual": 8.050086952574271e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.42352951299835695,
+          "converged": true,
+          "iterations": 1800,
+          "residual": 9.313128654348052e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.3577396149994456,
+          "converged": true,
+          "iterations": 1490,
+          "residual": 8.152744228515252e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.3536136990005616,
+          "converged": true,
+          "iterations": 1489,
+          "residual": 9.448004643563974e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.12862250699981814,
+          "converged": true,
+          "iterations": 556,
+          "residual": 9.853093124952723e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        }
+      ],
+      "total_s": 3.0192696980011533,
+      "aborted": ""
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "bicgstab/block_jacobi",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.009869975001493003,
+          "converged": true,
+          "iterations": 303,
+          "residual": 4.219883835590622e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.014464735999354161,
+          "converged": true,
+          "iterations": 439,
+          "residual": 1.3630343205250584e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.018886112000473076,
+          "converged": true,
+          "iterations": 590,
+          "residual": 2.1018642419446567e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.02314389299863251,
+          "converged": true,
+          "iterations": 706,
+          "residual": 9.044859557180504e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.02836662499976228,
+          "converged": true,
+          "iterations": 878,
+          "residual": 3.0125701816304483e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.026462852998520248,
+          "converged": true,
+          "iterations": 825,
+          "residual": 6.641436223781006e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.027821927000331925,
+          "converged": true,
+          "iterations": 857,
+          "residual": 3.6955557542619956e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.024998622997372877,
+          "converged": true,
+          "iterations": 786,
+          "residual": 3.86762786814136e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.02608624699860229,
+          "converged": true,
+          "iterations": 798,
+          "residual": 4.141338481487724e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.0008637749997433275,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=3.559e-02, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 0.2083579220015963,
+      "aborted": "LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=3.559e-02, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "bicgstab/ilu",
+      "method": "bicgstab",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.002858413998183096,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.231317025649184e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.00298355300037656,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=9.928e-01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 0.007470491000276525,
+      "aborted": "LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=9.928e-01, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "bicgstab/schur",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.02126445599787985,
+          "converged": true,
+          "iterations": 219,
+          "residual": 8.699694636140057e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.004776882000442129,
+          "converged": true,
+          "iterations": 43,
+          "residual": 6.43062534942012e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.013934599999629427,
+          "converged": true,
+          "iterations": 141,
+          "residual": 9.453536058103645e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.03632776099766488,
+          "converged": true,
+          "iterations": 384,
+          "residual": 9.474213287828001e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.044370200997946085,
+          "converged": true,
+          "iterations": 471,
+          "residual": 7.01714029502439e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.04413056100020185,
+          "converged": true,
+          "iterations": 474,
+          "residual": 2.6369190086716277e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.042748156000016024,
+          "converged": true,
+          "iterations": 456,
+          "residual": 2.3594477022165673e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.04647197899976163,
+          "converged": true,
+          "iterations": 490,
+          "residual": 8.811268714750065e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.05105198099772679,
+          "converged": true,
+          "iterations": 543,
+          "residual": 4.432150804361978e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.05910059099915088,
+          "converged": true,
+          "iterations": 636,
+          "residual": 2.5519318670295573e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.04831024400118622,
+          "converged": true,
+          "iterations": 514,
+          "residual": 1.9316027531726146e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 1206
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.0021318470026017167,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.598e-03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 0.4243105130008189,
+      "aborted": "LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.598e-03, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B2",
+      "size": "quick",
+      "label": "petsc",
+      "method": "petsc",
+      "block_size": 3,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 1.0752629320013511,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "petsc did not converge within 2000 iterations (KSPConvergedReason=-3, relative residual=2.536e-06, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 1206
+        }
+      ],
+      "total_s": 1.0759437479973712,
+      "aborted": "LinearSolveError: petsc did not converge within 2000 iterations (KSPConvergedReason=-3, relative residual=2.536e-06, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "direct",
+      "method": "direct",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.035643053000967484,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.03428567900118651,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.03374496799733606,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.034817293999367394,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.034598181999172084,
+          "converged": true,
+          "iterations": 1,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        }
+      ],
+      "total_s": 0.2214237320004031,
+      "aborted": ""
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "gmres/block_jacobi",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 1.5220859280016157,
+          "converged": true,
+          "iterations": 749,
+          "residual": 2.7316415648797143e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 1.476714902997628,
+          "converged": true,
+          "iterations": 724,
+          "residual": 9.798793523901922e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 1.6286659450015577,
+          "converged": true,
+          "iterations": 762,
+          "residual": 2.1646296145574516e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 1.3685833889976493,
+          "converged": true,
+          "iterations": 688,
+          "residual": 9.228270731747715e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 1.5388941729979706,
+          "converged": true,
+          "iterations": 724,
+          "residual": 9.771568608148431e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        }
+      ],
+      "total_s": 7.571050528997148,
+      "aborted": ""
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "gmres/ilu",
+      "method": "gmres",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.11527233000015258,
+          "converged": true,
+          "iterations": 3,
+          "residual": 1.462205688329388e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.10982312600026489,
+          "converged": true,
+          "iterations": 3,
+          "residual": 8.384616924703817e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.11305663700113655,
+          "converged": true,
+          "iterations": 3,
+          "residual": 2.595930627250509e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.11655537600017851,
+          "converged": true,
+          "iterations": 3,
+          "residual": 4.375895189415617e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.11663322000094922,
+          "converged": true,
+          "iterations": 3,
+          "residual": 1.9059842640735314e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.11232959300104994,
+          "converged": true,
+          "iterations": 3,
+          "residual": 2.5581822410136415e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        }
+      ],
+      "total_s": 0.7370141440005682,
+      "aborted": ""
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "gmres/schur",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 6.03635647000192,
+          "converged": true,
+          "iterations": 2300,
+          "residual": 8.510864227964324e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 4.862153098998533,
+          "converged": true,
+          "iterations": 2166,
+          "residual": 3.9314471016874246e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 4.502193731001171,
+          "converged": true,
+          "iterations": 2000,
+          "residual": 9.582575673459946e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 4.245236064998608,
+          "converged": true,
+          "iterations": 1900,
+          "residual": 8.12549339810326e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 508.97603135199824,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=7.218e-10, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 11640
+        }
+      ],
+      "total_s": 528.652994772001,
+      "aborted": "LinearSolveError: gmres did not converge within 2000 iterations (scipy code=2000, relative residual=7.218e-10, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "bicgstab/block_jacobi",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.11685303099875455,
+          "converged": true,
+          "iterations": 304,
+          "residual": 8.804542562677262e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.09933808099958696,
+          "converged": true,
+          "iterations": 276,
+          "residual": 7.655488853623614e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.10544934599965927,
+          "converged": true,
+          "iterations": 271,
+          "residual": 3.857387884790863e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.10959431400260655,
+          "converged": true,
+          "iterations": 319,
+          "residual": 7.164503962076527e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.029030420999333728,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=4.721e-04, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 11640
+        }
+      ],
+      "total_s": 0.4901357859998825,
+      "aborted": "LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=4.721e-04, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "bicgstab/ilu",
+      "method": "bicgstab",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.10565279699949315,
+          "converged": true,
+          "iterations": 1,
+          "residual": 3.433299668910717e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.10986087499986752,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.9209355496034772e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.10943032800059882,
+          "converged": true,
+          "iterations": 1,
+          "residual": 4.428206357533584e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.10940420299812104,
+          "converged": true,
+          "iterations": 1,
+          "residual": 2.0848125682524605e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.10673362099987571,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.294998348040683e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.10840520300189382,
+          "converged": true,
+          "iterations": 1,
+          "residual": 2.2798095498439385e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.10446340300040902,
+          "converged": true,
+          "iterations": 1,
+          "residual": 2.2164896589388e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.10348114999942482,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.9695083878651596e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        }
+      ],
+      "total_s": 0.9256403010003851,
+      "aborted": ""
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "bicgstab/schur",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.8056712180004979,
+          "converged": true,
+          "iterations": 827,
+          "residual": 7.583706184211484e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 1.123083737998968,
+          "converged": true,
+          "iterations": 1199,
+          "residual": 6.239406531139517e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.856234956998378,
+          "converged": true,
+          "iterations": 850,
+          "residual": 9.16708880803791e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.7410628329998872,
+          "converged": true,
+          "iterations": 760,
+          "residual": 7.746539301936307e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.1543031080000219,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=7.497e-03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 11640
+        }
+      ],
+      "total_s": 3.7092926830009674,
+      "aborted": "LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=7.497e-03, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+    },
+    {
+      "case": "B3",
+      "size": "quick",
+      "label": "petsc",
+      "method": "petsc",
+      "block_size": 3,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.31451389900030335,
+          "converged": true,
+          "iterations": 761,
+          "residual": 1.705821339730595e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.300445946999389,
+          "converged": true,
+          "iterations": 751,
+          "residual": 5.2103991821276045e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.2936682979998295,
+          "converged": true,
+          "iterations": 729,
+          "residual": 4.925007031213884e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.28318522999688867,
+          "converged": true,
+          "iterations": 711,
+          "residual": 4.588575630729949e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.2881565480020072,
+          "converged": true,
+          "iterations": 717,
+          "residual": 3.6291113124417936e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 11640
+        }
+      ],
+      "total_s": 1.514981317002821,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "direct",
+      "method": "direct",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.1394206539989682,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1845721296752366e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.1378744329995243,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.36313404932535e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.14113497099970118,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0255923916282735e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.13343029399766237,
+          "converged": true,
+          "iterations": 1,
+          "residual": 4.58300640634511e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.1410891849991458,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.8406717584444555e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.13636738000059268,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.805557661348399e-13,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.1418130679994647,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1748620411410216e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.13673810700129252,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.080692249365018e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.13877278300060425,
+          "converged": true,
+          "iterations": 1,
+          "residual": 5.011662107800343e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.13787779899939778,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.2761960628882217e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 1.4547883279992675,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "gmres/block_jacobi",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.010255568999127718,
+          "converged": true,
+          "iterations": 27,
+          "residual": 4.6124373425348584e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.011796536000474589,
+          "converged": true,
+          "iterations": 32,
+          "residual": 4.385472783319334e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.017370219000440557,
+          "converged": true,
+          "iterations": 36,
+          "residual": 2.942829882556386e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.018713582001510076,
+          "converged": true,
+          "iterations": 41,
+          "residual": 5.303217252357966e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.032300550999934785,
+          "converged": true,
+          "iterations": 61,
+          "residual": 1.4709302400843325e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.03939981999792508,
+          "converged": true,
+          "iterations": 69,
+          "residual": 1.114909053629632e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.08302494400049909,
+          "converged": true,
+          "iterations": 79,
+          "residual": 2.146588913556117e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 0.25322893299744464,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "gmres/ilu",
+      "method": "gmres",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.1104468289995566,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=2.640e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.1394104699975287,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1845721296752366e-12,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.11276852599985432,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=1.796e+05, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.13938373599739862,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.36313404932535e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.11767396200229996,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=1.140e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.13880937100111623,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0255923916282735e-12,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.09518015600042418,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=1.000e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.14196107200041297,
+          "converged": true,
+          "iterations": 1,
+          "residual": 4.58300640634511e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 3.089533050002501,
+          "converged": true,
+          "iterations": 874,
+          "residual": 6.748009806493279e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 9,
+          "seconds": 2.510764777998702,
+          "converged": true,
+          "iterations": 723,
+          "residual": 8.756117614494103e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 10,
+          "seconds": 2.8526223769986245,
+          "converged": true,
+          "iterations": 788,
+          "residual": 5.243855819527818e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 11,
+          "seconds": 3.081849594000232,
+          "converged": true,
+          "iterations": 862,
+          "residual": 7.546737853489686e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 12,
+          "seconds": 2.8675834870009567,
+          "converged": true,
+          "iterations": 797,
+          "residual": 9.354808380683706e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 13,
+          "seconds": 2.705399070000567,
+          "converged": true,
+          "iterations": 768,
+          "residual": 5.887685233899105e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 18.171764609000093,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "gmres/schur",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.3368719600002805,
+          "converged": true,
+          "iterations": 253,
+          "residual": 6.554693856240191e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.4065756769996369,
+          "converged": true,
+          "iterations": 263,
+          "residual": 9.119875266438565e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.43233117499767104,
+          "converged": true,
+          "iterations": 256,
+          "residual": 8.838744181131742e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.4101585369971872,
+          "converged": true,
+          "iterations": 317,
+          "residual": 8.699840662954131e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.7640793919999851,
+          "converged": true,
+          "iterations": 517,
+          "residual": 7.741861543955345e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 1.114344081001036,
+          "converged": true,
+          "iterations": 727,
+          "residual": 2.145971956983734e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.566876670000056,
+          "converged": true,
+          "iterations": 386,
+          "residual": 4.173416772208693e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 4.069973501998902,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "bicgstab/block_jacobi",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.007047423998301383,
+          "converged": true,
+          "iterations": 13,
+          "residual": 9.76336874516667e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.004453707999346079,
+          "converged": true,
+          "iterations": 15,
+          "residual": 3.038123854878192e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.004004932001407724,
+          "converged": true,
+          "iterations": 15,
+          "residual": 7.491653205820827e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.004324980000092182,
+          "converged": true,
+          "iterations": 18,
+          "residual": 3.693648642014481e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.007729016000666888,
+          "converged": true,
+          "iterations": 32,
+          "residual": 4.804845867766402e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.01025670600211015,
+          "converged": true,
+          "iterations": 38,
+          "residual": 9.428157703428387e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.009969014001399046,
+          "converged": true,
+          "iterations": 43,
+          "residual": 7.462968112959464e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.009602917998563498,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.638e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.13881337900238577,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.162760569156963e-14,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 0.24078229099905002,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "bicgstab/ilu",
+      "method": "bicgstab",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 1.5914629910002986,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=5.600e+124, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.14286296700083767,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1845721296752366e-12,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.08982930300044245,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=9.999e-01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.1413658290002786,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.36313404932535e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.08641823100333568,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=1.000e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.13941360199896735,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0255923916282735e-12,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.08922160599831841,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-11, relative residual=1.000e+00, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.1360155019974627,
+          "converged": true,
+          "iterations": 1,
+          "residual": 4.58300640634511e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 8.019334552001965,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.148e+06, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.14336926599935396,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.8406717584444555e-11,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 10,
+          "seconds": 7.925612276998436,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=2.860e+106, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.14497764500265475,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.805557661348399e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 12,
+          "seconds": 7.9628010769993125,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=2.093e+14, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.13969672900202568,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1748620411410216e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 14,
+          "seconds": 7.9364200730015,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=4.689e+01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 15,
+          "seconds": 0.13951734399961424,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.080692249365018e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 16,
+          "seconds": 7.865768583997124,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=3.493e+13, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 17,
+          "seconds": 0.13869099099974846,
+          "converged": true,
+          "iterations": 1,
+          "residual": 5.011662107800343e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 18,
+          "seconds": 8.27803599300023,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=5.771e+01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 19,
+          "seconds": 0.143427844002872,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.2761960628882217e-14,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 51.32674842399865,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "bicgstab/schur",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.25228192299982766,
+          "converged": true,
+          "iterations": 333,
+          "residual": 4.4984307134183676e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.19114467200051877,
+          "converged": true,
+          "iterations": 241,
+          "residual": 9.736159581291465e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.2035569760009821,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=4.087e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.13766252999994322,
+          "converged": true,
+          "iterations": 1,
+          "residual": 8.317181791596262e-13,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.18879034799829242,
+          "converged": true,
+          "iterations": 252,
+          "residual": 8.38483732755955e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.4202763440007402,
+          "converged": true,
+          "iterations": 580,
+          "residual": 9.11923045647874e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.28275201300129993,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.050e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.1412912759988103,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.3072032230511148e-12,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.07879292299912777,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=2.370e-06, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 6591
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.14055556499806698,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.808960766577986e-14,
+          "fell_back": true,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 2.078797353999107,
+      "aborted": ""
+    },
+    {
+      "case": "S3D",
+      "size": "quick",
+      "label": "petsc",
+      "method": "petsc",
+      "block_size": 3,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0027622199995676056,
+          "converged": true,
+          "iterations": 14,
+          "residual": 2.060423051747302e-08,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0047256819998438004,
+          "converged": true,
+          "iterations": 19,
+          "residual": 2.5710745274628664e-08,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.0053705329992226325,
+          "converged": true,
+          "iterations": 20,
+          "residual": 1.785344086471657e-08,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.0037905880017206073,
+          "converged": true,
+          "iterations": 21,
+          "residual": 1.4149299899402909e-08,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.005937418001849437,
+          "converged": true,
+          "iterations": 34,
+          "residual": 5.136500120823627e-07,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.010321310001017991,
+          "converged": true,
+          "iterations": 66,
+          "residual": 8.706601456442115e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.012422645999322413,
+          "converged": true,
+          "iterations": 72,
+          "residual": 1.560364740450767e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.010113943000760628,
+          "converged": true,
+          "iterations": 71,
+          "residual": 1.368430084228995e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.011516162001498742,
+          "converged": true,
+          "iterations": 70,
+          "residual": 2.1709161321221402e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.012977424998098286,
+          "converged": true,
+          "iterations": 75,
+          "residual": 4.536241390797057e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 6591
+        }
+      ],
+      "total_s": 0.13250882099964656,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "direct",
+      "method": "direct",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.002081121998344315,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1693304577356282e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.002003339999646414,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0818049810670554e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.0058794939977815375,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "gmres/block_jacobi",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0035474340002110694,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.425573523777855e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0032796100022096653,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.3445169200568922e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.008573396000429057,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "gmres/ilu",
+      "method": "gmres",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0035579030009103008,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.425573523777855e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0032960050011752173,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.3445169200568922e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.008572098999138689,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "gmres/schur",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0035603210017143283,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.425573523777855e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0034005859997705556,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.3445169200568922e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.008688625999639044,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "bicgstab/block_jacobi",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0030768620017624926,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1262823768571567e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0028502339991973713,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1445271693857634e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.007576083000458311,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "bicgstab/ilu",
+      "method": "bicgstab",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.003091720001975773,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1262823768571567e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0028758110020135064,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1445271693857634e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.007683839998207986,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "bicgstab/schur",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.003121342000667937,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1262823768571567e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0030989049992058426,
+          "converged": true,
+          "iterations": 0,
+          "residual": 1.1445271693857634e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.008068251998338383,
+      "aborted": ""
+    },
+    {
+      "case": "U2DP",
+      "size": "quick",
+      "label": "petsc",
+      "method": "petsc",
+      "block_size": 3,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.00043991600250592455,
+          "converged": true,
+          "iterations": 1,
+          "residual": 2.4023939858674863e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.0002942610008176416,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.2360712443511998e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 1001
+        }
+      ],
+      "total_s": 0.0024096640008792747,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "direct",
+      "method": "direct",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.04494724299729569,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0871084094566903e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.04373753899926669,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1716552371639307e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.04321066500051529,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1487425934047382e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.042999932997190626,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.197039221251277e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.04209230199921876,
+          "converged": true,
+          "iterations": 1,
+          "residual": 9.209615623834482e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.04367267400084529,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.198831775673681e-14,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.043017853997298516,
+          "converged": true,
+          "iterations": 1,
+          "residual": 5.147070037322093e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.042942996999045135,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.635089272001164e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.043006335999962175,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.482332758043501e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.04288477600130136,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.457368179669667e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.042440694000106305,
+          "converged": true,
+          "iterations": 1,
+          "residual": 9.497643845120332e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.042704298000899144,
+          "converged": true,
+          "iterations": 1,
+          "residual": 8.769632003921399e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.042512864998570876,
+          "converged": true,
+          "iterations": 1,
+          "residual": 8.094285915452634e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.042531020000751596,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.101236744307929e-16,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 14,
+          "seconds": 0.042430262998095714,
+          "converged": true,
+          "iterations": 1,
+          "residual": 3.765906604551323e-15,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.7065805990023364,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "gmres/block_jacobi",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.012818343999242643,
+          "converged": true,
+          "iterations": 62,
+          "residual": 6.871703831661844e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.019776878998527536,
+          "converged": true,
+          "iterations": 81,
+          "residual": 9.073194229659099e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.019963660000939853,
+          "converged": true,
+          "iterations": 81,
+          "residual": 7.719958498531138e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.019289080999442376,
+          "converged": true,
+          "iterations": 79,
+          "residual": 7.869534121257715e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.019299733998195734,
+          "converged": true,
+          "iterations": 80,
+          "residual": 8.601620504458992e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.024914699999499135,
+          "converged": true,
+          "iterations": 125,
+          "residual": 4.833544191428248e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.02180988200052525,
+          "converged": true,
+          "iterations": 96,
+          "residual": 9.60744707033347e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.024441564000881044,
+          "converged": true,
+          "iterations": 118,
+          "residual": 6.271851537324824e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.02441552999880514,
+          "converged": true,
+          "iterations": 119,
+          "residual": 3.32461148461927e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.0218283620015427,
+          "converged": true,
+          "iterations": 95,
+          "residual": 5.617947869101734e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.021770526996988337,
+          "converged": true,
+          "iterations": 97,
+          "residual": 6.400717406480586e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.01945223299844656,
+          "converged": true,
+          "iterations": 97,
+          "residual": 8.095694084582883e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.017320348000794183,
+          "converged": true,
+          "iterations": 90,
+          "residual": 7.884754258194846e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.01920434899875545,
+          "converged": true,
+          "iterations": 80,
+          "residual": 5.026339862326009e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.34269500600203173,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "gmres/ilu",
+      "method": "gmres",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 123.93077497700142,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "gmres did not converge within 2000 iterations (scipy code=2000, relative residual=2.773e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        }
+      ],
+      "total_s": 123.93505610899956,
+      "aborted": "budget exceeded"
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "gmres/schur",
+      "method": "gmres",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.027687346999300644,
+          "converged": true,
+          "iterations": 70,
+          "residual": 2.5019157242666996e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.028370043997711036,
+          "converged": true,
+          "iterations": 72,
+          "residual": 5.5969954112651893e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.028235499001311837,
+          "converged": true,
+          "iterations": 72,
+          "residual": 2.1210386934229116e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.033660995002719574,
+          "converged": true,
+          "iterations": 91,
+          "residual": 4.3567019481057085e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.0346427570002561,
+          "converged": true,
+          "iterations": 80,
+          "residual": 7.845950045528296e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.0520464789988182,
+          "converged": true,
+          "iterations": 130,
+          "residual": 9.149810842835273e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.05691033199764206,
+          "converged": true,
+          "iterations": 155,
+          "residual": 4.476643786010675e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.05239492399778101,
+          "converged": true,
+          "iterations": 129,
+          "residual": 8.094318351961174e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.051519380998797715,
+          "converged": true,
+          "iterations": 122,
+          "residual": 8.139959441480707e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.056867774001148064,
+          "converged": true,
+          "iterations": 144,
+          "residual": 1.2568963595741556e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.05069711800024379,
+          "converged": true,
+          "iterations": 122,
+          "residual": 8.701963673934417e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.04923911600053543,
+          "converged": true,
+          "iterations": 124,
+          "residual": 8.049481445042378e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.05256823299714597,
+          "converged": true,
+          "iterations": 130,
+          "residual": 7.066881061668647e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.05053359500016086,
+          "converged": true,
+          "iterations": 120,
+          "residual": 4.7164274973336564e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.6823614289969555,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "bicgstab/block_jacobi",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "block_jacobi",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.004692050002631731,
+          "converged": true,
+          "iterations": 41,
+          "residual": 4.235145498123339e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.006133967002824647,
+          "converged": true,
+          "iterations": 56,
+          "residual": 6.988984345820574e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.005949754999164725,
+          "converged": true,
+          "iterations": 58,
+          "residual": 8.391314926979433e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.005517277000762988,
+          "converged": true,
+          "iterations": 53,
+          "residual": 5.0939072536827876e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.006309077998594148,
+          "converged": true,
+          "iterations": 59,
+          "residual": 6.973601889065229e-12,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.006680801001493819,
+          "converged": true,
+          "iterations": 65,
+          "residual": 6.95061712676985e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.006429790999391116,
+          "converged": true,
+          "iterations": 61,
+          "residual": 9.601181825444019e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.006445817998610437,
+          "converged": true,
+          "iterations": 65,
+          "residual": 9.34637441913246e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.007295942003111122,
+          "converged": true,
+          "iterations": 73,
+          "residual": 6.018499388826621e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.006821891998697538,
+          "converged": true,
+          "iterations": 67,
+          "residual": 2.0831341346147278e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.006598312997084577,
+          "converged": true,
+          "iterations": 66,
+          "residual": 9.625054919752785e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.0059816730026795994,
+          "converged": true,
+          "iterations": 56,
+          "residual": 6.972845322713395e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.005901431999518536,
+          "converged": true,
+          "iterations": 57,
+          "residual": 8.686617447830677e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.0024140460009220988,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.125e-03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 14,
+          "seconds": 0.042790715997398365,
+          "converged": true,
+          "iterations": 1,
+          "residual": 5.816869272918743e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.1818349080022017,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "bicgstab/ilu",
+      "method": "bicgstab",
+      "block_size": null,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 1.5599190430002636,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.212e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.04471898599877022,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.0871084094566903e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 1.5510940490021312,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=7.352e+02, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.04751166200003354,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1716552371639307e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 1.5614842840004712,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.867e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.04812663399934536,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.1487425934047382e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 1.5474471749985241,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.290e+08, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.04763330199784832,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.197039221251277e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 1.5444436700017832,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=4.511e+01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.04593654000200331,
+          "converged": true,
+          "iterations": 1,
+          "residual": 9.209615623834482e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 1.5446602709998842,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=2.320e+02, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.046359473999473266,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.198831775673681e-14,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 1.5464443979981297,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=4.850e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.0468858829990495,
+          "converged": true,
+          "iterations": 1,
+          "residual": 5.147070037322093e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 14,
+          "seconds": 1.5477926339990518,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=9.943e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 15,
+          "seconds": 0.047177245000057155,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.635089272001164e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 16,
+          "seconds": 1.5577404510004271,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.141e+04, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 17,
+          "seconds": 0.046352798999578226,
+          "converged": true,
+          "iterations": 1,
+          "residual": 6.482332758043501e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 18,
+          "seconds": 1.5485960510013683,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=5.389e+02, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 19,
+          "seconds": 0.047501536002528155,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.457368179669667e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 20,
+          "seconds": 1.5498113030007516,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.613e+03, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 21,
+          "seconds": 0.04620722300023772,
+          "converged": true,
+          "iterations": 1,
+          "residual": 9.497643845120332e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 22,
+          "seconds": 1.5546025760013436,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=1.669e+02, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 23,
+          "seconds": 0.04665489499893738,
+          "converged": true,
+          "iterations": 1,
+          "residual": 8.769632003921399e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 24,
+          "seconds": 1.5612750589971256,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=2.493e+04, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 25,
+          "seconds": 0.04571688400028506,
+          "converged": true,
+          "iterations": 1,
+          "residual": 8.094285915452634e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 26,
+          "seconds": 1.551696319002076,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=2000, relative residual=4.940e-01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 27,
+          "seconds": 0.04660178999984055,
+          "converged": true,
+          "iterations": 1,
+          "residual": 7.101236744307929e-16,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 28,
+          "seconds": 1.134860785001365,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=3.082e+01, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 29,
+          "seconds": 0.04621605099964654,
+          "converged": true,
+          "iterations": 1,
+          "residual": 3.765906604551323e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 23.642868136001198,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "bicgstab/schur",
+      "method": "bicgstab",
+      "block_size": 3,
+      "precond": "schur",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.019360477999725845,
+          "converged": true,
+          "iterations": 41,
+          "residual": 2.361027802200533e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.01837853300094139,
+          "converged": true,
+          "iterations": 39,
+          "residual": 9.326965966905535e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.018901980998634826,
+          "converged": true,
+          "iterations": 38,
+          "residual": 6.615576947460713e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.021447915998578537,
+          "converged": true,
+          "iterations": 49,
+          "residual": 3.199111218986254e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.02152271800150629,
+          "converged": true,
+          "iterations": 49,
+          "residual": 2.315916872942589e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.03266552100103581,
+          "converged": true,
+          "iterations": 87,
+          "residual": 5.7395773850597565e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.032032904997322476,
+          "converged": true,
+          "iterations": 85,
+          "residual": 4.632290891252167e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.031043588001921307,
+          "converged": true,
+          "iterations": 81,
+          "residual": 8.122219555016824e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.030755709998629754,
+          "converged": true,
+          "iterations": 79,
+          "residual": 8.948204307544948e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.029749848999927053,
+          "converged": true,
+          "iterations": 77,
+          "residual": 5.613459290708216e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.028903228001581738,
+          "converged": true,
+          "iterations": 74,
+          "residual": 4.7679936677299304e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.027622839003015542,
+          "converged": true,
+          "iterations": 69,
+          "residual": 8.549647392759723e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.028344491998723242,
+          "converged": true,
+          "iterations": 73,
+          "residual": 9.840474704131369e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.014286378001997946,
+          "converged": false,
+          "iterations": 0,
+          "residual": NaN,
+          "fell_back": false,
+          "error": "bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=6.106e-05, target rtol=1.000e-10) -- refusing to return the unconverged iterate",
+          "dof": 2889
+        },
+        {
+          "call_index": 14,
+          "seconds": 0.04687708200071938,
+          "converged": true,
+          "iterations": 1,
+          "residual": 1.290682453041577e-15,
+          "fell_back": true,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.4603757540025981,
+      "aborted": ""
+    },
+    {
+      "case": "B9",
+      "size": "quick",
+      "label": "petsc",
+      "method": "petsc",
+      "block_size": 3,
+      "precond": "auto",
+      "records": [
+        {
+          "call_index": 0,
+          "seconds": 0.0075311590007913765,
+          "converged": true,
+          "iterations": 62,
+          "residual": 6.87170252241131e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 1,
+          "seconds": 0.010679555998649448,
+          "converged": true,
+          "iterations": 81,
+          "residual": 9.073201764193028e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 2,
+          "seconds": 0.009150259000307415,
+          "converged": true,
+          "iterations": 81,
+          "residual": 7.719864161523428e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 3,
+          "seconds": 0.007727402000455186,
+          "converged": true,
+          "iterations": 79,
+          "residual": 7.869648163419904e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 4,
+          "seconds": 0.007692383998801233,
+          "converged": true,
+          "iterations": 80,
+          "residual": 8.601624464941122e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 5,
+          "seconds": 0.009140402999037178,
+          "converged": true,
+          "iterations": 84,
+          "residual": 7.446852576460574e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 6,
+          "seconds": 0.008011883997824043,
+          "converged": true,
+          "iterations": 83,
+          "residual": 3.078405588577979e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 7,
+          "seconds": 0.0107644240015361,
+          "converged": true,
+          "iterations": 83,
+          "residual": 4.203461533484762e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 8,
+          "seconds": 0.011626588999206433,
+          "converged": true,
+          "iterations": 84,
+          "residual": 2.5645045416274623e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 9,
+          "seconds": 0.009022587000799831,
+          "converged": true,
+          "iterations": 84,
+          "residual": 2.1999631888879732e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 10,
+          "seconds": 0.00779190699904575,
+          "converged": true,
+          "iterations": 84,
+          "residual": 2.0756657932212782e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 11,
+          "seconds": 0.008721507001610007,
+          "converged": true,
+          "iterations": 76,
+          "residual": 6.845401225202796e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 12,
+          "seconds": 0.009858843997790245,
+          "converged": true,
+          "iterations": 74,
+          "residual": 8.269515342997506e-10,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        },
+        {
+          "call_index": 13,
+          "seconds": 0.011073705998569494,
+          "converged": true,
+          "iterations": 82,
+          "residual": 3.830493326531241e-11,
+          "fell_back": false,
+          "error": "",
+          "dof": 2889
+        }
+      ],
+      "total_s": 0.18454879599812557,
+      "aborted": ""
+    }
+  ]
+}

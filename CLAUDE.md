@@ -97,8 +97,26 @@ python3 examples/01_pn_diode.py            # examples 01..05
 
 ## Gotcha: line endings are MIXED, and no .gitattributes guards them
 
-`pytcad/pytcad/` is 18 CRLF files and 28 LF files, and there is no
-`.gitattributes`.  `device.py`, `device2d.py` and `CLAUDE.md` are CRLF.
+`pytcad/pytcad/` mixes both, and there is no `.gitattributes`.
+
+**Do not trust a checked-in list of WHICH files -- measure it.** This
+paragraph used to name `device.py` and `device2d.py` as the CRLF ones;
+re-measured 2026-09-10, both are LF and the counts had drifted from
+"18 CRLF / 28 LF" to **13 CRLF / 36 LF**. The set moves whenever a file
+gets rewritten, so the only durable form of this gotcha is the check
+itself:
+
+```bash
+cd pytcad/pytcad && for f in *.py; do
+  grep -qU $'\r' "$f" && echo "CRLF: $f"; done
+```
+
+As of 2026-09-10 the 13 are: `adapt.py`, `constants.py`,
+`continuation.py`, `fermi.py`, `__init__.py`, `ionization.py`,
+`linsolve.py`, `materials.py`, `mesh.py`, `mesh2d.py`, `mesh3d.py`,
+`mosfet.py`, `process.py` -- plus `CLAUDE.md` itself. Note that
+`linsolve.py` is on that list and is exactly the file M31 P5-1 keeps
+editing.
 
 So a script that does the obvious thing --
 

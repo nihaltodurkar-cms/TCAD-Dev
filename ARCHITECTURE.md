@@ -1734,7 +1734,16 @@ M40  OPTICAL GENERATION / PHOTONICS                       [L]
 Spine:  M31 P3a -> M32 -> M31 P4..P7 -> M35
         (the spine is "make it fast, PROVE it, then spend the speed")
         STATUS (2026-09-10): P3a, P3b, P4, M32, P5-0 and P5-1 (all 5
-        phases) have landed. P5 PROPER (the C++ assembler) STOPPED
+        phases, plus Phase A-2) have landed. Phase A-2 measured the
+        five solver-selection cells Phase A had left absent, so
+        linsolve.select_auto now has a real entry for all EIGHT cells
+        a caller can reach -- and it overturned Phase A's own summary:
+        the discriminator is COUPLING, not dimension (a scalar 2D
+        Poisson solve wants petsc, 12x; a coupled 2D one wants direct
+        even at 72,912 DOF). Largest new win: 3D structured coupled
+        bias, 44.56s -> 1.60s (27.9x). No default moved -- E-auto is
+        still a separate proposal, but its stated blocker is now gone.
+        See M31-P5-1-SOLVER-SELECTION-PLAN.md "Phase A-2". P5 PROPER (the C++ assembler) STOPPED
         after P5-0, not started -- its own section 9 exit criterion
         fired once P5-1 made the re-run possible: B9's assembly SHARE
         rose 11x (1.5% -> 16.3%) but its ABSOLUTE cost did not move

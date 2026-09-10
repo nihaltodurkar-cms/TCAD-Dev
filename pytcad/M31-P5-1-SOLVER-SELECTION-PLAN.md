@@ -696,6 +696,311 @@ matrix gets measured (starting with `device3d.py`'s coupled `solve_bias`
 and structured 1D/2D, the combinations section 4's own Phase D writeup
 names as unmeasured).
 
+### Phase A-2 -- the cells Phase A never measured (2026-09-10)
+
+**Why this exists.** Phase E's own writeup names the blocker for
+E-auto precisely: Phase A produced evidence for exactly THREE
+`(dim, unstructured, coupled)` cells, so flipping the default would
+mean guessing for every cell `select_auto` currently refuses by name.
+Phase A-2 closes that gap by MEASURING those cells rather than
+arguing about them.
+
+**Exactly which cells, and why these.** Grepping every `select_auto`
+call site gives nine dispatch points across six cells; three are
+covered by Phase A (B4, B8, B9). The five that are reachable through
+`auto` and unmeasured are:
+
+| cell | call site | what reaches it |
+|---|---|---|
+| (1, False, True) | `device.py:1739` | **B2** (1D diode `solve_bias`) |
+| (2, False, True) | `device2d.py:1000` | **B3** (2D MOSFET `solve_bias`) |
+| (3, False, True) | `device3d.py:1015` | **S3D** (new study fixture) |
+| (2, True, False) | `unstructured_poisson.py:141` | **U2DP** (new study fixture) |
+| (3, True, False) | `unstructured_dd3d.py:286` | **B9**, inside `solve_bias3d` |
+
+Two other `solve_linear` call sites -- `Device1D` and `Device2D`'s
+`solve_equilibrium` -- are deliberately NOT on this list: they
+hardcode `method="direct"` and never read `opts.linsolve` at all, so
+no selection rule can reach them. Measuring them would produce a
+number no caller could act on.
+
+**Three harness changes, each with a reason that is not cosmetic:**
+
+1. **`IterRecord` now records `dof`** (the rows of the system actually
+   handed to `solve_linear`). This is what makes (3, True, False)
+   measurable at all: `unstructured_dd3d.solve_bias3d` runs a SCALAR
+   equilibrium sub-solve before its COUPLED bias solve, so ONE
+   module-local `solve_linear` name serves TWO different cells, and
+   the only thing separating them per call is the system size -- N for
+   the scalar Poisson rows, 3N for the coupled ones. Phase A's B9
+   numbers silently averaged the two together.
+2. **`_sweep_structured` gained a `coupled=True` mode** that drives the
+   case's own `run()` and sweeps the FULL method x block_size x
+   preconditioner grid. Phase A's structured sweep varied only the
+   METHOD, which was correct for B4 (a scalar Poisson solve, where
+   `block_size` cannot apply structurally) and would be actively
+   misleading for a coupled solve: M22 phase 1 measured scalar ILU
+   making no visible progress in 500 iterations on exactly this
+   coupled Jacobian, which is why node-block-Jacobi exists at all.
+3. **Two study-only fixtures, `S3D` and `U2DP`**, kept OUT of
+   `cases.py`. Nothing in the dashboard reaches either call site --
+   B4/B5/B7 are all equilibrium-only, and `unstructured_dd.solve_bias`
+   cold-starts from an analytic Boltzmann guess rather than running a
+   Poisson equilibrium first (read from its `init` documentation, not
+   inferred from the module name). Adding dashboard rows would change
+   `BASELINE.md`/`FULL.md` and their gates; M32's own plan says the
+   dashboard is for per-commit rows and this is an occasional study.
+   If either shape ever deserves a permanent row, that is its own
+   proposal.
+
+**What Phase A-2 does NOT do.** It does not change any default. Adding
+a measured cell to `_AUTO_EVIDENCE` changes only what `auto` resolves
+to, and `NewtonOptions.linsolve` still defaults to `"direct"`, so no
+existing caller's behaviour moves and no golden can shift. E-auto
+remains a separate proposal with its own sign-off, exactly as Phase E
+wrote it.
+
+#### Phase A-2 -- QUICK-SIZE RESULTS (2026-09-10)
+
+Raw per-call record: `benchmarks/phase_a2_out/quick.json`; the run log
+with every abort reason is `quick.log`. Wall time is for the WHOLE
+Newton solve, not one matrix -- the distinction section 4 had to learn
+the hard way.
+
+| case | cell | DOF | direct | best iterative | winner |
+|---|---|---|---|---|---|
+| B2 | (1, F, T) | 1,206 | **0.01s** | 3.02s `gmres/schur` | **direct** |
+| B3 | (2, F, T) | 11,640 | **0.22s** | 0.74s `gmres/ilu` | **direct** |
+| S3D | (3, F, T) | 6,591 | 1.45s | **0.13s `petsc`** | **petsc, 11.2x** |
+| U2DP | (2, T, F) | 1,001 | 0.01s | 0.01s (all eight) | **no signal** |
+| B9 | (3, T, T) | 2,889 | 0.71s | **0.18s `petsc`** | petsc, 3.9x (re-confirms Phase A) |
+
+Per-config detail for the two cells that decided something new:
+
+| B2 (1D coupled, 1,206 DOF) | total | outcome |
+|---|---|---|
+| direct | 0.01s | 10 solves |
+| gmres/schur | 3.02s | converged, ~300x slower than direct |
+| gmres/block_jacobi | 40.60s | did NOT converge |
+| gmres/ilu | 0.01s | did NOT converge -- residual GREW to 1.196 |
+| bicgstab/block_jacobi | 0.21s | did NOT converge |
+| bicgstab/ilu | 0.01s | did NOT converge (residual 0.993) |
+| bicgstab/schur | 0.42s | did NOT converge |
+| petsc | 1.08s | did NOT converge (KSPConvergedReason=-3) |
+
+| S3D (3D structured coupled, 6,591 DOF) | total | vs direct |
+|---|---|---|
+| petsc | **0.13s** | **11.2x** |
+| bicgstab/block_jacobi | 0.24s | 6.0x |
+| gmres/block_jacobi | 0.25s | 5.8x |
+| bicgstab/schur | 2.08s | 0.7x |
+| gmres/schur | 4.07s | 0.36x |
+| direct | 1.45s | 1.0x |
+| gmres/ilu | 18.17s | 0.08x |
+| bicgstab/ilu | 51.33s | 0.03x |
+
+**What the shape of this says.** Six of B2's seven iterative configs
+fail to converge AT ALL on a 1D coupled Jacobian, and the survivor is
+300x slower than a direct solve of the same system -- so the 1D answer
+is not "direct is somewhat better", it is "iterative does not work
+here". At the other end, S3D reproduces M22 phase 1's finding from a
+new direction: node-block preconditioning wins by ~6x while SCALAR ILU
+is 12x-35x WORSE than direct on the same matrix, which is exactly the
+psi/n/p-interleaving failure mode `_build_block_jacobi_preconditioner`
+was written for.
+
+Across five independent cases the dimensional split is now consistent:
+**PETSc wins every 3D cell measured (B4 82-119x, S3D 11.2x, B9 3.9x);
+direct wins every 1D and 2D cell measured (B2, B3, B8).**
+
+**U2DP produced NO SIGNAL at quick size and that is reported, not
+massaged**: 1,001 nodes converge in 2 Newton steps and all eight
+configs land at 0.01s, which is timer resolution. Quick size cannot
+discriminate here; see the full-size section.
+
+##### Two harness findings from this run
+
+1. **`budget_s` bounds calls STARTED, not the duration of one call.**
+   It is checked on entry to each `solve_linear`, so a single
+   pathological solve runs to completion regardless: B3's
+   `gmres/schur` took **528.65s against a 90s budget**, and B9's
+   `gmres/ilu` took 123.94s. The cap is still doing its job (it stops
+   the REMAINING iterates) but a reader comparing "total_s" against
+   the budget will otherwise think the cap is broken. Bounding a
+   single call needs `maxiter`, which Phase A established is not
+   method-fair -- so this is a real limitation, not an oversight to
+   fix by lowering `maxiter`.
+2. **A wrong claim in Phase A's own harness comment, disproved by
+   measurement.** `CASE_MODULES` stated that "B9's [case] exercises
+   unstructured_dd3d, whose solve_bias3d calls its own equilibrium
+   sub-solve first". It does not: `solve_poisson_equilibrium3d` is a
+   separate PUBLIC entry point, and `solve_bias3d` cold-starts from an
+   analytic Boltzmann guess exactly like its 2D counterpart. The new
+   `dof` field is what caught it -- B9's entire sweep came back
+   `dof=[2889]` with no 963-row scalar solve anywhere. Consequence:
+   B9 covers (3, True, True) ONLY, and the scalar 3D unstructured cell
+   needs its own fixture (`U3DP`), just as the 2D one needs `U2DP`.
+   Had the `dof` field not been added, Phase A-2 would have recorded
+   B9's coupled numbers as evidence for a cell they never touched.
+
+#### Phase A-2 -- U3DP, AND THE FIRST MEASURED SIZE CROSSOVER
+
+`benchmarks/phase_a2_out/u3dp.json`. The `(3, True, False)` cell, on
+B9's own mesh and doping but through `solve_poisson_equilibrium3d`.
+
+| U3DP | DOF | direct | petsc | best scipy iterative |
+|---|---|---|---|---|
+| quick | 963 | **0.04s** | 0.97s (24x SLOWER) | 0.05s |
+| full | 2,488 | 0.16s | **0.04s (4.0x)** | 0.09s (1.8x) |
+
+This is the first cell in either phase where `min_dof` is set by a
+MEASURED CROSSOVER rather than by "the smallest size we happened to
+try". At 963 rows PETSc's setup dominates so thoroughly that it is 24x
+slower than a direct factorization; at 2,488 rows the same
+configuration is 4x faster. So the entry is `petsc` with
+`min_dof=2488`, and the refusal below that floor is backed by a
+measurement showing direct genuinely wins there -- a stronger claim
+than Gate D-3's usual "no evidence, refusing to guess".
+
+**A methodology check that passed, worth recording.** On this scalar
+system `gmres/block_jacobi`, `gmres/ilu` and `gmres/schur` report
+IDENTICAL times (0.09s at full size). That is the correct answer, and
+it is evidence the Phase A-2 faithful sweep works: the scalar call site
+passes neither `block_size` nor `precond`, so all three configurations
+collapse to the same call. Under Phase A's forcing methodology they
+would have appeared as three distinct preconditioners, two of them
+structurally impossible for a one-unknown-per-node system.
+
+#### Phase A-2 -- FULL-SIZE RESULTS
+
+`benchmarks/phase_a2_out/full.log` and `full2.log`.
+
+**B3 full (2D structured coupled, 72,912 DOF) -- direct still wins,
+and by more than at quick size.**
+
+| config | total | outcome |
+|---|---|---|
+| **direct** | **3.30s** | 5 solves |
+| gmres/ilu | 10.07s | converged, 3.0x slower |
+| bicgstab/block_jacobi | 9.66s | did not reach rtol |
+| bicgstab/ilu | 9.67s | did not reach rtol (residual 1.223e-10 vs 1.0e-10) |
+| bicgstab/schur | 25.98s | did not reach rtol |
+| petsc | 7.08s | did not reach rtol (residual 1.120e-09) |
+| gmres/schur | 136.41s | did not reach rtol |
+| gmres/block_jacobi | 138.57s | did not reach rtol |
+
+**An honest nuance about those "failures".** Two of them are MARGINAL,
+not divergent: `bicgstab/ilu` got to 1.223e-10 against a 1.0e-10
+target, and petsc to 1.120e-09. Called differently, a looser rtol
+would have scored them as converged. It does not change the ranking --
+petsc spent 7.08s to get that close, already 2x direct's 3.30s -- but
+"five of seven failed" would be a misleading summary on its own, so
+both numbers are recorded here rather than only the verdict.
+
+**S3D full (3D structured coupled, 27,783 DOF) -- the win GROWS with
+size**, which is the opposite of the trap M31 P5's re-decision fell
+into (a percentage that rises only because the rest got faster). Here
+the ABSOLUTE saving grows too: 1.45s -> 0.13s at quick size saves
+1.3s, while 43.58s -> ~1.9s at full size saves over 40 seconds.
+
+| S3D full (27,783 DOF) | total | vs direct |
+|---|---|---|
+| **gmres/block_jacobi** | **1.60s** | **27.9x** |
+| petsc | 1.67s | 26.7x |
+| bicgstab/block_jacobi | 5.14s | 8.7x |
+| direct | 44.56s | 1.0x |
+
+**U2DP full (2D unstructured SCALAR Poisson, 11,341 DOF) -- the result
+that changes the shape of the whole conclusion.**
+
+| config | total | vs direct |
+|---|---|---|
+| **petsc** | **0.01s** | **12x** |
+| bicgstab (all three) | 0.04s | 3.0x |
+| gmres (all three) | 0.05s | 2.4x |
+| direct | 0.12s | 1.0x |
+
+##### A third harness finding: pyamg writes to stdout, in bulk
+
+The first Phase A-2 runs left a 19 MB and a 4.5 MB markdown file
+behind. Almost none of it was benchmark data: **96.6% and 99.0% of
+those lines were a single repeated pyamg message**, `"Outer denominator
+was zero: diagonal plus sum of weak connections was zero."` -- 260,525
+copies in one file. pyamg prints it to STDOUT, unsuppressed, while its
+AMG hierarchy construction degenerates on these Jacobians.
+
+It reaches a real code path, not just this study:
+`_build_preconditioner` falls through to pyamg whenever `block_size`
+is None, which is exactly the ILU-chain configurations. With
+`NewtonOptions`' own default (`block_size=3`) the block-Jacobi branch
+is taken first and pyamg is never reached, so no shipped default is
+affected -- but a caller who sets `block_size=None` with an iterative
+method on a coupled system gets hundreds of thousands of lines of it.
+Worth knowing before someone reports "the solver hangs" when it is
+actually writing to a terminal.
+
+The regenerable stdout dumps were deleted; `phase_a2_out/` is now
+168 KB of `.json` and `.log`, comparable to Phase A's 196 KB. The
+per-call JSON and the run logs are the record.
+
+##### THE ACTUAL RULE IS COUPLING, NOT DIMENSION
+
+Phase A's three cells suggested "3D favours iterative, 1D/2D favour
+direct". With eight cells measured that summary is WRONG, in both
+directions, and a default built on it would have been wrong too:
+
+* **Scalar (one-unknown-per-node, Poisson-only) systems favour an
+  iterative solve once they are big enough to amortise setup -- in 2D
+  as well.** U2DP is 12x at 11,341 DOF. That is the same phenomenon as
+  B4's 82-119x in 3D, and it means the "2D means direct" half of the
+  Phase A summary was an artifact of B8 and B3 both happening to be
+  COUPLED cases.
+* **Coupled psi/n/p systems favour direct in 1D and 2D and iterative
+  only in 3D.** B2 (1D) is the extreme: six of seven iterative
+  configurations do not converge at all. B3 stays direct even at
+  72,912 DOF. S3D and B9 flip in 3D.
+* **And size matters independently of both.** U3DP is 4.0x FASTER with
+  petsc at 2,488 DOF and 24x SLOWER at 963.
+
+So a naive "use petsc in 3D" rule would have been wrong for small 3D
+meshes (U3DP at 963 DOF) and would have missed a 12x win in 2D
+(U2DP). This is the M22 MPI-Schwarz split-axis lesson again, in a new
+place: a rule derived from one axis of variation does not survive
+contact with a second one.
+
+##### One method choice that was NOT decided by the stopwatch alone
+
+For (3, False, True), `gmres/block_jacobi` (1.60s) and `petsc` (1.67s)
+are within 4% at full size -- inside run-to-run noise -- while at quick
+size petsc led 0.13s to 0.25s. The entry says **gmres**, and the reason
+is not performance: **petsc is an OPTIONAL dependency that
+`select_auto` cannot see.** On a checkout without PETSc, resolving to
+petsc means every Newton iterate pays a failed attempt plus a direct
+solve, i.e. strictly worse than never having tried. `gmres` with
+NewtonOptions' own defaults is pure scipy and always available, and
+`_build_preconditioner` routes its non-None `block_size` to node
+block-Jacobi before ILU/AMG -- so "gmres" IS the configuration that was
+measured, not an approximation of it. When two configurations tie, the
+one with no optional dependency wins. U2DP is the contrasting case:
+petsc there is 4x better than the best scipy option, not tied, so it
+earns its dependency and the entry says petsc.
+
+##### A deliberate, recorded deviation: S3D full was re-run on a subset
+
+`gmres/schur` at 27,783 DOF ran for over 20 minutes without finishing a
+single configuration, and `budget_s` cannot interrupt one long call
+(see the harness finding above). Rather than let one pathological
+preconditioner hold up the phase, S3D full was re-run over the four
+CONTENDERS only -- `direct`, `gmres/block_jacobi`,
+`bicgstab/block_jacobi`, `petsc` -- the three that beat direct at quick
+size plus the baseline. The two ILU and two Schur configurations are
+NOT reported at full size for S3D, and they are not being quietly
+dropped: at quick size they measured 0.36x, 0.08x, 0.03x and 0.7x
+against direct, i.e. all four already lost, and nothing about a larger
+system makes a preconditioner that is 12x-35x slower than direct at
+6,591 DOF a candidate at 27,783. That is a judgement, so it is written
+down as one.
+
 ## 5. What this is worth, stated honestly
 
 Phase A ran (see section 4's own subsections for the full tables), and

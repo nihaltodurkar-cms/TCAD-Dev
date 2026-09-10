@@ -46,17 +46,28 @@ def test_every_evidenced_combo_returns_its_own_method_above_the_floor():
 
 
 @pytest.mark.parametrize("dim,unstructured,coupled", [
-    (1, False, True), (1, False, False),
-    (2, False, True), (2, False, False),
-    (2, True, False),
-    (3, False, True),
-    (3, True, False),
+    # NARROWED by M31 P5-1 Phase A-2 (2026-09-10). This list used to
+    # hold seven combinations; five of them -- (1,F,T), (2,F,T),
+    # (2,T,F), (3,F,T) and (3,T,F) -- have since been MEASURED and now
+    # have real entries, so asserting they are absent would assert the
+    # opposite of the truth. They moved to
+    # tests/test_m31_p51_phase_a2.py, which checks each against the
+    # method and floor that were measured for it.
+    #
+    # These two remain genuinely unmeasured, and are the only cells left
+    # that Gate D-3 guards for real: both are STRUCTURED EQUILIBRIUM
+    # paths, and neither has a select_auto dispatch site at all --
+    # Device1D.solve_equilibrium and Device2D.solve_equilibrium hardcode
+    # method="direct" and never read opts.linsolve. So no selection rule
+    # can reach them, and measuring them would produce a number no
+    # caller could act on.
+    (1, False, False),
+    (2, False, False),
 ])
 def test_unmeasured_combinations_refuse_to_direct(dim, unstructured, coupled):
-    """Gate D-3: every combination Phase A did not measure -- including
-    ones that superficially resemble a measured one (e.g. 2D structured
-    coupled resembles B8's 2D UNSTRUCTURED coupled, but is a different,
-    unmeasured matrix) -- refuses rather than guessing."""
+    """Gate D-3: a combination that has not been measured -- including
+    one that superficially resembles a measured one -- refuses rather
+    than guessing."""
     assert (dim, unstructured, coupled) not in _AUTO_EVIDENCE
     method, reason = select_auto(dim, unstructured, coupled, dof=10**9)
     assert method == "direct"
@@ -66,6 +77,10 @@ def test_unmeasured_combinations_refuse_to_direct(dim, unstructured, coupled):
 
 @pytest.mark.parametrize("dim,unstructured,coupled", [(3, False, False), (3, True, True)])
 def test_below_the_measured_floor_refuses_to_direct(dim, unstructured, coupled):
+    # Phase A's own two entries. The floors added by Phase A-2 are
+    # gated in tests/test_m31_p51_phase_a2.py, generically over the
+    # whole table, so this stays a check on the ORIGINAL two rather
+    # than drifting into a duplicate of that one.
     entry = _AUTO_EVIDENCE[(dim, unstructured, coupled)]
     method, reason = select_auto(dim, unstructured, coupled,
                                  dof=entry["min_dof"] - 1)
@@ -145,9 +160,17 @@ def test_structured_3d_equilibrium_auto_below_floor_stays_direct():
 
 
 def test_1d_and_2d_structured_auto_is_always_direct_and_bit_identical():
-    """Phase A never measured 1D or 2D structured -- auto there must be
-    bit-identical to the caller having asked for "direct" outright,
-    at any size, confirmed on a real coupled solve."""
+    """1D and 2D structured coupled solves must be bit-identical under
+    "auto" to the caller having asked for "direct" outright, at any
+    size, confirmed on a real coupled solve.
+
+    The ASSERTIONS here are unchanged by M31 P5-1 Phase A-2; only the
+    reason they hold is. When this was written, auto resolved to direct
+    because Phase A had measured neither cell. Phase A-2 measured both
+    (B2 and B3) and direct WON both, so the entries it added say
+    "direct" and this gate keeps passing on evidence instead of on
+    absence. Had 2D come out iterative, this test would have failed --
+    which is the point of leaving it here rather than rewriting it."""
     from pytcad import Device1D, Models
 
     x = np.linspace(0.0, 1.0e-4, 41)

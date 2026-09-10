@@ -100,7 +100,7 @@ import scipy
 from pytcad import linsolve as _linsolve
 from pytcad.linsolve import LinearSolveError
 
-from .cases import get
+from .cases import Case, get as _dashboard_get
 
 # label, method, block_size, precond -- see module docstring.
 CONFIGS = [
@@ -116,14 +116,196 @@ CONFIGS = [
 
 # Which module(s) hold the `solve_linear` name this case's Newton loop
 # actually calls -- see the P5-0 module-local-import note in the
-# docstring above. B8's case exercises unstructured_dd only (the
-# Poisson-only module is a separate, un-benchmarked entry point);
-# B9's exercises unstructured_dd3d, whose solve_bias3d calls its own
-# equilibrium sub-solve first, through the same module-local name.
+# docstring above.
+#
+# CORRECTION (Phase A-2, 2026-09-10): this comment used to claim
+# "B9's exercises unstructured_dd3d, whose solve_bias3d calls its own
+# equilibrium sub-solve first". IT DOES NOT. `solve_poisson_equilibrium3d`
+# is a separate PUBLIC entry point that `solve_bias3d` never calls --
+# `solve_bias3d` cold-starts from an analytic Boltzmann guess, exactly
+# like its 2D counterpart. Disproved by measurement, not by re-reading:
+# once `IterRecord` recorded `dof`, B9's whole sweep came back with
+# dof=[2889] and no 963-row scalar solve anywhere in it. So B9 covers
+# (3, True, True) ONLY, and the scalar 3D unstructured cell needs its
+# own fixture (U3DP below), just as the 2D one needs U2DP.
 CASE_MODULES = {
     "B8": ("unstructured_dd",),
     "B9": ("unstructured_dd3d",),
+    # Phase A-2: the scalar unstructured cells, which B8/B9 never
+    # reach -- see _u2d_poisson's and _u3d_poisson's docstrings.
+    "U2DP": ("unstructured_poisson",),
+    "U3DP": ("unstructured_dd3d",),
 }
+
+
+# ----------------------------------------------------------------------
+#  Study-only fixtures (NOT dashboard cases)
+# ----------------------------------------------------------------------
+# Phase A-2 needs one shape the dashboard does not have: a STRUCTURED 3D
+# COUPLED bias solve, i.e. `device3d.py:1015`'s `select_auto` site. B4,
+# B5 and B7 are all equilibrium-only (B4 by construction -- its `build`
+# returns `dev.solve_equilibrium` as the runner), so nothing in
+# `cases.py` reaches that call site at all.
+#
+# It lives HERE, not in `cases.py`, deliberately. Adding a dashboard row
+# changes `BASELINE.md`/`FULL.md` and is gated by
+# `tests/test_m32_benchmarks.py`; this is a study fixture that exists to
+# answer one question about solver selection, and M32's own plan is
+# explicit that the dashboard is for per-commit rows rather than
+# occasional studies. If a 3D structured coupled solve ever deserves a
+# permanent row, that is its own proposal with its own gates.
+#
+# Sizes are NOT B4's. B4 full is 41^3 = 68,921 nodes, which as a COUPLED
+# system is 206,763 unknowns -- M31 section 1's own measurement says a
+# direct solve at that scale never completes, so a "full" that large
+# would measure only the budget cap. The sizes here bracket the region
+# where direct is still finishable, so the comparison is real on both
+# sides.
+def _s3d_coupled(size, opts=None):
+    """B4-SHAPED structured 3D device, driven through a COUPLED
+    `solve_bias` rather than `solve_equilibrium`."""
+    from pytcad import Device3D, Mesh3D
+    from pytcad.mesh import uniform_mesh
+
+    n = 12 if size == "quick" else 20
+    xs = uniform_mesh(1.0e-4, n)
+    mesh = Mesh3D(xs, xs.copy(), uniform_mesh(0.6e-4, n))
+    # Same (Nz, Ny, Nx) build order as _b4, for the same reason -- see
+    # its comment and history.md's meshgrid gotcha.
+    Z, Y, X = np.meshgrid(mesh.z, mesh.y, mesh.x, indexing="ij")
+    doping = np.where(Z < 0.2e-4, 1e19, -1e17)
+    dev = Device3D(mesh, doping.ravel())
+    # Device3D has no implicit terminals (unlike Device1D's 2-terminal
+    # convention) -- contacts are explicit, one on each side of the
+    # z-junction the doping above defines. Same (i, j, k) broadcasting
+    # shape tests/test_validation_3d.py uses.
+    jj, ii = np.meshgrid(np.arange(mesh.Ny), np.arange(mesh.Nx),
+                         indexing="ij")
+    jj, ii = jj.ravel(), ii.ravel()
+    dev.add_contact("cathode", i=ii, j=jj, k=np.zeros_like(ii), V=0.0)
+    dev.add_contact("anode", i=ii, j=jj,
+                    k=np.full_like(ii, mesh.Nz - 1), V=0.0)
+    dev.solve_equilibrium()      # setup, deliberately outside the sweep
+
+    def run():
+        if opts is not None:
+            dev.solve_bias({"anode": 0.3, "cathode": 0.0}, opts)
+        else:
+            dev.solve_bias({"anode": 0.3, "cathode": 0.0})
+    return dev, run
+
+
+
+def _u2d_poisson(size, opts=None):
+    """B8's mesh and doping, but driving `unstructured_poisson.
+    solve_poisson_equilibrium` -- the `(2, True, False)` cell, i.e.
+    `unstructured_poisson.py:141`'s `select_auto` site.
+
+    B8 itself does NOT reach that code: `unstructured_dd.solve_bias`
+    cold-starts from an analytic Boltzmann guess rather than running a
+    Poisson equilibrium first (confirmed by reading its `init`
+    documentation, not assumed from the module name). So the scalar 2D
+    unstructured path has never been swept, by B8 or anything else.
+    """
+    from pytcad.gmsh_mesh import build_diode_mesh
+    from pytcad.region_resolver import resolve_regions, resolve_contacts
+    from pytcad.unstructured_assembly import (
+        build_unstructured_stencil, build_edge_flux_geometry)
+    from pytcad.unstructured_poisson import (evaluate_doping_at_nodes,
+                                             solve_poisson_equilibrium)
+
+    # Same geometry knob as _b8 -- sized by domain, not by the mesh size
+    # field; see that case's docstring for why.
+    if size == "quick":
+        Lx, Ly, Xj = 4.0e-4, 1.0e-4, 2.0e-4
+    else:
+        Lx, Ly, Xj = 20.0e-4, 7.0e-4, 10.0e-4
+    mesh = build_diode_mesh(Lx=Lx, Ly=Ly, Xj=Xj)
+    regions = resolve_regions(mesh)
+    contacts = resolve_contacts(mesh)
+    edge_list, node_areas = build_unstructured_stencil(mesh.nodes,
+                                                      mesh.triangles)
+    interior_edges, trans_geom = build_edge_flux_geometry(
+        mesh.nodes, mesh.triangles, edge_list)
+    region_of_triangle = np.empty(mesh.n_triangles(), dtype=object)
+    for name, idx in regions.items():
+        region_of_triangle[idx] = name
+    C = evaluate_doping_at_nodes(mesh.nodes, mesh.triangles,
+                                 region_of_triangle,
+                                 {"p_region": -1e17, "n_region": 1e17})
+
+    def run():
+        solve_poisson_equilibrium(mesh.nodes, mesh.triangles, edge_list,
+                                  node_areas, interior_edges, trans_geom,
+                                  C, contacts, opts=opts)
+    return None, run
+
+
+
+def _u3d_poisson(size, opts=None):
+    """B9's mesh and doping, driving `unstructured_dd3d.
+    solve_poisson_equilibrium3d` -- the `(3, True, False)` cell
+    (`unstructured_dd3d.py:286`).
+
+    B9 does NOT reach this code, despite living in the same module:
+    `solve_bias3d` cold-starts from an analytic Boltzmann guess and
+    never calls the Poisson entry point. See the CASE_MODULES
+    correction above for how that was established.
+    """
+    from pytcad.gmsh_mesh3d import build_diode_mesh3d
+    from pytcad.unstructured_assembly3d import (
+        build_unstructured_stencil3d, build_edge_flux_geometry3d)
+    from pytcad.unstructured_dd3d import (evaluate_doping_at_nodes3d,
+                                          solve_poisson_equilibrium3d)
+
+    # Same geometry knob as _b9.
+    if size == "quick":
+        Lx, Ly, Lz, Xj = 1.0e-4, 2.5e-5, 1.5e-5, 0.5e-4
+    else:
+        Lx, Ly, Lz, Xj = 2.0e-4, 5.0e-5, 3.0e-5, 1.0e-4
+    mesh = build_diode_mesh3d(Lx=Lx, Ly=Ly, Lz=Lz, Xj=Xj, Nd_scale=1e17)
+    edge_list, node_vols = build_unstructured_stencil3d(mesh.nodes, mesh.tets)
+    edges, trans = build_edge_flux_geometry3d(mesh.nodes, mesh.tets, edge_list)
+    region_of_tet = np.empty(mesh.n_tets(), dtype=object)
+    for name, idx in mesh.volume_tags.items():
+        region_of_tet[idx] = name
+    C = evaluate_doping_at_nodes3d(mesh.nodes, mesh.tets, region_of_tet,
+                                   {"p_region": -1e17, "n_region": 1e17})
+    contacts = {"left_contact": mesh.face_tags["left_contact"],
+                "right_contact": mesh.face_tags["right_contact"]}
+
+    def run():
+        solve_poisson_equilibrium3d(mesh.nodes, mesh.tets, edges, node_vols,
+                                    trans, C, contacts, opts=opts)
+    return None, run
+
+
+_EXTRA_CASES = {
+    "S3D": Case("S3D", "3D structured coupled bias",
+                "device3d.py:1015 select_auto cell (3, False, True)",
+                _s3d_coupled, dim=3,
+                notes="study-only fixture, not a dashboard row -- see "
+                      "the comment above _s3d_coupled"),
+    "U2DP": Case("U2DP", "2D unstructured Poisson equilibrium",
+                 "unstructured_poisson.py:141 select_auto cell "
+                 "(2, True, False)",
+                 _u2d_poisson, requires=("gmsh",), dim=2,
+                 notes="study-only fixture; B8 does not reach this code "
+                       "-- see the comment in _u2d_poisson"),
+    "U3DP": Case("U3DP", "3D unstructured Poisson equilibrium",
+                 "unstructured_dd3d.py:286 select_auto cell "
+                 "(3, True, False)",
+                 _u3d_poisson, requires=("gmsh",), dim=3,
+                 notes="study-only fixture; B9 does not reach this code "
+                       "-- see the CASE_MODULES correction"),
+}
+
+
+def get(name):
+    """Dashboard cases first, then this module's study-only fixtures."""
+    if name.upper() in _EXTRA_CASES:
+        return _EXTRA_CASES[name.upper()]
+    return _dashboard_get(name)
 
 
 @dataclass
@@ -135,6 +317,15 @@ class IterRecord:
     residual: float
     fell_back: bool
     error: str = ""
+    # Rows of the system actually handed to solve_linear.  Load-bearing,
+    # not decoration: a core that runs a SCALAR equilibrium sub-solve
+    # before its COUPLED bias solve (unstructured_dd3d.solve_bias3d does
+    # exactly this) reaches TWO different `select_auto` cells through
+    # ONE module-local `solve_linear` name, and the only thing that
+    # separates them per call is the system size -- N for the scalar
+    # Poisson rows, 3N for the coupled rows.  Without this, a B9 sweep
+    # silently averages two different questions together.
+    dof: int = 0
 
 
 @dataclass
@@ -185,7 +376,7 @@ def _sweep_one(case_name, size, label, method, block_size, precond,
                 call_index=idx, seconds=dt, converged=True,
                 iterations=info.get("iterations", 1),
                 residual=info.get("residual", float("nan")),
-                fell_back=False))
+                fell_back=False, dof=int(A.shape[0])))
             return x, info
         except LinearSolveError as exc:
             dt = time.perf_counter() - t0
@@ -196,7 +387,7 @@ def _sweep_one(case_name, size, label, method, block_size, precond,
                 result.records.append(IterRecord(
                     call_index=idx, seconds=dt, converged=False,
                     iterations=0, residual=float("nan"), fell_back=False,
-                    error=str(exc)))
+                    error=str(exc), dof=int(A.shape[0])))
                 raise
             # Emulated Phase-C fallback -- see module docstring. Falls
             # back to direct so later iterates are still measured; the
@@ -208,7 +399,7 @@ def _sweep_one(case_name, size, label, method, block_size, precond,
                 call_index=idx, seconds=dt + dt_fb, converged=True,
                 iterations=infod.get("iterations", 1),
                 residual=infod.get("residual", float("nan")),
-                fell_back=True, error=str(exc)))
+                fell_back=True, error=str(exc), dof=int(A.shape[0])))
             return xd, infod
 
     modules = []
@@ -278,15 +469,33 @@ def run_sweep(cases, sizes, configs=CONFIGS, maxiter=200, budget_s=180.0):
 STRUCTURED_METHODS = ["direct", "gmres", "bicgstab", "petsc"]
 
 
-def _sweep_structured(case_name, size, method, maxiter, budget_s):
+def _sweep_structured(case_name, size, method, maxiter, budget_s,
+                     block_size=None, precond="auto", label=None,
+                     coupled=False):
+    """Sweep a STRUCTURED core (device.py / device2d.py / device3d.py).
+
+    `coupled=False` (the default) drives `dev.solve_equilibrium` and
+    reproduces the Phase A B4 sweep exactly -- that path is SCALAR (one
+    psi per node), so `block_size`/`precond` cannot apply structurally
+    and stay at their None/"auto" defaults.
+
+    `coupled=True` drives the case's OWN `run()` instead, which for
+    B2/B3 and the 3D coupled fixture below is a `solve_bias` -- three
+    interleaved unknowns per node. There `block_size` and `precond` are
+    the whole question, not a detail: M22 phase 1 measured scalar ILU
+    making NO visible progress in 500 iterations on exactly this
+    coupled Jacobian, which is why node-block-Jacobi exists. A coupled
+    sweep that varied only the METHOD would therefore be measuring the
+    known-bad configuration and calling it "iterative".
+    """
     from pytcad.device import NewtonOptions
     from pytcad import linsolve as _mod
 
     case = get(case_name)
-    dev, _ = case.build(size)
+    dev, case_run = case.build(size)
 
-    result = ConfigResult(label=method, method=method, block_size=None,
-                          precond="auto")
+    result = ConfigResult(label=label or method, method=method,
+                          block_size=block_size, precond=precond)
     call_index = [0]
     t_start = time.perf_counter()
     real_solve_linear = _mod.solve_linear
@@ -301,13 +510,15 @@ def _sweep_structured(case_name, size, method, maxiter, budget_s):
         t0 = time.perf_counter()
         try:
             x, info = real_solve_linear(A, b, method=method, rtol=rtol,
-                                        maxiter=maxiter)
+                                        maxiter=maxiter,
+                                        block_size=block_size,
+                                        precond=precond)
             dt = time.perf_counter() - t0
             result.records.append(IterRecord(
                 call_index=idx, seconds=dt, converged=True,
                 iterations=info.get("iterations", 1),
                 residual=info.get("residual", float("nan")),
-                fell_back=False))
+                fell_back=False, dof=int(A.shape[0])))
             return x, info
         except LinearSolveError as exc:
             dt = time.perf_counter() - t0
@@ -315,7 +526,7 @@ def _sweep_structured(case_name, size, method, maxiter, budget_s):
                 result.records.append(IterRecord(
                     call_index=idx, seconds=dt, converged=False,
                     iterations=0, residual=float("nan"), fell_back=False,
-                    error=str(exc)))
+                    error=str(exc), dof=int(A.shape[0])))
                 raise
             t1 = time.perf_counter()
             xd, infod = real_solve_linear(A, b, method="direct")
@@ -324,13 +535,21 @@ def _sweep_structured(case_name, size, method, maxiter, budget_s):
                 call_index=idx, seconds=dt + dt_fb, converged=True,
                 iterations=infod.get("iterations", 1),
                 residual=infod.get("residual", float("nan")),
-                fell_back=True, error=str(exc)))
+                fell_back=True, error=str(exc), dof=int(A.shape[0])))
             return xd, infod
 
     _mod.solve_linear = swept
     try:
-        opts = NewtonOptions(linsolve=method if method != "direct" else "direct")
-        dev.solve_equilibrium(opts=opts)
+        if coupled:
+            # The case's own run() -- the patch above overrides whatever
+            # method it asked for, exactly as _sweep_one does for the
+            # unstructured cores, so the case does not need to know it
+            # is being swept.
+            case_run()
+        else:
+            opts = NewtonOptions(
+                linsolve=method if method != "direct" else "direct")
+            dev.solve_equilibrium(opts=opts)
     except LinearSolveError as exc:
         result.aborted = result.aborted or f"Newton loop raised: {exc}"
     except Exception as exc:  # noqa: BLE001 -- see _sweep_one's rationale
@@ -360,6 +579,231 @@ def run_structured_sweep(cases, sizes, methods=STRUCTURED_METHODS,
                     f"[preconditioners]   -> {res.total_s:.2f}s, "
                     f"{len(res.records)} calls, {n_fb} fell back"
                     f"{', ABORTED: ' + res.aborted if res.aborted else ''}\n")
+    return out
+
+
+def run_structured_coupled_sweep(cases, sizes, configs=CONFIGS,
+                                 maxiter=2000, budget_s=180.0):
+    """Phase A-2: the STRUCTURED COUPLED cells Phase A never measured.
+
+    Phase A covered three `(dim, unstructured, coupled)` cells and
+    `linsolve.select_auto` refuses every other one by name. Of the five
+    it refuses that a caller can actually reach through `auto`, three
+    are structured coupled-bias solves -- `device.py:1739`,
+    `device2d.py:1000` and `device3d.py:1015` -- and the P5-1 plan's own
+    Phase E writeup names them as where more evidence has to come from
+    before the default can move.
+
+    Unlike `run_structured_sweep`, this varies the full method x
+    block_size x preconditioner grid, because the systems here are
+    coupled (see `_sweep_structured`'s docstring).
+    """
+    out = []
+    for case_name in cases:
+        for size in sizes:
+            for label, method, block_size, precond in configs:
+                sys.stderr.write(
+                    f"[preconditioners] (structured/coupled) {case_name} "
+                    f"{size} {label} ...\n")
+                sys.stderr.flush()
+                res = _sweep_structured(case_name, size, method, maxiter,
+                                        budget_s, block_size=block_size,
+                                        precond=precond, label=label,
+                                        coupled=True)
+                out.append(dict(case=case_name, size=size, **res.as_dict()))
+                n_fb = sum(1 for r in res.records if r.fell_back)
+                sys.stderr.write(
+                    f"[preconditioners]   -> {res.total_s:.2f}s, "
+                    f"{len(res.records)} calls, {n_fb} fell back"
+                    f"{', ABORTED: ' + res.aborted if res.aborted else ''}\n")
+    return out
+
+
+# ----------------------------------------------------------------------
+#  Phase A-2: the FAITHFUL sweep
+# ----------------------------------------------------------------------
+# Phase A's `_sweep_one`/`_sweep_structured` FORCE a (method,
+# block_size, precond) triple onto every solve_linear call, ignoring
+# what the call site asked for. That was necessary then: before Phase B
+# landed, no core could express "ILU for a coupled solve" at all, so
+# forcing was the only way to measure the option that did not exist yet.
+#
+# It is the WRONG methodology for Phase A-2, and not by a little:
+#
+#   * Two of Phase A-2's five cells are SCALAR (one unknown per node) --
+#     `unstructured_poisson` and `unstructured_dd3d`'s equilibrium
+#     sub-solve. Their real call sites pass NO block_size, deliberately.
+#     `_build_block_jacobi_preconditioner` only refuses a block_size
+#     when `n % block_size != 0`, so forcing block_size=3 onto a scalar
+#     system whose node count happens to divide by 3 would silently
+#     carve 3x3 "node blocks" out of three UNRELATED rows and measure a
+#     preconditioner no caller can ever construct. device.py's own
+#     NewtonOptions.block_size comment says exactly this.
+#   * Driving a structured core's real `run()` while forcing the method
+#     from outside also desynchronises the core from the sweep: the core
+#     branches on ITS OWN resolved method, so it would take the
+#     `method="direct"` branch (passing no block_size) while the patch
+#     quietly ran gmres.
+#
+# So Phase A-2 builds each case with REAL `NewtonOptions` and lets the
+# core decide what to hand `solve_linear`; the patch only RECORDS. Two
+# consequences worth stating:
+#
+#   * No emulated fallback. Phase C landed since Phase A, so every core
+#     now HAS a real per-iterate fallback -- this sweep re-raises and
+#     lets it run, then records the direct retry as its own call. That
+#     is strictly more faithful than Phase A's scaffolding.
+#   * `maxiter` is still injected, because no core passes one and
+#     `solve_linear`'s default (500) starves bicgstab/petsc relative to
+#     gmres+restart -- the exact artifact Phase A had to correct for.
+#     This is the one deliberate deviation from "whatever the core does".
+def _patch_targets(case_name):
+    """(object, attribute) pairs holding the `solve_linear` this case's
+    Newton loop actually calls.
+
+    Two import styles exist in the tree and the difference is load-
+    bearing: the unstructured cores bind `from .linsolve import
+    solve_linear` into their own namespace (so the patch must go on the
+    MODULE), while device*.py do `from . import linsolve` and look up
+    `linsolve.solve_linear` at call time (so the patch must go on
+    `pytcad.linsolve` itself).
+    """
+    if case_name.upper() in CASE_MODULES:
+        return [(__import__(f"pytcad.{m}", fromlist=["_"]), "solve_linear")
+                for m in CASE_MODULES[case_name.upper()]]
+    return [(_linsolve, "solve_linear")]
+
+
+# Modules holding a bare `spsolve` in their OWN namespace. Patching
+# solve_linear alone is not enough, and this is measured rather than
+# defensive: `Device1D.solve_bias`'s direct branch calls
+# `spsolve(Jd.tocsc(), rhs)` outright, and so does device2d.py's, so a
+# B2/B3 "direct" sweep patched only at solve_linear records ZERO calls
+# and reports the baseline as free -- which is exactly what the first
+# Phase A-2 run did before this list existed. `instrument.py` carries
+# the same list for the same reason. device3d.py by contrast DOES route
+# its direct branch through solve_linear, so the cores genuinely differ
+# and neither patch point alone covers all of them.
+_SPSOLVE_MODULES = ("device", "device2d", "device3d", "unstructured_dd",
+                    "unstructured_dd3d", "unstructured_poisson")
+
+
+def _sweep_faithful(case_name, size, label, method, block_size, precond,
+                    maxiter, budget_s):
+    from pytcad.device import NewtonOptions
+
+    case = get(case_name)
+    opts = NewtonOptions(linsolve=method, block_size=block_size,
+                         precond=precond, linsolve_rtol=1e-10)
+    _, run = case.build(size, opts=opts)
+
+    result = ConfigResult(label=label, method=method, block_size=block_size,
+                          precond=precond)
+    call_index = [0]
+    t_start = time.perf_counter()
+    targets = _patch_targets(case_name)
+    reals = [getattr(obj, attr) for obj, attr in targets]
+    real_solve = reals[0]
+
+    def _record(idx, t0, A, converged, iterations, residual, err="",
+                fell_back=False):
+        result.records.append(IterRecord(
+            call_index=idx, seconds=time.perf_counter() - t0,
+            converged=converged, iterations=iterations, residual=residual,
+            fell_back=fell_back, error=err, dof=int(A.shape[0])))
+
+    def recorder(A, b, **kwargs):
+        idx = call_index[0]
+        call_index[0] += 1
+        if time.perf_counter() - t_start > budget_s:
+            result.aborted = result.aborted or "budget exceeded"
+            raise LinearSolveError("preconditioners.py: budget exceeded")
+        kwargs.setdefault("maxiter", maxiter)
+        t0 = time.perf_counter()
+        try:
+            x, info = real_solve(A, b, **kwargs)
+        except LinearSolveError as exc:
+            # Re-raise: the CORE's own Phase C fallback handles this and
+            # its direct retry arrives here as the next recorded call.
+            result.records.append(IterRecord(
+                call_index=idx, seconds=time.perf_counter() - t0,
+                converged=False, iterations=0, residual=float("nan"),
+                fell_back=False, error=str(exc), dof=int(A.shape[0])))
+            raise
+        result.records.append(IterRecord(
+            call_index=idx, seconds=time.perf_counter() - t0,
+            converged=True, iterations=info.get("iterations", 1),
+            residual=info.get("residual", float("nan")),
+            fell_back=bool(kwargs.get("method") == "direct"
+                           and method != "direct"),
+            dof=int(A.shape[0])))
+        return x, info
+
+    def make_spsolve_recorder(raw):
+        def spsolve_recorder(A, b, *a, **kw):
+            idx = call_index[0]
+            call_index[0] += 1
+            if time.perf_counter() - t_start > budget_s:
+                result.aborted = result.aborted or "budget exceeded"
+                raise LinearSolveError(
+                    "preconditioners.py: budget exceeded")
+            t0 = time.perf_counter()
+            x = raw(A, b, *a, **kw)
+            # spsolve returns a bare x. A direct factorization, so
+            # "1 iteration" and no residual -- the same way
+            # solve_linear(method="direct") reports itself.
+            _record(idx, t0, A, True, 1, float("nan"))
+            return x
+        return spsolve_recorder
+
+    sp_undo = []
+    for _modname in _SPSOLVE_MODULES:
+        try:
+            _mod = __import__(f"pytcad.{_modname}", fromlist=["_"])
+        except ImportError:
+            continue
+        _raw = getattr(_mod, "spsolve", None)
+        if _raw is not None:
+            sp_undo.append((_mod, _raw))
+            setattr(_mod, "spsolve", make_spsolve_recorder(_raw))
+
+    for obj, attr in targets:
+        setattr(obj, attr, recorder)
+    try:
+        run()
+    except Exception as exc:  # noqa: BLE001 -- one config's failure is
+        # the data point, not a reason to lose the whole sweep.
+        result.aborted = result.aborted or f"{type(exc).__name__}: {exc}"
+    finally:
+        for (obj, attr), real in zip(targets, reals):
+            setattr(obj, attr, real)
+        for _mod, _raw in sp_undo:
+            setattr(_mod, "spsolve", _raw)
+
+    result.total_s = time.perf_counter() - t_start
+    return result
+
+
+def run_faithful_sweep(cases, sizes, configs=CONFIGS, maxiter=2000,
+                       budget_s=180.0):
+    out = []
+    for case_name in cases:
+        for size in sizes:
+            for label, method, block_size, precond in configs:
+                sys.stderr.write(
+                    f"[preconditioners] (faithful) {case_name} {size} "
+                    f"{label} ...\n")
+                sys.stderr.flush()
+                res = _sweep_faithful(case_name, size, label, method,
+                                      block_size, precond, maxiter,
+                                      budget_s)
+                out.append(dict(case=case_name, size=size, **res.as_dict()))
+                dofs = sorted({r.dof for r in res.records})
+                sys.stderr.write(
+                    f"[preconditioners]   -> {res.total_s:.2f}s, "
+                    f"{len(res.records)} calls, dofs={dofs}"
+                    f"{', ABORTED: ' + res.aborted if res.aborted else ''}\n")
+                sys.stderr.flush()
     return out
 
 
@@ -430,6 +874,17 @@ def main(argv=None):
                          "dev.solve_equilibrium -- see "
                          "run_structured_sweep's docstring for why this "
                          "is a separate, smaller sweep than --cases")
+    ap.add_argument("--structured-coupled", default=None,
+                    help="comma-separated STRUCTURED cases whose own "
+                         "run() is a coupled solve_bias (B2, B3, S3D) "
+                         "to sweep over the full method x block_size x "
+                         "preconditioner grid -- Phase A-2, the cells "
+                         "linsolve.select_auto currently refuses")
+    ap.add_argument("--faithful", default=None,
+                    help="comma-separated cases to sweep with Phase "
+                         "A-2's FAITHFUL methodology (real NewtonOptions, "
+                         "core decides what solve_linear gets, patch only "
+                         "records) -- see _sweep_faithful's comment")
     ap.add_argument("--out", default=None,
                     help="write JSON to this path (also prints markdown "
                          "to stdout)")
@@ -444,6 +899,14 @@ def main(argv=None):
         rows += run_structured_sweep(args.structured.split(","), sizes,
                                      maxiter=args.maxiter,
                                      budget_s=args.budget)
+    if args.faithful:
+        rows += run_faithful_sweep(args.faithful.split(","), sizes,
+                                   maxiter=args.maxiter,
+                                   budget_s=args.budget)
+    if args.structured_coupled:
+        rows += run_structured_coupled_sweep(
+            args.structured_coupled.split(","), sizes,
+            maxiter=args.maxiter, budget_s=args.budget)
 
     if args.out:
         with open(args.out, "w") as f:

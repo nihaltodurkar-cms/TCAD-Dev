@@ -1,0 +1,51 @@
+[preconditioners] (faithful) B3 full direct ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 3.30s, 5 calls, dofs=[72912]
+[preconditioners] (faithful) B3 full gmres/block_jacobi ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 138.57s, 4 calls, dofs=[72912], ABORTED: budget exceeded
+[preconditioners] (faithful) B3 full gmres/ilu ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 10.07s, 7 calls, dofs=[72912]
+[preconditioners] (faithful) B3 full gmres/schur ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 136.41s, 3 calls, dofs=[72912], ABORTED: budget exceeded
+[preconditioners] (faithful) B3 full bicgstab/block_jacobi ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 9.66s, 5 calls, dofs=[72912], ABORTED: LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=3.599e-05, target rtol=1.000e-10) -- refusing to return the unconverged iterate
+[preconditioners] (faithful) B3 full bicgstab/ilu ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 9.67s, 7 calls, dofs=[72912], ABORTED: LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=1.223e-10, target rtol=1.000e-10) -- refusing to return the unconverged iterate
+[preconditioners] (faithful) B3 full bicgstab/schur ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 25.98s, 5 calls, dofs=[72912], ABORTED: LinearSolveError: bicgstab did not converge within 2000 iterations (scipy code=-10, relative residual=3.079e-05, target rtol=1.000e-10) -- refusing to return the unconverged iterate
+[preconditioners] (faithful) B3 full petsc ...
+/home/nihal/Desktop/TCAD-Dev/TCAD-Dev/pytcad/pytcad/device2d.py:196: UserWarning: Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here overestimate the carrier density. Treat results in the degenerate regions as qualitative.
+  warnings.warn(
+[preconditioners]   -> 7.08s, 1 calls, dofs=[72912], ABORTED: LinearSolveError: petsc did not converge within 2000 iterations (KSPConvergedReason=-3, relative residual=1.120e-09, target rtol=1.000e-10) -- refusing to return the unconverged iterate
+[preconditioners] (faithful) S3D full direct ...
+[preconditioners]   -> 43.58s, 10 calls, dofs=[27783]
+[preconditioners] (faithful) S3D full gmres/block_jacobi ...
+[preconditioners]   -> 1.87s, 7 calls, dofs=[27783]
+[preconditioners] (faithful) S3D full gmres/ilu ...
+/home/nihal/anaconda3/envs/TCAD/lib/python3.11/site-packages/numpy/linalg/_linalg.py:2768: RuntimeWarning: overflow encountered in dot
+  sqnorm = x.dot(x)
+/home/nihal/anaconda3/envs/TCAD/lib/python3.11/site-packages/scipy/sparse/linalg/_isolve/iterative.py:789: RuntimeWarning: invalid value encountered in scalar multiply
+  tmp = -np.conjugate(s)*S[col]
+[preconditioners]   -> 80.21s, 20 calls, dofs=[27783]
+[preconditioners] (faithful) S3D full gmres/schur ...
+[0]PETSC ERROR: ------------------------------------------------------------------------
+[0]PETSC ERROR: Caught signal number 15 Terminate: Some process (or the batch system) has told this process to end
+[0]PETSC ERROR: Try option -start_in_debugger or -on_error_attach_debugger
+[0]PETSC ERROR: or see https://petsc.org/release/faq/#valgrind and https://petsc.org/release/faq/
+[0]PETSC ERROR: configure using --with-debugging=yes, recompile, link, and run 
+[0]PETSC ERROR: to get more information on the crash.
+Abort(59) on node 0 (rank 0 in comm 0): application called MPI_Abort(MPI_COMM_WORLD, 59) - process 0
+ERROR conda.cli.main_run:execute(148): `conda run python -m benchmarks.preconditioners --cases  --faithful B3,S3D,U2DP --size full --budget 120 --out benchmarks/phase_a2_out/full.json` failed. (See above for error)

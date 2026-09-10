@@ -327,9 +327,8 @@ class NewtonOptions:
     # only -- never a guess), independently at every call site that
     # supports it (every coupled solve_bias, plus device3d.py's
     # structured-3D and the two SCALAR unstructured equilibrium paths).
-    # A (dim, unstructured, coupled) combination Phase A never measured
-    # -- currently everything except B4's structured-3D-equilibrium and
-    # B9's 3D-unstructured-coupled path -- resolves to "direct" (Gate
+    # A (dim, unstructured, coupled) combination that has never been
+    # measured resolves to "direct" (Gate
     # D-3's explicit refusal, not a default guess). The default here
     # stays "direct" (Phase E-opt-in): nothing changes unless a caller
     # asks for "auto" explicitly.
@@ -1731,10 +1730,11 @@ class Device1D:
         """Solve at applied bias V = [V_left, V_right] (volts)."""
         opts = opts or NewtonOptions()
         # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
-        # Phase A never measured 1D at all, so this always resolves to
-        # "direct" today (Gate D-3's refusal path) -- wired in only so
-        # "auto" is never an unrecognized method here, matching every
-        # other core. See linsolve.select_auto's own docstring.
+        # Phase A-2 MEASURED 1D (B2) and it resolves to "direct" -- not
+        # for lack of evidence but because six of seven iterative
+        # configurations do not converge on a 1D coupled Jacobian at
+        # all, and the survivor is ~300x slower than a direct solve.
+        # See linsolve.select_auto's own docstring.
         resolved_linsolve, auto_reason = (
             linsolve.select_auto(dim=1, unstructured=False, coupled=True,
                                  dof=3 * self.N)
@@ -1819,8 +1819,12 @@ class Device1D:
                     # explicit non-"direct" opts.linsolve (their
                     # LinearSolveError would now be silently swallowed
                     # instead of raised). Moot for "auto" specifically,
-                    # since dim=1 has no evidence entry and always
-                    # resolves to "direct" above.
+                    # since dim=1 is MEASURED to prefer direct (Phase
+                    # A-2, B2) and so resolves to "direct" above -- this
+                    # branch is unreachable through "auto". If a future
+                    # measurement ever moves dim=1 off direct, THIS
+                    # missing fallback becomes live and must be added
+                    # first.
                     du, _ = linsolve.solve_linear(
                         Jd, rhs, method=resolved_linsolve,
                         rtol=opts.linsolve_rtol, block_size=opts.block_size,

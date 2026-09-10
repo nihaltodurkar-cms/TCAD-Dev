@@ -992,9 +992,9 @@ class Device2D:
         cur_voltages = {name: bc.V for name, bc in self.bcs.items() if isinstance(bc, DirichletBC)}
 
         # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
-        # Phase A never measured 2D structured, so this always resolves
-        # to "direct" today (Gate D-3's refusal path) -- wired in only
-        # so "auto" is never an unrecognized method here. See
+        # Phase A-2 MEASURED 2D structured (B3) at 11,640 and 72,912
+        # DOF; direct wins both, so this resolves to "direct" -- now on
+        # evidence rather than on Gate D-3's refusal path. See
         # linsolve.select_auto's own docstring.
         resolved_linsolve, auto_reason = (
             linsolve.select_auto(dim=2, unstructured=False, coupled=True,

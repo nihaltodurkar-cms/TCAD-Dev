@@ -95,10 +95,28 @@ __all__ = ["solve_linear", "LinearSolveError", "select_auto"]
 # The precedent for taking this refusal seriously is in-tree
 # (CLAUDE.md's M22 MPI-Schwarz split-axis picker): a safety/selection
 # heuristic built from evidence for ONE case does not automatically
-# cover a case that merely resembles it. dim=1 and every 2D/3D
-# STRUCTURED coupled-bias configuration have NO entry here because
-# Phase A never measured them -- notably NOT because they were assumed
-# safe.
+# cover a case that merely resembles it. An absent entry always means
+# "never measured", never "assumed safe".
+#
+# As of Phase A-2 (2026-09-10) every cell that a caller can actually
+# REACH through "auto" has a measured entry -- all eight select_auto
+# dispatch sites in the tree. The refusal path above is still live and
+# still gated, but it now guards only combinations that do not exist
+# (e.g. 1D unstructured).
+#
+# WHAT THE EIGHT CELLS ACTUALLY SAY, since the obvious summary is
+# wrong: the discriminator is NOT dimension, it is COUPLING.
+#   * SCALAR (one unknown per node, Poisson-only) systems favour an
+#     iterative solve wherever they are big enough to amortise setup --
+#     including in 2D (U2DP, 12x at 11,341 DOF). B4's 82-119x is the
+#     same phenomenon in 3D.
+#   * COUPLED psi/n/p systems favour a DIRECT solve in 1D and 2D
+#     (B2, B3, B8 -- in 1D most iterative configurations do not
+#     converge at all) and an iterative one only in 3D (S3D 27.9x,
+#     B9 3.9x).
+# A rule of the form "use petsc in 3D" would have been wrong in both
+# directions: wrong for small 3D meshes (U3DP is 24x SLOWER with petsc
+# at 963 DOF) and wrong by omission for large 2D scalar ones.
 _AUTO_EVIDENCE = {
     # (dim, unstructured, coupled): dict(method, min_dof, reason)
     (3, False, False): dict(
@@ -116,6 +134,75 @@ _AUTO_EVIDENCE = {
                "(7.85s -> 0.68s at 7,464 DOF). Not measured below "
                "2,889 DOF (B9 quick size); refusing below that rather "
                "than extrapolating."),
+    # ---- Phase A-2 (2026-09-10) ------------------------------------
+    # Five cells that were absent until now. Adding them changes only
+    # what `linsolve="auto"` RESOLVES TO; `NewtonOptions.linsolve` still
+    # defaults to "direct", so no existing caller moves and no golden
+    # can shift. See the plan's "Phase A-2" section for every number.
+    (1, False, True): dict(
+        method="direct", min_dof=0,
+        reason="B2 (Phase A-2): 1D coupled drift-diffusion -- MEASURED, "
+               "and not a close call: SIX of the seven iterative "
+               "configurations tried do not converge on this Jacobian "
+               "at all (gmres and bicgstab x block_jacobi/ILU/schur, "
+               "plus petsc), and the one that does (gmres/schur, 3.02s) "
+               "is ~300x slower than direct's 0.01s at 1,206 DOF. "
+               "min_dof=0: direct wins at every size, and a 1D system "
+               "only gets easier for a direct factorization as it "
+               "grows narrower."),
+    (2, False, True): dict(
+        method="direct", min_dof=0,
+        reason="B3 (Phase A-2): 2D structured coupled drift-diffusion "
+               "-- MEASURED at two sizes and direct wins both: 0.22s vs "
+               "0.74s best iterative at 11,640 DOF, and 3.30s vs 10.07s "
+               "at 72,912 DOF, where five of seven iterative configs "
+               "also failed to reach rtol=1e-10 outright. Note some of "
+               "those failures are MARGINAL (bicgstab/ILU reached "
+               "1.223e-10 against a 1.0e-10 target) -- but petsc needed "
+               "7.08s to get to 1.120e-09, already 2x direct's time, so "
+               "the ranking does not depend on the tolerance nuance."),
+    (3, True, False): dict(
+        method="petsc", min_dof=2488,
+        reason="U3DP (Phase A-2): 3D unstructured SCALAR Poisson "
+               "equilibrium -- petsc 0.04s vs direct 0.16s (4.0x) at "
+               "2,488 DOF. min_dof here is a MEASURED CROSSOVER, not "
+               "just the smallest size tried: at 963 DOF the same petsc "
+               "configuration is 0.97s against direct's 0.04s, i.e. 24x "
+               "SLOWER, because KSP/PC setup dominates a system that "
+               "small. Refusing below 2,488 is therefore backed by a "
+               "measurement showing direct genuinely wins there."),
+    (3, False, True): dict(
+        method="gmres", min_dof=6591,
+        reason="S3D (Phase A-2): 3D structured coupled bias -- 44.56s "
+               "direct vs 1.60s (27.9x) at 27,783 DOF, and 1.45s vs "
+               "0.25s (5.8x) at 6,591. The win GROWS with size in "
+               "ABSOLUTE terms (1.3s saved -> 43s saved), which is the "
+               "opposite of the share-rises-because-the-rest-got-faster "
+               "trap M31 P5's re-decision turned on. \"gmres\" with "
+               "NewtonOptions' own defaults (block_size=3, "
+               "precond=\"auto\") IS the measured configuration: "
+               "_build_preconditioner routes a non-None block_size to "
+               "node block-Jacobi before ILU/AMG. CHOSEN OVER PETSC "
+               "DELIBERATELY -- petsc measured 1.67s here, within 4% of "
+               "gmres and inside run-to-run noise, but petsc is an "
+               "OPTIONAL dependency this function cannot see: on a "
+               "checkout without it every Newton iterate would pay a "
+               "failed petsc attempt plus a direct solve. When two "
+               "configurations tie, the one with no optional dependency "
+               "wins. Not measured below 6,591 DOF; refusing there."),
+    (2, True, False): dict(
+        method="petsc", min_dof=11341,
+        reason="U2DP (Phase A-2): 2D unstructured SCALAR Poisson "
+               "equilibrium -- petsc 0.01s vs direct 0.12s (12x) at "
+               "11,341 DOF, and 4x faster than the best scipy iterative "
+               "config (0.04s), so unlike S3D above this is NOT a tie "
+               "and petsc earns its dependency. Note this is the FIRST "
+               "2D cell where iterative wins: the discriminator is not "
+               "dimension but COUPLING -- a one-unknown-per-node Poisson "
+               "system behaves like B4's scalar 3D case, not like B3/B8's "
+               "coupled ones. Not measured below 11,341 DOF: at 1,001 "
+               "the whole solve is 2 Newton steps and all eight configs "
+               "sit at 0.01s, which is timer resolution, not a result."),
     (2, True, True): dict(
         method="direct", min_dof=0,
         reason="B8 (Phase A): 2D unstructured coupled drift-diffusion "

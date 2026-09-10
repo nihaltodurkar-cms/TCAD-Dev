@@ -92,7 +92,12 @@ def _b1(size):
 # ----------------------------------------------------------------------
 #  B2 -- 1D diode
 # ----------------------------------------------------------------------
-def _b2(size):
+def _b2(size, opts=None):
+    """`opts`: OPTIONAL NewtonOptions, default None reproduces the
+    original behavior exactly (solve_bias's own default). Added for
+    M31 P5-1 Phase A-2, which measures the `(1, False, True)`
+    select_auto cell and must drive the REAL call site rather than a
+    forced one -- see M31-P5-1-SOLVER-SELECTION-PLAN.md."""
     from pytcad import Device1D, Models
     from pytcad.mesh import uniform_mesh
 
@@ -103,14 +108,19 @@ def _b2(size):
     dev.solve_equilibrium()          # setup, deliberately outside the timing
 
     def run():
-        dev.solve_bias([0.5, 0.0])
+        if opts is None:
+            dev.solve_bias([0.5, 0.0])
+        else:
+            dev.solve_bias([0.5, 0.0], opts)
     return dev, run
 
 
 # ----------------------------------------------------------------------
 #  B3 -- 2D MOSFET
 # ----------------------------------------------------------------------
-def _b3(size):
+def _b3(size, opts=None):
+    """`opts`: OPTIONAL NewtonOptions -- see _b2's note. Default None
+    reproduces the dashboard row exactly."""
     from pytcad.mosfet import build_mosfet
 
     if size == "quick":
@@ -122,7 +132,11 @@ def _b3(size):
     dev.solve_equilibrium()
 
     def run():
-        dev.solve_bias({"gate": 1.0, "drain": 0.1, "source": 0.0, "body": 0.0})
+        bias = {"gate": 1.0, "drain": 0.1, "source": 0.0, "body": 0.0}
+        if opts is None:
+            dev.solve_bias(bias)
+        else:
+            dev.solve_bias(bias, opts)
     return dev, run
 
 
