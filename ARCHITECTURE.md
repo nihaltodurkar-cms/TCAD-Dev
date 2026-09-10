@@ -1938,12 +1938,53 @@ published number, it is the lower-dimensional code that already passed.
        Same shape as M44: M28 shipped a standalone-module slice that
        no device core calls.  Couple it first, then lift.
 
+  M47  3D NUMERICAL ENGINE COMPLETION                       [XL]
+       Proposed 2026-09-11, at the user's request, after a "can Claude
+       plan a 3D engine, and what would be hard about it" discussion --
+       NOT YET SCOPED IN DETAIL, NOT SIGNED OFF, NOT STARTED. Distinct
+       from M41-M46 above: those each lift ONE physics model to 3D;
+       this is the ENGINE work underneath all of them, closing two
+       gaps found by direct inspection while answering that question:
+         (a) M31's C++ coverage stops short of 3D residual/Jacobian
+             assembly -- `device3d.py`'s and `unstructured_dd3d.py`'s
+             own assembly loops are still pure Python/numpy (only mesh
+             geometry, the PETSc linear solve, and the process/AMR
+             kernels are compiled today; see CLAUDE.md "What is
+             compiled so far").
+         (b) `unstructured_dd3d.py` is explicitly homojunction-only
+             (module docstring: no `materials_per_node`/`dlnnie`
+             mechanism at all) -- unlike its 2D sibling
+             `unstructured_dd.py`, which gained both the legacy and
+             M33-S5 affinity heterojunction gauges. Adding either to
+             `unstructured_dd3d.py` is genuinely new-feature work, not
+             a port, and would need its own plan/gates/sign-off same
+             as M33-S5's did.
+       Expected difficulties (not exhaustive, from the same
+       discussion): the frozen-core amendment protocol applies to
+       every touch of `device3d.py`/`unstructured_dd3d.py` (sign-off +
+       FD-Jacobian-first + bit-identical off-path + reconstruct-and-
+       compare, CLAUDE.md's "Hard rules"); 3D's edge/GateBC
+       `normal_axis` combinatorics are a real step up from 2D, not a
+       linear one; 3D test batteries are already the slowest part of
+       the suite, so new gates there compound; and this codebase's own
+       precedent (M14 G-A) is that a published-value benchmark can be
+       blocked behind a paywall for months with no workaround but
+       refusing loudly. Depends on / overlaps M31 P4 (C++ kernels) and
+       M35 (3D process, its own track). Should be scoped into a proper
+       plan doc (frozen-core amendment request, gate list, honest
+       limits) before any implementation, same as every other
+       milestone in this file.
+
 4d.4 ORDERING, AND THE ONE RULE
 
 Cheapest first, and each is independently shippable:
      M41 [S] -> M43 [L] -> M42 [L] -> M46 [L] -> M45 [XL] -> M44 [XL]
 M35 (3D process) runs as its own track throughout; it is the widest gap
-and the least coupled to the others.
+and the least coupled to the others. M47 (3D engine completion) is the
+largest, least-scoped item on this list and sits LAST deliberately --
+it is infrastructure underneath M41-M46 rather than a competitor to
+them, so there is more to learn about what it actually needs by
+landing a few of M41-M46 first.
 
 THE RULE, which is what makes this section a plan rather than a wish:
 no dimensional lift lands without its reduction identity as a gate.  A
