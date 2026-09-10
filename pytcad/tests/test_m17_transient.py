@@ -40,7 +40,7 @@ def _diode(Na=1e17, Nd=1e17, L=2e-4, xj=1e-4, **kw):
 def test_fd_jacobian_matches_numerical():
     """G-FD: the analytic transient Jacobian (theta-scheme storage term
     added on top of Device1D's own analytic J) must match a numerical
-    Jacobian of the same transient residual -- required by AGENTS.md's
+    Jacobian of the same transient residual -- required by CLAUDE.md's
     standing "new physics needs FD-Jacobian-first" rule."""
     dev = _diode()
     dev.solve_equilibrium()

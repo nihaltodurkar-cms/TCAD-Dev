@@ -117,7 +117,7 @@ def test_surface_mobility_is_scoped_to_the_surface_row_only():
 def test_surface_mobility_produces_a_finite_different_solution():
     """The flag must actually DO something (not be a dead toggle) and
     must never produce a non-finite state -- the two failure modes a
-    'real toggle' rule is meant to catch (AGENTS.md / ARCHITECTURE.md
+    'real toggle' rule is meant to catch (CLAUDE.md / ARCHITECTURE.md
     'no fake physics' discipline)."""
     dev_off = _biased(_mosfet(surface_mobility=False))
     dev_on = _biased(_mosfet(surface_mobility=True))

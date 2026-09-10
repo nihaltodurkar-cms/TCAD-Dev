@@ -9,7 +9,7 @@ algebra (that is M22's already-shipped MPI-Schwarz work, a different
 axis entirely; see pytcad/M30-WORKBENCH-PLAN.md section 6).
 
 Each worker process gets OPENBLAS_NUM_THREADS pinned to "1" before
-doing any work -- AGENTS.md's own documented oversubscription hazard
+doing any work -- CLAUDE.md's own documented oversubscription hazard
 for `pytest -n` applies identically here: without the pin, each pool
 worker's own BLAS calls would spawn their own thread pool,
 oversubscribing every core across all workers simultaneously.
@@ -50,7 +50,7 @@ class BatchOutcome:
 
 
 def default_worker_count(n_jobs):
-    """Same conservative cap AGENTS.md's own `-n 6` guidance already
+    """Same conservative cap CLAUDE.md's own `-n 6` guidance already
     reasons about this machine with -- never more workers than jobs,
     never more than the CPU count, never more than 6."""
     return max(1, min(6, os.cpu_count() or 1, n_jobs))

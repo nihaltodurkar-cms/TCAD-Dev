@@ -1,6 +1,6 @@
 # pyTCAD benchmark suite (M32)
 
-Permanent performance cases **B1-B7** and the performance dashboard, per
+Permanent performance cases **B1-B9** and the performance dashboard, per
 `Architecture_Master_Plan.md` sections 34 and 35.
 
 This exists because of section 36:
@@ -26,7 +26,7 @@ conda run -n TCAD python -m benchmarks --out report.md --json report.json
 ```
 
 Set `OPENBLAS_NUM_THREADS=1` for a comparable number, for the reason
-AGENTS.md already documents: otherwise numpy's BLAS spawns its own
+CLAUDE.md already documents: otherwise numpy's BLAS spawns its own
 thread pool and the result depends on how loaded the machine was.
 
 `--size quick` runs the whole suite in a second or so; `--size full` is
@@ -48,8 +48,37 @@ regression.
 | B5 | traps, high field, avalanche, thermal | 4H-SiC vertical power MOSFET, **equilibrium only** |
 | B6 | heterojunctions, interface charge, high-field transport | **2D AlGaAs/GaAs**, not 3D GaN |
 | B7 | DOF scaling, AMG, MPI, GPU | large synthetic 3D junction, bicgstab |
+| B8 | *(not in section 34)* | 2D unstructured DD, gmsh triangles, forward bias |
+| B9 | *(not in section 34)* | 3D unstructured DD, gmsh tets, forward bias |
 
-Two of those rows do less than their section-34 description promises,
+**B8 and B9 are additions, not section-34 cases.** Section 34's seven
+all run the STRUCTURED cores, which left the unstructured path -- the
+one M31 P5 is scoped to port, and the only one a distributed `Mat`
+would ever be built for -- with no row at all. They were added before
+P5 starts rather than after it, because M32's own plan records what
+happens when the benchmark trails the work it is meant to police. Both
+declare `requires=("gmsh",)` and skip with a printed reason where gmsh
+is absent.
+
+Their size knob is GEOMETRY, not mesh density: `build_diode_mesh`
+clamps the bulk cell at `SizeMax = 2e-5` cm, so `Nd_scale` barely moves
+the node count (measured: 1e16 -> 2,102 nodes, 1e17 -> 3,350). Growing
+the domain at fixed cell size is the honest knob and keeps the physics
+identical across sizes.
+
+One more caveat specific to these two: `solve_bias` calls the assembler
+once MORE after convergence, to extract terminal currents from the
+converged state. So their `asm calls` is one above the Newton iteration
+count even when nothing was damped -- a second reason that column is
+not an iteration count.
+
+One consequence of that split is worth knowing before reading a
+`spread` column: the first repeat is the traced one, so `--repeats 2`
+leaves a single untraced timing and reports `spread = 0` for lack of a
+second sample, not because the runs agreed. Use `--repeats 3` or more
+for anything quoted.
+
+Two of the section-34 rows do less than their description promises,
 and say so rather than being labelled as if they did:
 
 - **B5** runs equilibrium only. The avalanche and thermal coupling

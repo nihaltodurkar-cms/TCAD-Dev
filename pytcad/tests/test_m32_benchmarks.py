@@ -117,11 +117,12 @@ def test_the_probe_does_not_change_the_answer():
 # ----------------------------------------------------------------------
 #  2. every case still builds and runs
 # ----------------------------------------------------------------------
-def test_all_seven_cases_are_declared():
-    """Section 34 names B1-B7. A case quietly dropped from the list is
+def test_all_nine_cases_are_declared():
+    """Section 34 names B1-B7; B8/B9 were added for M31 P5 to give the
+    unstructured path a row. A case quietly dropped from the list is
     the failure this asserts against."""
     assert [c.name for c in benchmarks.CASES] == \
-        ["B1", "B2", "B3", "B4", "B5", "B6", "B7"]
+        ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9"]
     for c in benchmarks.CASES:
         assert c.title and c.tests, f"{c.name} is missing its description"
 
@@ -141,6 +142,54 @@ def test_case_runs_and_reports_a_real_measurement(name):
     assert row.nnz > row.dof, "NNZ should exceed DOF for any real stencil"
     assert row.linsolve_calls > 0, "no linear solve observed"
     assert row.total_s > 0.0
+
+
+@pytest.mark.parametrize("name", ["B8", "B9"])
+def test_the_unstructured_cases_report_a_real_assembly_time(name):
+    """The unstructured cores assemble through MODULE-level functions,
+    not through a device method, so the probe's device-handle branch
+    cannot see them: before instrument.py patched them by name these
+    rows reported assembly_s = 0, which reads as "assembly is free"
+    rather than "assembly was not measured".
+
+    This is the column M31 P5's justification rests on -- the phase
+    ports exactly these functions -- so an absent number here is worse
+    than a missing row."""
+    row = run_case(bench_cases.get(name), size="quick")
+    if row.skipped:
+        pytest.skip(row.skipped)
+    assert not row.error, row.error
+    assert row.assembly_calls > 0, "assembly was not instrumented"
+    assert row.assembly_s > 0.0, "assembly reported zero time"
+    assert row.assembly_s < row.total_s, \
+        "assembly cannot exceed the whole run"
+
+
+def test_timing_and_memory_come_from_separate_runs():
+    """tracemalloc's hook is not a uniform tax -- measured 1.19x on B3
+    and 4.05x on B8 -- so a total_s taken under it is not comparable
+    with anything. The harness runs the memory repeat separately; this
+    pins that, because the failure mode is silent: the number still
+    looks like a time.
+
+    Asserted structurally rather than by comparing two timings, which
+    would be a threshold test on a loaded machine."""
+    row = run_case(bench_cases.get("B2"), size="quick", repeats=2)
+    assert not row.error, row.error
+    assert row.py_peak_mb > 0.0, "memory was not measured at all"
+    assert not any("tracemalloc" in n for n in row.notes), \
+        "a traced run's timings reached the row"
+
+
+def test_repeats_of_one_admits_its_timing_is_inflated():
+    """The honest fallback: with a single repeat there is no untraced
+    run, so the row must SAY the timing carries tracemalloc rather than
+    reporting it as if it did not."""
+    row = run_case(bench_cases.get("B2"), size="quick", repeats=1)
+    assert not row.error, row.error
+    assert row.py_peak_mb > 0.0
+    assert any("tracemalloc" in n for n in row.notes), \
+        "an inflated timing was reported without saying so"
 
 
 def test_a_failing_case_is_reported_as_a_row_not_an_exception():

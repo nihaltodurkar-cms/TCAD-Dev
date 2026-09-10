@@ -1,6 +1,8 @@
 # M32 -- Benchmark suite and performance dashboard
 
-Status as of 2026-09-09: **LANDED.**
+Status as of 2026-09-10: **LANDED**, amended the same week -- see section 6
+for B8/B9 and for the tracemalloc defect that invalidated every timing
+published before 2026-09-10.
 
 Implements `Architecture_Master_Plan.md` sections 34 (cases B1-B7) and 35
 (the dashboard), so that section 36's rule becomes enforceable rather
@@ -201,10 +203,71 @@ can re-run instead of on a number in a paragraph.
 
 ---
 
-## 6. What next
+## 6. Amendment, 2026-09-10 -- B8/B9, and a defect they exposed
+
+Added ahead of M31 P5, whose plan
+(`M31-P5-ASSEMBLY-NEWTON-PLAN.md` section 6) is the fuller record:
+
+**B8 (2D unstructured DD) and B9 (3D unstructured DD).** Section 34's
+seven cases all run the STRUCTURED cores, so the unstructured path --
+the one P5 is scoped to port -- had no row at all. Both declare
+`requires=("gmsh",)`. Their size knob is geometry, not mesh density:
+`build_diode_mesh` clamps the bulk cell at `SizeMax = 2e-5` cm, so
+`Nd_scale` moves the node count barely (1e16 -> 2,102 nodes,
+1e17 -> 3,350) and growing the domain at fixed cell size is the honest
+alternative.
+
+**Two instrumentation defects, both found by adding those rows.**
+
+1. `unstructured_dd3d` was missing from the `spsolve` patch list, so a
+   3D unstructured row would have reported `linsolve_calls = 0` and
+   looked as though it never solved anything.
+2. The unstructured cores assemble through MODULE-level functions
+   rather than device methods, which the probe's `device is not None`
+   branch cannot see. Their `assembly_s` would have been 0 -- reading
+   as "assembly is free" rather than "assembly was not measured", which
+   is the exact confusion section 3's skipped-vs-absent rule exists to
+   prevent.
+
+**And one that invalidates every number this milestone has published
+so far.** The harness ran the whole measured region under
+`tracemalloc`, whose per-allocation hook is not a uniform tax:
+
+| case | untraced | traced | |
+|---|---|---|---|
+| B3 (2D MOSFET, structured) | 0.047 s | 0.056 s | 1.19x |
+| B8 (2D unstructured DD) | 0.205 s | 0.832 s | **4.05x** |
+
+So `total_s` was never comparable between rows, and the inflation was
+worst on allocation-heavy code -- which is precisely the code M31 P5
+would have been judged on. `run_case` now runs the memory repeat
+separately from the timing repeats; at `--repeats 1` there is no
+untraced run and the row says so. `BASELINE.md` and `FULL.md` are
+regenerated. **Numbers quoted from the pre-2026-09-10 files are
+inflated** -- B2's assembly column read 38.1 ms and reads 4.6 ms.
+
+Section 5's "first thing the harness proved" survives this unchanged:
+B4's 99.9% solve share is dominated by SuperLU, where tracemalloc's
+hook is not charged, and the conclusion was about a ratio.
+
+## 7. What next
 
 * Re-measure P2/P3b/P4's headline numbers through the harness so they
-  stop being hand-taken (section 1's recorded cost).
+  stop being hand-taken (section 1's recorded cost). **DONE 2026-09-10**
+  for P2's three throughput kernels, P3b's timing comparison, and P4's
+  three indicator kernels -- `benchmarks/p2_p3b_p4_remeasure.py`, reusing
+  `test_accel_parity.py`'s own fixtures. All held up or exceeded the
+  original hand-taken figures; see `M31-CPP-ARCHITECTURE-PLAN.md`'s P2/
+  P3b/P4 sections for the updated tables. P4's two diffusion-loop
+  kernels (`process.diffuse_numeric`, `ted.diffuse_with_defects`) needed
+  a separate script since a timestep loop is wall-clock time, not a
+  per-item throughput rate -- **also DONE 2026-09-10**,
+  `benchmarks/p4_diffusion_remeasure.py`, same n=4000/t_s=1800s shape.
+  Speedup ratios confirm the original (3.3x/4.1x) within repeat noise
+  (3.3-3.7x / 4.4-4.5x); the exact TED/OED parameters were never
+  recorded alongside the original absolute times so those (13.6-14.2s
+  vs. the original's 24.6s) are not claimed to be the same run -- see
+  `M31-CPP-ARCHITECTURE-PLAN.md`'s P4 table.
 * Add the scaling/GPU columns when M31 P7 needs them -- that is the
   milestone that will actually make scaling claims, and section 36 says
   it may not make them without these.

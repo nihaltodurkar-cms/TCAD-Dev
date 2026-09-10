@@ -1,4 +1,4 @@
-# AGENTS.md — Guidance for AI agents working on PyTCAD
+# CLAUDE.md — Guidance for AI agents working on PyTCAD
 
 This file is the complete briefing for working on this repo -- it does
 not assume you have seen any prior conversation, and it does not assume
@@ -10,6 +10,15 @@ concrete gotcha below, that gotcha has already cost a real debugging
 session once and will cost another if repeated. If anything here
 conflicts with what a user asks for in a specific conversation, say so
 and ask, rather than silently picking one.
+
+**`Architecture_Master_Plan.md` was removed from the working tree on
+2026-09-10 and lives only in git history.** Docs across this repo still
+cite it by section number (34-37 for the benchmark cases, the dashboard
+and the no-unproven-performance-claims rule; 41-42 for architectural
+tests and the frozen API surface) because those sections are still the
+reasoning behind gates that exist. Read one with
+`git show a117d03:Architecture_Master_Plan.md`; do not treat a citation
+as a broken link.
 
 Read this before doing anything. Then read `history.md`
 (current state + open items -- read at least its LAST few entries,
@@ -89,7 +98,7 @@ python3 examples/01_pn_diode.py            # examples 01..05
 ## Gotcha: line endings are MIXED, and no .gitattributes guards them
 
 `pytcad/pytcad/` is 18 CRLF files and 28 LF files, and there is no
-`.gitattributes`.  `device.py`, `device2d.py` and `AGENTS.md` are CRLF.
+`.gitattributes`.  `device.py`, `device2d.py` and `CLAUDE.md` are CRLF.
 
 So a script that does the obvious thing --
 
@@ -227,6 +236,24 @@ with `pytest.warns` in the test that intends it.
   explicitly amends it (M11-S3 did for Device1D heterojunctions;
   M12-S2 added TAT). Any further core change needs the same explicit
   sign-off + FD-Jacobian-first + bit-identical-off-path gates.
+- **Golden baseline before a core edit -- the achievable version.**
+  Older wordings of the amendment rule said "goldens committed before
+  the edit". That is IMPOSSIBLE and always was: `.gitignore` excludes
+  `*.npz`, so `tests/goldens/**` has never been tracked, and it should
+  not be -- a golden pins ONE machine's summation order (see the
+  bit-identity gotcha below), so a committed one would be a
+  machine-specific artifact masquerading as a shared reference. A rule
+  nobody can perform is worse than no rule, so what is actually
+  required is **reconstruct-and-compare**, the protocol M31 P4b used:
+    1. BEFORE the edit, record the md5sum of every golden the change
+       could touch, in the plan file (not in git -- in the plan).
+    2. Make the edit and regenerate.
+    3. Prove the old baseline is recoverable AND that this change is
+       its sole cause: shim the pre-edit behaviour back, regenerate
+       again, and check the md5sums come back byte-identical.
+    4. Record which goldens moved, which did not, and WHY each --
+       a golden that moves for an unexplained reason is a defect, not
+       a re-baseline.
 - Layering: QML -> controllers -> services -> QProcess subprocess ->
   npz -> ResultStore -> canvas. Controllers/canvas never import pytcad.
 - `DeviceSpec` stays the wire format. Subprocess isolation per run.

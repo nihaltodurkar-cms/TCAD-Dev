@@ -574,6 +574,23 @@ class Device3D:
         opts = opts or NewtonOptions()
         Nz, Ny, Nx = self.Nz, self.Ny, self.Nx
 
+        # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here --
+        # this is B4, the case Phase A found the largest measured win
+        # on (3D structured Poisson-equilibrium). See
+        # linsolve.select_auto's own docstring for the evidence and the
+        # refusal path (Gate D-3): every other opts.linsolve value
+        # (including the default "direct") passes through unaffected.
+        resolved_linsolve, auto_reason = (
+            linsolve.select_auto(dim=3, unstructured=False, coupled=False,
+                                 dof=Nz * Ny * Nx)
+            if opts.linsolve == "auto" else (opts.linsolve, None))
+        if opts.verbose and auto_reason:
+            print(f"    eq  auto -> {resolved_linsolve} ({auto_reason})")
+        # Gate D-2: the choice and its reason are always inspectable
+        # after the call, not just when opts.verbose prints them.
+        self.last_auto_method = resolved_linsolve if opts.linsolve == "auto" else None
+        self.last_auto_reason = auto_reason
+
         psi = self._bulk_psi_guess() if psi_guess is None else np.array(psi_guess, dtype=float)
         for it in range(opts.max_iter):
             F, J = self._residual_jacobian_poisson(psi)
@@ -617,13 +634,13 @@ class Device3D:
                                     self._dirichlet_rows_poisson)
             try:
                 d, _ = linsolve.solve_linear(Jd.tocsc(), rhs,
-                                             method=opts.linsolve,
+                                             method=resolved_linsolve,
                                              rtol=opts.linsolve_rtol)
             except linsolve.LinearSolveError:
-                if opts.linsolve == "direct":
+                if resolved_linsolve == "direct":
                     raise
                 if opts.verbose:
-                    print(f"    eq it {it:2d}  {opts.linsolve} did not "
+                    print(f"    eq it {it:2d}  {resolved_linsolve} did not "
                           "converge -- falling back to direct for this "
                           "iteration")
                 d, _ = linsolve.solve_linear(Jd.tocsc(), rhs,
@@ -986,11 +1003,28 @@ class Device3D:
         cur_voltages = {name: bc.V for name, bc in self.bcs.items()
                         if isinstance(bc, DirichletBC)}
 
+        # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
+        # This is the COUPLED 3D structured solve -- Phase A never
+        # measured it (only B4's equilibrium-only path), so
+        # select_auto's own evidence table has no entry for
+        # (dim=3, unstructured=False, coupled=True) and this always
+        # resolves to "direct" today (Gate D-3's refusal path). Wired
+        # in anyway so opts.linsolve="auto" is never an unrecognized
+        # method here -- see linsolve.select_auto's docstring.
+        resolved_linsolve, auto_reason = (
+            linsolve.select_auto(dim=3, unstructured=False, coupled=True,
+                                 dof=3 * self.Nz * self.Ny * self.Nx)
+            if opts.linsolve == "auto" else (opts.linsolve, None))
+        if opts.verbose and auto_reason:
+            print(f"    solve_bias  auto -> {resolved_linsolve} ({auto_reason})")
+        self.last_auto_method = resolved_linsolve if opts.linsolve == "auto" else None
+        self.last_auto_reason = auto_reason
+
         for it in range(opts.max_iter):
             F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
             # Symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
             Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
-            if opts.linsolve == "direct":
+            if resolved_linsolve == "direct":
                 # linsolve.solve_linear(method="direct") is documented
                 # bit-identical to a raw spsolve call (see its own
                 # docstring) -- routing through it here, rather than
@@ -1004,7 +1038,8 @@ class Device3D:
                 # but a LinearSolveError (confirmed directly: the node
                 # block-Jacobi preconditioner does not always converge
                 # on this equation's coupled psi/n/p Jacobian, even
-                # with pyamg installed -- block_size=3 routes to
+                # with pyamg installed -- a non-None block_size (M31
+                # P5-1 Phase B: opts.block_size, default 3) routes to
                 # block-Jacobi before AMG is ever tried, see
                 # linsolve._build_preconditioner) falls back to a
                 # direct solve for that one iteration only, rather than
@@ -1015,11 +1050,16 @@ class Device3D:
                 # the next Newton iteration.
                 try:
                     du, _ = linsolve.solve_linear(
-                        Jd, rhs, method=opts.linsolve,
-                        rtol=opts.linsolve_rtol, block_size=3)
+                        Jd, rhs, method=resolved_linsolve,
+                        rtol=opts.linsolve_rtol, block_size=opts.block_size,
+                        precond=opts.precond)
                 except linsolve.LinearSolveError:
+                    # resolved_linsolve != "direct" is guaranteed here
+                    # (the outer if/else already routed "direct" to the
+                    # plain branch above), so there is no re-raise guard
+                    # needed the way the try-always shape below has one.
                     if opts.verbose:
-                        print(f"    solve_bias it {it:2d}  {opts.linsolve} "
+                        print(f"    solve_bias it {it:2d}  {resolved_linsolve} "
                               "did not converge -- falling back to direct "
                               "for this iteration")
                     du, _ = linsolve.solve_linear(Jd, rhs, method="direct")

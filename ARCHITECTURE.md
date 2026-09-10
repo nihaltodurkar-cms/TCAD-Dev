@@ -515,8 +515,10 @@ M13  FERMI-DIRAC STATISTICS + INCOMPLETE IONIZATION          [L]
   ionization (B/P/As) behind its own flag. DEPENDENCY-CLEAN AND
   BLOCKING: M13 depends on nothing; M15-M20 may not START until all
   gates are green. Touches ALL THREE cores' residual+Jacobian -> the
-  M11-S3 amendment mechanism applies (goldens committed before the
-  edit, FD-Jacobian-first, bit-identity proven before composition).
+  M11-S3 amendment mechanism applies (golden baseline recorded before
+  the edit and proved recoverable after it by reconstruct-and-compare
+  -- see CLAUDE.md; goldens are machine-specific and never committed --
+  FD-Jacobian-first, bit-identity proven before composition).
   Depends: nothing. FIRST, because every later model composes with
   statistics.
 
@@ -1694,12 +1696,25 @@ M37  RELIABILITY & TRAP DYNAMICS                          [L]
      the obvious capability gap for a tool claiming device-engineering
      use. Depends: M33, M17.
 
-M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION               [M]
+M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION      [M] PHASES 1-3 LANDED
      M27 shipped mixed-mode device+circuit; the inverse -- fitting a
      compact model to simulated I-V/C-V and emitting a netlist -- is
      what makes TCAD useful to a circuit designer. Reuses M30 Part I's
      calibration/Nelder-Mead machinery directly. Depends: M30 Part I
      (landed), M27 (landed). Cheapest real-world payoff on this list.
+     LANDED 2026-09-10 (plan and every measured number:
+     pytcad/M38-COMPACT-MODEL-PLAN.md; 33 gates in
+     tests/test_m38_compact_model.py; all new code in
+     workbench/compact.py, NO frozen-core edit). Fits circuit.py's own
+     Diode and MOSFET1, emits a real SPICE .MODEL card, reads it back,
+     and closes the loop through circuit.Circuit's MNA solver -- no
+     external SPICE. Measured: a Device1D pn diode extracts N = 1.0031;
+     a 2D Device2D MOSFET fits to 2.90% relative RMS with Vt0 within
+     0.91% of the closed-form long-channel threshold. NOT done, and
+     named as such: Phase 4 (GUI panel + workflow.py deck statement),
+     BSIM-class models, temperature/geometry scaling, AC/C-V
+     extraction. No performance claim is made -- section 36 forbids one
+     without a benchmark row, and M38 has none.
 
 M39  QUANTUM TRANSPORT (NEGF, 1D)                         [XL]
      M12-S3/M20 shipped density-gradient and Schrodinger-Poisson but
@@ -1718,10 +1733,21 @@ M40  OPTICAL GENERATION / PHOTONICS                       [L]
 ------------------------------------------------------------------------
 Spine:  M31 P3a -> M32 -> M31 P4..P7 -> M35
         (the spine is "make it fast, PROVE it, then spend the speed")
-        STATUS: P3a, P3b, P4 and M32 have landed. P5 is next.
+        STATUS (2026-09-10): P3a, P3b, P4, M32, P5-0 and P5-1 (all 5
+        phases) have landed. P5 PROPER (the C++ assembler) STOPPED
+        after P5-0, not started -- its own section 9 exit criterion
+        fired once P5-1 made the re-run possible: B9's assembly SHARE
+        rose 11x (1.5% -> 16.3%) but its ABSOLUTE cost did not move
+        (~109ms), and does not clear the bar against a second engine's
+        ongoing cost. See M31-P5-ASSEMBLY-NEWTON-PLAN.md section 12.
+        P6/P7 below are therefore NOT blocked on a C++ assembler that
+        will not exist -- re-scope them against the Python + PETSc
+        stack P5-0/P5-1 actually built, not the pytcad_cpp backend P5
+        would have added.
         M32 landed AFTER P4 rather than before it -- so P4's own
         speedups were measured by hand, not by the harness, and should
-        be re-measured through it before being quoted again.
+        STILL be re-measured through it before being quoted again (this
+        is now the open item, not P5's decision, which is closed).
 
 M32 sits deliberately INSIDE M31 rather than after it: P7's whole
 purpose is scaling claims, and section 36 forbids making them without
@@ -1733,11 +1759,20 @@ Parallelizable (independent of the C++ track):
   system:    M30 Part II -> M38  (workbench GUI, then compact models)
   optics:    M40                 (standalone)
 C++-gated:
-  M34 (needs P4), M36 and M39 (need P5), M35 (needs P2, has it)
+  M34 (needs P4, has it), M35 (needs P2, has it)
+  M36 and M39 (needed P5) -- P5 STOPPED (see spine STATUS above);
+  re-scope these against the Python + PETSc stack P5-0/P5-1 built
+  before treating them as blocked
 
 Cheapest-payoff-first, if optimizing for usefulness per session:
   M32 (small, unblocks honest claims) -> M38 (reuses landed machinery)
   -> M33 -> M34.
+  STATUS (2026-09-10): M32 LANDED, M38 Phases 1-3 LANDED. Next on this
+  line is M33 (surface/interface completion -- the thermionic-emission
+  heterojunction interface is the real remaining gap now that M14
+  landed D_it and S_n/S_p), then M34. Note that M33 DOES touch the
+  frozen numerical core and so needs the M11-S3 amendment mechanism,
+  unlike M32/M38, which did not.
 
 ------------------------------------------------------------------------
 4c.4 WHAT IS PERMANENTLY OUT OF SCOPE
@@ -1980,7 +2015,25 @@ Stated so no session burns effort trying to win these:
 One structural consequence, and it is time-critical:
 
   ADJOINT CAPABILITY MUST BE DESIGNED INTO M31 P5, NOT RETROFITTED.
-  An adjoint solve needs the TRANSPOSE of the Jacobian and the
+  **UPDATE 2026-09-10: M31 P5 (the C++ assembler) STOPPED after P5-0
+  -- see the spine STATUS above and
+  `M31-P5-ASSEMBLY-NEWTON-PLAN.md` section 12.  There is no C++
+  assembler for this gate to apply to.**  The first of the two gates
+  below was instead closed on the PYTHON path (P4b, symmetric
+  Dirichlet elimination -- `dirichlet.py`'s row-AND-column
+  elimination is transpose-friendly where the old row-only version
+  was not); the second (a named parameter vector p) was never
+  reached, because it was a C++-assembler acceptance gate and that
+  assembler will not exist.  M47 below should be RE-ANCHORED to
+  depend on P4b's Python-path fix, not on a P5 that stopped -- an
+  adjoint engine built against the Python assembler is still possible
+  (P4b's own fix applies there directly); it is a different, smaller
+  claim than the C++-assembler-native one this section originally
+  planned for, and should be re-scoped as such before M47 starts
+  rather than silently inheriting a "depends on P5" that is now
+  permanently false.
+  The original reasoning is kept below for the record. An adjoint
+  solve needs the TRANSPOSE of the Jacobian and the
   derivative of the residual with respect to parameters.  If the C++
   assembly is written to expose dR/dp and to apply J^T, adjoints are
   incremental afterwards.  If it is not, W1 becomes a second rewrite

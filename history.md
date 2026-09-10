@@ -1,6 +1,6 @@
 # PROJECT HISTORY -- handoff for the next session
 
-Read this + `AGENTS.md` + `ARCHITECTURE.md` + `SENTAURUS-PARITY-PLAN.md`
+Read this + `CLAUDE.md` + `ARCHITECTURE.md` + `SENTAURUS-PARITY-PLAN.md`
 before doing anything.
 
 **What this file is.** A compacted record of what was built, what broke,
@@ -33,16 +33,21 @@ by actual computation. Never fake, never mock, never weaken tests.
 
 ---
 
-## CURRENT STATE (2026-09-09)
+## CURRENT STATE (2026-09-10)
 
-**Suite, run both ways per AGENTS.md:**
+**Suite, run both ways per CLAUDE.md:**
 
 | run | result |
 |---|---|
-| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1444 passed, 2 skipped, 1 xfailed, 39 warnings |
-| fast, pure Python (`PYTCAD_ACCEL=0`) | 1436 passed, 10 skipped, 1 xfailed, 39 warnings |
-| slow gate battery | 25 passed, 10 warnings |
-| `tests/test_accel_parity.py` (incl. slow floors) | 55 passed |
+| fast, compiled kernels (`PYTCAD_ACCEL=1`) | 1589 passed, 2 skipped, 1 xfailed, 39 warnings |
+| fast, pure Python (`PYTCAD_ACCEL=0`) | 1581 passed, 10 skipped, 1 xfailed, 39 warnings |
+
+(the 2026-09-09 figures were 1444/1436, and the pre-M38 figures were
+1548/1556; the +33 is M38's gate file. Everything before that: M32's 19
+gates, P4b's 25, 6 benchmark/harness gates, P5-0's 18 and P5-1's 45
+across phases B/C/D. The slow battery and `test_accel_parity.py` were
+last run at P4 -- 25 passed and 55 passed -- and have not been re-run
+since; neither M31 P5-1 nor M38 touches a compiled kernel.)
 
 The 8-test gap between the two fast runs is exactly the PETSc
 backend-vs-backend gates, which need both backends present.
@@ -51,8 +56,161 @@ backend-vs-backend gates, which need both backends present.
 blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
-**Working tree is UNCOMMITTED.** It carries M31 P2b + P4 (below) plus
-doc updates. Nothing has been pushed.
+**Working tree is UNCOMMITTED.** Nothing has been pushed.
+
+### 2026-09-10 -- M38 PHASES 1-3 LANDED (TCAD-to-SPICE extraction)
+
+Plan and every measured number: `pytcad/M38-COMPACT-MODEL-PLAN.md`
+(section 5 for results, 5b for the two real findings). Chosen as the
+next milestone because `ARCHITECTURE.md` 4c.3's own cheapest-payoff
+ordering reads `M32 -> M38 -> M33 -> M34` and M32 had just landed --
+and because every ingredient already existed: `circuit.py`'s `Diode`
+and `MOSFET1` are the models fitted INTO, `circuit.Circuit` is the
+simulator the loop closes through, `calibration.py` supplied the
+Nelder-Mead/finite-penalty shape, and `mosfet.build_mosfet` /
+`Device1D.iv_sweep` supplied the reference curves.
+
+**NO FROZEN-CORE EDIT.** Two new files only: `workbench/compact.py`
+(616 lines) and `tests/test_m38_compact_model.py` (33 gates). In
+particular `pytcad/mosfet.py` has an `id_vg_sweep` but no
+`id_vd_sweep`; rather than amend a `pytcad/*.py` file under the M11-S3
+mechanism for a bare `solve_bias` loop, the Id-Vd family driver lives
+in the test and drives `Device2D` from outside, the pattern
+`transient.py`/`continuation.py` established.
+
+What it does: fits `circuit.Diode`'s (Is, N) and `circuit.MOSFET1`'s
+(Vt0, kp*W_L, lambda) to a simulated I-V, emits a real SPICE `.MODEL`
+card, reads it back, and re-simulates through `circuit.Circuit`'s own
+MNA solver -- TCAD -> parameters -> netlist text -> parameters ->
+circuit simulation -> back to the originating curve, with no external
+SPICE and no network.
+
+Headline measured numbers:
+
+* **Real `Device1D` pn diode**: ideality **N = 1.0031**, log-space
+  residual 1.57e-3. Independently corroborated -- `test_validation.py`
+  already gates the SAME fixture's POINTWISE ideality to within 2% of
+  1.0 above 0.3 V.
+* **Real 2D `Device2D` MOSFET**: level-1 fit at **2.90% relative RMS**
+  across 19 points spanning triode and saturation, with
+  **Vt0 = 0.16883 V** against **0.16730 V** from the closed-form
+  long-channel `Vfb + 2*phi_f + Qdep/Cox` built out of
+  `moscap.flatband_voltage` and `materials.SILICON` -- **0.91%**, and
+  the two share no code.
+
+Two real findings from the hard-debug pass, both now permanent gates:
+
+1. **`circuit.Circuit` shunts every node to ground through 1e-12 S**
+   (its floating-node guard). Any terminal current below ~`1e-12 * V`
+   amperes is dominated by it: a 1e-4 cm^2 diode at 0.25 V passes
+   2.5e-14 A against 2.5e-13 A of guard leakage, a **10x** error that
+   first read as a broken fit. The closed-loop gate now asserts a
+   PREDICTION -- the only permitted discrepancy is exactly
+   `MNA_LEAKAGE_G * V / I` -- so an error from any other cause still
+   fails it even where the guard is large. `mna_resolvable()` exposes
+   the floor at the API and one gate demonstrates it live.
+2. **A pointwise-derivative ELR tangent is not noise-robust.** Taking
+   the threshold tangent at the single `argmax(np.gradient(...))` point
+   moved the extracted Vt0 by **0.6 V** under 5% multiplicative noise
+   -- far enough to trip the extractor's own strong-inversion refusal
+   on data it can actually handle. Now a least-squares fit over every
+   point within 80% of peak gm: exact on a noiseless level-1 curve
+   (gm is constant, so the plateau is the whole curve), and 2.6% / 2.0%
+   / 2.7% on Vt0 / kp*W_L / lambda at 5% noise.
+
+Honest limits, written into the plan and the module docstring BEFORE
+implementation rather than discovered: `MOSFET1` has no subthreshold
+conduction at all (Id is EXACTLY 0 below threshold), so the fit is
+strong-inversion-only, REFUSES a window that crosses threshold, and
+reports linear-space relative error -- never a log-space figure that
+would imply subthreshold agreement the model cannot have. It also has
+no body effect. And the three layers disagree on units (A/cm^2 vs A/cm
+vs A), so every extractor takes its scaling factor as a REQUIRED
+argument with no default.
+
+Deliberately NOT claimed: any speedup from replacing `DeviceStamp`'s
+two full `Device1D.solve_bias` calls per Newton iteration with a cheap
+analytic element. It is real, but section 36 forbids a number that did
+not come from a benchmark run; it earns a `benchmarks/cases.py` row or
+it is not quoted.
+
+Suite green BOTH ways after the change: `PYTCAD_ACCEL=0` 1581 passed /
+10 skipped / 1 xfailed, `PYTCAD_ACCEL=1` 1589 passed / 2 skipped /
+1 xfailed, 39 warnings and zero failures in both -- the pre-M38
+baselines (1548/1556) plus exactly M38's 33 gates, warning count
+unchanged.
+
+### 2026-09-10 -- M31 P5-0 LANDED; P5 proper planned, not approved
+
+**P5-0 landed** (`M31-P5-ASSEMBLY-NEWTON-PLAN.md` section 11 is the full
+record, including the amendment record). Two Python-side changes to the
+four unstructured Newton loops, no C++, no physics change:
+
+* `dirichlet.stamp_dirichlet_rows` replaces the `J.tolil()` +
+  LIL-row-assignment stamping -- **byte-identical** (indptr, indices AND
+  data), **44.8x** faster on the step itself (115.4 ms -> 2.6 ms per
+  Newton iteration at B8 full size).
+* the update goes through `linsolve.solve_linear`, so
+  `NewtonOptions.linsolve` -- and M22's Krylov methods and P3a/P3b's
+  PETSc stack -- **reach these cores at all**. They called `spsolve`
+  directly before and silently ignored the option.
+* a second substitution rode along in the 3D loops (a gate's Robin
+  coupling accumulated into a diagonal instead of stamped entry by entry
+  through LIL) and is gated separately, including the shared-node
+  wrap-around case.
+
+Measured same-session A/B, full size: **B8 5.15 s -> 3.61 s (1.43x)**,
+B9 7.96 s -> 7.56 s (1.05x -- its remainder was only 7%, the direct
+solve is 91% of it). B8's non-assembly, non-solve remainder went 35% ->
+2.7%. **All ten goldens byte-identical**, m13 digests unchanged; 18 new
+gates in `tests/test_m31_p50_unstructured_linsolve.py`.
+
+Two things worth carrying forward:
+
+1. **P5-0 weakens the case for P5 proper rather than clearing the way.**
+   The linear solve is now 92% of B8 full and 98% of B9 full; the C++
+   assembler would be porting ~5%. The next experiment is
+   `opts.linsolve="petsc"` on these cores -- now possible, and
+   Python-side.
+2. Routing through `solve_linear` broke M32's instrumentation (the cores
+   `from .linsolve import solve_linear`, so patching
+   `pytcad.linsolve.solve_linear` misses them). **The existing M32 gate
+   caught it** -- `test_case_runs_and_reports_a_real_measurement`
+   asserts `linsolve_calls > 0` -- before any number was quoted.
+
+### 2026-09-10 -- M31 P5 planned, and its prerequisites landed
+
+Written, not started, NOT APPROVED: `pytcad/M31-P5-ASSEMBLY-NEWTON-PLAN.md`.
+Scope proposed there is the UNSTRUCTURED path only
+(`unstructured_poisson.py`, `unstructured_dd.py`, `unstructured_dd3d.py`);
+the structured cores stay Python. It needs the section-3 scope sign-off
+and the section-8 amendment record before any core edit.
+
+Landed this session (none of it touches the frozen core):
+
+* **B8 and B9** -- 2D and 3D unstructured DD benchmark cases. Before
+  them the code P5 targets had no dashboard row, so section 36 forbade
+  any claim about it.
+* **The profile P5 was waiting for**, and it is not encouraging for the
+  C++ case: assembly is 3.5% of B8 full and **1.5%** of B9 full, and its
+  share FALLS with problem size; the linear solve is 62-91%. The
+  unstructured cores call `spsolve` directly and cannot reach P3a/P3b's
+  PETSc stack at all. That created a new Python-side sub-phase (P5-0)
+  which addresses ~90% of the runtime with no C++.
+* **A tracemalloc defect in M32's harness**: the memory trace ran over
+  the whole measured region, inflating wall time 1.19x on B3 but 4.05x
+  on B8 -- worst exactly on the code P5 would be judged by. Timing and
+  memory repeats are now separate. **Every M32 number published before
+  2026-09-10 was inflated**; `BASELINE.md`/`FULL.md` are regenerated.
+  Also fixed: `unstructured_dd3d` was missing from the `spsolve` patch
+  list, and the unstructured module-level assemblers were not
+  instrumented at all.
+* **The impossible golden rule is gone.** "Goldens committed before the
+  edit" cannot be satisfied (`.gitignore` excludes `*.npz`) and should
+  not be -- a golden pins one machine's summation order. CLAUDE.md now
+  specifies reconstruct-and-compare as four numbered steps; this file
+  and ARCHITECTURE.md match, and `.gitignore` records why
+  `tests/goldens/**` stays ignored.
 
 **Environment (load-bearing, not a preference).** Run everything through
 `conda run -n TCAD`. This machine's `base` anaconda env has an
@@ -69,30 +227,202 @@ numpy's BLAS otherwise spawns a thread pool PER xdist worker.
 
 ## OPEN ITEMS
 
-1. **M31 P5** is next: assembly + Newton in C++. The plan flags it as
-   the phase that concentrates the risk -- least measured payoff, most
-   physics surface, and it spends the bit-identity budget on the code
-   the strictest goldens protect. Read the P5 adjoint-readiness addendum
-   in `M31-CPP-ARCHITECTURE-PLAN.md` BEFORE starting: it lists gates
-   that are cheap to build in and expensive to retrofit.
-2. **M14 G-A** -- blocked on external material, not effort. Two sessions
+0. **M31 P5-1 (linear-solver / preconditioner selection) is the
+   recommended next milestone**, ahead of P5 proper --
+   `pytcad/M31-P5-1-SOLVER-SELECTION-PLAN.md` -- **ALL FIVE PHASES (A-E)
+   LANDED 2026-09-10.** Phase A's real per-solve numbers
+   (not single-Jacobian extrapolations) moved the milestone's center of
+   gravity: **B4 (3D structured equilibrium, Poisson-only) is the
+   largest result in the whole study -- 179s direct -> 1.5-2.2s
+   iterative, 82x-119x, every one of 9 Newton iterates converging with
+   ZERO fallbacks needed.** B9 (3D unstructured) confirms the original
+   10.6x petsc finding independently under a full Newton sequence. But
+   **B8 (2D unstructured) turned out to have NO measured win**: the
+   single-Jacobian sweep that motivated this milestone favored "ILU"
+   (3-4 Krylov iterations), but the WHOLE-SOLVE number shows
+   preconditioner SETUP cost (93% of every call, isolated and timed
+   directly -- and it is `pyamg`'s AMG hierarchy construction on this
+   machine, not literal `spilu`, since `_build_preconditioner` tries
+   AMG first when installed) makes it slower than direct (8.41s vs
+   3.43s) -- direct stays for B8, measured rather than assumed. A real
+   methodology bug was caught and fixed along the way:
+   scipy's `gmres`+`restart` treats `maxiter` as restart-cycle count
+   (an effective ~100x larger budget than the same `maxiter` gives
+   `bicgstab`/`petsc`), which had made two B8 configs look like near-
+   total failures when they were actually iteration-starved; corrected
+   in the plan and permanently documented in
+   `benchmarks/preconditioners.py` (the new Phase A sweep script) so it
+   isn't repeated. **Phase B landed same day**: `NewtonOptions` gained
+   `precond`/`block_size` fields (defaults reproduce the old hardcoding
+   exactly), threaded into the five coupled call sites that hardcoded
+   `block_size=3` (`device.py`, `device2d.py`, `device3d.py`,
+   `unstructured_dd.py`, `unstructured_dd3d.py`); both fields validated
+   at construction (`ValueError` on an unknown `precond` or a
+   nonsensical `block_size`, mirroring `Models.driving_force`'s
+   existing refuse-don't-ignore pattern). Reconstruct-and-compare
+   confirmed bit-identity: all 6 `tests/goldens/m13/*.npz` files came
+   back md5-identical after the edit, including `frozen_meshes.npz`,
+   which an over-eager `rm -f` deleted before regenerating (a real
+   process mistake, not part of the plan) and had to be rebuilt from
+   the `graded_mesh()`/`np.linspace()` conventions documented in
+   `test_m13_goldens.py`'s own docstring -- the rebuild reproduced the
+   original file byte-for-byte. New gate file
+   `tests/test_m31_p51_phase_b.py` (22 gates). Suite green both ways
+   (`PYTCAD_ACCEL=0`: 1503 passed/10 skipped/1 xfailed;
+   `PYTCAD_ACCEL=1`: 1533 passed/2 skipped/1 xfailed; 39 warnings both,
+   zero failures). **Phase C landed same day**: all four unstructured
+   loops (`unstructured_poisson.solve_poisson_equilibrium`,
+   `unstructured_dd.solve_bias`, and both loops in
+   `unstructured_dd3d.py`) gained the identical try/except fallback
+   shape the structured cores already used, plus a `linsolve_fallbacks`
+   count in each returned dict (zero by default). Confirmed with
+   `tests/test_m31_p51_phase_c.py` (6 gates): a 100%-forced fallback
+   produces a result `np.array_equal` to the all-direct solve, for all
+   four loops, and the fallback count is nonzero when it happens.
+   **A real regression caught before it stuck**: Phase B's own test
+   file originally forwarded a mismatched `block_size=7` to a genuinely
+   REQUESTED iterative method, which made scipy's `gmres` actually
+   grind through real (failing) iterations -- ballooning the combined
+   P5-0/P5-1 test files from ~15s to over 600s. Fixed by having the spy
+   record the request but always execute via `method="direct"`; full
+   suite re-timed clean (`PYTCAD_ACCEL=0`: 1531/10/1 in 345.6s;
+   `PYTCAD_ACCEL=1`: 1539/2/1 in 346.4s, 39 warnings both, zero
+   failures -- matching the pre-Phase-C timing shape, not the
+   regression). **Phases D and E landed same day, completing the
+   plan.** `linsolve.select_auto(dim, unstructured, coupled, dof)`
+   resolves `NewtonOptions.linsolve="auto"` from a 3-entry evidence
+   table keyed on exactly what Phase A measured (B4 -> petsc >=4,913
+   DOF, B9 -> petsc >=2,889 DOF, B8 -> direct, explicitly MEASURED not
+   merely absent); every other `(dim, unstructured, coupled)` --
+   notably ALL of 1D, every 2D/3D STRUCTURED coupled-bias
+   configuration, and both scalar unstructured equilibrium paths --
+   refuses to direct with a reason naming the absence (Gate D-3). Wired
+   into all 9 call sites that dispatch on `opts.linsolve`; two
+   (`Device1D`/`Device2D`'s `solve_equilibrium`) left untouched because
+   they already hardcode `method="direct"` and never read
+   `opts.linsolve` at all. `tests/test_m31_p51_phase_d.py` (17 gates)
+   includes two real end-to-end checks beyond the lookup table: `auto`
+   on a 5,832-DOF `Device3D` resolves to petsc and agrees with direct
+   to `<=1e-14`; `auto` on a full-size B9-shaped 3D unstructured mesh
+   resolves to petsc and agrees with direct to `<=1e-12`. Reconstruct-
+   and-compare: all 6 `tests/goldens/m13/*.npz` md5-identical again --
+   the default stays `"direct"` everywhere (**Phase E landed as
+   E-opt-in**, requiring no new code beyond documenting the "auto"
+   contract on `NewtonOptions.linsolve` itself; **E-auto -- changing
+   the default -- was deliberately NOT taken**, per the plan's own
+   written guardrail that it needs separate sign-off and more measured
+   evidence than three cells currently cover).
+1. **M31 P5** (the C++ assembler) has its own plan doc,
+   `pytcad/M31-P5-ASSEMBLY-NEWTON-PLAN.md` -- **CLOSED 2026-09-10: P5-0
+   landed, P5a-P5e STOPPED, not started** (below). The scope sign-off
+   in its section 3 was never reached -- section 9's own pre-committed
+   exit criterion fired first. The headline: the phase's own profile
+   (section 6) said the assembler is 1.5-3.5% of a full-size
+   unstructured solve. P5-0
+   has since landed (section 11); after it the linear solve was 92-98%
+   of these runtimes, which is what P5-1 above attacked -- P5-1 is now
+   COMPLETE (all 5 phases), and **the decision is made: P5 STOPS after
+   P5-0, per section 9's own pre-committed exit criterion, invoked
+   2026-09-10 (section 12, measured through
+   `benchmarks/p5_redecision.py` and the real M32 harness, not by
+   hand)**. B8 full (auto picks direct, unchanged): assembly 5.45% of
+   3.43s, no case. B9 full (auto picks petsc, 11x): assembly's SHARE
+   rose to 16.3% of a 0.665s total (from 1.5% of 7.32s) while its
+   ABSOLUTE cost stayed at ~109ms -- exactly the "percentage rises
+   because the rest got faster" trap both plans warned against, now
+   measured rather than predicted, and the absolute number (at most
+   ~109ms saveable, realistically less) does not clear the bar against
+   two engines' ongoing maintenance cost. P5a-P5e (the C++ assembler)
+   are NOT started; `cases.py`'s `_b4`/`_b8`/`_b9` gained an optional
+   `opts=` parameter for this measurement (default `None` reproduces
+   the dashboard row exactly, confirmed unchanged by
+   `tests/test_m32_benchmarks.py`). A related, out-of-scope finding: B4
+   (structured 3D, not a P5-1 target) shows the same dynamic even more
+   sharply -- assembly 29.5% of a 0.505s `auto`-resolved total -- worth
+   a separate proposal if a structured C++ assembler is ever considered,
+   not smuggled into this now-closed decision.
+
+   **P5's closure propagated to `ARCHITECTURE.md`** (2026-09-10): the
+   4c.3 spine STATUS line, the C++-gated milestone list (M36/M39
+   flagged for re-scoping against the Python+PETSc stack P5-0/P5-1
+   actually built, since the C++ assembler they depended on will not
+   exist), and the adjoint-readiness section (M47 re-anchored to P4b's
+   Python-path fix rather than a P5 acceptance gate that will never be
+   evaluated) were all updated so a future reader does not plan against
+   a P5 that stopped.
+
+2. **P2/P3b/P4's hand-taken headline numbers -- RE-MEASURED 2026-09-10**
+   through `benchmarks/p2_p3b_p4_remeasure.py` (M32-BENCHMARK-PLAN.md
+   section 7's first open item, "doubly owed" after the tracemalloc
+   fix), reusing `test_accel_parity.py`'s own fixture builders so this
+   measures the exact thing the throughput-floor gates protect. Every
+   number held up or exceeded the original: P2's 3 kernels (41x/25x/539x
+   -> 43x/26x/560x), P3b's timing comparison (3.30ms/3.38ms ->
+   3.31ms/3.38ms, same 399 iterations, confirms "no speedup expected"
+   exactly), P4's 3 indicator kernels (835x/874x/123x ->
+   1081x/939x/221x -- `indicator_log_density_tri` notably higher).
+   `M31-CPP-ARCHITECTURE-PLAN.md`'s P2/P3b/P4 sections updated with both
+   figures side by side. P4's two diffusion-loop kernels
+   (`process.diffuse_numeric`, `ted.diffuse_with_defects`) needed a
+   second script since wall-clock time for a timestep loop isn't a
+   throughput rate -- **also RE-MEASURED 2026-09-10**,
+   `benchmarks/p4_diffusion_remeasure.py`, same n=4000/t_s=1800s shape
+   as the original claim, reusing `test_accel_parity.py`'s
+   `_diffusion_case` implant profile. Speedup held up across two
+   repeats: 3.3-3.7x (orig 3.3x) for `diffuse_numeric`, 4.4-4.5x (orig
+   4.1x) for `diffuse_with_defects`. Absolute seconds are not claimed
+   comparable to the original run (13.6-14.2s vs. the original's 24.6s)
+   since the original's exact TED/OED enhancement parameters were never
+   recorded -- only the speedup ratio is checkable against the prior
+   claim, and it is. `tests/goldens/m14/` (an empty, untracked,
+   unreferenced directory -- confirmed via grep across `tests/` and
+   `pytcad/`) was also removed the same session as a small cleanup item.
+3. **M14 G-A** -- blocked on external material, not effort. Two sessions
    searched (COMSOL docs, Sentaurus/Silvaco manuals, Prophet, TU Wien,
    CERN, ResearchGate, academia.edu, web.archive.org); Unpaywall
    confirms DOI 10.1109/43.9186 has zero open-access copies. Needs
    either institutional access to Lombardi 1988 or a Sentaurus/Silvaco
    manual PDF. Switching to the Darwish (1997) model that DEVSIM uses is
    a real option but a bigger decision than filling in a constant.
-3. **The 13 deleted plan documents** (see the caveat at the top).
-4. **M32-M40** are PROPOSED in `ARCHITECTURE.md` 4c.2, not decided --
+4. **The 13 deleted plan documents** (see the caveat at the top).
+   **`Architecture_Master_Plan.md` joined them on 2026-09-10**, and
+   `AGENTS.md` was renamed to `CLAUDE.md` the same day -- both at the
+   user's direction. The master plan is cited by section number in
+   CLAUDE.md, ARCHITECTURE.md, `M32-BENCHMARK-PLAN.md`, the P5 plan and
+   several test/benchmark modules; those citations were LEFT IN PLACE
+   because the sections are still the reasoning behind live gates.
+   CLAUDE.md's header says where to read one
+   (`git show a117d03:Architecture_Master_Plan.md`). Treat a citation as
+   a pointer into git history, not a broken link.
+5. **M32-M40** are PROPOSED in `ARCHITECTURE.md` 4c.2, not decided --
    nothing is committed until each has its own plan doc and gates.
+   EXCEPT M32 (landed) and **M38, whose Phases 1-3 landed 2026-09-10**
+   (`pytcad/M38-COMPACT-MODEL-PLAN.md`). M38 Phase 4 -- a GUI panel and
+   a `workbench/workflow.py` deck statement -- is named in that plan
+   and NOT started. Neither are BSIM-class models, temperature or
+   geometry scaling, or AC/C-V parameter extraction.
+6. **Not started, and worth knowing about before picking the next
+   item:** M31 P5-1's `E-auto` (making `linsolve="auto"` the DEFAULT
+   rather than opt-in) is still deliberately untaken -- its plan's
+   section 4 says it needs more of Phase A's matrix measured first,
+   starting with `device3d.py`'s coupled `solve_bias` and structured
+   1D/2D. The prize behind it is Phase A's largest number, B4's
+   179 s -> 1.5 s, which no caller reaches today without typing an
+   option they will not discover.
+7. **Housekeeping still owed:** the working tree remains fully
+   UNCOMMITTED, and the slow battery plus `tests/test_accel_parity.py`
+   have not been re-run since P4.
 
 ---
 
 ## HARD RULES (never break)
 
 - `pytcad/pytcad` numerical core: changes ONLY under the M11-S3-style
-  amendment mechanism (sign-off recorded in the plan file, goldens
-  committed before the edit, FD-Jacobian-first, bit-identity off-path).
+  amendment mechanism (sign-off recorded in the plan file, golden
+  baseline recorded before the edit and proved recoverable afterwards
+  -- reconstruct-and-compare, see CLAUDE.md's hard rules; goldens are
+  machine-specific and are never committed -- FD-Jacobian-first,
+  bit-identity off-path).
 - Layering: QML -> controllers -> services -> QProcess subprocess -> npz
   -> ResultStore -> canvas. Controllers/visualization never import
   `pytcad`.

@@ -61,7 +61,8 @@ from scipy.sparse.linalg import spsolve
 
 # M31 P4b: symmetric Dirichlet elimination (row AND column), so the
 # assembled Jacobian is transposable -- see pytcad/dirichlet.py.
-from .dirichlet import eliminate_csr
+from .dirichlet import eliminate_csr, stamp_dirichlet_rows
+from .linsolve import solve_linear, LinearSolveError, select_auto
 
 from .constants import Q, EPS0
 from .device import (
@@ -323,7 +324,18 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
     N = psi.shape[0]
     last_converged = False
     n_iter_used = 0
+    linsolve_fallbacks = 0
     residual_node_history = [] if return_diagnostics else None
+    # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here -- this
+    # is B8, the case Phase A found direct beats every iterative
+    # configuration on (see linsolve.select_auto's own docstring: this
+    # is a MEASURED "direct wins" entry, not an absence of evidence).
+    resolved_linsolve, auto_reason = (
+        select_auto(dim=2, unstructured=True, coupled=True, dof=3 * N)
+        if opts.linsolve == "auto" else (opts.linsolve, None))
+    if opts.verbose and auto_reason:
+        print(f"    unstructured-dd  auto -> {resolved_linsolve} "
+              f"({auto_reason})")
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian(
             psi, n, p, C_s, nie_s, areas_s, interior_edges, eps_trans,
@@ -338,19 +350,41 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
             residual_node_history.append(
                 np.linalg.norm(F3, axis=1).astype(float))
 
-        Jl = J.tolil()
-        for comp in range(3):
-            rows = 3 * contact_idx + comp
-            Jl[rows, :] = 0.0
-            Jl[rows, rows] = 1.0
-        # Symmetric elimination -- see pytcad/dirichlet.py. All three
-        # components of every contact node are constrained, so the
-        # eliminated column set is the union over comp.
+        # All three components of every contact node are constrained,
+        # so the stamped/eliminated row set is the union over comp.
         contact_rows = np.concatenate(
             [3 * contact_idx + comp for comp in range(3)])
-        Jc, rhs = eliminate_csr(Jl.tocsr(), -F3.ravel(), contact_rows)
+        # Symmetric elimination -- see pytcad/dirichlet.py.  M31 P5-0
+        # replaced a J.tolil() round trip here with stamp_dirichlet_rows
+        # (byte-identical, 44.8x faster on B8 at full size) and routed
+        # the update through linsolve so opts.linsolve reaches this core
+        # at all; method="direct" is bit-identical to the spsolve call
+        # it replaces.
+        Jc, rhs = eliminate_csr(stamp_dirichlet_rows(J, contact_rows),
+                                -F3.ravel(), contact_rows)
 
-        du = spsolve(Jc.tocsc(), rhs)
+        # M31 P5-1 Phase C: same try/except degrade the structured cores'
+        # solve_bias already uses (device3d.py, the only structured core
+        # with this on the COUPLED path) -- a requested iterative method
+        # is tried first, but a LinearSolveError falls back to a direct
+        # solve for THAT iteration only rather than raising out of the
+        # whole solve, UNLESS the failing method was already "direct".
+        # opts.linsolve="direct" (the default) never enters the except
+        # branch, so this is bit-identical unless the caller opts in.
+        try:
+            du, _ = solve_linear(Jc.tocsc(), rhs, method=resolved_linsolve,
+                                 rtol=opts.linsolve_rtol,
+                                 block_size=opts.block_size,
+                                 precond=opts.precond)
+        except LinearSolveError:
+            if resolved_linsolve == "direct":
+                raise
+            if opts.verbose:
+                print(f"    unstructured-dd it {it:2d}  {resolved_linsolve} "
+                      "did not converge -- falling back to direct for "
+                      "this iteration")
+            linsolve_fallbacks += 1
+            du, _ = solve_linear(Jc.tocsc(), rhs, method="direct")
         dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
         dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
         n_old, p_old = n, p
@@ -396,7 +430,11 @@ def solve_bias(nodes, triangles, edge_list, node_areas, interior_edges,
         terminal_current[name] = I * J0 * LD
 
     scale = dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps, R0=R0,
-                last_converged=last_converged)
+                last_converged=last_converged,
+                linsolve_fallbacks=linsolve_fallbacks,
+                auto_method=(resolved_linsolve
+                            if opts.linsolve == "auto" else None),
+                auto_reason=auto_reason)
     if return_diagnostics:
         diagnostics = dict(
             n_iter=n_iter_used,

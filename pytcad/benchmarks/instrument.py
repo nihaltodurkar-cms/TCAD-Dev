@@ -8,8 +8,9 @@ setup.  The obvious way to get them is to add timers inside
 `device.py`/`device2d.py`/`device3d.py` -- and that is exactly what this
 module exists to avoid.  Those files are the frozen numerical core:
 touching them requires the M11-S3 amendment mechanism (sign-off in a
-plan file, goldens committed first, FD-Jacobian-first, bit-identity
-off-path), which is a disproportionate price for a stopwatch, and it
+plan file, a recorded and recoverable golden baseline, FD-Jacobian-
+first, bit-identity off-path), which is a disproportionate price for a
+stopwatch, and it
 would put timing code on the hot path of every solve the project ever
 runs.
 
@@ -53,6 +54,29 @@ BLAS, or PETSc.  For a direct solve the LU factors are the dominant
 consumer and they live in SuperLU's own arena, so this number is a floor
 on real usage, not an estimate of it.  Reported as `py_peak_mb` -- named
 for what it actually measures.
+
+MEMORY COSTS TIME, AND NOT EVENLY
+---------------------------------
+`tracemalloc` charges a hook on every allocation, so a case that
+allocates many small objects pays far more for being measured than one
+that allocates a few large arrays.  Measured here on the same machine,
+quick size, warm:
+
+    B3 (2D MOSFET, structured)     0.047 s -> 0.056 s   1.19x
+    B8 (2D unstructured DD)        0.205 s -> 0.832 s   4.05x
+
+That is not a small correction, and it is not uniform -- so a `total_s`
+taken under tracemalloc cannot be compared across cases at all, and
+comparing one implementation against another through it would measure
+the profiler.  B8's 4x comes from the LIL row-stamping in
+`unstructured_dd.solve_bias`, which makes 66k `ndarray.tolist` calls per
+solve; that is exactly the code M31 P5 exists to judge, so leaving the
+inflation in would have put a 4x thumb on the scale of P5's own
+before/after.
+
+The harness therefore runs the memory repeat and the timing repeats
+SEPARATELY (`harness.run_case`), and any probe that ran traced says so
+in its notes.
 """
 from __future__ import annotations
 
@@ -156,13 +180,17 @@ def _capture_matrix(probe, fn):
 
 
 @contextlib.contextmanager
-def instrumented(device=None):
+def instrumented(device=None, memory=True):
     """Measure one solve. Yields a `Probe`; patches are undone on exit.
 
     Patching is restricted to this block and restored in a `finally`, so
     an exception mid-benchmark cannot leave the solver wrapped -- which
     would silently slow down and mis-measure every later case in the
     same process.
+
+    `memory=False` skips `tracemalloc` -- see MEMORY COSTS TIME in the
+    module docstring. `py_peak_mb` is then 0.0 and the caller must not
+    report it as a measurement.
     """
     from pytcad import linsolve as _linsolve
 
@@ -191,7 +219,7 @@ def instrumented(device=None):
     # above, and wrapping the function it calls internally would count
     # the same solve twice.
     for modname in ("device", "device2d", "device3d", "unstructured_dd",
-                    "unstructured_poisson", "moscap"):
+                    "unstructured_dd3d", "unstructured_poisson", "moscap"):
         try:
             mod = __import__(f"pytcad.{modname}", fromlist=["_"])
         except ImportError:
@@ -199,6 +227,39 @@ def instrumented(device=None):
         raw = getattr(mod, "spsolve", None)
         if raw is not None:
             patch(mod, "spsolve", _timed(probe, "linsolve", raw, sizes=True))
+        # A core that does `from .linsolve import solve_linear` holds its
+        # OWN reference, which patching pytcad.linsolve.solve_linear above
+        # does not reach -- the unstructured cores do exactly that since
+        # M31 P5-0. Patch the module-local name too. No double counting:
+        # the wrapper calls the real solve_linear, whose internal spsolve
+        # comes from pytcad.linsolve's namespace, which is deliberately
+        # left unpatched (see the comment above).
+        raw = getattr(mod, "solve_linear", None)
+        if raw is not None:
+            patch(mod, "solve_linear",
+                  _timed(probe, "linsolve", raw, sizes=True))
+
+    # The unstructured cores assemble through MODULE-level functions, not
+    # through a device method, so the `device is not None` branch below
+    # cannot see them and they would report assembly_s = 0 -- which reads
+    # as "assembly is free" rather than "assembly was not measured". They
+    # are patched here instead. This is the split M31 P5 needs measured
+    # before it can justify porting the assembler, so it has to be a real
+    # number rather than an absent column.
+    for modname, fnames in (
+            ("unstructured_poisson", ("_residual_jacobian",)),
+            ("unstructured_dd", ("_residual_jacobian",)),
+            ("unstructured_dd3d", ("_residual_jacobian_poisson3d",
+                                   "_residual_jacobian_dd3d")),
+    ):
+        try:
+            mod = __import__(f"pytcad.{modname}", fromlist=["_"])
+        except ImportError:
+            continue
+        for fname in fnames:
+            raw = getattr(mod, fname, None)
+            if raw is not None:
+                patch(mod, fname, _capture_matrix(probe, raw))
 
     if device is not None:
         for meth in ("_residual_jacobian", "_residual_jacobian_poisson"):
@@ -207,15 +268,19 @@ def instrumented(device=None):
                 setattr(device, meth, _capture_matrix(probe, bound))
                 undo.append((device, meth, None))   # instance attr: delete
 
-    tracemalloc.start()
+    if memory:
+        tracemalloc.start()
     t0 = time.perf_counter()
     try:
         yield probe
     finally:
         probe.total_s = time.perf_counter() - t0
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        probe.py_peak_mb = peak / (1024.0 * 1024.0)
+        if memory:
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            probe.py_peak_mb = peak / (1024.0 * 1024.0)
+            probe.note("tracemalloc was active: total_s is inflated and is "
+                       "not comparable with an untraced run")
         for obj, name, old in reversed(undo):
             if old is None:
                 # An instance attribute we added shadowing a class method:

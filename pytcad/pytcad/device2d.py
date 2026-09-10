@@ -991,6 +991,20 @@ class Device2D:
 
         cur_voltages = {name: bc.V for name, bc in self.bcs.items() if isinstance(bc, DirichletBC)}
 
+        # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
+        # Phase A never measured 2D structured, so this always resolves
+        # to "direct" today (Gate D-3's refusal path) -- wired in only
+        # so "auto" is never an unrecognized method here. See
+        # linsolve.select_auto's own docstring.
+        resolved_linsolve, auto_reason = (
+            linsolve.select_auto(dim=2, unstructured=False, coupled=True,
+                                 dof=3 * self.Ny * self.Nx)
+            if opts.linsolve == "auto" else (opts.linsolve, None))
+        if opts.verbose and auto_reason:
+            print(f"    solve_bias  auto -> {resolved_linsolve} ({auto_reason})")
+        self.last_auto_method = resolved_linsolve if opts.linsolve == "auto" else None
+        self.last_auto_reason = auto_reason
+
         for it in range(opts.max_iter):
             if self.models.surface_mobility:
                 self._update_surface_mobility(psi)
@@ -999,12 +1013,12 @@ class Device2D:
             # the convergence test below reads it. See
             # pytcad/dirichlet.py.
             Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
-            if opts.linsolve == "direct":
+            if resolved_linsolve == "direct":
                 du = spsolve(Jd.tocsc(), rhs)
             else:
                 du, _ = linsolve.solve_linear(
-                    Jd, rhs, method=opts.linsolve, rtol=opts.linsolve_rtol,
-                    block_size=3)
+                    Jd, rhs, method=resolved_linsolve, rtol=opts.linsolve_rtol,
+                    block_size=opts.block_size, precond=opts.precond)
             dpsi = du[0::3].reshape(self.Ny, self.Nx)
             dn = du[1::3].reshape(self.Ny, self.Nx)
             dp = du[2::3].reshape(self.Ny, self.Nx)

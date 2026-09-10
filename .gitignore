@@ -25,6 +25,16 @@ env/
 # Generated example/run output (not source) -- examples/*.py write these
 # next to themselves when run; solved-device results are equally runtime
 # output, never checked in
+#
+# tests/goldens/**/*.npz is DELIBERATELY covered by this rule, not an
+# oversight. A golden pins one machine's numpy/scipy/BLAS summation
+# order, not portable solver behaviour (AGENTS.md's "Hard rules" says
+# why, and records the 2026-09-04 merge that proved it: byte-identical
+# code in a different sandbox produced different golden bytes). Checking
+# them in would make a machine-specific artifact look like a shared
+# reference and would break every checkout that regenerated one. The
+# pre-edit baseline is protected by the reconstruct-and-compare protocol
+# in AGENTS.md instead.
 *.png
 *.npz
 

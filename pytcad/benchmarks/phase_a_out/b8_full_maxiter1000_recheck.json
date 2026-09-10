@@ -1,0 +1,214 @@
+[
+  {
+    "label": "bicgstab/block_jacobi",
+    "total_s": 5.552478509000139,
+    "aborted": "",
+    "records": [
+      {
+        "call_index": 0,
+        "seconds": 0.4106955149991336,
+        "converged": true,
+        "iterations": 312,
+        "residual": 9.893154356204567e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 1,
+        "seconds": 0.3947730359996058,
+        "converged": true,
+        "iterations": 324,
+        "residual": 8.607405304710262e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 2,
+        "seconds": 0.3973083819992098,
+        "converged": true,
+        "iterations": 315,
+        "residual": 7.48037632461509e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 3,
+        "seconds": 0.4055706850003844,
+        "converged": true,
+        "iterations": 321,
+        "residual": 8.993456547761324e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 4,
+        "seconds": 0.5438398449996384,
+        "converged": true,
+        "iterations": 474,
+        "residual": 9.748816222826128e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 5,
+        "seconds": 0.5307247150003604,
+        "converged": true,
+        "iterations": 446,
+        "residual": 9.589956663288979e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 6,
+        "seconds": 0.5251539379996757,
+        "converged": true,
+        "iterations": 437,
+        "residual": 9.934743318070147e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 7,
+        "seconds": 0.5542574299997796,
+        "converged": true,
+        "iterations": 437,
+        "residual": 7.056072207437226e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 8,
+        "seconds": 0.6368581310007357,
+        "converged": true,
+        "iterations": 431,
+        "residual": 7.021535999172874e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 9,
+        "seconds": 0.5218138689997431,
+        "converged": true,
+        "iterations": 414,
+        "residual": 7.987560284481424e-11,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 10,
+        "seconds": 0.3351914160002707,
+        "converged": true,
+        "iterations": 1,
+        "residual": 4.731681967109155e-16,
+        "fell_back": true,
+        "error": "bicgstab did not converge within 1000 iterations (scipy code=-10, relative residual=7.604e-05, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      }
+    ]
+  },
+  {
+    "label": "petsc",
+    "total_s": 18.295341256999563,
+    "aborted": "",
+    "records": [
+      {
+        "call_index": 0,
+        "seconds": 2.6701330010000675,
+        "converged": true,
+        "iterations": 1,
+        "residual": 8.642514882437202e-15,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=2.118e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 1,
+        "seconds": 1.7511592179998843,
+        "converged": true,
+        "iterations": 1,
+        "residual": 8.535222952007343e-15,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=1.701e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 2,
+        "seconds": 1.6684868020001886,
+        "converged": true,
+        "iterations": 1,
+        "residual": 8.975162616124382e-15,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=1.339e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 3,
+        "seconds": 1.6867052959996727,
+        "converged": true,
+        "iterations": 1,
+        "residual": 9.481240467563715e-15,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=1.253e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 4,
+        "seconds": 1.0672414059999937,
+        "converged": true,
+        "iterations": 778,
+        "residual": 8.947787185681325e-09,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 5,
+        "seconds": 1.6794454889995905,
+        "converged": true,
+        "iterations": 1,
+        "residual": 5.023400501035308e-16,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=6.393e-09, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 6,
+        "seconds": 1.7111002540004847,
+        "converged": true,
+        "iterations": 1,
+        "residual": 4.821815480549503e-16,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=6.721e-09, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 7,
+        "seconds": 1.6924931860003198,
+        "converged": true,
+        "iterations": 1,
+        "residual": 6.055405378375817e-16,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=3.388e-09, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 8,
+        "seconds": 1.2501154980000138,
+        "converged": true,
+        "iterations": 896,
+        "residual": 5.725608059340966e-10,
+        "fell_back": false,
+        "error": ""
+      },
+      {
+        "call_index": 9,
+        "seconds": 1.6913962380003795,
+        "converged": true,
+        "iterations": 1,
+        "residual": 8.492159788617191e-16,
+        "fell_back": true,
+        "error": "petsc did not converge within 1000 iterations (KSPConvergedReason=-3, relative residual=1.250e-07, target rtol=1.000e-10) -- refusing to return the unconverged iterate"
+      },
+      {
+        "call_index": 10,
+        "seconds": 1.1405319499999678,
+        "converged": true,
+        "iterations": 868,
+        "residual": 2.4970881861790676e-09,
+        "fell_back": false,
+        "error": ""
+      }
+    ]
+  }
+]

@@ -127,7 +127,7 @@ def _x_face_node_indices(i, ny, nz):
     device. Local to this module: the same construction is hand-rolled
     several times over in pytcad's own 3D benchmarks/tests/examples
     with no shared helper there, and pytcad/*.py is frozen core (see
-    AGENTS.md) -- not something this GUI-side module can refactor into.
+    CLAUDE.md) -- not something this GUI-side module can refactor into.
     This at least stops gui/services/examples.py from growing its own
     second copy as more 3D examples are added here."""
     jj, kk = np.meshgrid(np.arange(ny), np.arange(nz))

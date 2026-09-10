@@ -66,7 +66,7 @@ What is genuinely open (the real M30 backlog):
    independent jobs, at the process-pool level, reusing the existing
    one-job-per-subprocess contract unchanged.
 
-## 1. Ground rules (per AGENTS.md / ARCHITECTURE.md §4b.4)
+## 1. Ground rules (per CLAUDE.md / ARCHITECTURE.md §4b.4)
 
 - Nothing here touches `pytcad/*.py` numerical core. All four phases
   are pure additions in `workbench/`, a new top-level runner module,
@@ -82,11 +82,11 @@ What is genuinely open (the real M30 backlog):
 - Suite invariant unchanged: full suite green, zero new warnings,
   `-n 6` cap, `OPENBLAS_NUM_THREADS=1` under parallel batch execution
   (this now matters directly -- Phase 4's process pool multiplies the
-  BLAS-oversubscription risk AGENTS.md already warns about, since each
+  BLAS-oversubscription risk CLAUDE.md already warns about, since each
   pool worker's own subprocess can itself spawn a BLAS thread pool).
 - Working tree left dirty only with an explicit failing-test handoff
   note in `history.md`, per the standing workflow rule.
-- Do not commit automatically; user pushes (per AGENTS.md).
+- Do not commit automatically; user pushes (per CLAUDE.md).
 
 ## 2. Suggested order and why
 
@@ -173,7 +173,7 @@ Phase 3: DeckBuild-dialect import filter     <- independent, do anytime
   implementation, OR `scipy.optimize.minimize(method="Nelder-Mead")`
   reused directly -- prefer the scipy call, since scipy is already a
   hard dependency and a from-scratch simplex is exactly the kind of
-  unnecessary abstraction AGENTS.md's engineering rules warn against
+  unnecessary abstraction CLAUDE.md's engineering rules warn against
   when a validated library call does the same job).
 - Each trial evaluation: build device with the free params' proposed
   values (via Phase 1's per-row build path), run the existing solver
@@ -247,9 +247,9 @@ Phase 3: DeckBuild-dialect import filter     <- independent, do anytime
   already produce) that runs N independent jobs concurrently, capped
   at a worker count derived the same way M22's `-n 6` guidance already
   reasons about this machine (do not hardcode a different constant;
-  reuse whatever cap convention M22/AGENTS.md already establishes).
+  reuse whatever cap convention M22/CLAUDE.md already establishes).
 - Must set `OPENBLAS_NUM_THREADS=1` (or verify it's already forced) for
-  pool workers -- the exact oversubscription hazard AGENTS.md already
+  pool workers -- the exact oversubscription hazard CLAUDE.md already
   documents for `pytest -n`, now doubled by running actual solves (not
   just test collection) concurrently.
 - Wires into Phase 1 (`run_split_matrix`) as the default executor when
@@ -349,7 +349,7 @@ Confirmed by reading the actual code (not assumed from names):
   mechanisms for two different layers; Phase 5 reuses Phase 4's
   library executor where there is no GUI, and a small QProcess pool
   (bounded by the same worker-count convention) inside the GUI.
-- **Layering rule already in force** (AGENTS.md): `QML -> controllers
+- **Layering rule already in force** (CLAUDE.md): `QML -> controllers
   -> services -> QProcess subprocess -> npz -> ResultStore -> canvas`.
   Controllers already import `workbench` directly (`lab_controller.py`,
   `builder_controller.py`, `app_controller.py`) -- so a new Study
@@ -619,7 +619,7 @@ deck/split-spec text verbatim, the resolved parameter values per row
 result `.npz`, just referenced by path from the manifest rather than
 duplicated), and a coarse "code identity" stamp -- `git rev-parse
 HEAD` if running inside a git checkout, else an honest "unknown"
-rather than a fabricated value (this repo's own AGENTS.md rule against
+rather than a fabricated value (this repo's own CLAUDE.md rule against
 ever claiming something unverified applies directly here: never
 invent a commit hash or dependency version). Explicitly NOT in scope:
 capturing full dependency versions/OS/hardware fingerprints (that is a
@@ -919,7 +919,7 @@ before moving to the next.
 - **Phase 4 (batch parallelism)**: `workbench/batch.py`
   (`run_jobs_parallel`, `solve_split_matrix`, `BatchOutcome`), a
   `concurrent.futures.ProcessPoolExecutor` pool (worker count capped by
-  `default_worker_count`, same conservative convention as AGENTS.md's
+  `default_worker_count`, same conservative convention as CLAUDE.md's
   own `-n 6` guidance) with `OPENBLAS_NUM_THREADS=1` pinned per worker
   via the pool initializer. `solve_split_matrix` wires Phase 1's row
   builder directly into the pool: a row that fails to BUILD never
@@ -950,7 +950,7 @@ before moving to the next.
   `UserWarning`, not introduced by this work). No numerical core
   (`pytcad/*.py`) file was touched by any of the four phases. The
   `-m "slow"` gate battery (`tests/ gui/tests/`, `-n 6`) also run this
-  session per AGENTS.md's "slow gate battery must run before any
+  session per CLAUDE.md's "slow gate battery must run before any
   milestone completion claim" rule: 19 passed, 0 failures, only
   pre-existing adaptive-refinement `UserWarning`s. Part I (Phases
   1-4) is therefore fully gated as of 2026-09-07.

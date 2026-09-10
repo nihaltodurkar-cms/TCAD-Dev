@@ -5,7 +5,7 @@ Contract under test (workbench/batch.py):
     concurrently in a process pool, in the SAME order as given,
     isolating one bad job from the rest.
   - Each pool worker pins OPENBLAS_NUM_THREADS=1 before doing any work
-    (AGENTS.md's own documented oversubscription hazard).
+    (CLAUDE.md's own documented oversubscription hazard).
   - `solve_split_matrix` wires workbench.splits.run_split_matrix (Phase
     1) into the parallel pool: a row that failed to BUILD never reaches
     the solver at all, and results are bit-identical to running the

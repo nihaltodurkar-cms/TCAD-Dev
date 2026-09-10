@@ -321,8 +321,61 @@ class NewtonOptions:
     # "bicgstab" precondition with ILU and are gated to agree with the
     # direct solution within linsolve_rtol (G3), never to return a
     # non-converged iterate silently (G4).
+    #
+    # M31 P5-1 Phase D: "auto" resolves to a concrete method via
+    # linsolve.select_auto's evidence table (real Phase A measurements
+    # only -- never a guess), independently at every call site that
+    # supports it (every coupled solve_bias, plus device3d.py's
+    # structured-3D and the two SCALAR unstructured equilibrium paths).
+    # A (dim, unstructured, coupled) combination Phase A never measured
+    # -- currently everything except B4's structured-3D-equilibrium and
+    # B9's 3D-unstructured-coupled path -- resolves to "direct" (Gate
+    # D-3's explicit refusal, not a default guess). The default here
+    # stays "direct" (Phase E-opt-in): nothing changes unless a caller
+    # asks for "auto" explicitly.
     linsolve: str = "direct"
     linsolve_rtol: float = 1e-10
+    # M31 P5-1 Phase B: expose the preconditioner flavor and block size
+    # that every COUPLED (psi/n/p-interleaved) Newton loop's
+    # `solve_linear` call previously hardcoded (`block_size=3`, no
+    # `precond`) -- see M31-P5-1-SOLVER-SELECTION-PLAN.md section 3.
+    # Defaults reproduce that hardcoding EXACTLY (Gate B-1): a caller
+    # that never sets these two fields gets bit-identical behavior to
+    # every pre-Phase-B solve, on every fixture, ACCEL on or off.
+    #
+    # Only the coupled solves read this field -- the SCALAR
+    # Poisson-equilibrium solves (Device1D/2D/3D's own
+    # solve_equilibrium, unstructured_poisson.py,
+    # unstructured_dd3d.py's equilibrium sub-solve, moscap.py) never
+    # hardcoded a block_size (there is no psi/n/p interleaving to
+    # block on) and continue not passing one, regardless of what this
+    # field holds -- setting block_size here has NO EFFECT on those
+    # solves. That asymmetry is deliberate, not an oversight: passing
+    # block_size=3 into a one-unknown-per-node system would group three
+    # unrelated nodes' potentials into a fake "block", which is simply
+    # wrong, not merely unhelpful.
+    precond: str = "auto"
+    block_size: int | None = 3
+
+    def __post_init__(self):
+        # Refuse an unreachable preconditioner flavor loudly rather than
+        # silently ignoring it -- this project has already been bitten
+        # once by a silently-ignored NewtonOptions.linsolve (the reason
+        # M31 P5-0 exists: opts.linsolve reached nothing until the
+        # unstructured cores were rewired to read it). Mirrors
+        # linsolve.solve_linear's own `_PRECOND` contract exactly, so a
+        # value this accepts can never be rejected one layer down.
+        if self.precond not in ("auto", "block_jacobi", "schur"):
+            raise ValueError(
+                f"NewtonOptions.precond={self.precond!r} is not a known "
+                "preconditioner flavor -- choose from 'auto', "
+                "'block_jacobi', 'schur' (linsolve.solve_linear's own "
+                "precond= contract).")
+        if self.block_size is not None and (
+                not isinstance(self.block_size, int) or self.block_size <= 0):
+            raise ValueError(
+                f"NewtonOptions.block_size={self.block_size!r} must be "
+                "a positive int or None.")
 
 
 # ----------------------------------------------------------------------
@@ -1677,6 +1730,19 @@ class Device1D:
             self._Pp = None
         """Solve at applied bias V = [V_left, V_right] (volts)."""
         opts = opts or NewtonOptions()
+        # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
+        # Phase A never measured 1D at all, so this always resolves to
+        # "direct" today (Gate D-3's refusal path) -- wired in only so
+        # "auto" is never an unrecognized method here, matching every
+        # other core. See linsolve.select_auto's own docstring.
+        resolved_linsolve, auto_reason = (
+            linsolve.select_auto(dim=1, unstructured=False, coupled=True,
+                                 dof=3 * self.N)
+            if opts.linsolve == "auto" else (opts.linsolve, None))
+        if opts.verbose and auto_reason:
+            print(f"    solve_bias  auto -> {resolved_linsolve} ({auto_reason})")
+        self.last_auto_method = resolved_linsolve if opts.linsolve == "auto" else None
+        self.last_auto_reason = auto_reason
         if self.psi is None:
             self.solve_equilibrium(opts)
 
@@ -1742,12 +1808,23 @@ class Device1D:
                 # rather than only the arithmetic. See
                 # pytcad/dirichlet.py.
                 Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
-                if opts.linsolve == "direct":
+                if resolved_linsolve == "direct":
                     du = spsolve(Jd.tocsc(), rhs)
                 else:
+                    # NOT given Phase C's try/except fallback: that
+                    # phase's own scope was the four unstructured loops
+                    # plus device3d.py's pre-existing coupled fallback,
+                    # and adding one here now would be an unrequested
+                    # behavior change for any caller already passing an
+                    # explicit non-"direct" opts.linsolve (their
+                    # LinearSolveError would now be silently swallowed
+                    # instead of raised). Moot for "auto" specifically,
+                    # since dim=1 has no evidence entry and always
+                    # resolves to "direct" above.
                     du, _ = linsolve.solve_linear(
-                        Jd, rhs, method=opts.linsolve,
-                        rtol=opts.linsolve_rtol, block_size=3)
+                        Jd, rhs, method=resolved_linsolve,
+                        rtol=opts.linsolve_rtol, block_size=opts.block_size,
+                        precond=opts.precond)
                 dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
 
                 dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)

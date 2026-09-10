@@ -144,7 +144,8 @@ from scipy.sparse.linalg import spsolve
 
 # M31 P4b: symmetric Dirichlet elimination (row AND column), so the
 # assembled Jacobian is transposable -- see pytcad/dirichlet.py.
-from .dirichlet import eliminate_csr
+from .dirichlet import eliminate_csr, stamp_dirichlet_rows
+from .linsolve import solve_linear, LinearSolveError, select_auto
 
 from .constants import Q, EPS0
 from .device import NewtonOptions, thermal_voltage, bernoulli, dbernoulli, D0_REF
@@ -276,9 +277,25 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     psi[contact_idx] = contact_psi0
 
     N = psi.shape[0]
+    linsolve_fallbacks = 0
+    # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here. This
+    # is the SCALAR 3D unstructured equilibrium path -- Phase A never
+    # measured it (only solve_bias3d's coupled path, B9), so this
+    # always resolves to "direct" today (Gate D-3's refusal path).
+    resolved_linsolve, auto_reason = (
+        select_auto(dim=3, unstructured=True, coupled=False, dof=N)
+        if opts.linsolve == "auto" else (opts.linsolve, None))
+    if opts.verbose and auto_reason:
+        print(f"    unstructured3d-eq  auto -> {resolved_linsolve} "
+              f"({auto_reason})")
     for it in range(opts.max_iter):
         F, J = _residual_jacobian_poisson3d(psi, C_s, nie_s, vols_s, edges, trans_s)
-        J = J.tolil()
+        # M31 P5-0: the gate's Robin coupling used to be stamped one
+        # entry at a time through a LIL view.  Accumulating it into a
+        # diagonal and adding once is the same arithmetic in the same
+        # order (d + (-gt) is bit-identical to d - gt) without the
+        # conversion.
+        gate_diag = np.zeros(psi.shape[0])
         for g in gate_terms.values():
             idx, gate_trans = g["idx"], g["gate_trans"]
             if idx.size == 0:
@@ -287,15 +304,31 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
             psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
             F[idx] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
             for k, gt in zip(idx, gate_trans):
-                J[k, k] -= gt
+                gate_diag[k] -= gt
+        if gate_diag.any():
+            J = J.tocsr() + sp.diags(gate_diag, format="csr")
         F[contact_idx] = psi[contact_idx] - contact_psi0
-        J[contact_idx, :] = 0.0
-        J[contact_idx, contact_idx] = 1.0
         # Symmetric elimination -- see pytcad/dirichlet.py.
-        J, poisson_rhs = eliminate_csr(J.tocsr(), -F, contact_idx)
+        J, poisson_rhs = eliminate_csr(
+            stamp_dirichlet_rows(J, contact_idx), -F, contact_idx)
         J = J.tocsc()
 
-        d = spsolve(J, poisson_rhs)
+        # M31 P5-1 Phase C: same try/except degrade the structured cores
+        # already use for their own equilibrium solve (device3d.py) --
+        # opts.linsolve="direct" (the default) never enters the except
+        # branch, so this is bit-identical unless the caller opts in.
+        try:
+            d, _ = solve_linear(J, poisson_rhs, method=resolved_linsolve,
+                                rtol=opts.linsolve_rtol)
+        except LinearSolveError:
+            if resolved_linsolve == "direct":
+                raise
+            if opts.verbose:
+                print(f"    unstructured3d-eq it {it:2d}  {resolved_linsolve} "
+                      "did not converge -- falling back to direct for "
+                      "this iteration")
+            linsolve_fallbacks += 1
+            d, _ = solve_linear(J, poisson_rhs, method="direct")
         d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
         psi = psi + d
         if opts.verbose:
@@ -305,7 +338,11 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     else:
         warnings.warn("unstructured3d Poisson equilibrium solve did not converge.")
 
-    return psi, dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps)
+    return psi, dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps,
+                     linsolve_fallbacks=linsolve_fallbacks,
+                     auto_method=(resolved_linsolve
+                                 if opts.linsolve == "auto" else None),
+                     auto_reason=auto_reason)
 
 
 def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
@@ -507,13 +544,27 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
 
     last_converged = False
     n_iter_used = 0
+    linsolve_fallbacks = 0
     residual_node_history = [] if return_diagnostics else None
+    # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here -- this
+    # is B9, the case Phase A found petsc 10.6x-11.5x faster than direct
+    # on (Gate D-2/D-3: see linsolve.select_auto's own docstring for the
+    # evidence and the refusal-below-the-measured-floor logic).
+    resolved_linsolve, auto_reason = (
+        select_auto(dim=3, unstructured=True, coupled=True, dof=3 * N)
+        if opts.linsolve == "auto" else (opts.linsolve, None))
+    if opts.verbose and auto_reason:
+        print(f"    unstructured3d-dd  auto -> {resolved_linsolve} "
+              f"({auto_reason})")
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian_dd3d(
             psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
             R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger)
         F3 = F.reshape(N, 3)
-        Jl = J.tolil()
+        # M31 P5-0: see solve_poisson_equilibrium3d for why the gate
+        # coupling is accumulated and added once instead of stamped
+        # through a LIL view.
+        gate_diag = np.zeros(3 * N)
         for g in gate_terms.values():
             idx, gate_trans = g["idx"], g["gate_trans"]
             if idx.size == 0:
@@ -522,7 +573,9 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
             F3[idx, 0] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
             for k, gt in zip(idx, gate_trans):
-                Jl[3 * k, 3 * k] -= gt
+                gate_diag[3 * k] -= gt
+        if gate_diag.any():
+            J = J.tocsr() + sp.diags(gate_diag, format="csr")
         F3[contact_idx, 0] = psi[contact_idx] - psi0
         F3[contact_idx, 1] = n[contact_idx] - n0
         F3[contact_idx, 2] = p[contact_idx] - p0
@@ -531,16 +584,30 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             residual_node_history.append(
                 np.linalg.norm(F3, axis=1).astype(float))
 
-        for comp in range(3):
-            rows = 3 * contact_idx + comp
-            Jl[rows, :] = 0.0
-            Jl[rows, rows] = 1.0
-        # Symmetric elimination -- see pytcad/dirichlet.py.
         contact_rows = np.concatenate(
             [3 * contact_idx + comp for comp in range(3)])
-        Jc, rhs = eliminate_csr(Jl.tocsr(), -F3.ravel(), contact_rows)
+        # Symmetric elimination -- see pytcad/dirichlet.py.
+        Jc, rhs = eliminate_csr(stamp_dirichlet_rows(J, contact_rows),
+                                -F3.ravel(), contact_rows)
 
-        du = spsolve(Jc.tocsc(), rhs)
+        # M31 P5-1 Phase C: same try/except degrade the structured cores'
+        # solve_bias already uses (device3d.py) -- opts.linsolve="direct"
+        # (the default) never enters the except branch, so this is
+        # bit-identical unless the caller opts in.
+        try:
+            du, _ = solve_linear(Jc.tocsc(), rhs, method=resolved_linsolve,
+                                 rtol=opts.linsolve_rtol,
+                                 block_size=opts.block_size,
+                                 precond=opts.precond)
+        except LinearSolveError:
+            if resolved_linsolve == "direct":
+                raise
+            if opts.verbose:
+                print(f"    unstructured3d-dd it {it:2d}  {resolved_linsolve} "
+                      "did not converge -- falling back to direct for "
+                      "this iteration")
+            linsolve_fallbacks += 1
+            du, _ = solve_linear(Jc.tocsc(), rhs, method="direct")
         dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
         dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
         n_old, p_old = n, p
@@ -589,7 +656,11 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
         terminal_current[name] = I * J0 * LD   # [A]
 
     scale = dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps, R0=R0,
-                last_converged=last_converged)
+                last_converged=last_converged,
+                linsolve_fallbacks=linsolve_fallbacks,
+                auto_method=(resolved_linsolve
+                            if opts.linsolve == "auto" else None),
+                auto_reason=auto_reason)
     if return_diagnostics:
         diagnostics = dict(
             n_iter=n_iter_used,

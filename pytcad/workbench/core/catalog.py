@@ -152,7 +152,7 @@ _MODELS = {
                     "underflow Gamma to exactly 1.0 (no enhancement) at "
                     "realizable bulk-Si fields -- an honest physics "
                     "result of the WKB factor law, not a bug (see "
-                    "AGENTS.md's TAT WKB gotcha). Not ported to 2D/3D; "
+                    "CLAUDE.md's TAT WKB gotcha). Not ported to 2D/3D; "
                     "TAT+FD composition is declared untested (M13-FD "
                     "plan's own limitations note).",
     ),

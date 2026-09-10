@@ -79,7 +79,92 @@ _HAVE_PETSC4PY = _importlib_util.find_spec("petsc4py") is not None
 # call by _accel.have_petsc(), not here.
 from . import _accel
 
-__all__ = ["solve_linear", "LinearSolveError"]
+__all__ = ["solve_linear", "LinearSolveError", "select_auto"]
+
+# ----------------------------------------------------------------------
+#  M31 P5-1 Phase D: NewtonOptions.linsolve="auto"
+# ----------------------------------------------------------------------
+# Every entry is a REAL measurement from
+# M31-P5-1-SOLVER-SELECTION-PLAN.md's Phase A -- not a guess, and not a
+# rule tuned on itself and then checked against itself. Every
+# (dim, unstructured, coupled) combination NOT listed here, and every
+# `dof` below a listed entry's own `min_dof` (the smallest size Phase A
+# actually measured for that combination -- "quick" size, not chosen
+# separately), refuses to "direct" rather than extrapolating.
+#
+# The precedent for taking this refusal seriously is in-tree
+# (CLAUDE.md's M22 MPI-Schwarz split-axis picker): a safety/selection
+# heuristic built from evidence for ONE case does not automatically
+# cover a case that merely resembles it. dim=1 and every 2D/3D
+# STRUCTURED coupled-bias configuration have NO entry here because
+# Phase A never measured them -- notably NOT because they were assumed
+# safe.
+_AUTO_EVIDENCE = {
+    # (dim, unstructured, coupled): dict(method, min_dof, reason)
+    (3, False, False): dict(
+        method="petsc", min_dof=4913,
+        reason="B4 (Phase A): structured 3D Poisson-equilibrium -- "
+               "petsc measured 82-119x faster than direct with ZERO "
+               "fallbacks across a full 9-iterate Newton sequence "
+               "(179.0s -> 1.51s at 68,921 DOF). Not measured below "
+               "4,913 DOF (B4 quick size); refusing below that rather "
+               "than extrapolating."),
+    (3, True, True): dict(
+        method="petsc", min_dof=2889,
+        reason="B9 (Phase A): 3D unstructured coupled drift-diffusion "
+               "-- petsc measured 10.6x-11.5x faster than direct "
+               "(7.85s -> 0.68s at 7,464 DOF). Not measured below "
+               "2,889 DOF (B9 quick size); refusing below that rather "
+               "than extrapolating."),
+    (2, True, True): dict(
+        method="direct", min_dof=0,
+        reason="B8 (Phase A): 2D unstructured coupled drift-diffusion "
+               "-- MEASURED, not merely untested: every iterative "
+               "configuration's preconditioner SETUP cost (this "
+               "machine's installed pyamg building an AMG hierarchy, "
+               "or node-block-Jacobi's per-node inversion -- 93% of "
+               "every call, isolated and timed directly) exceeded "
+               "direct's whole-solve time at every size tried (34,023 "
+               "DOF full, 3.43s direct vs 8.41s best iterative). "
+               "Direct wins on the evidence; auto agrees, not by "
+               "default but because this is what was measured."),
+}
+
+
+def select_auto(dim, unstructured, coupled, dof):
+    """Resolve `NewtonOptions.linsolve="auto"` to a concrete method.
+
+    Returns `(method, reason)`. `reason` is ALWAYS a non-empty string
+    naming the evidence a choice rests on, or the absence of it -- Gate
+    D-2 (M31-P5-1-SOLVER-SELECTION-PLAN.md section 4): a caller, or a
+    test, can always ask why a choice was made, and the answer names a
+    real benchmark case and number rather than "trust me".
+
+    Gate D-3, the refusal path: any `(dim, unstructured, coupled)` this
+    project has not actually measured, and any `dof` below the smallest
+    size measured for a combination it HAS, returns `method="direct"`
+    with a reason saying so explicitly. Refusing is a different claim
+    from "direct is best here" -- it only ever claims "there is no
+    evidence for anything else here", which is the honest and total
+    truth of what Phase A covers today.
+
+    This function makes a recommendation; it does not solve anything
+    and never raises -- every caller still goes through its own
+    fallback-to-direct path (M31 P5-1 Phase C) if the recommended
+    method fails to converge.
+    """
+    entry = _AUTO_EVIDENCE.get((dim, unstructured, coupled))
+    if entry is None:
+        return "direct", (
+            f"no Phase A measurement exists for dim={dim}, "
+            f"unstructured={unstructured}, coupled={coupled} -- "
+            "refusing to guess (Gate D-3)")
+    if dof < entry["min_dof"]:
+        return "direct", (
+            entry["reason"] + f" This solve's {dof} DOF is below that "
+            f"floor ({entry['min_dof']}) -- refusing to extrapolate "
+            "below the smallest size actually measured.")
+    return entry["method"], entry["reason"]
 
 _METHODS = ("direct", "gmres", "bicgstab", "gpu_direct", "petsc")
 

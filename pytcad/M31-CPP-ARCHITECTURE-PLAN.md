@@ -1,8 +1,26 @@
 # M31 -- C++ / Python / Qt production architecture
 
-Status as of 2026-09-10: **P0, P1, P2, P2b, P3a, P3b, P4 and P4b
-LANDED.** P5 next -- and P4b has now cleared its first adjoint-readiness
-gate on the Python path.
+Status as of 2026-09-10: **P0, P1, P2, P2b, P3a, P3b, P4, P4b, P5-0 and
+P5-1 (all 5 phases) LANDED.** P4b cleared the first adjoint-readiness
+gate on the Python path; P5-0 (its own doc,
+`M31-P5-ASSEMBLY-NEWTON-PLAN.md`) then made the unstructured cores
+reachable by `linsolve`/PETSc at all and removed the LIL row stamping,
+1.43x on the 2D unstructured benchmark; P5-1 (`M31-P5-1-SOLVER-
+SELECTION-PLAN.md`) added `precond`/`block_size` (Phase B), fallback
+parity (Phase C), and an evidence-gated `linsolve="auto"` (Phase D/E)
+that measures 10.6-11.5x on 3D unstructured with no C++.
+
+**P5 proper -- the C++ assembler -- STOPPED after P5-0, not started.**
+This was not a scope-sign-off refusal (section 3's C++ scope question
+below was never reached): P5's own section 9 pre-committed an exit
+criterion ("if a re-run of B8/B9 does not move assembly into a position
+where porting it is worth a second engine, P5 stops"), and re-running
+it AFTER P5-1 (`M31-P5-ASSEMBLY-NEWTON-PLAN.md` section 12) fired that
+criterion. B8 (`auto` picks `direct`, unchanged) shows no case; B9's
+assembly SHARE rose to 16.3% (from 1.5%) but its ABSOLUTE cost (108.6ms
+of a 665ms `auto`-resolved solve) did not move, and does not clear the
+bar against two engines' ongoing cost. Read that plan's sections 6, 9,
+11 and 12 for the full record.
 P2's full-suite validation (see "Outstanding" at the end of the P2
 section) has now been run: `PYTCAD_ACCEL=0` fast suite (1404 passed,
 1 xfailed, 39 warnings), `PYTCAD_ACCEL=1` fast suite (identical: 1404
@@ -121,7 +139,9 @@ be checked.
 | P3b | the same configuration moved into `core/solver/` | **LANDED** |
 | P4 | process/particle kernels (MC implant, TED, diffusion, AMR indicators) | **LANDED** |
 | P4b | symmetric Dirichlet elimination, Python path (adjoint-readiness) | **LANDED** |
-| P5 | assembly + Newton in C++; the `pytcad_cpp` backend appears | next -- **see adjoint gates below** |
+| P5-0 | unstructured cores reach `linsolve` (hence PETSc); LIL row stamping dropped | **LANDED** -- see `M31-P5-ASSEMBLY-NEWTON-PLAN.md` sec 11 |
+| P5-1 | linear-solver / preconditioner selection (Python) | **LANDED, all 5 phases** -- `M31-P5-1-SOLVER-SELECTION-PLAN.md` -- 10.6-11.5x measured on 3D unstructured, `linsolve="auto"` reachable |
+| P5 | assembly + Newton in C++; the `pytcad_cpp` backend appears | **STOPPED after P5-0**, not started -- section 9's own exit criterion fired post-P5-1; see `M31-P5-ASSEMBLY-NEWTON-PLAN.md` sec 12 -- **adjoint gates below stay relevant if this is ever revisited** |
 | P6 | native `QQuickVTKItem` 3D viewport | |
 | P7 | MPI + GPU via PETSc; `DMPlex` | |
 | P8 | Qt shell hardening (split `AppController`, structured progress channel) | |
@@ -264,13 +284,19 @@ held to that standard when P5 comes up.
 ## P2 -- LANDED
 
 Five kernels ported, all **bit-identical** to the Python reference
-(`np.array_equal`, not a tolerance), single-threaded:
+(`np.array_equal`, not a tolerance), single-threaded. Original figures
+below were hand-taken when this landed; **re-measured 2026-09-10**
+through `benchmarks/p2_p3b_p4_remeasure.py` (M32-BENCHMARK-PLAN.md
+section 7's first open item, reusing `test_accel_parity.py`'s own
+fixture builders so this measures the exact thing the throughput-floor
+gates protect) -- both sets shown, current holds up or exceeds the
+original:
 
-| kernel | reference | compiled | speedup | floor | |
+| kernel | reference | compiled | speedup (orig / 2026-09-10) | floor | |
 |---|---|---|---|---|---|
-| `build_unstructured_stencil` (2D) | 77k tri/s | **3.16M tri/s** | 41x | 2M/s | PASS |
-| `build_unstructured_stencil3d` | 48k tet/s | **1.20M tet/s** | 25x | 1M/s | PASS |
-| `build_edge_flux_geometry3d` | 3.7k tet/s | **1.99M tet/s** | **539x** | 300k/s | PASS |
+| `build_unstructured_stencil` (2D) | 77k / 81k tri/s | 3.16M / **3.53M tri/s** | 41x / **43x** | 2M/s | PASS |
+| `build_unstructured_stencil3d` | 48k / 52k tet/s | 1.20M / **1.34M tet/s** | 25x / **26x** | 1M/s | PASS |
+| `build_edge_flux_geometry3d` | 3.7k / 4.0k tet/s | 1.99M / **2.06M tet/s** | 539x / **560x** | 300k/s | PASS |
 | `build_edge_flux_geometry` (2D) | — | bit-identical | | | PASS |
 | `boundary_face_node_weights3d` | — | bit-identical | | | PASS |
 
@@ -345,7 +371,7 @@ the dictionary work they replace was.
   Targeted runs are green: `tests/test_m21_phase3.py`,
   `test_accel_boundary.py`, `test_architecture_boundaries.py`
   (45 passed) and `tests/test_accel_parity.py` (24 passed).
-  Before claiming P2 complete, run both ways, per AGENTS.md:
+  Before claiming P2 complete, run both ways, per CLAUDE.md:
   ```
   for A in 0 1; do PYTCAD_ACCEL=$A OPENBLAS_NUM_THREADS=1 \
     conda run -n TCAD python -m pytest tests/ gui/tests/ -n 6 -m "not slow" -q; done
@@ -497,6 +523,11 @@ and the petsc4py wrapper was never the cost. The first-call difference
 (~1 s) is PETSc/MPI start-up, paid once per process by whichever backend
 runs first, not by the backend.
 
+**Re-measured 2026-09-10** through `benchmarks/p2_p3b_p4_remeasure.py`
+(same fixture, same methodology, same 399 iterations both times): 3.31
+ms compiled vs 3.38 ms petsc4py. Confirms the original claim exactly --
+still no speedup, still none expected, still the same reason.
+
 So P3b is justified by section 1's third conclusion and by the
 "Recorded dissent" counter-argument above -- a single engine is what
 makes a distributed `Mat`/`DMPlex` reachable in P7 -- and by nothing
@@ -566,7 +597,7 @@ it is checked.
 
 ### Validation
 
-Full battery, run both ways per AGENTS.md, all green, zero regressions:
+Full battery, run both ways per CLAUDE.md, all green, zero regressions:
 
 | run | result | vs. P3a |
 |---|---|---|
@@ -606,15 +637,30 @@ not move" below.
 ### What moved, and what it bought
 
 Measured on this machine, best of 3, `-n 1`, against the Python bodies
-that are kept as the oracle:
+that are kept as the oracle. The three indicator rows were hand-taken
+originally; **re-measured 2026-09-10** through
+`benchmarks/p2_p3b_p4_remeasure.py` (M32-BENCHMARK-PLAN.md section 7),
+reusing `test_accel_parity.py`'s own fixtures -- current holds up or
+exceeds the original in every row (`indicator_log_density_tri` notably
+so, 123x -> 221x). The two diffusion rows were originally left
+unmeasured by that script (a different shape -- timestep loops, not a
+per-triangle kernel) and are **now re-measured 2026-09-10** through a
+second script, `benchmarks/p4_diffusion_remeasure.py`, same n=4000/
+t_s=1800s shape, reusing `test_accel_parity.py`'s own `_diffusion_case`
+implant profile. The exact TED/OED enhancement parameters were never
+recorded alongside the original hand-taken absolute times, so this
+re-measurement's absolute seconds are not the same run (13.6-14.2 s
+reference vs. the original's 24.6 s) -- what is checkable is the
+speedup ratio, and it holds: 3.3-3.7x across two repeats (orig 3.3x)
+and 4.4-4.5x (orig 4.1x):
 
-| kernel | reference | compiled | |
+| kernel | reference | compiled | speedup (orig / 2026-09-10) |
 |---|---|---|---|
-| `indicator_curvature_tri` | 0.27 Mtri/s | **227 Mtri/s** | 835x |
-| `debye_ratio_tri` | 0.28 Mtri/s | **242 Mtri/s** | 874x |
-| `indicator_log_density_tri` | 0.80 Mtri/s | **99 Mtri/s** | 123x |
-| `process.diffuse_numeric` (n=4000, 1800 s) | 0.325 s | **0.098 s** | 3.3x |
-| `ted.diffuse_with_defects` (same) | 24.6 s | **6.07 s** | 4.1x |
+| `indicator_curvature_tri` | 0.27 / 0.27 Mtri/s | 227 / **288 Mtri/s** | 835x / **1081x** |
+| `debye_ratio_tri` | 0.28 / 0.27 Mtri/s | 242 / **256 Mtri/s** | 874x / **939x** |
+| `indicator_log_density_tri` | 0.80 / 0.81 Mtri/s | 99 / **178 Mtri/s** | 123x / **221x** |
+| `process.diffuse_numeric` (n=4000, 1800 s) | 0.325 / 0.32-0.36 s | 0.098 / 0.10 s | 3.3x / **3.3-3.7x** |
+| `ted.diffuse_with_defects` (same, params not recorded) | 24.6 / 13.6-14.2 s | 6.07 / 3.1-3.2 s | 4.1x / **4.4-4.5x** |
 
 The indicators are the P2 shape exactly: a per-triangle Python loop
 calling `np.linalg.norm` on two-element vectors, run over every triangle
@@ -777,12 +823,15 @@ the M11-S3 amendment mechanism:
   the old baseline is recoverable on demand and that this change is the
   SOLE cause of the difference -- nothing else in the tree contributed.
 
-  **Process gap, worth fixing separately:** a hard rule in `AGENTS.md`
-  requires goldens to be "committed before the edit", and `.gitignore`
-  makes that impossible. Either carve `tests/goldens/**` out of the
-  `*.npz` ignore, or rewrite the rule to say what is actually achievable
-  (reconstruct-and-compare, as done here). Right now the rule reads as
-  satisfied by a step nobody can perform.
+  **Process gap -- CLOSED 2026-09-10, ahead of P5.** The hard rule was
+  rewritten rather than the `.gitignore` carved out: a golden pins ONE
+  machine's summation order (`CLAUDE.md`'s own 2026-09-04 merge
+  finding), so committing one would publish a machine-specific artifact
+  as if it were a shared reference. `CLAUDE.md`'s hard rules now specify
+  the reconstruct-and-compare protocol this section used, as four
+  numbered steps; `history.md` and `ARCHITECTURE.md` carry the same
+  wording, and `.gitignore` says why `tests/goldens/**` is deliberately
+  inside the `*.npz` rule.
 * **FD-Jacobian-first:** the substitution is proved exact in
   `tests/test_dirichlet_elimination.py` (25 gates) before any core used
   it, and every existing FD-Jacobian gate still passes unchanged.

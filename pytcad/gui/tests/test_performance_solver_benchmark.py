@@ -6,13 +6,13 @@ for mosfet_2d): 1.11s wall time, 91% (0.909s) in
 scipy.sparse.linalg._dsolve._superlu.gssv -- the actual physics solve
 (direct sparse LU), not GUI-layer overhead. This is explicitly NOT a
 GUI-performance target: touching it means touching the frozen
-numerical core (pytcad/pytcad/*.py), which AGENTS.md gates behind
+numerical core (pytcad/pytcad/*.py), which CLAUDE.md gates behind
 explicit milestone sign-off + FD-Jacobian-first + bit-identical checks
 -- out of scope for a "GUI performance" mandate. No core file is
 modified by this pass for this item.
 
 This test exists purely as a regression gate: run_job() itself (the
-GUI-facing entry point, subprocess-isolated per AGENTS.md's layering
+GUI-facing entry point, subprocess-isolated per CLAUDE.md's layering
 rule) must keep completing a real mosfet_2d solve within a generous
 time bound, so a future accidental slowdown anywhere in the pipeline
 -- GUI-side job setup, not just the core solve -- is caught.

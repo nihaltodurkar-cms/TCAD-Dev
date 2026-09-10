@@ -1,7 +1,7 @@
 # CI for pyTCAD.
 #
 # The repo had no CI at all: the "N passed, zero warnings" invariant in
-# AGENTS.md was enforced by whoever remembered to run the suite.  This
+# CLAUDE.md was enforced by whoever remembered to run the suite.  This
 # makes it automatic.
 #
 # Two properties are non-negotiable and each has its own job:
@@ -15,8 +15,8 @@
 #     same suite with PYTCAD_ACCEL=1.
 #
 # Both run from pytcad/, which is the project root for this repo (see
-# AGENTS.md "Commands").  OPENBLAS_NUM_THREADS=1 is set for the same
-# reason AGENTS.md documents it: without it numpy's BLAS spawns a thread
+# CLAUDE.md "Commands").  OPENBLAS_NUM_THREADS=1 is set for the same
+# reason CLAUDE.md documents it: without it numpy's BLAS spawns a thread
 # pool per xdist worker and oversubscribes the runner.
 name: CI
 

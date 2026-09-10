@@ -19,7 +19,15 @@ to be one-time PETSc initialization paid by whichever backend ran first
 REPEATS
 -------
 Each case runs `repeat` times and the report keeps the BEST wall time,
-not the mean.  The best run is the one least contaminated by scheduler
+not the mean.  The FIRST repeat is the only one that runs under
+`tracemalloc`, and it supplies `py_peak_mb` and nothing else: the hook
+inflates wall time by 1.19x on one case here and 4.05x on another, so
+mixing the two would make `total_s` incomparable between rows.  At
+`--repeats 1` there is no untraced run and the row's notes say the
+timing is inflated -- quote a number from `--repeats 3` or more.  That
+threshold is also what `spread` needs: at `--repeats 2` exactly one
+untraced run happens, so the spread column is 0 for want of a second
+sample rather than because the timings agreed.  The best run is the one least contaminated by scheduler
 noise, page faults and cache eviction, which is what you want when
 comparing two implementations of the same computation.  The spread is
 reported too, so a case whose runs disagree wildly is visible rather
@@ -109,23 +117,40 @@ def run_case(case, size="quick", repeats=1):
         row.skipped = reason
         return row
 
+    # The FIRST repeat carries tracemalloc and supplies py_peak_mb only;
+    # every later repeat runs untraced and supplies the timings. They are
+    # separated because tracemalloc's per-allocation hook is not a
+    # uniform tax -- 1.19x on B3, 4.05x on B8 (see instrument.py's MEMORY
+    # COSTS TIME) -- so a traced total_s is not comparable with anything.
+    # At repeats=1 there is no untraced run to fall back on, and the row
+    # says so rather than quietly reporting an inflated number.
+    n_repeats = max(1, repeats)
     best = None
+    memory_probe = None
     times = []
-    for _ in range(max(1, repeats)):
+    for i in range(n_repeats):
+        traced = (i == 0)
         try:
             device, run = case.build(size)
         except Exception as exc:
             row.error = f"build failed: {exc.__class__.__name__}: {exc}"
             return row
         try:
-            with instrumented(device) as probe:
+            with instrumented(device, memory=traced) as probe:
                 run()
         except Exception as exc:
             row.error = f"{exc.__class__.__name__}: {exc}"
             return row
+        if traced:
+            memory_probe = probe
+            if n_repeats > 1:
+                continue          # its timings are inflated; do not keep them
         times.append(probe.total_s)
         if best is None or probe.total_s < best.total_s:
             best = probe
+
+    if best is None:                                  # cannot happen; be safe
+        best = memory_probe
 
     row.dof = best.dof
     row.nnz = best.nnz
@@ -134,11 +159,17 @@ def run_case(case, size="quick", repeats=1):
     row.linsolve_s = best.linsolve_s
     row.linsolve_calls = best.linsolve_calls
     row.precond_s = best.precond_s
-    row.py_peak_mb = best.py_peak_mb
+    row.py_peak_mb = memory_probe.py_peak_mb if memory_probe else 0.0
     row.total_s = best.total_s
     row.spread_s = (max(times) - min(times)) if len(times) > 1 else 0.0
     for n in best.notes:
         row.notes.append(n)
+    if memory_probe is not None and memory_probe is not best:
+        # The timing rows come from an untraced run, so drop the traced
+        # probe's own warning -- it applies to a number nobody reported.
+        for n in memory_probe.notes:
+            if "tracemalloc" not in n and n not in row.notes:
+                row.notes.append(n)
     return row
 
 

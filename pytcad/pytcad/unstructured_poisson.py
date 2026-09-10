@@ -21,7 +21,8 @@ from scipy.sparse.linalg import spsolve
 
 # M31 P4b: symmetric Dirichlet elimination (row AND column), so the
 # assembled Jacobian is transposable -- see pytcad/dirichlet.py.
-from .dirichlet import eliminate_csr
+from .dirichlet import eliminate_csr, stamp_dirichlet_rows
+from .linsolve import solve_linear, LinearSolveError, select_auto
 
 from .constants import Q, EPS0
 from .device import NewtonOptions, thermal_voltage
@@ -130,21 +131,53 @@ def solve_poisson_equilibrium(nodes, triangles, edge_list, node_areas,
     psi[contact_idx] = contact_psi0
 
     N = psi.shape[0]
+    linsolve_fallbacks = 0
+    # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here. This
+    # is the SCALAR 2D unstructured equilibrium path -- Phase A never
+    # measured it (only unstructured_dd.solve_bias's coupled path, B8),
+    # so this always resolves to "direct" today (Gate D-3's refusal
+    # path). See linsolve.select_auto's own docstring for the evidence.
+    resolved_linsolve, auto_reason = (
+        select_auto(dim=2, unstructured=True, coupled=False, dof=N)
+        if opts.linsolve == "auto" else (opts.linsolve, None))
+    if opts.verbose and auto_reason:
+        print(f"    unstructured-eq  auto -> {resolved_linsolve} "
+              f"({auto_reason})")
     for it in range(opts.max_iter):
         F, J = _residual_jacobian(psi, C_s, nie_s, areas_s,
                                   interior_edges, trans_s)
         F[contact_idx] = psi[contact_idx] - contact_psi0
-        J = J.tolil()
-        J[contact_idx, :] = 0.0
-        J[contact_idx, contact_idx] = 1.0
         # Symmetric elimination: drop the constrained COLUMNS too,
         # substituting their known contribution into the rhs. Same
         # system, same solution -- but J^T now imposes the same
         # constraint, which row-only elimination does not. See
-        # pytcad/dirichlet.py.
-        J, rhs = eliminate_csr(J.tocsr(), -F, contact_idx)
+        # pytcad/dirichlet.py.  M31 P5-0 replaced a J.tolil() round trip
+        # with stamp_dirichlet_rows (byte-identical) and routed the
+        # update through linsolve so opts.linsolve reaches this core.
+        J, rhs = eliminate_csr(stamp_dirichlet_rows(J, contact_idx),
+                               -F, contact_idx)
 
-        d = spsolve(J.tocsc(), rhs)
+        # M31 P5-1 Phase C: same try/except degrade the structured cores
+        # already use (device.py/device2d.py/device3d.py's own
+        # solve_equilibrium) -- a requested iterative method is tried
+        # first, but a LinearSolveError falls back to a direct solve for
+        # THAT iteration only rather than raising out of the whole
+        # solve, UNLESS the failing method was already "direct" (then
+        # there is nothing to fall back to, and re-raising is correct).
+        # opts.linsolve="direct" (the default) never enters the except
+        # branch, so this is bit-identical unless the caller opts in.
+        try:
+            d, _ = solve_linear(J.tocsc(), rhs, method=resolved_linsolve,
+                                rtol=opts.linsolve_rtol)
+        except LinearSolveError:
+            if resolved_linsolve == "direct":
+                raise
+            if opts.verbose:
+                print(f"    unstructured-eq it {it:2d}  {resolved_linsolve} "
+                      "did not converge -- falling back to direct for "
+                      "this iteration")
+            linsolve_fallbacks += 1
+            d, _ = solve_linear(J.tocsc(), rhs, method="direct")
         d = np.clip(d, -opts.max_dpsi, opts.max_dpsi)
         psi = psi + d
         if opts.verbose:
@@ -155,4 +188,8 @@ def solve_poisson_equilibrium(nodes, triangles, edge_list, node_areas,
         import warnings
         warnings.warn("unstructured Poisson equilibrium solve did not converge.")
 
-    return psi, dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps)
+    return psi, dict(Ns=Ns, LD=LD, VT=VT, nie=nie, eps=eps,
+                     linsolve_fallbacks=linsolve_fallbacks,
+                     auto_method=(resolved_linsolve
+                                 if opts.linsolve == "auto" else None),
+                     auto_reason=auto_reason)

@@ -351,7 +351,7 @@ pytest tests/ gui/tests/ -n 6 -m "not slow" -q   # fast dev loop (parallel)
 Everything -- library, GUI, tests, and optional deps (gmsh, devsim,
 mpmath) -- is in one file: `pip install -r requirements.txt` (verified
 on Linux and Windows, see the file's own header). Cap parallel workers
-at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see AGENTS.md's Commands
+at `-n 6` and set `OPENBLAS_NUM_THREADS=1` -- see CLAUDE.md's Commands
 section for why.
 
 ---
