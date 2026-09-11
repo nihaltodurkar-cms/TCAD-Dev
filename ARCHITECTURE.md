@@ -447,7 +447,8 @@ DEVICE PHYSICS
   [partial] TAT (Hurkx, frozen field, 1D); no Schenk variant
   [partial] Band-to-band tunneling: local Kane (Hurkx 1992 Si
             coefficients) coupled live into Device1D's Newton core
-            (M16, 2026-08-29); nonlocal path still missing (Tier 3)
+            (M16, 2026-08-29); nonlocal path BTBT landed in M34
+            (2026-09-11: 1D and structured 2D/3D)
   [missing] Surface recombination velocity; D_it in MOS module
   [missing] Transient simulation (steady-state only everywhere)
   [missing] Small-signal AC analysis
@@ -1680,25 +1681,31 @@ M33  SURFACE/INTERFACE PHYSICS COMPLETION      [L] S1-S5 LANDED, FULLY DONE
      out of scope (no heterojunction mechanism to port at all). M33 is
      now fully landed; no open piece remains on this line.
 
-M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  S1 ATTEMPTED, BLOCKED
+M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  LANDED 2026-09-11
      M16 shipped LOCAL Kane BTBT and explicitly deferred the nonlocal
      line-integral variant; M15 likewise states nonlocal (driving-
      force-integral) ionization out of scope. Both are the standard
      next tier and both need path integration along field lines --
      which is exactly the kind of per-element loop that is unusable in
      Python and cheap in C++. Depends: M31 P4.
-     S1 (nonlocal path Kane BTBT, Device1D homojunction only) was
-     ATTEMPTED 2026-09-11 and explicitly STOPPED, NOT SIGNED OFF --
-     `pytcad/M34-S1-PLAN.md` section 8 is the full record.
-     `Models(btbt_nonlocal=True)` is wired in `device.py`/`btbt.py`,
-     converges, and shows a real physical effect, but
-     `tests/test_m34_s1_nonlocal_btbt.py::test_g4_fd_jacobian` is left
-     OPENLY FAILING (0.74% vs. the 5e-5 house tolerance) as the
-     explicit blocker -- not xfail'd, not landed, do not describe this
-     as done. `Models(btbt_nonlocal=False)` (default) stays
-     bit-identical to the plain solver throughout. S2 (nonlocal
-     impact ionization) and any 2D/3D port remain untouched, per the
-     original S1 scoping.
+     All five slices landed -- `pytcad/M34-PLAN.md` "Status" is the
+     record (`M34-S1-PLAN.md` keeps S1's history). Nonlocal path Kane
+     BTBT (`Models(btbt_nonlocal=True)`, Esseni 2017 eq 11: exact WKB
+     quadrature, live band profile, path geometry frozen per bias
+     solve and re-located at convergence) in Device1D and structured
+     Device2D/Device3D through ONE engine, `pytcad/nonlocal_path.py`;
+     2D/3D paths follow field lines, and a transversely uniform 2D/3D
+     device reproduces Device1D to round-off. Nonlocal effective-field
+     impact ionization (`Models(impact_nonlocal=True)`,
+     `pytcad/ii_nonlocal.py`, Slotboom 1991) in Device1D. The field-
+     line tracer is compiled (`core/src/nonlocal/paths.cpp`, bit-
+     identical to its Python oracle; benchmark B10). Both flags are in
+     the model catalog and the GUI wire format. Out of scope, stated:
+     nonlocal II in 2D/3D (they have no local II to modify),
+     unstructured meshes and heterojunctions (refused), phonon-assisted
+     BTBT, energy-resolved tunneling channels. Also corrected here:
+     4d.1 listed local II and local BTBT as working in 2D/3D, which
+     both devices refuse.
 
 M35  3D PROCESS SIMULATION                                [XL]
      M23/M26 shipped structured-mesh slices. Still missing from 4b.1:
@@ -1817,7 +1824,8 @@ Cheapest-payoff-first, if optimizing for usefulness per session:
   M38 entry above for Phase 4). M33 is now FULLY LANDED (S1-S5 --
   Device1D's affinity gauge + thermionic emission, and the same
   affinity-gauge port to Device2D, Device3D, and `unstructured_dd.py`;
-  see history.md's 2026-09-10/11 entries): M34 is next on this line.
+  see history.md's 2026-09-10/11 entries). M34 LANDED 2026-09-11,
+  all five slices -- see its entry.
   Note that M33 DID touch the frozen numerical core and so needed the
   M11-S3 amendment mechanism throughout, unlike M32/M38, which did not.
 
@@ -1857,9 +1865,10 @@ NotImplementedError sites, not inferred from filenames.
   Drift-diffusion, unstructured     -     Y     Y    -- (1D moot)
   Fermi-Dirac statistics            Y     Y     Y    --
   Incomplete ionization             Y     R     R    M41
-  Impact ionization (coupled)       Y     Y     Y    --
-  BTBT, local Kane                  Y     Y     Y    --
-  BTBT, nonlocal                    -     -     -    M34
+  Impact ionization (coupled)       Y     R     R    M15 follow-up
+  Impact ionization, nonlocal       Y     R     R    needs 2D/3D II
+  BTBT, local Kane                  Y     R     R    M16 follow-up
+  BTBT, nonlocal                    Y     Y     Y    -- (structured)
   Trap-assisted tunneling           Y     Y     Y    --
   Density gradient / quantum        Y     -     -    M42
   Self-heating (lattice T)          Y     -     -    M43

@@ -120,7 +120,7 @@ def test_catalog_keys_match_the_solver_models_flags():
     assert set(ModelCatalog.list()) == {
         "doping_mobility", "field_mobility", "srh", "auger", "bgn",
         "tat", "fd", "incomplete_ion", "impact", "btbt",
-        "surface_mobility", "dg"}
+        "surface_mobility", "dg", "btbt_nonlocal", "impact_nonlocal"}
     # the catalog's default config IS the wire-format default
     assert ModelCatalog.default_config() == _default_models()
 

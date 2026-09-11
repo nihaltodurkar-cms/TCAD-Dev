@@ -119,10 +119,11 @@ def test_the_probe_does_not_change_the_answer():
 # ----------------------------------------------------------------------
 def test_all_nine_cases_are_declared():
     """Section 34 names B1-B7; B8/B9 were added for M31 P5 to give the
-    unstructured path a row. A case quietly dropped from the list is
-    the failure this asserts against."""
+    unstructured path a row, and B10 for M34 (the nonlocal-BTBT solve
+    with its compiled path tracer). A case quietly dropped from the list
+    is the failure this asserts against."""
     assert [c.name for c in benchmarks.CASES] == \
-        ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9"]
+        ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10"]
     for c in benchmarks.CASES:
         assert c.title and c.tests, f"{c.name} is missing its description"
 

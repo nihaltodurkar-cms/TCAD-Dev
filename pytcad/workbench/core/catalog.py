@@ -175,7 +175,8 @@ _MODELS = {
                       "coefficients; breakdown regime requires voltage "
                       "continuation",
         enabled_by_default=False,
-        limitations="No nonlocal or driving-force integral model; no "
+        limitations="The nonlocal (effective-field) variant is "
+                    "`impact_nonlocal` (1D, M34-S2); no "
                     "carrier-temperature coupling; devsim backend not "
                     "supported; near-BV convergence requires the "
                     "staged-generation continuation.",
@@ -198,13 +199,78 @@ _MODELS = {
         applicability="1D (device.py); local-field model; silicon "
                       "coefficients; Zener/GIDL regime",
         enabled_by_default=False,
-        limitations="No nonlocal (line-integral) BTBT -- the plain "
+        limitations="The nonlocal path model is the separate, "
+                    "first-principles `btbt_nonlocal` (M34), not a "
+                    "nonlocal recalibration of this one. The plain "
                     "local Kane/Hurkx form is known to UNDERESTIMATE "
                     "leakage at large reverse bias relative to nonlocal "
                     "BTBT (single average field stands in for the whole "
                     "tunneling path); gated on its known failure mode "
                     "(the M16 high-bias non-plateau gate). Not ported "
                     "to 2D/3D; no Modified-Hurkx dynamic correction.",
+    ),
+    "btbt_nonlocal": ModelInfo(
+        key="btbt_nonlocal",
+        title="Band-to-band tunneling (nonlocal Kane WKB path)",
+        equations=(
+            "G_T = |dEv/dx|_xi / (36 hbar) * (int dx/kappa)^-1 "
+            "* [1 - exp(-km^2 int dx/kappa)] * exp(-2 int kappa dx)",
+            "kappa(x) from Kane's two-band dispersion (Esseni eq 9), "
+            "integrated exactly along a piecewise-linear band",
+            "holes generated at the start x_i, electrons at the live "
+            "delta = 1 crossing x_f -- one pair per tunneling event",
+        ),
+        parameters=("m_n_star", "m_p_star"),
+        references=(
+            "D. Esseni, M. Pala, P. Palestri, C. Alper, T. Rollo, "
+            "Semicond. Sci. Technol. 32, 083005 (2017), sec. 2.1, "
+            "eqs (8)-(12), doi:10.1088/1361-6641/aa6fca",
+            "E. O. Kane, J. Phys. Chem. Solids 12, 181 (1960)",
+        ),
+        applicability="1D, structured 2D and 3D (device.py, device2d.py, "
+                      "device3d.py); homojunctions; field-line tunnel "
+                      "paths in 2D/3D",
+        enabled_by_default=False,
+        limitations="First-principles Kane WKB rate from bare mr/Eg, NOT "
+                    "the empirical Hurkx calibration `btbt` uses -- two "
+                    "independent models, not a local/nonlocal pair of one "
+                    "calibration. Single dominant zero-transverse-momentum "
+                    "channel with (fc - fv) = 1, so it generates at zero "
+                    "bias too. Refused on heterostructures and on "
+                    "unstructured meshes. Path geometry is frozen per bias "
+                    "solve and re-located at convergence; at a gate "
+                    "(Robin) boundary a path is kept inside the "
+                    "semiconductor, which is exact only at insulating "
+                    "boundaries.",
+    ),
+    "impact_nonlocal": ModelInfo(
+        key="impact_nonlocal",
+        title="Impact ionization, nonlocal effective field",
+        equations=(
+            "alpha(E_eff) with lambda dE_eff/ds + E_eff = |E| along each "
+            "carrier's drift direction",
+            "E_eff(k+1) = a E_eff(k) + (1 - a) |E_k|, a = exp(-h/lambda) "
+            "(exact per edge)",
+        ),
+        parameters=(),
+        references=(
+            "J.W. Slotboom, G. Streutker, M.J. van Dort, P.H. Woerlee, "
+            "A. Pruijmboom, D.J. Gravesteijn, 'Non-local impact "
+            "ionization in silicon devices', IEDM 1991 (IEEE Xplore "
+            "235484; abstract: lambda_e = 650 A)",
+            "van Overstraeten & de Man, Solid-State Electron. 13, 583 "
+            "(1970) -- the coefficients evaluated at E_eff",
+        ),
+        applicability="1D (device.py); modifies `impact` and requires it",
+        enabled_by_default=False,
+        limitations="Only the IEDM abstract was accessible: the "
+                    "relaxation equation is the drift-dominated form of "
+                    "its simplified energy balance as constructed here, "
+                    "not a quotation. lambda_p = lambda_n (no hole value "
+                    "was accessible). Transport direction from the field "
+                    "on edges above 100 V/cm, inherited from the nearest "
+                    "such edge below it. Not ported to 2D/3D, which have "
+                    "no coupled local impact model to modify.",
     ),
     "surface_mobility": ModelInfo(
         key="surface_mobility",
@@ -325,3 +391,9 @@ class ModelCatalog:
                 raise ValueError(
                     f"model '{key}' must be true or false, got "
                     f"{value!r}")
+        # M34-S2: the effective field only modifies the local impact
+        # model's coefficients -- on its own it would do nothing.
+        if config.get("impact_nonlocal") and not config.get("impact"):
+            raise ValueError(
+                "model 'impact_nonlocal' modifies 'impact' and needs it "
+                "enabled too")

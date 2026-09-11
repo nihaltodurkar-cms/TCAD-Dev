@@ -418,11 +418,14 @@ def _default_models():
     # model's internal numeric constants (Cn_auger, bgn_E0, ...), it is
     # a physics parameter on Semiconductor/Models, not a per-job wire-
     # format toggle the catalog's bool-only contract covers.
+    # M34: btbt_nonlocal / impact_nonlocal join the same way (OFF),
+    # keeping this dict equal to ModelCatalog.default_config().
     return {"doping_mobility": True, "field_mobility": False,
             "srh": True, "auger": True, "bgn": True,
             "tat": False,
             "fd": False, "incomplete_ion": False,
             "impact": False, "btbt": False,
+            "btbt_nonlocal": False, "impact_nonlocal": False,
             "surface_mobility": False, "dg": False}
 
 

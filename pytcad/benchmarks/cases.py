@@ -374,6 +374,43 @@ def _b9(size, opts=None):
     return None, run
 
 
+# ----------------------------------------------------------------------
+#  B10 -- nonlocal BTBT path tracing (M34-S4 addition)
+# ----------------------------------------------------------------------
+def _b10(size):
+    """One nonlocal-BTBT bias solve (M34) on an L-shaped p+/n+ corner
+    junction, equilibrium -> -0.5V.  Every solve_bias traces the field-
+    line tunnel paths (at the warm start and again after convergence --
+    the stepping loop M34-S4 compiled) and assembles the nonlocal block
+    into the Newton system.  Mesh and equilibrium are outside the
+    measured region.  PYTCAD_ACCEL routes the tracer to _trace_paths_py
+    (0) or _core (1), so the two totals differ by the tracer's cost; a
+    tracer-only case would observe no solve, which the harness contract
+    (tests/test_m32_benchmarks.py) rightly refuses."""
+    from pytcad import Models
+    from pytcad.device2d import Device2D
+    from pytcad.mesh import graded_mesh
+    from pytcad.mesh2d import Mesh2D
+
+    hx, hy = (2e-7, 2e-7) if size == "quick" else (5e-8, 5e-8)
+    x = graded_mesh(1.0e-5, [5.0e-6], h_min=1e-8, h_max=hx)
+    y = graded_mesh(2.0e-6, [1.0e-6], h_min=2e-8, h_max=hy)
+    Y, X = np.meshgrid(y, x, indexing="ij")
+    dop = np.where((X > 5.0e-6) & (Y < 1.0e-6), 5e19, -5e19)
+    dev = Device2D(Mesh2D(x, y), dop, T=300.0,
+                   models=Models(bgn=False, srh=True, btbt_nonlocal=True))
+    dev.add_contact("left", i=[0], j=list(range(y.size)), V=0.0)
+    dev.add_contact("right", i=[x.size - 1],
+                    j=[j for j in range(y.size) if y[j] < 1.0e-6], V=0.0)
+    dev.solve_equilibrium()
+
+    def run():
+        dev.solve_bias({"left": -0.5, "right": 0.0})
+        assert dev.last_converged
+        assert dev._btbt_nl_paths.n_paths > 0
+    return dev, run
+
+
 CASES = [
     Case("B1", "1D Poisson", "PDE IR, BCs, Jacobian", _b1, dim=1),
     Case("B2", "1D diode", "DD, convergence, conservation", _b2, dim=1),
@@ -405,6 +442,11 @@ CASES = [
                "deliberately small even at full size -- see the case "
                "docstring. One assembly call is the post-convergence "
                "current extraction, not a Newton iteration"),
+    Case("B10", "2D nonlocal BTBT solve",
+         "field-line path tracing + nonlocal Newton block (M34)", _b10,
+         dim=2,
+         notes="an M34 addition, not a section-34 case; the path tracer "
+               "is compiled (M34-S4) -- compare PYTCAD_ACCEL=0/1"),
 ]
 
 

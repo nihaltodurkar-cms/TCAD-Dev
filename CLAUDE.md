@@ -607,6 +607,20 @@ what that scope actually was and what's honestly still deferred):
     surface quantum potential. gamma stays at its documented default of
     1.0, untouched -- the boundary-condition fix closed the gates, not
     a gamma retune. See pytcad/M20-DENSITY-GRADIENT-PLAN.md section 7.
+  M34 nonlocal tunneling & ionization -- LANDED 2026-09-11, all five
+    slices (pytcad/M34-PLAN.md "Status" is the record): nonlocal path
+    Kane BTBT (Models.btbt_nonlocal) in Device1D and structured
+    Device2D/Device3D through one engine, pytcad/nonlocal_path.py
+    (exact per-segment WKB quadrature, live band profile, frozen path
+    geometry re-located after convergence; 2D/3D field-line paths,
+    whose transversely uniform devices reproduce Device1D to
+    round-off); nonlocal effective-field impact ionization
+    (Models.impact_nonlocal, pytcad/ii_nonlocal.py, 1D only); the
+    tracer compiled in core/src/nonlocal/paths.cpp, bit-identical to
+    nonlocal_path._trace_paths_py; both flags in the catalog and wire
+    format. With an M34 flag on, Device1D.solve_bias measures density
+    updates against the M11-S5 1e-10 floor (M15/M16 alone keep the raw
+    test, bit-identical).
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

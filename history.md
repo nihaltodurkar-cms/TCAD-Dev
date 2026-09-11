@@ -73,10 +73,106 @@ backend-vs-backend gates, which need both backends present.
 blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
-**Working tree is UNCOMMITTED.** Nothing has been pushed. It also
-carries ONE openly-failing test on purpose -- see the M34-S1 entry
-immediately below (M12-S2 dirty-tree precedent: fine to leave dirty
-with a red gate and a precise handoff note, not fine to hide it).
+**Working tree is UNCOMMITTED.** Nothing has been pushed. The earlier
+openly-failing M34-S1 G6 is closed (see the M34 entry immediately
+below); no test fails. The rebuilt `pytcad/_core*.so` is tracked and
+shows as modified -- committing it is the user's call.
+
+### 2026-09-11 (latest) -- M34 LANDED: nonlocal tunneling and impact ionization, all five slices
+
+Full record: `pytcad/M34-PLAN.md`, "Status" (its sections 0-7 are the
+plan as written before execution). The instruction was "Fully implement
+M34, make plans and execute" -- the explicit sign-off for the core
+amendments to `device.py`, `device2d.py`, `device3d.py` and `btbt.py`.
+The six `tests/goldens/m13/*.npz` md5s are unchanged throughout.
+
+- **S1, 1D nonlocal BTBT.** G6 closed by exact per-segment WKB
+  quadrature (closed antiderivatives in asin(alpha)); prefactor, band
+  extrema and electron deposit are live; the path set is re-located
+  after convergence and re-solved with plain full-step Newton. Two more
+  real defects fixed on the way: kappa computed with cancellation at the
+  band edges (exactly 0 below delta ~ 1e-16, a divide-by-zero that NaN'd
+  a 0.25 V ramp), and paths starting on a Dirichlet contact node. A
+  correction to my own diagnosis: "G6b fails only under pytest" was my
+  script comparing psi alone -- the failing quantity was the relative
+  hole density at deep-minority nodes, undetermined in double precision;
+  the gate now compares densities against n + p.
+- **S2, 1D nonlocal impact ionization** (`pytcad/ii_nonlocal.py`):
+  effective field from the relaxation equation (Slotboom 1991,
+  lambda_e = 650 A; abstract only). Two design corrections forced by
+  measurement: in quasi-neutral regions neither the field sign nor the
+  carrier's own SG current gives a usable transport direction (both are
+  round-off), so strong edges use the field and weak ones inherit; and
+  M34-active 1D solves measure density updates against the M11-S5 floor.
+- **S3, structured 2D/3D nonlocal BTBT** (`nonlocal_path.build_structured`,
+  field-line paths). The dimensional-reduction gate -- a transversely
+  uniform 2D/3D device must equal Device1D -- found four tracer defects
+  (ulp-short face landings, a start screen unlike 1D's, boundary-row
+  paths pushed out of the domain by round-off, wandering paths), each
+  fixed at its cause; the reduction now holds to ~1e-13.
+- **S4**: `core/src/nonlocal/paths.cpp` mirrors `_trace_paths_py` bit
+  for bit (7 parity gates). Benchmark B10 (a 2D nonlocal-BTBT bias
+  solve, quick size, best of 3): 4.64 s with the Python tracer, 2.08 s
+  compiled, linear solves unchanged.
+- **S5**: catalog entries, wire-format keys, and `ModelCatalog.validate`
+  refusing `impact_nonlocal` without `impact`.
+- Fixed outside M34 proper: unstructured Device2D silently ignored
+  `impact`/`btbt`; ARCHITECTURE 4d.1 listed local II/BTBT as working in
+  2D/3D.
+- Open, recorded: a direct 0 -> -5 V solve on the 5e19 tunnel diode
+  stalls in the strength ladder's 0.0 stage for M15, M16 and M34 alike
+  (ramps avoid it); the suite's 39 warnings pre-date M34.
+- Three pre-existing tests changed, each because it pins a list M34
+  grows: `test_workbench_m1.py` and `gui/tests/test_physics_lab.py`
+  (catalog keys), `test_m32_benchmarks.py` (benchmark cases, now B10).
+  A tracer-only B10 was refused by the harness contract (every case
+  must observe a solve), so B10 became a full solve.
+- Suites, 2026-09-11 (final code): fast `-m "not slow"` -- ACCEL=1
+  1731 passed / 5 skipped / 1 xfailed; ACCEL=0 1723 passed / 13
+  skipped / 1 xfailed; 39 warnings each, same count and sources as
+  before M34. Slow battery -- ACCEL=1 26 passed; ACCEL=0 20 passed / 6
+  skipped (the compiled-path throughput floors). The xfail is M14 G-A.
+
+### 2026-09-11 (later) -- M34-S1 second pass: G4 blocker fixed, two more bugs fixed, G6 OPEN -- still NOT signed off
+
+Full record: `pytcad/M34-S1-PLAN.md` section 9, which supersedes the
+section 8 diagnosis the entry below points at. The first pass was
+committed as 4b1dcd9 while this pass was running; this pass is
+uncommitted on top of it.
+
+- **The G4 blocker was not the kappa floor.** Probing every FD column:
+  every bad one was a window START node. The residual reads psi[i0]
+  live (the tunnel energy and every delta hang off it); the Jacobian
+  treated it as frozen. Fixed by adding that column -- "fix B", chosen
+  by the user over freezing psi[i0]. Fix B alone touches only the
+  Jacobian, so converged solutions do not move (3e-14); the deposition
+  fix below does change the residual. G4 now passes at 5e-5 on every
+  column at -2/-4/-6V.
+- **Pair-conservation bug (new):** electrons were deposited with
+  dV[j0], holes with dV[i0] -- 26% excess electrons at -6V on the
+  graded test mesh. Both now use dV[i0]. New gate G5.
+- **The "factor of pi" was an eq (8) transcription error** (18 pi^2 for
+  the paper's 18 pi), not a small-k_perp artifact. The uniform-field
+  reduction is gated in `tests/test_model_benchmarks.py` (closed-form
+  1/kappa integral, plus N^-1/2 convergence to ratio 1).
+- **OPEN, the reason this is still not signed off:** G6 (0 -> -6V ramp)
+  fails at -5.5V, openly, not xfail'd. The edge-midpoint quadrature is
+  nearly discontinuous whenever a node crosses a turning point: a 1e-6
+  nudge of one psi dropped a window's rate 356x. Smaller steps fail
+  earlier, not later. The proposed fix -- exact per-edge integration
+  via closed forms in alpha -- is a model change awaiting sign-off.
+  G3/G7 are unwritten.
+- Found, NOT an M34 defect: on the same 5e19 tunnel diode a direct
+  0 -> -5V solve stalls in the strength ladder's 0.0 stage identically
+  for Models(btbt=True) and Models(impact=True) -- the shared stiff_gen
+  backtracking path, pre-existing.
+- Fast suite after this pass (`-m "not slow"`, `-n 6`): ACCEL=0 1 failed
+  (G6) / 1677 passed / 13 skipped / 1 xfailed; ACCEL=1 1 failed (G6) /
+  1685 passed / 5 skipped / 1 xfailed. 39 warnings each way -- the same
+  count as the run before this pass, from mesh.py, adapt.py and
+  scipy/numpy, none from btbt.py or device.py. The zero-warnings suite
+  invariant is therefore already broken upstream of M34; not chased
+  here. Slow battery not run (no completion claim is being made).
 
 ### 2026-09-11 -- M34-S1 ATTEMPTED, STOPPED, NOT SIGNED OFF: nonlocal path BTBT in Device1D
 
@@ -1637,3 +1733,20 @@ nodes (limit cycle ~8.5e-7); both cores now use a density floor.
   the road to full 3D) and 4e (how this is meant to beat
   Sentaurus/Atlas, and where it deliberately concedes). 4c.2's M32-M40
   are PROPOSED, not decided.
+
+## 2026-09-11 -- M34-S6 (impact ionization in 2D/3D) PAUSED mid-S6a -- HANDOFF
+
+The user chose "2D then 3D" and "field along the current"; the plan is pytcad/M34-S6-PLAN.md. Nothing is committed.
+- Done: the new kernel pytcad/pytcad/ii_grid.py (grid_impact, returning G, COO Jacobian and (E_n, E_p)).
+- Done: device2d.py. The structured Models(impact=True) refusal is removed (the unstructured refusal is kept). The II block sits before the M34-S3 block in _residual_jacobian. solve_bias gains the _II_STAGES ladder and M15 backtracking, active only with impact on; the refresh re-solves at full strength with plain Newton.
+- Done: the new test file tests/test_m34_s6_impact_2d3d.py.
+- Verified: impact-off 2D/3D bias solutions (2D planar, 2D corner, 2D btbt_nonlocal, 3D planar) are byte-identical in md5 to the pre-edit baseline with PYTCAD_ACCEL=0 and =1. The script was a scratch file, not in the repo. The m13 golden md5s matched the M34-PLAN section 1 record before the edit.
+- OPEN, failing: test_transverse_uniform_2d_reduces_to_1d_m15 gives n/(n+p) = 1.1e-3. This is diagnosed, not a kernel bug:
+  - The same-state G agrees with Device1D to 3.1e-8 of Gmax, and the 2D residual at the converged 1D state is 4.6e-13.
+  - The mismatch sits in deep-depletion densities (~5e-17 scaled), far below the 1e-10 M11-S5 floor.
+  - On this device at -30V, J ~ 3e-8 A/cm2, and the n+-side SG currents are round-off-limited at ~1% even with impact off.
+  - The gate must be restated: an equation-level identity plus floor-normalized densities, with no current comparison at this bias.
+- Measured: a tau=1e-9 variant (well-conditioned currents) reduces 2D->1D to psi 1e-13, n/floor 2e-10, p/floor 5e-9 and J 1.4e-7. BUT M = 1.000001 at -30V, and both the 1D and 2D impact ramps fail to converge at most biases from -6/-10V up. Do not use that variant for the gates.
+- Not yet run: the FD-Jacobian and curved-vs-planar tests. The -40V and corner measurements were interrupted.
+- Not started: S6b (Device3D) and S6c (nonlocal). The test file still contains test_device3d_still_refuses_impact_until_s6b.
+- Full suites have NOT been run since the device2d.py edit.

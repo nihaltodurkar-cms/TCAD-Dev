@@ -30,7 +30,12 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
 # M31 P4b: symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+from .btbt import M0_SI as _NL_M0, Q_SI as _NL_Q
+from .nonlocal_path import build_structured as _nl_build_structured
+from .nonlocal_path import evaluate as _nl_evaluate
 from .dirichlet import eliminate_csr
+from .ii_grid import grid_impact as _ii_grid
+from .device import _II_STAGES
 
 from . import linsolve
 
@@ -159,14 +164,15 @@ class Device2D:
                 "Canali field-dependent mobility is not implemented in "
                 "Device2D (see design spec, deferred items)."
             )
-        if getattr(self.models, "impact", False):
+        # Models(impact=True): M15's coupled model, ported by M34-S6
+        # (pytcad/ii_grid.py; see _residual_jacobian and solve_bias).
+        if getattr(self.models, "impact_nonlocal", False):
             raise NotImplementedError(
-                "Impact ionization (Models(impact=True)) is implemented "
-                "in Device1D only (M15 scope; 2D/3D ports are a follow-"
-                "up slice).  Refusing rather than silently ignoring the "
-                "flag -- a silently dropped physics model is a hidden "
-                "failure."
-            )
+                "Nonlocal impact ionization (Models(impact_nonlocal=True), "
+                "M34-S2) is implemented in Device1D only: it modifies the "
+                "coefficients of the local impact model, which this device "
+                "does not have.  Refusing rather than silently ignoring the "
+                "flag.")
         if getattr(self.models, "btbt", False):
             raise NotImplementedError(
                 "Band-to-band tunneling (Models(btbt=True)) is implemented "
@@ -198,6 +204,23 @@ class Device2D:
                 "Refusing rather than silently ignoring the flag -- a "
                 "silently dropped physics model is a hidden failure."
             )
+        # M34-S3: nonlocal path BTBT (field-line paths, pytcad/
+        # nonlocal_path.py).  Homojunction only, as in Device1D.
+        if getattr(self.models, "btbt_nonlocal", False) and any(
+                mm is not self.mats[0] for mm in self.mats):
+            raise NotImplementedError(
+                "Models(btbt_nonlocal=True) is homojunction-only (M34 "
+                "scope) -- this device has more than one material. "
+                "Refusing rather than applying a single-material formula "
+                "across a hetero boundary.")
+        self._btbt_nl_paths = None
+        self.last_btbt_nl_refreshes = 0
+        self.last_btbt_nl_stable = None
+        self.last_converged = None
+        # M34-S6: M15's generation-strength multiplier (see _II_STAGES)
+        # and the last stamped generation (scaled, zero at contacts).
+        self._ii_strength = 1.0
+        self._ii_gs_cache = None
 
         self.fd = bool(getattr(self.models, "fd", False))
         if self.Ntot.max() > 1e19 and not self.fd:
@@ -375,6 +398,13 @@ class Device2D:
             "incomplete_ion": getattr(models, "incomplete_ion", False),
             "surface_mobility": getattr(models, "surface_mobility", False),
             "field_mobility": getattr(models, "field_mobility", False),
+            # The structured path's impact/btbt refusals run only after
+            # this branch has returned, so without these entries an
+            # unstructured device silently ignored them.
+            "impact": getattr(models, "impact", False),
+            "impact_nonlocal": getattr(models, "impact_nonlocal", False),
+            "btbt": getattr(models, "btbt", False),
+            "btbt_nonlocal": getattr(models, "btbt_nonlocal", False),
         }
         bad = [name for name, on in unsupported.items() if on]
         if bad:
@@ -735,6 +765,30 @@ class Device2D:
     # ------------------------------------------------------------------
     #  Full drift-diffusion residual/Jacobian
     # ------------------------------------------------------------------
+    def _btbt_nl_params(self):
+        """M34-S3: (Eg [J], mr, mc, mv [kg]) of the homojunction material."""
+        mat = self.mats[0]
+        mc = mat.m_n_star * _NL_M0
+        mv = mat.m_p_star * _NL_M0
+        return mat.Eg(self.T) * _NL_Q, 1.0 / (1.0 / mc + 1.0 / mv), mc, mv
+
+    def _btbt_nl_build_paths(self, psi):
+        """M34-S3: trace the field-line tunnel paths at `psi` (grid).
+        Only this geometry is frozen for the Newton solve that follows;
+        solve_bias re-locates it after convergence."""
+        mask = np.zeros((self.Ny, self.Nx), dtype=bool)
+        for bc in self.bcs.values():
+            if isinstance(bc, DirichletBC):
+                mask[bc.j, bc.i] = True
+        return _nl_build_structured((self.mesh.y, self.mesh.x), psi,
+                                    self.VT, self.mats[0].Eg(self.T), mask)
+
+    def _btbt_nl_eval(self, psi_flat):
+        """M34-S3: evaluate the frozen paths at a live (flat) psi."""
+        Eg_J, mr, mc, mv = self._btbt_nl_params()
+        return _nl_evaluate(self._btbt_nl_paths, psi_flat, self.VT, Eg_J,
+                            mr, mc, mv)
+
     def _residual_jacobian(self, psi, n, p, voltages):
         Ny, Nx, N = self.Ny, self.Nx, self.N
         hx, hy, dVx, dVy, dV = self.hx, self.hy, self.dVx, self.dVy, self.dV
@@ -950,6 +1004,80 @@ class Device2D:
                 F.reshape(N, 3)[kk, 0] += bc.kappa * w * (Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows.append(3 * kk); cols.append(3 * kk); vals.append(-bc.kappa * w)
 
+        # --- M34-S6: M15's coupled impact ionization on the grid
+        # (pytcad/ii_grid.py: alpha at the field along each carrier's
+        # current).  Device1D's invariants: after the continuity rows,
+        # before the Dirichlet stamping, not at contact nodes (their rows
+        # are replaced), and the ladder's strength scales the live term
+        # and its Jacobian together. ---
+        if getattr(self.models, "impact", False):
+            axes = [
+                dict(kL=kLx, kR=kRx,
+                     h=np.broadcast_to(hx[None, :], (Ny, Nx - 1)).ravel(),
+                     Jn=Jn_x.ravel(), Jp=Jp_x.ravel(),
+                     dJn_dpsiR=dJn_dpsiR_x.ravel(),
+                     dJn_dnL=dJn_dn_L_x.ravel(), dJn_dnR=dJn_dn_R_x.ravel(),
+                     dJp_dpsiR=dJp_dpsiR_x.ravel(),
+                     dJp_dpL=dJp_dp_L_x.ravel(), dJp_dpR=dJp_dp_R_x.ravel()),
+                dict(kL=kSy, kR=kNy,
+                     h=np.broadcast_to(hy[:, None], (Ny - 1, Nx)).ravel(),
+                     Jn=Jn_y.ravel(), Jp=Jp_y.ravel(),
+                     dJn_dpsiR=dJn_dpsiR_y.ravel(),
+                     dJn_dnL=dJn_dn_L_y.ravel(), dJn_dnR=dJn_dn_R_y.ravel(),
+                     dJp_dpsiR=dJp_dpsiR_y.ravel(),
+                     dJp_dpL=dJp_dp_L_y.ravel(), dJp_dpR=dJp_dp_R_y.ravel()),
+            ]
+            G, g_r, g_c, g_v, _ = _ii_grid(N, axes, psi.ravel(), self.VT,
+                                           self.LD, self.J0, self.R0)
+            live = np.ones(N, dtype=bool)
+            for bc in self.bcs.values():
+                if isinstance(bc, DirichletBC):
+                    live[bc.j * Nx + bc.i] = False
+            strength = self._ii_strength
+            Gs = np.where(live, strength * G, 0.0)
+            self._ii_gs_cache = Gs.copy()
+            dVf = dV.ravel()
+            F[1::3] += Gs * dVf
+            F[2::3] -= Gs * dVf
+            keep = live[g_r]
+            w = strength * dVf[g_r[keep]] * g_v[keep]
+            rows.append(3 * g_r[keep] + 1); cols.append(g_c[keep]); vals.append(w)
+            rows.append(3 * g_r[keep] + 2); cols.append(g_c[keep]); vals.append(-w)
+
+        # --- M34-S3: nonlocal path BTBT (Esseni 2017 eq 11) along field
+        # lines.  Same invariant as Device1D: after the continuity rows,
+        # before the Dirichlet stamping.  Only the path geometry is frozen
+        # per solve_bias call; psi along every path is live. ---
+        if getattr(self.models, "btbt_nonlocal", False):
+            if self._btbt_nl_paths is None:
+                self._btbt_nl_paths = self._btbt_nl_build_paths(psi)
+            if self._btbt_nl_paths.n_paths:
+                ev = self._btbt_nl_eval(psi.ravel())
+                st = self._btbt_nl_paths.start
+                # one pair per tunneling event: the electron count spread
+                # around the delta = 1 crossing equals the start's holes
+                fac = 1e-6 / self.R0 * dV.ravel()[st]      # SI -> scaled count
+                cnt = fac * ev.G
+                np.add.at(F, 3 * st + 2, -cnt)
+                dep = ev.dep.tocoo()
+                np.add.at(F, 3 * dep.col + 1, cnt[dep.row] * dep.data)
+                dG = ev.dG.tocoo()
+                rows.append(3 * st[dG.row] + 2)
+                cols.append(3 * dG.col)
+                vals.append(-fac[dG.row] * dG.data)
+                Wm = csr_matrix((fac[dep.row] * dep.data,
+                                 (3 * dep.col + 1, dep.row)),
+                                shape=(3 * N, st.size))
+                dG3 = csr_matrix((dG.data, (dG.row, 3 * dG.col)),
+                                 shape=(st.size, 3 * N))
+                Je = (Wm @ dG3).tocoo()
+                rows.append(Je.row)
+                cols.append(Je.col)
+                vals.append(Je.data)
+                rows.append(3 * ev.ddep_node + 1)
+                cols.append(3 * ev.ddep_col)
+                vals.append(cnt[ev.ddep_p] * ev.ddep_val)
+
         rows = np.concatenate(rows); cols = np.concatenate(cols); vals = np.concatenate(vals)
 
         # --- Dirichlet (contact) BC on psi, always; n/p when S=0 ----------
@@ -1069,50 +1197,116 @@ class Device2D:
         self.last_auto_method = resolved_linsolve if opts.linsolve == "auto" else None
         self.last_auto_reason = auto_reason
 
-        for it in range(opts.max_iter):
-            if self.models.surface_mobility:
-                self._update_surface_mobility(psi)
-            F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
-            # Symmetric Dirichlet elimination; F is left alone because
-            # the convergence test below reads it. See
-            # pytcad/dirichlet.py.
-            Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
-            if resolved_linsolve == "direct":
-                du = spsolve(Jd.tocsc(), rhs)
-            else:
-                du, _ = linsolve.solve_linear(
-                    Jd, rhs, method=resolved_linsolve, rtol=opts.linsolve_rtol,
-                    block_size=opts.block_size, precond=opts.precond)
-            dpsi = du[0::3].reshape(self.Ny, self.Nx)
-            dn = du[1::3].reshape(self.Ny, self.Nx)
-            dp = du[2::3].reshape(self.Ny, self.Nx)
+        # M34-S3: nonlocal BTBT paths are frozen for a Newton solve and
+        # re-located at the converged state (Device1D's rule); the loop
+        # below runs exactly once otherwise.
+        btbt_nl = getattr(self.models, "btbt_nonlocal", False)
+        self._btbt_nl_paths = None
+        self.last_btbt_nl_refreshes = 0
+        self.last_btbt_nl_stable = None
+        # M34-S6: impact ionization runs Device1D's M15 machinery -- the
+        # generation-strength ladder (_II_STAGES, starting generation-
+        # free, each stage warm-starting the next) and a backtracking
+        # line search on the 2-norm merit.  impact=False keeps the single
+        # full-step pass, arithmetic unchanged.
+        ii_on = getattr(self.models, "impact", False)
+        stages = _II_STAGES if ii_on else (1.0,)
+        backtrack = ii_on
+        self._ii_strength = 1.0
+        while True:
+            for stage in stages:
+                self._ii_strength = stage
+                converged = False
+                for it in range(opts.max_iter):
+                    if self.models.surface_mobility:
+                        self._update_surface_mobility(psi)
+                    F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
+                    # Symmetric Dirichlet elimination; F is left alone
+                    # because the convergence test (and the merit) read
+                    # it. See pytcad/dirichlet.py.
+                    Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
+                    if resolved_linsolve == "direct":
+                        du = spsolve(Jd.tocsc(), rhs)
+                    else:
+                        du, _ = linsolve.solve_linear(
+                            Jd, rhs, method=resolved_linsolve, rtol=opts.linsolve_rtol,
+                            block_size=opts.block_size, precond=opts.precond)
+                    dpsi = du[0::3].reshape(self.Ny, self.Nx)
+                    dn = du[1::3].reshape(self.Ny, self.Nx)
+                    dp = du[2::3].reshape(self.Ny, self.Nx)
 
-            dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
-            n_old, p_old = n, p
-            n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
-            p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
-            psi = psi + dpsi
-            n, p = n_new, p_new
+                    dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
+                    n_old, p_old = n, p
+                    n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
+                    p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
+                    if backtrack:
+                        # Device1D's M15 rule, verbatim
+                        base = 0.5 * float(np.dot(F, F))
+                        lam = 1.0
+                        for _ in range(40):
+                            Ft, *_ = self._residual_jacobian(
+                                psi + lam * dpsi,
+                                np.clip(n_old + lam * dn, 0.1 * n_old,
+                                        10.0 * n_old),
+                                np.clip(p_old + lam * dp, 0.1 * p_old,
+                                        10.0 * p_old), cur_voltages)
+                            ft = 0.5 * float(np.dot(Ft, Ft))
+                            if np.isfinite(ft) and \
+                                    ft <= base * (1.0 - 1e-4 * lam):
+                                break
+                            lam *= 0.5
+                        else:
+                            lam = 0.0
+                        n_new = np.clip(n_old + lam * dn, 0.1 * n_old,
+                                        10.0 * n_old)
+                        p_new = np.clip(p_old + lam * dp, 0.1 * p_old,
+                                        10.0 * p_old)
+                        psi = psi + lam * dpsi
+                    else:
+                        psi = psi + dpsi
+                    n, p = n_new, p_new
 
-            # M11-S5: relative updates are measured against a density
-            # floor -- deep-minority nodes (e.g. inside an AlGaAs
-            # barrier, p ~ 1e-13 scaled) otherwise pin the criterion to
-            # roundoff and stall the solve at a harmless limit cycle.
-            # Densities below 1e-10 scaled carry <= 1e-10 of the local
-            # Poisson charge; their exact value is numerically
-            # meaningless.  Equilibrium (slaved-carrier) solves are
-            # unaffected.
-            rel_n = (np.abs(n_new - n_old)
-                     / np.maximum(n_old, 1e-10)).max()
-            rel_p = (np.abs(p_new - p_old)
-                     / np.maximum(p_old, 1e-10)).max()
-            err = max(np.abs(dpsi).max(), rel_n, rel_p)
-            if opts.verbose:
-                print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
-            if err < opts.tol_update:
+                    # M11-S5: relative updates are measured against a
+                    # density floor -- deep-minority nodes (e.g. inside an
+                    # AlGaAs barrier, p ~ 1e-13 scaled) otherwise pin the
+                    # criterion to roundoff and stall the solve at a
+                    # harmless limit cycle.  Densities below 1e-10 scaled
+                    # carry <= 1e-10 of the local Poisson charge; their
+                    # exact value is numerically meaningless.  Equilibrium
+                    # (slaved-carrier) solves are unaffected.
+                    rel_n = (np.abs(n_new - n_old)
+                             / np.maximum(n_old, 1e-10)).max()
+                    rel_p = (np.abs(p_new - p_old)
+                             / np.maximum(p_old, 1e-10)).max()
+                    err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                    if opts.verbose:
+                        print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
+                    if err < opts.tol_update:
+                        converged = True
+                        break
+                else:
+                    warnings.warn(f"2D Newton did not converge; last update {err:.2e}")
+                if not converged:
+                    break
+
+            if not (btbt_nl and converged):
                 break
-        else:
-            warnings.warn(f"2D Newton did not converge; last update {err:.2e}")
+            new = self._btbt_nl_build_paths(psi)
+            if (self._btbt_nl_paths is not None
+                    and np.array_equal(new.start, self._btbt_nl_paths.start)
+                    and self._btbt_nl_eval(psi.ravel()).reached.all()):
+                self.last_btbt_nl_stable = True
+                break
+            if self.last_btbt_nl_refreshes == 4:
+                self.last_btbt_nl_stable = False
+                break
+            self._btbt_nl_paths = new
+            self.last_btbt_nl_refreshes += 1
+            # the re-solve starts converged: full strength, plain Newton
+            # (Device1D's rule -- see its solve_bias refresh comment)
+            stages = (1.0,)
+            backtrack = False
+        self.last_converged = converged
 
         self.psi, self.n, self.p = psi, n, p
         _, _, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)

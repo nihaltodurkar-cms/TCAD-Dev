@@ -778,3 +778,168 @@ def test_hydrodynamic_impact_ionization_reduces_to_the_published_field_model():
     G_carrierT = impact_ionization_rate_carrierT(n, p, Tn, Tp, mu_n, mu_p)
     G_field = alpha_n(E) * mu_n * E * n + alpha_p(E) * mu_p * E * p
     assert G_carrierT == pytest.approx(G_field, rel=1e-9)
+
+
+# ------------------------------------------ M34-S1 nonlocal BTBT (Kane WKB)
+def test_kane_two_band_inverse_kappa_integral_matches_closed_form():
+    """Esseni et al., Semicond. Sci. Technol. 32, 083005 (2017), eq (9):
+    alpha runs from -1 to +1 across the gap with
+    d(delta) = (alpha+u)/(2u) d(alpha), so the tunnel-path integral
+        int_0^1 d(delta)/kappa = pi*hbar / (2*sqrt(mr*Eg))
+    exactly, for any u = m0/(2*mr) > 1.  This identity is what makes
+    eq (11) reduce to eq (8) with no leftover factor (an earlier
+    "factor of pi" was a mistranscription of eq (8)'s 18*pi as
+    18*pi^2).  Gauss-Chebyshev nodes never touch the integrable
+    1/sqrt turning points."""
+    from pytcad.btbt import kane_kappa, M0_SI, HBAR_SI, Q_SI
+    Eg = 1.12 * Q_SI
+    n = 64
+    k = np.arange(1, n + 1)
+    d = 0.5 * (1.0 + np.cos((2 * k - 1) * np.pi / (2 * n)))
+    for mr_rel in (0.05, 0.1554, 0.3):
+        mr = mr_rel * M0_SI
+        integral = np.pi / n * np.sum(np.sqrt(d * (1.0 - d))
+                                      / kane_kappa(d, Eg, mr))
+        assert integral == pytest.approx(
+            np.pi * HBAR_SI / (2.0 * np.sqrt(mr * Eg)), rel=1e-10)
+
+
+def test_nonlocal_btbt_reduces_to_published_kane_formula_in_uniform_field():
+    """M34-S1 G2: on a linear band profile the nonlocal path rate
+    (Esseni 2017 eqs 11/12, btbt.nonlocal_btbt_window) equals the
+    published uniform-field Kane closed form (eq 8, kane_local_fp):
+        G = e^2 F^2 sqrt(mr) / (18 pi hbar^2 sqrt(Eg))
+            * exp(-pi sqrt(mr) Eg^1.5 / (2 e hbar F))
+    Silicon masses and gap; km^2 large so eq (11)'s bracket is 1 (eq 8
+    integrates k_perp to infinity).  btbt.segment_integrals integrates
+    eq (9)'s kappa EXACTLY along a piecewise-linear band (closed-form
+    antiderivatives), so the reduction holds to rounding at ANY
+    resolution -- a single edge included.  (The earlier edge-midpoint
+    rule converged only as N^-1/2: 3.0e-3 off at N=16000.)"""
+    from pytcad.btbt import (nonlocal_btbt_window, kane_local_fp,
+                             M0_SI, HBAR_SI, Q_SI)
+    mc, mv = SILICON.m_n_star * M0_SI, SILICON.m_p_star * M0_SI
+    mr = 1.0 / (1.0 / mc + 1.0 / mv)
+    Eg = SILICON.Eg(300.0) * Q_SI
+    for F in (5e7, 1e8, 3e8):                        # V/m
+        L = Eg / (Q_SI * F)                           # x_f - x_i
+        G8 = kane_local_fp(F, Eg, mr)
+        expo8 = np.pi * np.sqrt(mr) * Eg ** 1.5 / (2.0 * Q_SI * F * HBAR_SI)
+        for N in (1, 7, 1000):
+            x = np.linspace(0.0, L, N + 1)
+            G, _, int_kappa, _ = nonlocal_btbt_window(
+                x, -Q_SI * F * x, Q_SI * F, Eg, mr, mc, mv,
+                -10.0 * Q_SI, 10.0 * Q_SI)
+            assert 2.0 * int_kappa == pytest.approx(expo8, rel=1e-12)
+            assert G == pytest.approx(G8, rel=1e-12), (F, N)
+
+
+def test_nonlocal_btbt_tunnel_length_matches_published_uniform_field_value():
+    """M34-S1 G7 (structural).  Esseni et al. 2017, section 2.1: the
+    path generates holes at the start turning point x_i and electrons
+    at the end turning point x_f, and in a uniform field
+    x_f - x_i = e*Eg/|F| (stated with eq (7)).  The path engine puts
+    the electron deposit at the live delta = 1 crossing, so its tunnel
+    length must be Eg/(qF) exactly for a uniform field.  For a two-slope
+    band it must equal the analytic piecewise value and lie inside
+    [Eg/(q Fmax), Eg/(q Fmin)] -- the tunnel length is a harmonic mean
+    of the segment fields.  No calibration constant is involved."""
+    from pytcad.nonlocal_path import build_1d, evaluate
+    from pytcad.btbt import M0_SI, Q_SI
+    mc, mv = SILICON.m_n_star * M0_SI, SILICON.m_p_star * M0_SI
+    mr = 1.0 / (1.0 / mc + 1.0 / mv)
+    Eg_eV = SILICON.Eg(300.0)
+    Eg = Eg_eV * Q_SI
+    VT = 0.025852
+    for F in (5e7, 3e8):                              # V/m, uniform
+        L = Eg_eV / F
+        x = np.linspace(0.0, 1.7 * L, 60)
+        psi = F * x / VT                              # electrons go up psi
+        ev = evaluate(build_1d(x, [0], [59]), psi, VT, Eg, mr, mc, mv)
+        assert ev.reached[0]
+        assert ev.length[0] == pytest.approx(L, rel=1e-12)
+    F1, F2, f = 2e8, 6e7, 0.4                         # two slopes, kink at delta=f
+    xk = f * Eg_eV / F1
+    x = np.concatenate([np.linspace(0.0, xk, 11),
+                        xk + np.linspace(0.0, 1.2 * (1 - f) * Eg_eV / F2, 31)[1:]])
+    psi = np.where(x <= xk, F1 * x, F1 * xk + F2 * (x - xk)) / VT
+    ev = evaluate(build_1d(x, [0], [x.size - 1]), psi, VT, Eg, mr, mc, mv)
+    want = f * Eg_eV / F1 + (1 - f) * Eg_eV / F2
+    assert ev.length[0] == pytest.approx(want, rel=1e-12)
+    assert Eg_eV / ev.fmax[0] <= ev.length[0] <= Eg_eV / ev.fmin[0]
+
+
+# ------------------------------------ M34-S2 nonlocal (effective-field) II
+def test_nonlocal_ii_relaxation_length_matches_slotboom_1991():
+    """Slotboom, Streutker, van Dort, Woerlee, Pruijmboom, Gravesteijn,
+    "Non-local impact ionization in silicon devices", IEDM 1991 (IEEE
+    Xplore 235484), abstract: an electron energy relaxation length
+    lambda_e = 650 A was found from MBE-grown bipolar transistors and
+    scaled submicron MOS transistors."""
+    from pytcad.ii_nonlocal import LAMBDA_E_SLOTBOOM_CM
+    assert LAMBDA_E_SLOTBOOM_CM == 6.5e-6          # cm = 650 A
+
+
+def _ii_step_mesh():
+    from pytcad.mesh import graded_mesh
+    x = graded_mesh(2.0e-4, [1.0e-4], h_min=2e-7, h_max=5e-6)   # cm
+    x0 = x[np.argmin(np.abs(x - 1.0e-4))]
+    return x, x0
+
+
+def test_effective_field_step_response_is_the_relaxation_solution():
+    """The defining property of the relaxation equation
+    lambda dE_eff/ds + E_eff = |E| (Slotboom 1991's simplified energy
+    balance, drift-dominated form): cold electrons entering a field step
+    E0 at x0 heat as E_eff = E0 (1 - exp(-(x - x0)/lambda)).  The
+    per-edge exponential integrator is exact for a piecewise-constant
+    field, so this holds to rounding on a graded mesh."""
+    from pytcad.ii_nonlocal import effective_field, LAMBDA_E_SLOTBOOM_CM
+    x, x0 = _ii_step_mesh()
+    VT, E0, lam = 0.025852, 3.0e5, LAMBDA_E_SLOTBOOM_CM
+    psi = np.where(x < x0, 0.0, E0 * (x - x0) / VT)   # electrons drift +x
+    Eeff = effective_field(x, psi, VT, lam, "n")
+    on = x >= x0
+    want = E0 * (1.0 - np.exp(-(x[on] - x0) / lam))
+    assert np.allclose(Eeff[on], want, rtol=1e-12, atol=1e-9 * E0)
+    assert np.all(Eeff[~on] == 0.0)                   # upstream stays cold
+
+
+def test_effective_field_is_the_local_field_in_a_uniform_field():
+    """Far from the inflow boundary (>> lambda) a uniform field gives
+    E_eff = |E| exactly: the nonlocal model reduces to the local M15
+    model wherever the field is uniform over a relaxation length."""
+    from pytcad.ii_nonlocal import effective_field, LAMBDA_E_SLOTBOOM_CM
+    lam = LAMBDA_E_SLOTBOOM_CM
+    x = np.linspace(0.0, 5.0e-4, 801)                 # 5 um = 77 lambda
+    VT, E0 = 0.025852, 2.0e5
+    for carrier, sign in (("n", 1.0), ("p", -1.0)):
+        psi = sign * E0 * x / VT
+        Eeff = effective_field(x, psi, VT, lam, carrier)
+        # Both carriers drift +x here (electrons up psi, holes down
+        # it), so the cold inflow is x = 0 for both; 40 lambda
+        # downstream exp(-40) = 4e-18.
+        far = x > 40 * lam
+        assert far.sum() > 100                        # not vacuous
+        # the recursion accumulates a few ulps over ~800 edges
+        assert np.allclose(Eeff[far], E0, rtol=1e-12, atol=0.0)
+
+
+def test_effective_field_lags_a_narrow_field_peak():
+    """Slotboom 1991's central claim, as a formula: electrons gain much
+    less energy than the maximum field implies when the field peak is
+    narrow.  Across a rectangular pulse E0 of width w the exact response
+    is E_eff(end) = E_eff(start) exp(-w/lambda) + E0 (1 - exp(-w/lambda));
+    for w = lambda/2 the carriers leave the peak at under 40% of E0."""
+    from pytcad.ii_nonlocal import effective_field, LAMBDA_E_SLOTBOOM_CM
+    lam = LAMBDA_E_SLOTBOOM_CM
+    VT, E0, Ebg, w = 0.025852, 5.0e5, 1.0e2, 0.5 * lam
+    xa, xb = 2.0e-5, 2.0e-5 + w
+    x = np.unique(np.concatenate([np.linspace(0.0, 6.0e-5, 601), [xa, xb]]))
+    field = np.where((x[:-1] >= xa) & (x[1:] <= xb), E0, Ebg)
+    psi = np.concatenate([[0.0], np.cumsum(field * np.diff(x))]) / VT
+    Eeff = effective_field(x, psi, VT, lam, "n")
+    ia, ib = np.searchsorted(x, xa), np.searchsorted(x, xb)
+    want = Eeff[ia] * np.exp(-w / lam) + E0 * (1.0 - np.exp(-w / lam))
+    assert Eeff[ib] == pytest.approx(want, rel=1e-12)
+    assert Eeff.max() < 0.40 * E0

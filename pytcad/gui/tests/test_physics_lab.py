@@ -59,12 +59,14 @@ def test_panel_present_with_full_catalog(gapp):
     assert [r["key"] for r in rows] == sorted(
         ["doping_mobility", "field_mobility", "srh", "auger", "bgn",
          "tat", "fd", "incomplete_ion", "impact", "btbt",
-         "surface_mobility", "dg"])
+         "surface_mobility", "dg", "btbt_nonlocal", "impact_nonlocal"])
     assert all(r["enabled"] == (r["key"] not in
                                 ("field_mobility", "tat", "fd",
                                  "incomplete_ion",
                                  "impact", "btbt",
-                                 "surface_mobility", "dg")) for r in rows)
+                                 "surface_mobility", "dg",
+                                 "btbt_nonlocal", "impact_nonlocal"))
+               for r in rows)
     caughey = next(r for r in rows if r["key"] == "doping_mobility")
     assert "Caughey" in caughey["references"]
 

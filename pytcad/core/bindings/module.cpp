@@ -24,6 +24,7 @@
 void register_mesh(nanobind::module_& m);
 void register_solver(nanobind::module_& m);
 void register_process(nanobind::module_& m);
+void register_nonlocal(nanobind::module_& m);
 
 namespace nb = nanobind;
 
@@ -78,6 +79,7 @@ NB_MODULE(_core, m) {
     register_mesh(m);
     register_solver(m);
     register_process(m);
+    register_nonlocal(m);
 
     nb::register_exception_translator(
         [](const std::exception_ptr& p, void*) {

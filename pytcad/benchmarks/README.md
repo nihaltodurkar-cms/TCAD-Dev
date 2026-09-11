@@ -50,6 +50,7 @@ regression.
 | B7 | DOF scaling, AMG, MPI, GPU | large synthetic 3D junction, bicgstab |
 | B8 | *(not in section 34)* | 2D unstructured DD, gmsh triangles, forward bias |
 | B9 | *(not in section 34)* | 3D unstructured DD, gmsh tets, forward bias |
+| B10 | *(not in section 34)* | 2D nonlocal-BTBT bias solve (M34), corner junction; the path tracer is the M34-S4 compiled kernel |
 
 **B8 and B9 are additions, not section-34 cases.** Section 34's seven
 all run the STRUCTURED cores, which left the unstructured path -- the

@@ -1,18 +1,11 @@
 # M34-S1 — Nonlocal BTBT in Device1D: Reviewed Formulation
 
-Status, 2026-09-11 (FINAL for this session): **IMPLEMENTED BUT NOT
-SIGNED OFF.** `pytcad/device.py` and `pytcad/btbt.py` WERE edited
-(superseding the "not touched" note this section originally carried
-during the review phase, before implementation was authorized) --
-`Models(btbt_nonlocal=True)` is wired end-to-end, converges on a real
-diode, produces a genuine non-negligible effect, and is bit-identical
-off-path. It is explicitly NOT landed: an open correctness gate
-(analytic vs. finite-difference Jacobian) fails at ~0.74%, far above
-house tolerance. See section 8 for the full, final handoff record --
-read that section FIRST if resuming this milestone, it supersedes the
-GO/HOLD framing below where the two disagree on current state (this
-paragraph is the current state; sections 1-6 are the reviewed
-formulation and remain accurate).
+Status, 2026-09-11 (final): **S1 LANDED as part of M34 -- the current
+record is `M34-PLAN.md`, "Status".** Section 9 below is the second
+pass's record (the G4 blocker's real cause, the conservation bug, the
+eq (8) transcription error); its open G6 item was closed by the exact
+per-segment quadrature M34-PLAN.md section 2 describes. Sections 1-8
+are the history of how the design got there.
 
 Original review framing, preserved below: this review was triggered by
 an explicit instruction to resolve a named contradiction before any
@@ -253,8 +246,12 @@ paper describes, verified algebraically here, not assumed.
 **A finding that changes G2/G3, found by tracing units through eq (8)
 (the paper's own closed-form UNIFORM-FIELD reduction of eq 9-11):**
 
-    G_T = (e^2 F^2 sqrt(mr)) / (18 pi^2 hbar^2 sqrt(Eg))
-          * exp( -pi * sqrt(mr) * Eg^1.5 / (sqrt(2) * e * F * hbar) )  (8)
+    G_T = (e^2 F^2 sqrt(mr)) / (18 pi hbar^2 sqrt(Eg))
+          * exp( -pi * sqrt(mr) * Eg^1.5 / (2 * e * F * hbar) )        (8)
+
+[Corrected 2026-09-11, second pass: this block originally read
+`18 pi^2` and `sqrt(2)`; both were transcription errors against the
+paper's page 5 and both propagated into `kane_local_fp` -- section 9.]
 
 This is a FIRST-PRINCIPLES construction from bare mr/Eg/hbar. It is
 **NOT the same function as `pytcad/btbt.py`'s existing
@@ -537,3 +534,124 @@ here, `history.md` updated with a short pointer to this section.
 Goldens (section 7 above) confirmed byte-identical to the pre-M34-S1
 baseline at every checkpoint during this work -- the default-off path
 was never at risk.
+
+## 9. SECOND PASS, 2026-09-11 -- G4 blocker root-caused and fixed; G6 open
+
+Read this section first when resuming. It supersedes section 8's
+diagnosis of the G4 blocker and the "factor of pi" explanation in
+sections 6 and 8. Still NOT signed off (see the end of this section).
+
+### What was actually wrong (each measured, not inferred)
+
+1. **G4 (FD Jacobian, 7.4e-3) was not the kappa floor.** Probing EVERY
+   psi column at -6V: every bad column was a window START node (worst
+   7.4e-3); interior, end and outside columns agreed to ~1e-8. The
+   residual reads psi[i0] LIVE -- `delta = VT*(psi - psi[i0])/Eg`, and
+   `E = Ev(x_i)` inside km^2 -- while the Jacobian treated psi[i0] as
+   frozen and left its column zero. Section 8's leading hypothesis was
+   not the cause.
+2. **The two-point deposition fabricated charge.** Holes were
+   deposited as `g*dV[i0]`, electrons as `g*dV[j0]`. On the graded test
+   mesh the per-window ratio dV[j0]/dV[i0] spans 0.33-3.3, and
+   device-wide the electron injection was 26% above the hole injection
+   at -6V (1.4653e-1 vs 1.1625e-1, scaled). Esseni eq (1) and figure 2:
+   an energy bin's hole and electron generation carry the same COUNT,
+   so both rows take `g*dV[i0]`. Section 5's G5 would have caught this;
+   it had not been written.
+3. **The "factor of pi" was a third transcription error in eq (8),**
+   not an expansion artifact. The paper's eq (8) (page 5) is
+   `e^2 F^2 sqrt(mr) / (18 pi hbar^2 sqrt(Eg)) * exp(-pi sqrt(mr)
+   Eg^1.5 / (2 hbar e F))`; `kane_local_fp` had `18 pi^2`. Integrating
+   eq (7) over k_perp in eq (3) by hand also gives 18 pi. In a uniform
+   field eq (10)'s expansion is exact, and substituting alpha gives
+   `int_0^1 d(delta)/kappa = pi hbar / (2 sqrt(mr Eg))` for any
+   u = m0/(2 mr) > 1 (Gauss-Chebyshev agrees to 1e-10), so eq (11)/eq
+   (8) = 1. Do not re-check this with scipy `quad` on 1/kappa: it
+   under-resolves the two inverse-sqrt endpoints and returns 3.188.
+
+### What changed (the user chose fix B over freezing psi[i0])
+
+- `Device1D._btbt_nl_window_contribution`: psi at every node i..j is
+  live in the Jacobian, the start node included (it shifts every
+  unclipped delta by -s = -VT/Eg and enters km^2 through E); clipped
+  nodes carry zero sensitivity. Still frozen per solve_bias call: the
+  node span, the mesh path, |dEv/dx|_xi, Emin/Emax. Fix B on its own
+  leaves the residual -- and therefore every converged solution --
+  unchanged (measured max |dpsi| 3e-14 against the pre-fix solve at
+  -6V); the deposition fix in the next bullet is what changes the
+  residual. The
+  rejected alternative (A: freeze psi[i0] when the window is found)
+  also passed the FD probe but moved the converged psi by 0.157.
+  Consequence: section 5's G4b ("exactly zero Jacobian at x_i") is no
+  longer the design. G4b now asserts that the nonlocal block touches
+  only its two deposit rows and psi columns inside [i0, j0].
+- `_residual_jacobian`: the electron deposit at j0 is weighted by
+  dV[i0], in the residual and the Jacobian.
+- `btbt.kane_local_fp`: 18 pi. Comments in btbt.py and device.py that
+  carried the old pi explanation or the "do not wire" status corrected.
+
+### Gates now
+
+| gate | where | status |
+|---|---|---|
+| G1 default-off bit-identity | test_m34 | pass |
+| G2 uniform-field reduction: closed-form 1/kappa integral, and `nonlocal_btbt_window` -> `kane_local_fp` (N^-1/2 order + Richardson limit, F = 5e7..3e8 V/m) | test_model_benchmarks.py | pass (red at ratio 3.151 before the 18 pi fix) |
+| G4 FD Jacobian at 5e-5: 60 random columns at -6V, and every column at -2/-4/-6V | test_m34 | pass (was 7.4e-3 / 8.5e-4) |
+| G4b sparsity | test_m34 | pass |
+| G5 pair conservation, -2 and -6V, rel 1e-12 | test_m34 | pass (red before) |
+| G6 0 -> -6V ramp, 0.5V steps | test_m34 | **FAILS -- open, below** |
+| G3 high-bias departure, G7 structural benchmark | -- | not written |
+
+### Open: G6 -- the edge-midpoint quadrature is not smooth at a turning point
+
+Before this pass the ramp failed at -1.0V; with fix B it fails at
+-5.5V (stage 0.35 of the strength ladder). With 0.25V steps it fails at
+-1.25V, with 0.1V steps at -1.6V (both stage 0.7): smaller steps do not
+help, which points at a non-smooth residual rather than continuation.
+
+Root cause, confirmed at the -1.25V stall: node 46 of window (30, 47)
+sits within ~2e-8 of delta = 1, and raising psi[30] by 1e-6 drops that
+window's rate from 1.945e-4 to 5.46e-7 (356x). delta is clipped at 1,
+so an edge whose true band crosses the turning point partway along it
+looks like a whole edge sitting just below delta = 1: its midpoint
+kappa is near zero and dx/kappa_mid is huge, until the kappa floor
+drops the edge entirely. int dx/kappa -- and so G -- is nearly
+discontinuous whenever a node crosses delta = 0 or 1, and Newton stalls
+when the solution sits on such a crossing. The 1 /m floor is not
+"physically negligible" for this integral: an edge just above it adds
+dx/1 ~ 1e-10 m^2 against a typical whole-window integral of ~3e-18 m^2.
+
+Separately, and NOT an M34 defect: a direct solve from equilibrium to
+-5V stalls in the ladder's 0.0 stage (no generation active) identically
+for Models(btbt=True), Models(impact=True) and Models(btbt_nonlocal=
+True) -- err 3.12e-7, backtracking stuck at lambda = 0 with |F| =
+1.2e-2, which is not round-off (the plain solver converges there to
+9e-14). The stiff_gen backtracking path shared since M15 stalls on that
+jump; ramps avoid it, so G6 is a ramp.
+
+**Proposed fix, not started, needs sign-off:** integrate each edge
+exactly under a linear-in-x delta, truncated at the turning point,
+instead of the midpoint rule. With alpha as the variable,
+`int d(delta)/kappa = hbar/(2u sqrt(mr Eg)) [u asin(alpha) -
+sqrt(1-alpha^2)]` and `int kappa d(delta) = sqrt(mr Eg)/(2u hbar)
+[u (alpha sqrt(1-alpha^2) + asin(alpha))/2 - (1-alpha^2)^1.5/3]`, so
+each edge contributes (dx/d-delta) times a difference of closed forms
+(with the flat-edge limit d-delta -> 0 handled separately). That is
+continuous as a node crosses delta = 0 or 1, needs no kappa floor, and
+makes G2's uniform-field reduction exact instead of N^-1/2. It changes
+G_T on real devices and needs its own Jacobian re-derivation, so it is
+a model change, not a tweak.
+
+### Suite and goldens after this pass
+
+Fast suite both ways: the only failure is G6. ACCEL=0: 1677 passed, 13
+skipped, 1 xfailed (M14 G-A); ACCEL=1: 1685 passed, 5 skipped, 1
+xfailed. The default-off golden gates are in that run and pass;
+section 7's md5s are unchanged (every edit here sits behind
+`btbt_nonlocal=True` or in `kane_local_fp`, which no default path
+calls).
+
+### Still not signed off
+
+G6 is openly red (not xfail'd), and G3/G7 are unwritten. Sign-off is
+the user's call once those are settled.

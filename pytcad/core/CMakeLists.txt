@@ -88,8 +88,16 @@ add_library(tcad_core OBJECT
   src/solver/petsc_ksp.cpp
   src/process/indicators.cpp
   src/process/diffuse.cpp
+  src/nonlocal/paths.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+# M34-S4: the path tracer is gated bit-for-bit against a pure-Python
+# oracle, so no multiply-add may be fused in it -- stated explicitly
+# rather than relied on as a default of the target architecture.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set_source_files_properties(src/nonlocal/paths.cpp PROPERTIES
+    COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 if(OpenMP_CXX_FOUND)
   target_link_libraries(tcad_core PUBLIC OpenMP::OpenMP_CXX)
   target_compile_definitions(tcad_core PUBLIC TCAD_HAVE_OPENMP=1)
@@ -117,6 +125,7 @@ nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/mesh_bindings.cpp
   bindings/solver_bindings.cpp
   bindings/process_bindings.cpp
+  bindings/nonlocal_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
 
