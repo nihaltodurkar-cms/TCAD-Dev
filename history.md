@@ -73,7 +73,65 @@ backend-vs-backend gates, which need both backends present.
 blocked on a paywalled 1988 paper -- see the M14 entry). There are no
 failures anywhere.
 
-**Working tree is UNCOMMITTED.** Nothing has been pushed.
+**Working tree is UNCOMMITTED.** Nothing has been pushed. It also
+carries ONE openly-failing test on purpose -- see the M34-S1 entry
+immediately below (M12-S2 dirty-tree precedent: fine to leave dirty
+with a red gate and a precise handoff note, not fine to hide it).
+
+### 2026-09-11 -- M34-S1 ATTEMPTED, STOPPED, NOT SIGNED OFF: nonlocal path BTBT in Device1D
+
+Full record: `pytcad/M34-S1-PLAN.md` section 8 (read that section
+first if resuming). Do NOT treat this as landed or read past this
+paragraph as evidence it is close to landing -- the explicit
+instruction that ended this work was "stop, document, do not sign off
+M34-S1, and carry the 0.74% FD-Jacobian failure as the explicit
+blocker."
+
+Attempted the nonlocal (path-integral) Kane BTBT model from M34's
+Tier-3 scope, scoped to Device1D homojunctions only (S1). Grounded in
+a verified, actually-read (not paraphrased) open-access reference:
+Esseni et al., Semicond. Sci. Technol. 32, 083005 (2017),
+doi:10.1088/1361-6641/aa6fca, section 2.1. `Models(btbt_nonlocal=
+False)` (default) is bit-identical to the plain solver (all six
+`tests/goldens/m13/*.npz` md5-identical throughout this work);
+`Models(btbt_nonlocal=True)` is wired end-to-end in `pytcad/device.py`
+and `pytcad/btbt.py`, converges on a real reverse-biased diode, and
+produces a genuine, non-negligible physical effect (confirmed
+directly, pinned as a regression test).
+
+Real bugs found and fixed along the way (not hypothetical, each
+confirmed by measurement): (1) a mistranscribed exponent constant in
+the first-principles uniform-field closed form (`sqrt(2)` should have
+been `2`), found by re-reading the primary source's equation image at
+high resolution rather than trusting an earlier text-only fetch; (2) a
+double-counted factor of elementary charge in the nonlocal prefactor,
+found via an independent from-scratch re-derivation; (3) two
+"kappa-floor" bugs (one in the Jacobian, one in the value computation
+itself) where a real device's long near-flat mesh regions put many
+interior nodes within float precision of a WKB turning point, driving
+`1/kappa^2` to blow up or underflow -- fixed with a physically-
+motivated floor that excludes near-turning-point edges from the
+quadrature/derivative entirely.
+
+**NOT resolved, and the reason this is not signed off:** the nonlocal
+model's own uniform-field limit converges to exactly `pi` times (not
+equal to) the first-principles closed form it should reduce to -- a
+plausible but UNPROVEN small-k_perp-expansion artifact, carried as a
+documented caveat, not divided out. More importantly, an adversarial
+FD-Jacobian probe (run because CLAUDE.md requires FD-Jacobian-first,
+not because it was scripted) shows a 0.74% worst-case mismatch against
+this project's usual 5e-5 house tolerance -- pinned into
+`tests/test_m34_s1_nonlocal_btbt.py::test_g4_fd_jacobian`, which is
+LEFT OPENLY FAILING ON PURPOSE (not xfail'd -- this is an internal gap
+to fix, not an external blocker like M14 G-A's paywall). Leading
+hypothesis (unproven): the same kappa-floor fix may be silently
+dropping a small FD-visible sensitivity near the floor. See the plan
+doc's section 8 "Other NOT-yet-ruled-out candidates" for what else has
+NOT been checked.
+
+Next session resuming this: read `M34-S1-PLAN.md` section 8 in full
+before touching `device.py` again; do not loosen the 5e-5 tolerance to
+make the red test pass.
 
 ### 2026-09-11 -- M33-S5 LANDED: chi-aware band alignment ported to Device3D and unstructured_dd.py -- M33 FULLY DONE
 

@@ -1680,13 +1680,25 @@ M33  SURFACE/INTERFACE PHYSICS COMPLETION      [L] S1-S5 LANDED, FULLY DONE
      out of scope (no heterojunction mechanism to port at all). M33 is
      now fully landed; no open piece remains on this line.
 
-M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)             [L]
+M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  S1 ATTEMPTED, BLOCKED
      M16 shipped LOCAL Kane BTBT and explicitly deferred the nonlocal
      line-integral variant; M15 likewise states nonlocal (driving-
      force-integral) ionization out of scope. Both are the standard
      next tier and both need path integration along field lines --
      which is exactly the kind of per-element loop that is unusable in
      Python and cheap in C++. Depends: M31 P4.
+     S1 (nonlocal path Kane BTBT, Device1D homojunction only) was
+     ATTEMPTED 2026-09-11 and explicitly STOPPED, NOT SIGNED OFF --
+     `pytcad/M34-S1-PLAN.md` section 8 is the full record.
+     `Models(btbt_nonlocal=True)` is wired in `device.py`/`btbt.py`,
+     converges, and shows a real physical effect, but
+     `tests/test_m34_s1_nonlocal_btbt.py::test_g4_fd_jacobian` is left
+     OPENLY FAILING (0.74% vs. the 5e-5 house tolerance) as the
+     explicit blocker -- not xfail'd, not landed, do not describe this
+     as done. `Models(btbt_nonlocal=False)` (default) stays
+     bit-identical to the plain solver throughout. S2 (nonlocal
+     impact ionization) and any 2D/3D port remain untouched, per the
+     original S1 scoping.
 
 M35  3D PROCESS SIMULATION                                [XL]
      M23/M26 shipped structured-mesh slices. Still missing from 4b.1:

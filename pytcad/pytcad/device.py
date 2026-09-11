@@ -122,6 +122,11 @@ from .ionization import dalpha_dE as _ii_dalpha_dE
 from .ionization import Q_E as _II_Q
 from .btbt import btbt_generation as _btbt_G
 from .btbt import dbtbt_dF as _btbt_dG
+from .btbt import (
+    kane_kappa as _nl_kappa, dkappa_ddelta as _nl_dkappa_ddelta,
+    nonlocal_btbt_window as _nl_window,
+    M0_SI as _NL_M0, HBAR_SI as _NL_HBAR, Q_SI as _NL_Q,
+)
 
 # M15 R1b, ATTEMPT 3 (2026-08-28): impact-ionization generation is
 # coupled DIRECTLY into the Newton residual/Jacobian every iterate
@@ -302,6 +307,21 @@ class Models:
     # coefficients, G = A F^2 exp(-B/F)).  Default OFF => bit-identical
     # to the plain solver (goldens).  1D only; Device2D/3D raise.
     btbt: bool = False
+    # M34-S1: nonlocal PATH Kane BTBT (Esseni et al. 2017,
+    # doi:10.1088/1361-6641/aa6fca, eqs 9/11/12 -- see
+    # M34-S1-PLAN.md).  Homojunction 1D ONLY (raises otherwise).
+    # INDEPENDENT of `btbt` above: this is a first-principles WKB path
+    # integral, NOT calibrated against and not numerically comparable
+    # to KANE_A_SI/KANE_B_SI's empirical Hurkx fit -- see
+    # pytcad/btbt.py's module docstring.  Verified against its own
+    # uniform-field closed-form limit (eq 8) up to a documented,
+    # unproven-exact factor of pi (small-k_perp expansion artifact,
+    # NOT divided out here -- see pytcad/btbt.py "STATUS" comment).
+    # Window endpoints frozen once per solve_bias call (same cadence
+    # `_update_tat_probabilities` uses); only the interior WKB
+    # integral is live in the Jacobian.  Default OFF => bit-identical
+    # to the plain solver (goldens).
+    btbt_nonlocal: bool = False
     # M20: density-gradient quantum correction (Ancona-Stafford form,
     # quantum potential on the slaved equilibrium densities -- see
     # pytcad/dg.py and M20-DENSITY-GRADIENT-PLAN.md).  Default OFF =>
@@ -674,6 +694,17 @@ class Device1D:
             self._te_rNc = self.nc_s[:-1] / self.nc_s[1:]
             self._te_rNv = self.nv_s[:-1] / self.nv_s[1:]
 
+        # M34-S1: nonlocal path BTBT is homojunction-only (S1 scope --
+        # see M34-S1-PLAN.md section 1). Reuses the SAME `_te_edge`
+        # heterointerface detector M33-S2 already built above.
+        if getattr(self.models, "btbt_nonlocal", False):
+            if self._te_edge.any():
+                raise NotImplementedError(
+                    "Models(btbt_nonlocal=True) is homojunction-only "
+                    "(M34-S1 scope) -- this device has a heterointerface. "
+                    "Refusing rather than silently applying a "
+                    "single-material formula across a hetero boundary.")
+
         # M13 incomplete ionization: dopant split from the net doping.
         # Single-species assumption (majority side carries all dopants);
         # documented in Models.incomplete_ion.
@@ -702,6 +733,12 @@ class Device1D:
         # the M15 R1b II source).  None whenever Models.btbt is False;
         # never read back into the residual.
         self._btbt_gs_cache = None
+        # M34-S1: frozen nonlocal-BTBT tunnel windows -- located once
+        # per solve_bias call (lazily, on first residual evaluation,
+        # same None-cache cadence as `_Pn`/`_Pp` below), then held
+        # fixed through that call's Newton iterations.  Reset to None
+        # at the same points `_btbt_gs_cache` is reset.
+        self._btbt_nl_window = None
         # M12-S2 frozen-field WKB escape probabilities (None until the
         # first TAT-enabled residual evaluation freezes them)
         self._Pn = None
@@ -1046,6 +1083,7 @@ class Device1D:
         self._ii_gs = None               # no II source at equilibrium
         self._ii_gs_cache = None         # clear frozen generation cache
         self._btbt_gs_cache = None       # M16: no BTBT source at V=0 gauge
+        self._btbt_nl_window = None      # M34-S1: same, nonlocal windows
         self._dg_Lam_n = None
         self._dg_Lam_p = None
         self.psi = psi
@@ -1268,6 +1306,7 @@ class Device1D:
         self._ii_gs = None
         self._ii_gs_cache = None
         self._btbt_gs_cache = None
+        self._btbt_nl_window = None
         self._dg_Lam_n = Lam_n
         self._dg_Lam_p = Lam_p
         self.psi = psi
@@ -1390,6 +1429,159 @@ class Device1D:
         Sp[1:-1] = aJp_ph[:-1] + aJp_ph[1:]
         Kgen = 0.5 / (_II_Q * self.R0)
         return Kgen * (alpha_n * Sn + alpha_p * Sp)
+
+    def _btbt_nl_find_windows(self, psi):
+        """M34-S1: locate nonlocal-path BTBT tunnel windows for the
+        CURRENT psi. Frozen for the rest of this solve_bias call (see
+        the None-cache reset in solve_bias -- this is only ever called
+        when self._btbt_nl_window is None). Homojunction only
+        (enforced at construction). One candidate window per mesh edge
+        with forward band bending that can reach the Eg/(q VT) psi
+        threshold before the device ends; NOT deduplicated/optimized
+        -- a known performance consideration for a later pass, out of
+        scope for S1 correctness. Returns a list of dicts holding the
+        FROZEN geometry each window's residual/Jacobian block needs.
+        """
+        N = self.N
+        mat = self.mats[0]           # homojunction -- __init__ guarantees this
+        Eg_eV = mat.Eg(self.T)
+        Eg_J = Eg_eV * _NL_Q
+        VT = self.VT
+        mc_kg = mat.m_n_star * _NL_M0
+        mv_kg = mat.m_p_star * _NL_M0
+        mr_kg = 1.0 / (1.0 / mc_kg + 1.0 / mv_kg)
+        thr = Eg_eV / VT              # psi threshold for the window (section 1)
+        psi_max = float(psi.max())
+        # Global band extrema (eq 12's Emin/Emax) at the SAME frozen
+        # snapshot; Ev(x) = -q*VT*psi(x), Ec(x) = Ev(x) + Eg (uniform
+        # Eg, homojunction) -- only relative energies ever matter.
+        Emax_J = -_NL_Q * VT * float(psi.min())     # max Ev(x)
+        Emin_J = -_NL_Q * VT * psi_max + Eg_J        # min Ec(x)
+        c_edge = VT / (self.LD * self.h)             # V/cm per unit psi, per edge
+        x_m = self.x * 1e-2                          # cm -> m
+
+        windows = []
+        for i0 in range(N - 1):
+            if psi_max - psi[i0] < thr:
+                break     # psi is the Newton state for a biased junction:
+                          # once even the FURTHEST node can't reach the
+                          # threshold from here, no later i0 can either.
+            if psi[i0 + 1] - psi[i0] <= 0.0:
+                continue  # no forward band bending on this edge
+            F_local_Vcm_screen = (psi[i0 + 1] - psi[i0]) * c_edge[i0]
+            if F_local_Vcm_screen < 1.0e3:
+                continue  # negligible field -- G underflows to ~0 anyway
+                          # (btbt_generation's own convention), and a
+                          # near-flat-region candidate is exactly what
+                          # produces a huge, near-degenerate window whose
+                          # interior nodes clip to delta=0/1 well before
+                          # the true endpoint (see the strict-delta live-
+                          # node mask below, which this floor keeps rare
+                          # rather than routine).
+            j0 = i0 + 1
+            while j0 < N and psi[j0] - psi[i0] < thr:
+                j0 += 1
+            if j0 >= N or j0 - i0 < 2:
+                continue  # need >=2 edges for the edge-midpoint quadrature
+            F_local_Vcm = abs(psi[i0 + 1] - psi[i0]) * c_edge[i0]
+            dEv_dxi_SI = _NL_Q * (F_local_Vcm * 100.0)   # V/cm -> V/m -> J/m
+            windows.append(dict(
+                i=i0, j=j0, x_path=x_m[i0:j0 + 1].copy(),
+                dEv_dxi=dEv_dxi_SI, Eg_J=Eg_J, mr_kg=mr_kg,
+                mc_kg=mc_kg, mv_kg=mv_kg, Emin_J=Emin_J, Emax_J=Emax_J,
+            ))
+        return windows
+
+    def _btbt_nl_window_contribution(self, w, psi, R0):
+        """M34-S1: residual/Jacobian contribution for ONE frozen
+        window `w` (from _btbt_nl_find_windows), evaluated at the
+        CURRENT (live) psi. Returns (i, j, g_scaled, k_idx, dg_dpsi_k)
+        where g_scaled is the SCALED [cm^-3 s^-1 / R0] generation rate
+        to deposit (-g at the hole row of node i, +g at the electron
+        row of node j), k_idx are the window's INTERIOR node indices
+        (strictly between i and j) and dg_dpsi_k the analytic
+        d(g_scaled)/d(psi_k) for each -- see M34-S1-PLAN.md section 4
+        for the frozen-boundary/live-interior derivation, and
+        pytcad/btbt.py's module docstring for the pi-factor caveat
+        this raw g_scaled carries (not divided out here either).
+        """
+        i0, j0 = w["i"], w["j"]
+        Eg_J, mr_kg = w["Eg_J"], w["mr_kg"]
+        VT = self.VT
+        psi_win = psi[i0:j0 + 1]
+        delta = np.clip(VT * (psi_win - psi_win[0]) / (Eg_J / _NL_Q), 0.0, 1.0)
+        Ev_win = -_NL_Q * VT * psi_win     # only used for E = Ev_win[0] downstream
+        G_T, _kappa_nodal, int_kappa, int_invkappa = _nl_window(
+            w["x_path"], Ev_win, w["dEv_dxi"], Eg_J, mr_kg,
+            w["mc_kg"], w["mv_kg"], w["Emin_J"], w["Emax_J"])
+        g_scaled = G_T * 1e-6 / R0     # SI m^-3 s^-1 -> cm^-3 s^-1 -> scaled
+
+        # Live interior derivative: chain through EDGE-MIDPOINT kappa,
+        # matching nonlocal_btbt_window's own quadrature exactly (see
+        # that function's edge-midpoint comment). delta[0]=0 and
+        # delta[-1]=1 are FROZEN by construction (turning points, per
+        # M34-S1-PLAN.md section 4) -- window-local index 0 (node i0)
+        # and -1 (node j0) get NO Jacobian contribution; only strictly
+        # interior window-local indices 1..len-2 do.
+        M = len(psi_win)
+        k_idx = np.arange(i0 + 1, j0)             # global node indices, interior
+        if k_idx.size == 0 or int_invkappa <= 0.0:
+            return i0, j0, g_scaled, k_idx, np.zeros(k_idx.size)
+        delta_mid = 0.5 * (delta[1:] + delta[:-1])
+        dkappa_ddelta_mid = _nl_dkappa_ddelta(delta_mid, Eg_J, mr_kg,
+                                               hbar=_NL_HBAR)
+        dx = np.diff(w["x_path"])
+        kappa_mid = _nl_kappa(delta_mid, Eg_J, mr_kg, hbar=_NL_HBAR)
+        # A real device has long near-flat (negligible-field) regions,
+        # so a wide window can carry MANY interior nodes whose psi
+        # differs from the endpoint by less than float precision --
+        # not just the two literal window endpoints -- clipping their
+        # delta to exactly 0/1 too (confirmed directly: found via a
+        # NaN Newton step, traced to 1/kappa_mid^2 exploding at such a
+        # node). A tiny but nonzero kappa_mid from float noise near the
+        # turning point is just as unsafe (1/kappa^2 still huge before
+        # underflow). Fix: treat any edge whose kappa_mid falls below a
+        # physically-negligible floor (a WKB kappa of 1e8-1e9 /m is
+        # typical; 1.0 /m is many orders below any real tunneling
+        # value) as part of the frozen boundary -- zero its derivative
+        # contribution entirely, rather than only excluding the two
+        # array-position endpoints.
+        kappa_floor = 1.0                              # 1/m
+        live_edge = kappa_mid > kappa_floor
+        kappa_mid_safe = np.maximum(kappa_mid, kappa_floor)
+        # d(delta_node[m])/d(psi[node m]) for interior window-local m
+        # (1..M-2); the two endpoints (m=0, m=M-1) are frozen (=0).
+        ddelta_dpsi = np.zeros(M)
+        ddelta_dpsi[1:-1] = VT / (Eg_J / _NL_Q)
+        # Each edge e (0..M-2, between window-local nodes e, e+1)
+        # contributes to d(int_kappa)/dpsi_k and d(int_invkappa)/dpsi_k
+        # for BOTH its endpoints via the 0.5 midpoint average.
+        dkappa_mid_dnode = 0.5 * dkappa_ddelta_mid   # d(kappa_mid[e])/d(delta_node[m])
+        dint_kappa_dpsi = np.zeros(M)
+        dint_invkappa_dpsi = np.zeros(M)
+        contrib_k = np.where(live_edge, dkappa_mid_dnode * dx, 0.0)
+        contrib_ik = np.where(
+            live_edge,
+            -dkappa_mid_dnode * dx / (kappa_mid_safe * kappa_mid_safe),
+            0.0)
+        dint_kappa_dpsi[:-1] += contrib_k * ddelta_dpsi[:-1]
+        dint_kappa_dpsi[1:] += contrib_k * ddelta_dpsi[1:]
+        dint_invkappa_dpsi[:-1] += contrib_ik * ddelta_dpsi[:-1]
+        dint_invkappa_dpsi[1:] += contrib_ik * ddelta_dpsi[1:]
+
+        km2 = max(min(2.0 * w["mv_kg"] * (w["Emax_J"] - Ev_win[0]),
+                      2.0 * w["mc_kg"] * (Ev_win[0] - w["Emin_J"]))
+                  / (_NL_HBAR * _NL_HBAR), 0.0)
+        A = 1.0 / int_invkappa
+        Bb = 1.0 - np.exp(-km2 * int_invkappa)
+        Ce = np.exp(-2.0 * int_kappa)
+        P = abs(w["dEv_dxi"]) / (36.0 * _NL_HBAR)
+        dA = -A * A * dint_invkappa_dpsi
+        dBb = km2 * np.exp(-km2 * int_invkappa) * dint_invkappa_dpsi
+        dCe = -2.0 * Ce * dint_kappa_dpsi
+        dG_dpsi = P * (dA * Bb * Ce + A * dBb * Ce + A * Bb * dCe)
+        dg_dpsi_k = dG_dpsi[1:-1] * 1e-6 / R0
+        return i0, j0, g_scaled, k_idx, dg_dpsi_k
 
     def _residual_jacobian(self, psi, n, p, bc):
         N, h, dV, C = self.N, self.h, self.dV, self.C
@@ -1849,6 +2041,34 @@ class Device1D:
             add(3 * i + 2, 3 * i, -dVi * dGi_M)
             add(3 * i + 2, 3 * (i + 1), -dVi * dGi_R)
 
+        # --- M34-S1: nonlocal path BTBT (frozen window, live interior) -
+        # SAME ordering invariant as the M15/M16 blocks above: after
+        # both continuity `=` assignments, before Dirichlet stamping.
+        # Windows are located ONCE per solve_bias call (frozen; see the
+        # None-cache reset there) and held fixed through every Newton
+        # iterate of that call; only the WKB integral's interior nodes
+        # are re-evaluated live here -- see _btbt_nl_window_contribution
+        # and M34-S1-PLAN.md section 4/6 (the documented, un-divided-out
+        # pi-factor caveat applies to every g_scaled used below).
+        if getattr(self.models, "btbt_nonlocal", False):
+            if self._btbt_nl_window is None:
+                self._btbt_nl_window = self._btbt_nl_find_windows(psi)
+            strength = getattr(self, "_ii_strength", 1.0)
+            for w in self._btbt_nl_window:
+                i0, j0, g_scaled, k_idx, dg_dpsi_k = \
+                    self._btbt_nl_window_contribution(w, psi, self.R0)
+                F[3 * i0 + 2] -= strength * g_scaled * dV[i0]
+                F[3 * j0 + 1] += strength * g_scaled * dV[j0]
+                if k_idx.size:
+                    # add() broadcasts v to r's shape, not c's -- r must
+                    # already match k_idx's shape (no existing add()
+                    # call site in this file stamps one row against many
+                    # columns, so there is no precedent to reuse here).
+                    row_i0 = np.full(k_idx.shape, 3 * i0 + 2)
+                    row_j0 = np.full(k_idx.shape, 3 * j0 + 1)
+                    add(row_i0, 3 * k_idx, -strength * dV[i0] * dg_dpsi_k)
+                    add(row_j0, 3 * k_idx, strength * dV[j0] * dg_dpsi_k)
+
         # --- Dirichlet contacts (Robin on n/p when M14 S_n/S_p != 0) ---
         # psi stays fully Dirichlet -- S_n/S_p model carrier recombination
         # at the contact, not band bending. S=0 (default) keeps the
@@ -2013,7 +2233,16 @@ class Device1D:
         # even stiffer than avalanche onset (G ~ exp(-1e8/F)), so the
         # leading 0.0 relaxation stage matters just as much here.
         btbt_enabled = getattr(self.models, "btbt", False)
-        stiff_gen = ii_enabled or btbt_enabled
+        # M34-S1: nonlocal BTBT windows are frozen for the DURATION of
+        # this solve_bias call (relocated lazily on the first
+        # _residual_jacobian evaluation below, same None-cache pattern
+        # `_Pn`/`_Pp` use) -- resetting here, once per call, is what
+        # gives that cadence; `_residual_jacobian` itself never resets
+        # this cache (unlike `_btbt_gs_cache`, which IS live every
+        # iterate and is reset there instead).
+        btbt_nl_enabled = getattr(self.models, "btbt_nonlocal", False)
+        self._btbt_nl_window = None
+        stiff_gen = ii_enabled or btbt_enabled or btbt_nl_enabled
         self._ii_strength = 1.0
 
         bc = self._contact_values(V)
