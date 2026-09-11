@@ -1706,6 +1706,15 @@ M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  LANDED 2026-09-11
      BTBT, energy-resolved tunneling channels. Also corrected here:
      4d.1 listed local II and local BTBT as working in 2D/3D, which
      both devices refuse.
+     2026-09-12 (`pytcad/M34-S6-PLAN.md` section 5): S6a/S6b put M15's
+     coupled local impact ionization into structured Device2D/Device3D
+     (`pytcad/ii_grid.py`; alpha at the field component along each
+     carrier's current), so 4d.1's local-II row now reads Y; S6c
+     (nonlocal II on a grid) is not started. S7: Device1D's stiff
+     paths (impact, btbt, btbt_nonlocal) judged Newton convergence on
+     the line-search-DAMPED update and stopped short of the discrete
+     solution; fixed in all three devices. M15's long-open G-C gap
+     was that artifact (M_sim/M_int 0.76, inside the plan's band).
 
 M35  3D PROCESS SIMULATION                                [XL]
      M23/M26 shipped structured-mesh slices. Still missing from 4b.1:
@@ -1865,8 +1874,8 @@ NotImplementedError sites, not inferred from filenames.
   Drift-diffusion, unstructured     -     Y     Y    -- (1D moot)
   Fermi-Dirac statistics            Y     Y     Y    --
   Incomplete ionization             Y     R     R    M41
-  Impact ionization (coupled)       Y     R     R    M15 follow-up
-  Impact ionization, nonlocal       Y     R     R    needs 2D/3D II
+  Impact ionization (coupled)       Y     Y     Y    -- (structured)
+  Impact ionization, nonlocal       Y     R     R    M34-S6c
   BTBT, local Kane                  Y     R     R    M16 follow-up
   BTBT, nonlocal                    Y     Y     Y    -- (structured)
   Trap-assisted tunneling           Y     Y     Y    --

@@ -35,7 +35,8 @@ from .nonlocal_path import build_structured as _nl_build_structured
 from .nonlocal_path import evaluate as _nl_evaluate
 from .dirichlet import eliminate_csr
 from .ii_grid import grid_impact as _ii_grid
-from .device import _II_STAGES
+from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
+                     _STIFF_DENSITY_FLOOR)
 
 from . import linsolve
 
@@ -221,6 +222,8 @@ class Device2D:
         # and the last stamped generation (scaled, zero at contacts).
         self._ii_strength = 1.0
         self._ii_gs_cache = None
+        self._ii_jac_cache = None
+        self._ii_fields = None          # (E_n, E_p) alpha was evaluated at
 
         self.fd = bool(getattr(self.models, "fd", False))
         if self.Ntot.max() > 1e19 and not self.fd:
@@ -1027,8 +1030,8 @@ class Device2D:
                      dJp_dpsiR=dJp_dpsiR_y.ravel(),
                      dJp_dpL=dJp_dp_L_y.ravel(), dJp_dpR=dJp_dp_R_y.ravel()),
             ]
-            G, g_r, g_c, g_v, _ = _ii_grid(N, axes, psi.ravel(), self.VT,
-                                           self.LD, self.J0, self.R0)
+            G, g_r, g_c, g_v, self._ii_fields = _ii_grid(
+                N, axes, psi.ravel(), self.VT, self.LD, self.J0, self.R0)
             live = np.ones(N, dtype=bool)
             for bc in self.bcs.values():
                 if isinstance(bc, DirichletBC):
@@ -1040,6 +1043,11 @@ class Device2D:
             F[1::3] += Gs * dVf
             F[2::3] -= Gs * dVf
             keep = live[g_r]
+            # dG_i/du of the stamped generation alone (no box volume):
+            # the S6 FD gate reads it, because inside the full rows G's
+            # derivatives sit far below the transport entries' round-off
+            self._ii_jac_cache = (g_r[keep], g_c[keep],
+                                  strength * g_v[keep])
             w = strength * dVf[g_r[keep]] * g_v[keep]
             rows.append(3 * g_r[keep] + 1); cols.append(g_c[keep]); vals.append(w)
             rows.append(3 * g_r[keep] + 2); cols.append(g_c[keep]); vals.append(-w)
@@ -1212,6 +1220,9 @@ class Device2D:
         ii_on = getattr(self.models, "impact", False)
         stages = _II_STAGES if ii_on else (1.0,)
         backtrack = ii_on
+        # the stiff path's update-test floor (device._STIFF_DENSITY_FLOOR);
+        # the plain path keeps M11-S5's 1e-10, bit-identical
+        dens_floor = _STIFF_DENSITY_FLOOR if ii_on else 1e-10
         self._ii_strength = 1.0
         while True:
             for stage in stages:
@@ -1239,11 +1250,32 @@ class Device2D:
                     n_old, p_old = n, p
                     n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
                     p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
-                    if backtrack:
-                        # Device1D's M15 rule, verbatim
+
+                    # M11-S5: relative updates are measured against a
+                    # density floor -- deep-minority nodes (e.g. inside an
+                    # AlGaAs barrier, p ~ 1e-13 scaled) otherwise pin the
+                    # criterion to roundoff and stall the solve at a
+                    # harmless limit cycle.  Densities below 1e-10 scaled
+                    # carry <= 1e-10 of the local Poisson charge; their
+                    # exact value is numerically meaningless.  Equilibrium
+                    # (slaved-carrier) solves are unaffected.
+                    rel_n = (np.abs(n_new - n_old)
+                             / np.maximum(n_old, dens_floor)).max()
+                    rel_p = (np.abs(p_new - p_old)
+                             / np.maximum(p_old, dens_floor)).max()
+                    err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                    # M34-S6: with impact ionization, M15's backtracking
+                    # line search on the 2-norm merit (Device1D's rule),
+                    # except that convergence is judged on the FULL Newton
+                    # correction (err above, before any damping) and a
+                    # converged step is taken whole.  Device1D measures the
+                    # damped update, which a small lam passes early.
+                    # (search only outside Newton's region -- see
+                    # device._LS_NEWTON_REGION)
+                    if backtrack and err >= _LS_NEWTON_REGION:
                         base = 0.5 * float(np.dot(F, F))
                         lam = 1.0
-                        for _ in range(40):
+                        for _ in range(_LS_MAX_HALVINGS + 1):
                             Ft, *_ = self._residual_jacobian(
                                 psi + lam * dpsi,
                                 np.clip(n_old + lam * dn, 0.1 * n_old,
@@ -1256,7 +1288,18 @@ class Device2D:
                                 break
                             lam *= 0.5
                         else:
-                            lam = 0.0
+                            # No trial reduced the merit.  Device1D takes
+                            # lam = 0 here, but that repeats this identical
+                            # iterate (state, F, J and step cannot change)
+                            # until max_iter -- a certain failure.  Take the
+                            # full step and let the (M11-S5-floored) update
+                            # test judge.  Measured: a corner diode at -34V,
+                            # stage 0.7, merit at its round-off floor
+                            # (1.8e-19) with a 1.4e-8 update left.
+                            lam = 1.0
+                        if opts.verbose:
+                            print(f"    stage {self._ii_strength}  lam={lam:.3e}"
+                                  f"  merit {base:.3e} -> {ft:.3e}")
                         n_new = np.clip(n_old + lam * dn, 0.1 * n_old,
                                         10.0 * n_old)
                         p_new = np.clip(p_old + lam * dp, 0.1 * p_old,
@@ -1265,20 +1308,6 @@ class Device2D:
                     else:
                         psi = psi + dpsi
                     n, p = n_new, p_new
-
-                    # M11-S5: relative updates are measured against a
-                    # density floor -- deep-minority nodes (e.g. inside an
-                    # AlGaAs barrier, p ~ 1e-13 scaled) otherwise pin the
-                    # criterion to roundoff and stall the solve at a
-                    # harmless limit cycle.  Densities below 1e-10 scaled
-                    # carry <= 1e-10 of the local Poisson charge; their
-                    # exact value is numerically meaningless.  Equilibrium
-                    # (slaved-carrier) solves are unaffected.
-                    rel_n = (np.abs(n_new - n_old)
-                             / np.maximum(n_old, 1e-10)).max()
-                    rel_p = (np.abs(p_new - p_old)
-                             / np.maximum(p_old, 1e-10)).max()
-                    err = max(np.abs(dpsi).max(), rel_n, rel_p)
                     if opts.verbose:
                         print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
                     if err < opts.tol_update:

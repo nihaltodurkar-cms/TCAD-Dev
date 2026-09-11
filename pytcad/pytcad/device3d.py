@@ -41,6 +41,9 @@ from .btbt import M0_SI as _NL_M0, Q_SI as _NL_Q
 from .nonlocal_path import build_structured as _nl_build_structured
 from .nonlocal_path import evaluate as _nl_evaluate
 from .dirichlet import eliminate_csr
+from .ii_grid import grid_impact as _ii_grid
+from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
+                     _STIFF_DENSITY_FLOOR)
 
 from . import linsolve
 
@@ -220,14 +223,8 @@ class Device3D:
                 "implemented in Device1D and Device2D only -- never in "
                 "the M14 plan's scope for Device3D. Refusing rather than "
                 "silently ignoring the flag.")
-        if getattr(self.models, "impact", False):
-            raise NotImplementedError(
-                "Impact ionization (Models(impact=True)) is implemented "
-                "in Device1D only (M15 scope; 2D/3D ports are a follow-"
-                "up slice).  Refusing rather than silently ignoring the "
-                "flag -- a silently dropped physics model is a hidden "
-                "failure."
-            )
+        # Models(impact=True): M15's coupled model, ported by M34-S6
+        # (pytcad/ii_grid.py; see _residual_jacobian and solve_bias).
         if getattr(self.models, "impact_nonlocal", False):
             raise NotImplementedError(
                 "Nonlocal impact ionization (Models(impact_nonlocal=True), "
@@ -248,6 +245,13 @@ class Device3D:
         self.last_btbt_nl_refreshes = 0
         self.last_btbt_nl_stable = None
         self.last_converged = None
+        # M34-S6: M15's generation-strength multiplier (see _II_STAGES),
+        # the last stamped generation (scaled, zero at contacts), its
+        # Jacobian, and the fields alpha was evaluated at.
+        self._ii_strength = 1.0
+        self._ii_gs_cache = None
+        self._ii_jac_cache = None
+        self._ii_fields = None
         if getattr(self.models, "btbt", False):
             raise NotImplementedError(
                 "Band-to-band tunneling (Models(btbt=True)) is implemented "
@@ -1046,6 +1050,57 @@ class Device3D:
                     Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
                 rows.append(3 * kk); cols.append(3 * kk); vals.append(-bc.kappa * w)
 
+        # --- M34-S6: M15's coupled impact ionization on the grid
+        # (pytcad/ii_grid.py; Device2D's block with a third axis).  After
+        # the continuity rows, before the Dirichlet stamping, not at
+        # contact or pinned nodes; the ladder's strength scales the live
+        # term and its Jacobian together. ---
+        if getattr(self.models, "impact", False):
+            axes = [
+                dict(kL=kLx, kR=kRx,
+                     h=np.broadcast_to(hx[None, None, :],
+                                       (Nz, Ny, Nx - 1)).ravel(),
+                     Jn=Jn_x.ravel(), Jp=Jp_x.ravel(),
+                     dJn_dpsiR=dJn_dpsiR_x.ravel(),
+                     dJn_dnL=dJn_dn_L_x.ravel(), dJn_dnR=dJn_dn_R_x.ravel(),
+                     dJp_dpsiR=dJp_dpsiR_x.ravel(),
+                     dJp_dpL=dJp_dp_L_x.ravel(), dJp_dpR=dJp_dp_R_x.ravel()),
+                dict(kL=kSy, kR=kNy,
+                     h=np.broadcast_to(hy[None, :, None],
+                                       (Nz, Ny - 1, Nx)).ravel(),
+                     Jn=Jn_y.ravel(), Jp=Jp_y.ravel(),
+                     dJn_dpsiR=dJn_dpsiR_y.ravel(),
+                     dJn_dnL=dJn_dn_L_y.ravel(), dJn_dnR=dJn_dn_R_y.ravel(),
+                     dJp_dpsiR=dJp_dpsiR_y.ravel(),
+                     dJp_dpL=dJp_dp_L_y.ravel(), dJp_dpR=dJp_dp_R_y.ravel()),
+                dict(kL=kDz, kR=kUz,
+                     h=np.broadcast_to(hz[:, None, None],
+                                       (Nz - 1, Ny, Nx)).ravel(),
+                     Jn=Jn_z.ravel(), Jp=Jp_z.ravel(),
+                     dJn_dpsiR=dJn_dpsiR_z.ravel(),
+                     dJn_dnL=dJn_dn_L_z.ravel(), dJn_dnR=dJn_dn_R_z.ravel(),
+                     dJp_dpsiR=dJp_dpsiR_z.ravel(),
+                     dJp_dpL=dJp_dp_L_z.ravel(), dJp_dpR=dJp_dp_R_z.ravel()),
+            ]
+            G, g_r, g_c, g_v, self._ii_fields = _ii_grid(
+                N, axes, psi.ravel(), self.VT, self.LD, self.J0, self.R0)
+            live = np.ones(N, dtype=bool)
+            for bc in self.bcs.values():
+                if isinstance(bc, (DirichletBC, PinnedBC)):
+                    live[bc.k * Nx * Ny + bc.j * Nx + bc.i] = False
+            strength = self._ii_strength
+            Gs = np.where(live, strength * G, 0.0)
+            self._ii_gs_cache = Gs.copy()
+            dVf = dV.ravel()
+            F[1::3] += Gs * dVf
+            F[2::3] -= Gs * dVf
+            keep = live[g_r]
+            self._ii_jac_cache = (g_r[keep], g_c[keep],
+                                  strength * g_v[keep])
+            w = strength * dVf[g_r[keep]] * g_v[keep]
+            rows.append(3 * g_r[keep] + 1); cols.append(g_c[keep]); vals.append(w)
+            rows.append(3 * g_r[keep] + 2); cols.append(g_c[keep]); vals.append(-w)
+
         # --- M34-S3: nonlocal path BTBT along field lines (Device2D's
         # block; same invariant: after the continuity rows, before the
         # Dirichlet stamping). ---
@@ -1176,82 +1231,127 @@ class Device3D:
         self._btbt_nl_paths = None
         self.last_btbt_nl_refreshes = 0
         self.last_btbt_nl_stable = None
+        # M34-S6: impact ionization runs Device2D's M15 machinery -- the
+        # _II_STAGES ladder, backtracking on the 2-norm merit with
+        # convergence judged on the FULL Newton correction, and the full
+        # step when a search fails (see Device2D.solve_bias for both
+        # measured reasons).  impact=False keeps the single full-step
+        # pass, arithmetic unchanged.
+        ii_on = getattr(self.models, "impact", False)
+        stages = _II_STAGES if ii_on else (1.0,)
+        backtrack = ii_on
+        # the stiff path's update-test floor (device._STIFF_DENSITY_FLOOR);
+        # the plain path keeps M11-S5's 1e-10, bit-identical
+        dens_floor = _STIFF_DENSITY_FLOOR if ii_on else 1e-10
+        self._ii_strength = 1.0
         while True:
-            converged = False
-            for it in range(opts.max_iter):
-                F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
-                # Symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
-                Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
-                if resolved_linsolve == "direct":
-                    # linsolve.solve_linear(method="direct") is documented
-                    # bit-identical to a raw spsolve call (see its own
-                    # docstring) -- routing through it here, rather than
-                    # calling spsolve directly, buys the MatrixRankWarning-
-                    # as-error guard for free with no behavior change,
-                    # matching solve_equilibrium's primary direct branch.
-                    du, _ = linsolve.solve_linear(Jd, rhs, method="direct")
-                else:
-                    # Same fallback contract as solve_equilibrium above: a
-                    # requested iterative method is tried first for speed,
-                    # but a LinearSolveError (confirmed directly: the node
-                    # block-Jacobi preconditioner does not always converge
-                    # on this equation's coupled psi/n/p Jacobian, even
-                    # with pyamg installed -- a non-None block_size (M31
-                    # P5-1 Phase B: opts.block_size, default 3) routes to
-                    # block-Jacobi before AMG is ever tried, see
-                    # linsolve._build_preconditioner) falls back to a
-                    # direct solve for that one iteration only, rather than
-                    # raising out of the whole solve. Routed through
-                    # linsolve.solve_linear (not a raw spsolve call) so an
-                    # exactly-singular Jacobian raises LinearSolveError
-                    # instead of silently propagating a NaN/Inf update into
-                    # the next Newton iteration.
-                    try:
-                        du, _ = linsolve.solve_linear(
-                            Jd, rhs, method=resolved_linsolve,
-                            rtol=opts.linsolve_rtol, block_size=opts.block_size,
-                            precond=opts.precond)
-                    except linsolve.LinearSolveError:
-                        # resolved_linsolve != "direct" is guaranteed here
-                        # (the outer if/else already routed "direct" to the
-                        # plain branch above), so there is no re-raise guard
-                        # needed the way the try-always shape below has one.
-                        if opts.verbose:
-                            print(f"    solve_bias it {it:2d}  {resolved_linsolve} "
-                                  "did not converge -- falling back to direct "
-                                  "for this iteration")
+            for stage in stages:
+                self._ii_strength = stage
+                converged = False
+                for it in range(opts.max_iter):
+                    F, J, *_ = self._residual_jacobian(psi, n, p, cur_voltages)
+                    # Symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
+                    Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
+                    if resolved_linsolve == "direct":
+                        # linsolve.solve_linear(method="direct") is documented
+                        # bit-identical to a raw spsolve call (see its own
+                        # docstring) -- routing through it here, rather than
+                        # calling spsolve directly, buys the MatrixRankWarning-
+                        # as-error guard for free with no behavior change,
+                        # matching solve_equilibrium's primary direct branch.
                         du, _ = linsolve.solve_linear(Jd, rhs, method="direct")
-                dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
-                dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
-                dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)
+                    else:
+                        # Same fallback contract as solve_equilibrium above: a
+                        # requested iterative method is tried first for speed,
+                        # but a LinearSolveError (confirmed directly: the node
+                        # block-Jacobi preconditioner does not always converge
+                        # on this equation's coupled psi/n/p Jacobian, even
+                        # with pyamg installed -- a non-None block_size (M31
+                        # P5-1 Phase B: opts.block_size, default 3) routes to
+                        # block-Jacobi before AMG is ever tried, see
+                        # linsolve._build_preconditioner) falls back to a
+                        # direct solve for that one iteration only, rather than
+                        # raising out of the whole solve. Routed through
+                        # linsolve.solve_linear (not a raw spsolve call) so an
+                        # exactly-singular Jacobian raises LinearSolveError
+                        # instead of silently propagating a NaN/Inf update into
+                        # the next Newton iteration.
+                        try:
+                            du, _ = linsolve.solve_linear(
+                                Jd, rhs, method=resolved_linsolve,
+                                rtol=opts.linsolve_rtol, block_size=opts.block_size,
+                                precond=opts.precond)
+                        except linsolve.LinearSolveError:
+                            # resolved_linsolve != "direct" is guaranteed here
+                            # (the outer if/else already routed "direct" to the
+                            # plain branch above), so there is no re-raise guard
+                            # needed the way the try-always shape below has one.
+                            if opts.verbose:
+                                print(f"    solve_bias it {it:2d}  {resolved_linsolve} "
+                                      "did not converge -- falling back to direct "
+                                      "for this iteration")
+                            du, _ = linsolve.solve_linear(Jd, rhs, method="direct")
+                    dpsi = du[0::3].reshape(self.Nz, self.Ny, self.Nx)
+                    dn = du[1::3].reshape(self.Nz, self.Ny, self.Nx)
+                    dp = du[2::3].reshape(self.Nz, self.Ny, self.Nx)
 
-                dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
-                n_old, p_old = n, p
-                n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
-                p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
-                psi = psi + dpsi
-                n, p = n_new, p_new
+                    dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
+                    n_old, p_old = n, p
+                    n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
+                    p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
 
-                # M11-S5: relative updates are measured against a density
-                # floor -- deep-minority nodes (e.g. inside an AlGaAs
-                # barrier, p ~ 1e-13 scaled) otherwise pin the criterion to
-                # roundoff and stall the solve at a harmless limit cycle.
-                # Densities below 1e-10 scaled carry <= 1e-10 of the local
-                # Poisson charge; their exact value is numerically
-                # meaningless.  Equilibrium (slaved-carrier) solves are
-                # unaffected.
-                rel_n = (np.abs(n_new - n_old)
-                         / np.maximum(n_old, 1e-10)).max()
-                rel_p = (np.abs(p_new - p_old)
-                         / np.maximum(p_old, 1e-10)).max()
-                err = max(np.abs(dpsi).max(), rel_n, rel_p)
-                if opts.verbose:
-                    print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
-                if err < opts.tol_update:
-                    converged = True
+                    # M11-S5: relative updates are measured against a
+                    # density floor -- deep-minority nodes (e.g. inside an
+                    # AlGaAs barrier, p ~ 1e-13 scaled) otherwise pin the
+                    # criterion to roundoff and stall the solve at a
+                    # harmless limit cycle.  Densities below 1e-10 scaled
+                    # carry <= 1e-10 of the local Poisson charge; their
+                    # exact value is numerically meaningless.  Equilibrium
+                    # (slaved-carrier) solves are unaffected.
+                    rel_n = (np.abs(n_new - n_old)
+                             / np.maximum(n_old, dens_floor)).max()
+                    rel_p = (np.abs(p_new - p_old)
+                             / np.maximum(p_old, dens_floor)).max()
+                    err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                    # (search only outside Newton's region -- see
+                    # device._LS_NEWTON_REGION)
+                    if backtrack and err >= _LS_NEWTON_REGION:
+                        base = 0.5 * float(np.dot(F, F))
+                        lam = 1.0
+                        for _ in range(_LS_MAX_HALVINGS + 1):
+                            Ft, *_ = self._residual_jacobian(
+                                psi + lam * dpsi,
+                                np.clip(n_old + lam * dn, 0.1 * n_old,
+                                        10.0 * n_old),
+                                np.clip(p_old + lam * dp, 0.1 * p_old,
+                                        10.0 * p_old), cur_voltages)
+                            ft = 0.5 * float(np.dot(Ft, Ft))
+                            if np.isfinite(ft) and \
+                                    ft <= base * (1.0 - 1e-4 * lam):
+                                break
+                            lam *= 0.5
+                        else:
+                            lam = 1.0      # see Device2D.solve_bias
+                        if opts.verbose:
+                            print(f"    stage {self._ii_strength}  lam={lam:.3e}"
+                                  f"  merit {base:.3e} -> {ft:.3e}")
+                        n_new = np.clip(n_old + lam * dn, 0.1 * n_old,
+                                        10.0 * n_old)
+                        p_new = np.clip(p_old + lam * dp, 0.1 * p_old,
+                                        10.0 * p_old)
+                        psi = psi + lam * dpsi
+                    else:
+                        psi = psi + dpsi
+                    n, p = n_new, p_new
+                    if opts.verbose:
+                        print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
+                    if err < opts.tol_update:
+                        converged = True
+                        break
+                else:
+                    warnings.warn(f"3D Newton did not converge; last update {err:.2e}")
+                if not converged:
                     break
-            else:
-                warnings.warn(f"3D Newton did not converge; last update {err:.2e}")
 
             if not (btbt_nl and converged):
                 break
@@ -1266,6 +1366,9 @@ class Device3D:
                 break
             self._btbt_nl_paths = new
             self.last_btbt_nl_refreshes += 1
+            # the re-solve starts converged: full strength, plain Newton
+            stages = (1.0,)
+            backtrack = False
         self.last_converged = converged
 
         self.psi, self.n, self.p = psi, n, p

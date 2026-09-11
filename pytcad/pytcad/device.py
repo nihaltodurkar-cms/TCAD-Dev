@@ -143,6 +143,32 @@ from .ii_nonlocal import LAMBDA_E_SLOTBOOM_CM as _II_LAMBDA_E
 # _II_STAGES below -- but it now ramps a single scalar multiplying the
 # LIVE, fully-coupled term, not a cached array.
 _II_STAGES = (0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0)
+# M34-S7: the stiff paths' line search halves at most this many times
+# (lam >= 2^-10) before taking the full step.  A smaller step cannot
+# cover the Newton correction within max_iter = 100, and at a merit on
+# its round-off floor such steps "pass" the decrease test by noise --
+# measured: M16's tunnel diode at -0.2V accepted lam = 4.8e-7 every
+# iteration (merit 1.3e-28 -> 1.3e-28) and never moved.  Was 40.
+_LS_MAX_HALVINGS = 10
+# M34-S7: the line search is a globalization device for the stiff onset
+# (updates of O(1)); once the full Newton correction is below this (psi
+# within 1e-3 VT, densities within 0.1%, where the exponentials are
+# linear) Newton takes full steps.  Near convergence the merit sits on
+# its round-off floor and accepts partial steps by noise, which stops
+# the quadratic finish -- measured: M15's diode at -40V, stage 0.7, took
+# lam = 1/8..1/64 for 100 iterations at merit 4.2e-26 with a ~1e-8
+# correction left, where full steps close (1e-8 -> 1e-15 at -30V).
+_LS_NEWTON_REGION = 1e-3
+# M34-S7: density floor of the stiff paths' update test (M11-S5's 1e-10
+# elsewhere).  The test demands |dn| < tol_update * floor below it, i.e.
+# 1e-18 at 1e-10 -- tighter than double precision resolves there:
+# measured, sub-floor densities in converged II solves sit in a round-off
+# limit cycle of 2-5e-18 (M15 at -32V: p = 3.1e-11; M34-S2 at -20V: p
+# 1.1e-17 <-> 1.6e-17 on the n+ side, period 2) with the residual at
+# round-off and the current fixed to every digit.  At 1e-8 a sub-floor
+# density carries <= 1e-8 of the local charge (M11-S5's own argument) and
+# its tolerance, 1e-16, is 20x the measured cycle.
+_STIFF_DENSITY_FLOOR = 1e-8
 # The leading 0.0 stage is a plain drift-diffusion Newton solve (no
 # generation at all) at the NEW bias before any coupling turns on.  It
 # replaces the old frozen-source model's implicit protection against
@@ -309,7 +335,8 @@ class Models:
     # carrier's drift direction (pytcad/ii_nonlocal.py; Slotboom et al.,
     # IEDM 1991: lambda_e = 650 A).  Requires impact=True.  lambda_p =
     # lambda_n is a named simplification.  Default OFF => the local M15
-    # model, bit-identical.  1D only (Device2D/3D refuse `impact`).
+    # model, bit-identical.  1D only (Device2D/3D implement `impact`
+    # since M34-S6 but still refuse this flag).
     impact_nonlocal: bool = False
     impact_lambda_n: float = _II_LAMBDA_E     # cm
     impact_lambda_p: float = _II_LAMBDA_E     # cm
@@ -2232,10 +2259,15 @@ class Device1D:
         # at |F| ~ 1e-13 move them by ~1e-4 relative every iteration --
         # so the raw relative-update test can never close.  With a M34
         # flag on, updates are measured against the M11-S5 density
-        # floor Device2D/Device3D already use (1e-10 scaled).  M15/M16
-        # alone keep their exact previous behaviour.
+        # floor Device2D/Device3D already use (1e-10 scaled).
+        # M34-S7: every stiff (ladder + line search) path now measures
+        # that way, because the test reads the FULL Newton correction
+        # (see _newton): on M15's diode the raw metric sits at O(1) on
+        # the n+ side's p ~ 1e-19 holes at every step, measured.  The
+        # plain path keeps the raw test, bit-identical.
         m34_active = btbt_nl_enabled or getattr(
             self.models, "impact_nonlocal", False)
+        floored = stiff_gen or m34_active
         self._ii_strength = 1.0
 
         bc = self._contact_values(V)
@@ -2305,12 +2337,32 @@ class Device1D:
                 n_new = np.clip(n + dn, 0.1 * n, 10.0 * n)
                 p_new = np.clip(p + dp, 0.1 * p, 10.0 * p)
 
+                # Convergence is judged on the FULL Newton correction,
+                # before any damping.  M34-S7: the stiff paths used to
+                # measure the line-search-damped update, which a small lam
+                # passes with the correction still large -- measured on
+                # M15's diode at -30V, the returned state carried 0.698 of
+                # the discrete solution's current.
+                if floored:
+                    rel_n = (np.abs(n_new - n_old)
+                             / np.maximum(n_old, _STIFF_DENSITY_FLOOR)).max()
+                    rel_p = (np.abs(p_new - p_old)
+                             / np.maximum(p_old, _STIFF_DENSITY_FLOOR)).max()
+                else:
+                    rel_n = np.abs(n_new / np.maximum(n_old, 1e-300)
+                                   - 1.0).max()
+                    rel_p = np.abs(p_new / np.maximum(p_old, 1e-300)
+                                   - 1.0).max()
+                err = max(np.abs(dpsi).max(), rel_n, rel_p)
+
                 # M15 backtracking: 2-norm merit reduction test
-                # (M16: also active for BTBT -- stiff_gen above)
-                if stiff_gen:
+                # (M16: also active for BTBT -- stiff_gen above), run only
+                # outside Newton's region (_LS_NEWTON_REGION); inside it,
+                # and for a converged step, the step is taken whole.
+                if stiff_gen and err >= _LS_NEWTON_REGION:
                     base = 0.5 * float(np.dot(F, F))
                     lam = 1.0
-                    for _ in range(40):
+                    for _ in range(_LS_MAX_HALVINGS + 1):
                         Ft, *_ = self._residual_jacobian(
                             psi + lam * dpsi,
                             np.clip(n_old + lam * dn, 0.1 * n_old,
@@ -2323,7 +2375,15 @@ class Device1D:
                             break
                         lam *= 0.5
                     else:
-                        lam = 0.0
+                        # No trial reduced the merit.  lam = 0 would repeat
+                        # this identical iterate (state, F, J and step
+                        # cannot change) until max_iter -- a certain
+                        # failure; take the full step and let the update
+                        # test judge (M34-S7; Device2D/3D's rule).
+                        lam = 1.0
+                    if opts.verbose:
+                        print(f"   stage {self._ii_strength}  lam={lam:.3e}"
+                              f"  merit {base:.3e} -> {ft:.3e}")
                     n_new = np.clip(n_old + lam * dn, 0.1 * n_old,
                                     10.0 * n_old)
                     p_new = np.clip(p_old + lam * dp, 0.1 * p_old,
@@ -2333,18 +2393,6 @@ class Device1D:
                 else:
                     psi = psi + dpsi
                     n, p = n_new, p_new
-
-                if m34_active:
-                    rel_n = (np.abs(n_new - n_old)
-                             / np.maximum(n_old, 1e-10)).max()
-                    rel_p = (np.abs(p_new - p_old)
-                             / np.maximum(p_old, 1e-10)).max()
-                else:
-                    rel_n = np.abs(n_new / np.maximum(n_old, 1e-300)
-                                   - 1.0).max()
-                    rel_p = np.abs(p_new / np.maximum(p_old, 1e-300)
-                                   - 1.0).max()
-                err = max(np.abs(dpsi).max(), rel_n, rel_p)
                 if opts.verbose:
                     print(f"   it {it:2d}  |F|={np.abs(F).max():.3e}  "
                           f"|dpsi|={np.abs(dpsi).max():.3e}  "

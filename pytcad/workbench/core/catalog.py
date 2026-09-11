@@ -171,12 +171,15 @@ _MODELS = {
             "(1970)",
             "Sentaurus/Taurus device manual parameter tables",
         ),
-        applicability="1D (device.py); local-field model; silicon "
-                      "coefficients; breakdown regime requires voltage "
-                      "continuation",
+        applicability="1D (device.py) and structured 2D/3D "
+                      "(device2d.py/device3d.py, M34-S6: alpha at the "
+                      "field component along each carrier's current); "
+                      "local-field model; silicon coefficients; "
+                      "breakdown regime requires voltage continuation",
         enabled_by_default=False,
         limitations="The nonlocal (effective-field) variant is "
-                    "`impact_nonlocal` (1D, M34-S2); no "
+                    "`impact_nonlocal` (1D, M34-S2); unstructured "
+                    "Device2D refuses it; no "
                     "carrier-temperature coupling; devsim backend not "
                     "supported; near-BV convergence requires the "
                     "staged-generation continuation.",

@@ -618,9 +618,19 @@ what that scope actually was and what's honestly still deferred):
     (Models.impact_nonlocal, pytcad/ii_nonlocal.py, 1D only); the
     tracer compiled in core/src/nonlocal/paths.cpp, bit-identical to
     nonlocal_path._trace_paths_py; both flags in the catalog and wire
-    format. With an M34 flag on, Device1D.solve_bias measures density
-    updates against the M11-S5 1e-10 floor (M15/M16 alone keep the raw
-    test, bit-identical).
+    format. 2026-09-12: M34-S6a/b put M15's coupled local impact
+    ionization into structured Device2D/Device3D (pytcad/ii_grid.py;
+    alpha at the field along each carrier's current; S6c, nonlocal II
+    on a grid, not started -- pytcad/M34-S6-PLAN.md), and M34-S7 fixed
+    the stiff-path Newton convergence test in all three devices: it
+    read the line-search-DAMPED update and stopped short (M15's diode
+    at -30V returned 0.698 of the discrete solution's current). Stiff
+    paths (impact, btbt, btbt_nonlocal) now judge the full Newton
+    correction against a 1e-8 density floor, line-search only above a
+    1e-3 correction and halve at most 10 times (device.py
+    _STIFF_DENSITY_FLOOR, _LS_NEWTON_REGION, _LS_MAX_HALVINGS); plain
+    paths bit-identical. M15's G-C gap was this artifact: M_sim/M_int
+    = 0.76, gate back on the plan's [0.5, 2.0] band.
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

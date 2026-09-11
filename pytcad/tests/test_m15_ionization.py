@@ -294,24 +294,18 @@ def test_g_c_multiplication_matches_integral():
     multiplication agrees with M_int = 1/(1-I(V)) from the analysis
     layer at 85-95% of BV.
 
-    TOLERANCE, 2026-08-28 (was [0.5, 2.0], strict-xfail): loosened to
-    [0.15, 2.0] following the root-cause investigation in
-    test_g_c_field_profile_matches_idealized_triangle and
-    test_g_c_mesh_sensitivity (M15-IONIZATION-PLAN.md's "G-C ROOT
-    CAUSE").  M_int is the classic local-field ionization-integral
-    approximation: I(W)=1 / M=1/(1-I) is derived by integrating
-    alpha(E) over the UNPERTURBED (avalanche-off) field, explicitly
-    neglecting how the generated carriers' own space charge modifies
-    that field -- exactly the self-consistent feedback the coupled
-    Jacobian solves FOR.  Measured (mesh-independent, field-profile-
-    independent -- ruled out via the diagnostics above): M_sim/M_int
-    consistently 0.21-0.28 across three independent solve methodologies
-    at 0.85*BV.  0.15 keeps ~30-45% margin below every measured value
-    while still gating against a genuine regression (e.g. impact
-    ionization contributing near-zero enhancement, or the coupled
-    Jacobian's sign flipping) -- this is a physically-explained
-    approximation gap being given the room the formula's own
-    derivation says it deserves, not a rubber-stamped pass."""
+    TOLERANCE: the plan's own [0.5, 2.0], restored 2026-09-12 (M34-S7).
+    From 2026-08-28 it was loosened to [0.15, 2.0] on a measured
+    M_sim/M_int of 0.21-0.28, attributed to the local-field
+    approximation (the "G-C ROOT CAUSE" of M15-IONIZATION-PLAN.md, now
+    in git history only: git show e948fbe^:pytcad/M15-IONIZATION-PLAN.md).
+    That measurement was a solver artifact: Device1D's stiff paths judged
+    convergence on the line-search-DAMPED update and returned states
+    short of the discrete solution (on this diode at -30V, 0.698 of its
+    current).  Judged on the full Newton correction, M_sim/M_int =
+    0.761-0.764 at 0.85*BV on three meshes (h_min 5e-8..1e-8), inside the
+    plan's band.  M_int's neglect of the carriers' own space-charge
+    feedback is real physics; it is not a factor of four."""
     on = _diode(impact=True);  on.solve_equilibrium()
     off = _diode(impact=False); off.solve_equilibrium()
     bv = breakdown_voltage_one_sided(1e16)
@@ -323,7 +317,7 @@ def test_g_c_multiplication_matches_integral():
     # POSITIVE magnitude (it computes vbi + V).  Passing -V silently
     # clamps the depletion width to zero and returns I=0, M_int=1.
     M_int = 1.0 / (1.0 - ionization_integral(targets[-1], 1e16))
-    assert 0.15 <= M_sim / M_int <= 2.0, \
+    assert 0.5 <= M_sim / M_int <= 2.0, \
         f"G-C FAIL: M_sim={M_sim:.3f} vs M_int={M_int:.3f}"
 
 
@@ -407,9 +401,12 @@ def test_g_c_mesh_sensitivity():
     discretization error (a real possibility given the exponential
     sensitivity of alpha(E) to field, and this device's own
     dense-sampling-cap warnings near the junction).  It does not: both
-    quantities are flat to within normal solve-to-solve noise across a
-    10x change in h_min, confirming the M_sim/M_int gap is NOT a mesh
-    artifact.
+    quantities are flat across the 5x change in h_min (measured
+    2026-09-12: I spread 0.03%, M_sim 3.632-3.647, M_sim/M_int
+    0.761-0.764).  This test used to assert M_sim/M_int < 0.5 on every
+    mesh as well -- a gap that was the M34-S7 solver artifact (see
+    test_g_c_multiplication_matches_integral); it now gates the plan's
+    band instead.
     """
     bv = breakdown_voltage_one_sided(1e16)
     v_probe = 0.85 * bv
@@ -444,11 +441,14 @@ def test_g_c_mesh_sensitivity():
         f"refinement (values: {I_hybrids}) -- suggests under-resolution")
 
     M_int = 1.0 / (1.0 - I_analysis)
+    M_spread = (max(M_sims) - min(M_sims)) / min(M_sims)
+    assert M_spread < 0.02, (
+        f"M_sim varies {M_spread:.1%} across mesh refinement "
+        f"(values: {M_sims}) -- suggests under-resolution")
     for M_sim in M_sims:
-        assert M_sim / M_int < 0.5, (
-            "M_sim moved to within the required [0.5, 2.0] band under "
-            "mesh refinement alone -- re-examine whether G-C's failure "
-            "is actually a mesh artifact after all")
+        assert 0.5 <= M_sim / M_int <= 2.0, (
+            f"M_sim={M_sim:.3f} vs M_int={M_int:.3f} outside the plan's "
+            f"G-C band on one mesh")
 
 
 # ---------------------------------------------------------------- G-D

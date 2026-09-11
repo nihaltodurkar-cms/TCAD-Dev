@@ -1734,19 +1734,60 @@ nodes (limit cycle ~8.5e-7); both cores now use a density floor.
   Sentaurus/Atlas, and where it deliberately concedes). 4c.2's M32-M40
   are PROPOSED, not decided.
 
-## 2026-09-11 -- M34-S6 (impact ionization in 2D/3D) PAUSED mid-S6a -- HANDOFF
+## 2026-09-12 -- M34-S6a/S6b (impact ionization, structured 2D/3D) + M34-S7 (Device1D stiff-path convergence) -- LANDED, uncommitted
 
-The user chose "2D then 3D" and "field along the current"; the plan is pytcad/M34-S6-PLAN.md. Nothing is committed.
-- Done: the new kernel pytcad/pytcad/ii_grid.py (grid_impact, returning G, COO Jacobian and (E_n, E_p)).
-- Done: device2d.py. The structured Models(impact=True) refusal is removed (the unstructured refusal is kept). The II block sits before the M34-S3 block in _residual_jacobian. solve_bias gains the _II_STAGES ladder and M15 backtracking, active only with impact on; the refresh re-solves at full strength with plain Newton.
-- Done: the new test file tests/test_m34_s6_impact_2d3d.py.
-- Verified: impact-off 2D/3D bias solutions (2D planar, 2D corner, 2D btbt_nonlocal, 3D planar) are byte-identical in md5 to the pre-edit baseline with PYTCAD_ACCEL=0 and =1. The script was a scratch file, not in the repo. The m13 golden md5s matched the M34-PLAN section 1 record before the edit.
-- OPEN, failing: test_transverse_uniform_2d_reduces_to_1d_m15 gives n/(n+p) = 1.1e-3. This is diagnosed, not a kernel bug:
-  - The same-state G agrees with Device1D to 3.1e-8 of Gmax, and the 2D residual at the converged 1D state is 4.6e-13.
-  - The mismatch sits in deep-depletion densities (~5e-17 scaled), far below the 1e-10 M11-S5 floor.
-  - On this device at -30V, J ~ 3e-8 A/cm2, and the n+-side SG currents are round-off-limited at ~1% even with impact off.
-  - The gate must be restated: an equation-level identity plus floor-normalized densities, with no current comparison at this bias.
-- Measured: a tau=1e-9 variant (well-conditioned currents) reduces 2D->1D to psi 1e-13, n/floor 2e-10, p/floor 5e-9 and J 1.4e-7. BUT M = 1.000001 at -30V, and both the 1D and 2D impact ramps fail to converge at most biases from -6/-10V up. Do not use that variant for the gates.
-- Not yet run: the FD-Jacobian and curved-vs-planar tests. The -40V and corner measurements were interrupted.
-- Not started: S6b (Device3D) and S6c (nonlocal). The test file still contains test_device3d_still_refuses_impact_until_s6b.
-- Full suites have NOT been run since the device2d.py edit.
+Supersedes the 2026-09-11 PAUSED handoff. Its diagnosis of the failing
+2D-to-1D reduction (gate conditioning) was incomplete: the 1D reference
+itself was not converged -- see S7. Record: `pytcad/M34-S6-PLAN.md`
+section 5.
+
+- **S6a/S6b.** `pytcad/pytcad/ii_grid.py` (`grid_impact`): M15's node
+  generation from smoothed edge currents, alpha at the field component
+  along each carrier's current (the user's choice), exact Jacobian
+  including dG/d eps (first order in 2D; M15 neglects it in 1D, where
+  it is second order). Device2D/Device3D: the structured
+  `Models(impact=True)` refusal is removed (unstructured still refuses;
+  `impact_nonlocal` is still refused in 2D/3D until S6c); generation is
+  stamped after the continuity rows and not at contact/pinned nodes;
+  caches `_ii_gs_cache`, `_ii_jac_cache`, `_ii_fields`; `solve_bias` runs
+  the `_II_STAGES` ladder with backtracking when impact is on.
+- **Gates** (`pytcad/tests/test_m34_s6_impact_2d3d.py`): kernel unit
+  test; 2D and 3D reduction to Device1D's M15 fixed point at -30V (psi
+  2.3e-13, densities vs floor <= 4e-9, p-contact current 4.4e-16,
+  same-state G 6e-9 of peak, the 2D/3D state itself a Newton fixed
+  point); the generation's own FD Jacobian on a 2D corner and a 3D
+  cube corner -- a full-residual FD gate is blind to it (G ~ 1e-5 vs
+  O(1) entries), and 10% damage to dalpha/dE or the smoothed sign reads
+  ~1e-1 on both; slow curvature/ramp gate (corner M 1.334 vs planar
+  1.128 at -20V, every 2V step converged).
+- **M34-S7 (user sign-off).** Device1D's stiff paths (impact, btbt,
+  btbt_nonlocal) judged convergence on the line-search-DAMPED update:
+  on M15's diode at -30V the returned state carried 0.698 of the
+  discrete solution's current. Fixed in `device.py`, `device2d.py`,
+  `device3d.py`: convergence on the full Newton correction; stiff-path
+  density floor `_STIFF_DENSITY_FLOOR = 1e-8`; line search only above
+  `_LS_NEWTON_REGION = 1e-3`; at most `_LS_MAX_HALVINGS = 10` halvings,
+  then the full step. Each constant's comment carries its measurement.
+  Gate: `pytcad/tests/test_m34_s7_device1d_convergence.py` (M15 was red
+  at 6e-6 / 43%, M16's tunnel diode did not converge at all).
+- **M15's G-C gap was that artifact.** M_sim/M_int = 0.761-0.764 at
+  0.85 BV on three meshes, not 0.21-0.28. Changed pre-existing tests,
+  each for that reason: `test_g_c_multiplication_matches_integral` back
+  on the plan's [0.5, 2.0] band (was loosened to [0.15, 2.0]);
+  `test_g_c_mesh_sensitivity` gates mesh flatness plus that band
+  instead of M_sim/M_int < 0.5. The M15 plan they cite is only in git
+  history: `git show e948fbe^:pytcad/M15-IONIZATION-PLAN.md`. Also
+  `test_sic_vmosfet`'s 3D refusal list lost `impact`, which Device3D now
+  implements. Catalog `impact` applicability text updated.
+- **Default-off.** Golden md5s unchanged (the six m13 files, matching
+  M34-PLAN section 1); impact-off 2D/3D bias solutions byte-identical
+  to the pre-edit run in both accel modes after every Newton-loop edit
+  (scratch script, not in the repo).
+- **Known limitation, pre-existing, default path untouched:** Device2D's
+  plain Newton fails on a coarse corner junction at -8V with 4V steps
+  (|dn/n| ~2e-6 oscillating just above the 1e-10 floor); 2V steps work.
+- **Suites.** Fast, `PYTCAD_ACCEL=0`: 1730 passed, 13 skipped, 1
+  xfailed, 39 warnings (the pre-existing count). Fast, `PYTCAD_ACCEL=1`:
+  1738 passed, 5 skipped, 1 xfailed, 39 warnings. Slow battery: 27
+  passed, 10 warnings. Golden md5s re-checked after: unchanged.
+- **Not done:** S6c (nonlocal II on a grid).

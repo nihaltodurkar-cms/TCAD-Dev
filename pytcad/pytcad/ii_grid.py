@@ -21,6 +21,12 @@ In a transversely uniform device the transverse currents vanish, s gives
 eps there, and M = sqrt(S_x^2 + eps^2) differs from M15's S_x by
 eps^2/(2 S_x) -- round-off-close to Device1D where ionization happens.
 
+The Jacobian is exact, including G's dependence on eps, i.e. on the
+unknowns of the largest-|J| edge.  M15 neglects that term in 1D, where it
+is second order in eps; here a current-free transverse axis enters E_par
+with weight eps/M, which makes it first order (measured: 1e-4 of a
+column, fixed at every FD step).
+
 `eff`, if given, replaces E_par by a per-carrier effective field and its
 Jacobian (the nonlocal model, M34-S6 section 2).
 """
@@ -54,23 +60,30 @@ def grid_impact(N, axes, psi, VT, LD, J0, R0, eff=None):
     are unknown indices 3*u + comp; and the fields alpha was evaluated at.
     """
     K = 1.0 / (Q_E * R0)
-    j_eps = _II_J_EPS_REL * max(
-        max(float(np.abs(ax["Jn"]).max()) for ax in axes if ax["Jn"].size),
-        max(float(np.abs(ax["Jp"]).max()) for ax in axes if ax["Jp"].size),
-        1e-300)
+    # the edge that sets eps: (|J|, axis index, carrier, edge index)
+    top = (0.0, None, None, None)
+    for ai, ax in enumerate(axes):
+        for car in ("n", "p"):
+            J = ax["J" + car]
+            if J.size:
+                k = int(np.argmax(np.abs(J)))
+                if abs(J[k]) > top[0]:
+                    top = (float(abs(J[k])), ai, car, k)
+    j_eps = _II_J_EPS_REL * max(top[0], 1e-300)
     per = []
     for ax in axes:
         kL, kR = ax["kL"], ax["kR"]
         cnt = (np.bincount(kL, minlength=N)
                + np.bincount(kR, minlength=N)).astype(float)
         inv = _ratio(np.ones(N), cnt)
-        sn = _ii_smooth_abs(ax["Jn"], j_eps) * J0
-        sp = _ii_smooth_abs(ax["Jp"], j_eps) * J0
+        rn = _ii_smooth_abs(ax["Jn"], j_eps)
+        rp = _ii_smooth_abs(ax["Jp"], j_eps)
+        sn, sp = rn * J0, rp * J0
         dpsi = psi[kR] - psi[kL]
         cE = VT / (LD * ax["h"])                      # V/cm per unit psi
         Ee = np.abs(dpsi) * cE
         per.append(dict(
-            ax=ax, inv=inv,
+            ax=ax, inv=inv, rn=rn, rp=rp,
             Sn=(np.bincount(kL, sn, N) + np.bincount(kR, sn, N)) * inv,
             Sp=(np.bincount(kL, sp, N) + np.bincount(kR, sp, N)) * inv,
             Ea=(np.bincount(kL, Ee, N) + np.bincount(kR, Ee, N)) * inv,
@@ -92,6 +105,7 @@ def grid_impact(N, axes, psi, VT, LD, J0, R0, eff=None):
     G = K * (an * Mn + ap * Mp)
 
     rows, cols, vals = [], [], []
+    dG_deps = np.zeros(N)
     for a in per:
         ax, inv = a["ax"], a["inv"]
         if eff is None:
@@ -114,6 +128,28 @@ def grid_impact(N, axes, psi, VT, LD, J0, R0, eff=None):
                      cJn * ax["dJn_dpsiR"] + cJp * ax["dJp_dpsiR"] + cEd,
                      cJn * ax["dJn_dnL"], cJn * ax["dJn_dnR"],
                      cJp * ax["dJp_dpL"], cJp * ax["dJp_dpR"]]
+        # d(J0 s)/d eps = J0 eps / s, per edge, into both end nodes
+        for g, r in ((gSn, a["rn"]), (gSp, a["rp"])):
+            ds = J0 * j_eps / r
+            dG_deps += g * (np.bincount(kL, ds, N)
+                            + np.bincount(kR, ds, N)) * inv
+    if top[1] is not None:
+        ax = axes[top[1]]
+        car, k = top[2], top[3]
+        comp = 1 if car == "n" else 2
+        dcL, dcR = ("dJn_dnL", "dJn_dnR") if car == "n" else ("dJp_dpL",
+                                                               "dJp_dpR")
+        # eps = rel * |J_k|: d eps/du = rel * sign(J_k) * dJ_k/du
+        c = _II_J_EPS_REL * np.sign(ax["J" + car][k])
+        dJ = {3 * ax["kL"][k]: -ax["dJ" + car + "_dpsiR"][k],
+              3 * ax["kR"][k]: ax["dJ" + car + "_dpsiR"][k],
+              3 * ax["kL"][k] + comp: ax[dcL][k],
+              3 * ax["kR"][k] + comp: ax[dcR][k]}
+        nz = np.nonzero(dG_deps)[0]
+        for col, d in dJ.items():
+            rows.append(nz)
+            cols.append(np.full(nz.size, col))
+            vals.append(dG_deps[nz] * c * d)
     if eff is not None:
         for Dc, dac, Mc in ((Dn, dan, Mn), (Dp, dap, Mp)):
             Dc = Dc.tocoo()

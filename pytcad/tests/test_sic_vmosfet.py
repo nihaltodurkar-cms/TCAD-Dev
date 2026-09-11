@@ -104,7 +104,8 @@ def test_build_succeeds_with_the_supported_model_combination():
 
 @pytest.mark.parametrize("flag,kwargs", [
     ("field_mobility", dict(field_mobility=True)),
-    ("impact", dict(impact=True)),
+    # "impact" left this list with M34-S6: Device3D implements M15's
+    # coupled model now (tests/test_m34_s6_impact_2d3d.py).
     ("btbt", dict(btbt=True)),
     ("dg", dict(dg=True)),
     ("incomplete_ion", dict(incomplete_ion=True)),
