@@ -994,8 +994,14 @@ pytcad/M30-WORKBENCH-PLAN.md for scope, gates (tests/test_m30_*.py,
 33/33 green), and honest limits. M30 Part II (GUI/product layer:
 Study Manager, Sweep Matrix Viewer, Run Comparison, study-manifest
 resume, provenance/reproducibility, parameter constraints, adaptive
-sweep, remote execution) is PLANNED but not yet implemented -- see the
-same plan doc's PART II section.
+sweep, remote execution) LANDED 2026-09-09, all 12 phases including
+Phase 12's SSH remote execution and its GUI wiring -- see the same plan
+doc's PART II section. (This paragraph said "PLANNED but not yet
+implemented" until 2026-09-12; the sentence was written 2026-09-07 and
+never updated when Part II shipped two days later. Verified against the
+tree before correcting: workbench/study_manifest.py, adaptive_sweep.py,
+constraints.py, remote_executor.py, gui/services/remote_job_runner.py
+and gui/qml/panels/StudyPanel.qml all exist.)
 
 Finish-first queue (already designed, do before M13 -- historical,
 all now DONE, kept for the rationale):
@@ -1055,7 +1061,11 @@ M15 needs M22's continuation only for robustness, not correctness.
 4b.5 STATUS BY MILESTONE (2026-08-31, live -- read this one, not 4b.2,
 for what has actually landed)
 ------------------------------------------------------------------------
-  M13 Fermi-Dirac + incomplete ionization        COMPLETE (G1-G8)
+  M13 Fermi-Dirac + incomplete ionization        COMPLETE (G1-G8);
+                                                  incomplete ionization
+                                                  lifted to structured
+                                                  2D/3D by M41
+                                                  (2026-09-12)
   M14 surface/inversion mobility                 MOSTLY COMPLETE
                                                   (2026-08-28): G-B (D_it
                                                   in moscap.py), G-C
@@ -1892,7 +1902,7 @@ NotImplementedError sites, not inferred from filenames.
   Drift-diffusion, structured       Y     Y     Y    --
   Drift-diffusion, unstructured     -     Y     Y    -- (1D moot)
   Fermi-Dirac statistics            Y     Y     Y    --
-  Incomplete ionization             Y     R     R    M41
+  Incomplete ionization             Y     Y     Y    -- (structured)
   Impact ionization (coupled)       Y     Y     Y    -- (structured)
   Impact ionization, nonlocal       Y     Y     Y    -- (structured)
   BTBT, local Kane                  Y     R     R    M16 follow-up
@@ -1914,7 +1924,8 @@ NotImplementedError sites, not inferred from filenames.
        any device Newton core (hydrodynamic.py and schottky.py are
        imported by __init__.py and nothing else).
   R  = Device2D/Device3D raise NotImplementedError rather than silently
-       ignoring the flag (device3d.py:242) -- the right behavior, and
+       ignoring the flag (device3d.py's constructor guards; do not cite
+       a line number here, they move) -- the right behavior, and
        exactly why this debt is countable instead of hidden.
 
 4d.2 WHAT THIS MEANS
@@ -1951,9 +1962,38 @@ floating-point noise; measured 1.11e-16 V on the existing reduction).
 That makes every milestone below self-gating: the reference is not a
 published number, it is the lower-dimensional code that already passed.
 
-  M41  Incomplete ionization -> 2D/3D                       [S]
-       Currently refused at device3d.py:242.  Pure port; the 1D
-       physics and its goldens are the gate.  Smallest item here.
+  M41  Incomplete ionization -> 2D/3D            [S]  LANDED 2026-09-12
+       Was refused in both structured cores' constructors.  Landed as
+       planned -- a port, not new physics: M13's shallow-dopant model
+       now enters Poisson's charge term as rho = n - p - C_ion in
+       `device2d.py` and `device3d.py` exactly as in `device.py`.
+       See `pytcad/M41-INCOMPLETE-ION-2D3D-PLAN.md`.
+       The slice deliberately did NOT copy the formula a third time:
+       Device1D's `_ionized_C` body and the ionized half of its
+       neutrality root were factored to module level in `device.py`
+       (`ionized_doping`, `ionized_eta_doping`, `ionized_dE_kt`, and a
+       new optional `ion=` argument to `fd_ohmic_values`), so all three
+       devices evaluate ONE implementation; Device1D's own arithmetic
+       is unchanged (M13's gates and all six m13 golden md5s verified
+       after the extraction).  Four sites per device: the neutral-bulk
+       guess and the ohmic-contact root both take the eta-space branch
+       on `fd OR ion` (freeze-out moves the neutral potential, so the
+       Boltzmann arcsinh guess is wrong for the same reason it is wrong
+       under FD), and both the equilibrium and coupled Poisson blocks
+       gain the charge term plus its chain rule.
+       Two findings worth keeping:
+       (a) the equilibrium and coupled blocks need DIFFERENT chain
+           rules -- carriers are slaved to psi in one and independent
+           unknowns in the other -- so each needed its own FD-Jacobian
+           gate; a mutation test confirmed the equilibrium one catches
+           a dropped chain by 4 orders of magnitude (0.52 vs the 5e-5
+           threshold), which the convergence gates alone would not have.
+       (b) `band_offset='affinity'` + `incomplete_ion` is refused in
+           2D/3D as it already was in 1D, rather than composed: the
+           eta-space contact solver and the affinity shift each carry
+           their own ln(Nc/nie) offset.
+       Unstructured Device2D keeps refusing the flag (no ionization
+       mechanism exists in `unstructured_dd.py` at all).
 
   M42  Density gradient / quantum correction -> 2D/3D       [L]
        M20 shipped 1D coupled-Newton DG.  The 2D/3D lift is the
@@ -2028,6 +2068,14 @@ published number, it is the lower-dimensional code that already passed.
 
 Cheapest first, and each is independently shippable:
      M41 [S] -> M43 [L] -> M42 [L] -> M46 [L] -> M45 [XL] -> M44 [XL]
+STATUS (2026-09-12): M41 LANDED; M43 is the next one on this line.
+Also open on the 4d.1 matrix, and NOT one of M41-M46: local Kane BTBT
+in structured 2D/3D (the "M16 follow-up" row).  It is planned but not
+implemented -- `pytcad/M16-S2-PLAN.md`, written 2026-09-12.  Worth
+doing early: it is the one remaining inversion in the matrix (the
+harder nonlocal BTBT already reaches 2D/3D via M34-S3 while the local
+model does not), and M34-S6's `ii_grid.py` already built the
+per-node-generation-on-a-grid machinery it needs.
 M35 (3D process) runs as its own track throughout; it is the widest gap
 and the least coupled to the others. M47 (3D engine completion) is the
 largest, least-scoped item on this list and sits LAST deliberately --

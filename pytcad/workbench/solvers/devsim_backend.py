@@ -62,7 +62,7 @@ def check_devsim_compatible(spec):
     (a non-default model config, a heterostructure) was previously
     solved SILENTLY WRONG rather than refused -- the exact "hidden
     failure" this codebase's house rule (see e.g. Device1D/2D/3D's own
-    dg/impact/incomplete_ion guards) exists to catch elsewhere."""
+    dg/btbt guards) exists to catch elsewhere."""
     if spec.mesh.dimensionality != 1:
         raise ValueError(
             "the devsim backend currently solves 1D devices only")

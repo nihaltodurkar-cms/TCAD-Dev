@@ -108,7 +108,9 @@ def test_build_succeeds_with_the_supported_model_combination():
     # coupled model now (tests/test_m34_s6_impact_2d3d.py).
     ("btbt", dict(btbt=True)),
     ("dg", dict(dg=True)),
-    ("incomplete_ion", dict(incomplete_ion=True)),
+    # "incomplete_ion" left this list with M41: Device3D implements
+    # M13's shallow-dopant freeze-out model now
+    # (tests/test_m41_incomplete_ion_2d3d.py).
     ("S_n", dict(S_n=1e4)),
 ])
 def test_unsupported_3d_models_are_refused_not_silently_ignored(flag, kwargs):

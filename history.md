@@ -1873,3 +1873,119 @@ record). User: "for now complete M34."
   unchanged. Nothing committed -- 4b/M34 is now fully closed per
   `ARCHITECTURE.md`'s 4d.1 coverage matrix (impact ionization, local and
   nonlocal, both read Y across 1D/2D/3D structured).
+
+## 2026-09-12 -- M16-S2 planned (local BTBT 2D/3D) + M41 LANDED (incomplete ionization, structured 2D/3D)
+
+User: "write a plan doc for local-BTBT Slice then I will implement it
+later, after plan doc go straight to M41 and implement it." Also closed
+a leftover from the S6c session: `ii_nonlocal_grid.py` imported and
+re-exported `LAMBDA_E_SLOTBOOM_CM` without using it (nothing imports it
+from there -- `device2d.py`/`device3d.py` always pass
+`models.impact_lambda_n/p` explicitly), so the import and the `__all__`
+entry are gone.
+
+### M16-S2 -- PLANNED ONLY, not implemented
+
+`pytcad/M16-S2-PLAN.md`. Local Kane BTBT in structured Device2D/
+Device3D -- the "M16 follow-up" row of 4d.1, and the last inversion in
+that matrix: `btbt_nonlocal` reaches 2D/3D through M34-S3 while the
+SIMPLER local model still raises `NotImplementedError`. The plan is
+written against the code, not from memory: the exact refusal sites, the
+`axes`-list hoist the generation block needs, the `ii_grid.py`
+quantities (`inv`, `cEs`, `Ea`) the Jacobian chain reuses, and the two
+reduction identities (1D, and transverse-uniform) which are EXACT here
+rather than round-off-close, because unlike S6a there is no
+eps-smoothed `|J|` anywhere in the model -- so its gates can be tighter
+than S6a's, and should not just copy S6a's tolerances.
+Two things settled while planning, recorded so the implementer does not
+re-derive them: (a) local `btbt` must NOT inherit `btbt_nonlocal`'s
+homojunction refusal, because Device1D has no such guard for the local
+model either and a dimensional lift must not quietly tighten the model
+it is gated against; (b) Device1D puts `btbt_nonlocal` in its
+stiff-generation set while Device2D/Device3D do not (`device2d.py`
+computes `btbt_nl` but only `ii_on` reaches `stages`/`backtrack`/
+`dens_floor`) -- flagged as a separate, separately-gated question and
+explicitly OUT of that slice, since changing it would move every
+existing `btbt_nonlocal` 2D/3D result.
+
+### M41 -- LANDED, uncommitted
+
+The first of ARCHITECTURE.md 4d.3's dimensional-lift milestones.
+Full record: `pytcad/M41-INCOMPLETE-ION-2D3D-PLAN.md` (section 6).
+
+- **One implementation, three devices.** Rather than copy a subtle
+  formula a third time, Device1D's `_ionized_C` body and the ionized
+  half of `_fd_neutral_eta`'s root were factored to module level in
+  `device.py` -- `ionized_dE_kt`, `ionized_eta_doping`,
+  `ionized_doping`, plus one optional `ion=` argument to
+  `fd_ohmic_values`. Device1D's own arithmetic is unchanged:
+  `test_m13_solver.py` stayed 29/29 green on the first run after the
+  extraction (including G5's FD-Jacobian probe and G7b/c's 1e-9
+  ionized-fraction match at four temperatures), and all six
+  `tests/goldens/m13/*.npz` md5s were byte-identical.
+- **Four sites per device, all mirroring 1D.** The neutral-bulk guess
+  and the ohmic-contact root both take the eta-space branch on
+  `fd OR ion` (freeze-out moves the neutral potential, so the Boltzmann
+  arcsinh guess is wrong for the same reason it is wrong under FD --
+  `device.py:1027` reads `if fd or ion:` for exactly this); the
+  equilibrium and the coupled Poisson blocks each gain
+  `rho = n - p - C_ion` plus their chain rule. `band_offset='affinity'`
+  + `incomplete_ion` is REFUSED in 2D/3D as it already was in 1D.
+- **The finding worth keeping: two chain rules, and only one of them is
+  reachable by a convergence gate.** The equilibrium block slaves n and
+  p to psi, so `d(rho)/dpsi` picks up
+  `(1-dcden) dn/dpsi + (1+dcdp) |dp/dpsi|`; the coupled block treats
+  them as independent unknowns, so Poisson's row instead gains two
+  density columns. Each needed its own FD-Jacobian gate, and a mutation
+  test proved why: DROPPING the equilibrium chain entirely still
+  converges to the right answer and passes every convergence and
+  physics gate, while moving the FD probe to 0.52 against a 5e-5
+  threshold (baseline 6.4e-8). Sign-flipping `d(C_ion)/dp` in the
+  coupled block moves the coupled probe to 1.5e-2 (baseline 1.3e-8).
+  Newton tolerates a wrong Jacobian by iterating more -- so "it
+  converges to the right answer" is not evidence the Jacobian is right.
+- **Gates** (`pytcad/tests/test_m41_incomplete_ion_2d3d.py`, 21 tests):
+  six FD-Jacobian probes (coupled 2D/3D/Boltzmann, equilibrium
+  2D/3D/Boltzmann), all at ~1e-8 against 5e-5; the ionized fraction vs
+  `test_m13_solver.py`'s own INDEPENDENT root-finder at 77/150/250/300 K
+  in 2D and 77/300 K in 3D, <= 1e-9, inside M13's published literature
+  bands; freeze-out direction (0.2857 at 77 K, 0.9927 at 300 K) and the
+  same statement read off the solved field; 4d.4's reduction identity in
+  2D and 3D at equilibrium AND at 0.3 V forward bias (terminal current
+  density to 1e-6 relative); `incomplete_ion=False` bit-identity in both
+  devices; flag independence between FD and Boltzmann within the exact
+  Boltzmann-limit deviation `exp(eta_p)/2^(3/2) = 1.13e-4` (measured
+  2.7e-5 -- note the MAJORITY carrier's eta sets that bound; the
+  electron side's own delta is 1.4e-16 and gates nothing).
+- **Pre-existing gates touched.** `test_sic_vmosfet.py`'s 3D refusal
+  inventory dropped its `incomplete_ion` row (as M34-S6 dropped
+  `impact`). The unstructured refusal was deliberately NOT duplicated:
+  `test_m21_phase3.py::test_wrapper_refuses_unsupported_models_flags`
+  already names it and builds the real GmshMesh that path needs; re-run
+  and still green. `catalog.py`'s applicability/limitations updated, and
+  `devsim_backend.py`'s comment citing "Device1D/2D/3D's own
+  dg/impact/incomplete_ion guards" corrected to `dg/btbt` -- the other
+  two no longer exist.
+- **A measurement gotcha, recorded because it wasted a real
+  investigation.** The first fast ACCEL=0 run reported 1747 passed
+  against 1765 collected -- a 4-test gap with zero failures, which
+  looked like a crashed xdist worker. It was not: I had ADDED four
+  tests to the M41 file while that run was already in flight, so it
+  collected the 17-test version and the collection count I compared it
+  against came from the final 21-test file. **Do not edit a test file
+  while a suite run you intend to quote is in progress**; the numbers
+  are silently from two different trees. Settled by re-running with
+  `--junitxml` and diffing against `--collect-only`: 1765 collected,
+  1765 executed, `errors="0" failures="0"`.
+- **Suites** (all on the final tree). Fast, `PYTCAD_ACCEL=0`: 1751
+  passed, 13 skipped, 1 xfailed, 39 warnings. Fast, `PYTCAD_ACCEL=1`:
+  1759 passed, 5 skipped, 1 xfailed, 39 warnings. Both account for all
+  1765 collected fast tests exactly, and both equal the pre-M41 baseline
+  (1731 / 1739) plus 21 new M41 tests minus the one retired
+  `test_sic_vmosfet.py` refusal case. Slow battery: 33 passed, 10
+  warnings -- unchanged. Warning counts unchanged in every mode, so the
+  "N passed, zero NEW warnings" invariant holds. All six
+  `tests/goldens/m13/*.npz` md5s re-checked at the end: byte-identical
+  to the baseline recorded in the plan doc before the first edit, so
+  the default-off path is provably untouched and nothing needed
+  reconstructing. Nothing committed.

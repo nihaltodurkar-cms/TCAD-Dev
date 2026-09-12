@@ -263,11 +263,71 @@ def fd_node_factors(nc_s, nv_s, n, p):
     return Ln, Lp, wn, wp
 
 
-def fd_ohmic_values(C, nc_s, nv_s, ln_gn, eg_kt, V, VT):
+def ionized_dE_kt(T):
+    """Shallow-dopant ionization energy in units of kT.
+
+    45 meV hydrogenic B/P/As, the single M13 number -- shared so the
+    1D core, the 2D/3D cores (M41) and the neutrality roots cannot
+    drift apart."""
+    return 0.045 / (KB_EV * T)
+
+
+def ionized_eta_doping(nd, na, eta_n, eta_p, ded_kt):
+    """Net IONIZED doping from the reduced Fermi energies (M13).
+
+        N_D+ = N_D / (1 + 2 e^{eta_n + dE/kT})
+        N_A- = N_A / (1 + 4 e^{eta_p + dE/kT})
+
+    Returns (cion, dcion_deta_n, dcion_deta_p) with cion = ND+ - NA-,
+    all scaled the same way nd/na are.  Split out of Device1D's
+    `_ionized_C` (M41) so the 2D/3D cores and every neutrality-root
+    bisection evaluate ONE formula; the exponent clamps are the 1D
+    ones, unchanged."""
+    ed_n = np.exp(np.minimum(eta_n + ded_kt, 700.0))
+    ea_p = np.exp(np.minimum(eta_p + ded_kt, 700.0))
+    ndp = nd / (1.0 + 2.0 * ed_n)
+    nam = na / (1.0 + 4.0 * ea_p)
+    dndp_deta = -2.0 * ed_n / (1.0 + 2.0 * ed_n) ** 2 * nd
+    dnam_deta = -4.0 * ea_p / (1.0 + 4.0 * ea_p) ** 2 * na
+    return ndp - nam, dndp_deta, -dnam_deta
+
+
+def ionized_doping(nd, na, n, p, nc_s, nv_s, T):
+    """Net ionized doping and its derivatives wrt the SLOT DENSITIES.
+
+    The density chain is d(eta)/d(density) = 1/(Nc_s F'(eta)), with the
+    exact tail derivative exp(eta) below the validated range
+    (consistent with fd_density's piecewise policy).  Independent of
+    the `fd` flag by design -- see Models.incomplete_ion.
+
+    Returns (cion, d cion/dn, d cion/dp)."""
+    en = f_half_inv(np.maximum(n, 1e-300) / nc_s)
+    ep = f_half_inv(np.maximum(p, 1e-300) / nv_s)
+    cion, dc_den, dc_dep = ionized_eta_doping(nd, na, en, ep,
+                                              ionized_dE_kt(T))
+    tail_n = np.exp(np.minimum(en, 700.0))
+    tail_p = np.exp(np.minimum(ep, 700.0))
+    den_n = np.where(en >= FERMI_ETA_MIN,
+                     f_mhalf(np.clip(en, FERMI_ETA_MIN,
+                                     FERMI_ETA_MAX)), tail_n)
+    den_p = np.where(ep >= FERMI_ETA_MIN,
+                     f_mhalf(np.clip(ep, FERMI_ETA_MIN,
+                                     FERMI_ETA_MAX)), tail_p)
+    detn = 1.0 / np.maximum(nc_s * den_n, 1e-300)
+    detp = 1.0 / np.maximum(nv_s * den_p, 1e-300)
+    return cion, dc_den * detn, dc_dep * detp
+
+
+def fd_ohmic_values(C, nc_s, nv_s, ln_gn, eg_kt, V, VT, ion=None):
     """FD ohmic-contact values for ARBITRARY node sets (vectorized
     bisection; the exact Boltzmann closed form is recovered as
     F -> exp).  All inputs broadcast against each other; C is the SCALED
-    net doping at the contact nodes.  Returns (psi0, n0, p0) scaled."""
+    net doping at the contact nodes.  Returns (psi0, n0, p0) scaled.
+
+    `ion`, if given, is (nd, na, T): the neutrality root then balances
+    the net IONIZED doping ND+(e) - NA-(e) instead of C (M13 incomplete
+    ionization, lifted to 2D/3D by M41).  `ion=None` is the full-
+    ionization path every pre-M41 caller uses, bit-identical."""
     C = np.asarray(C, dtype=float)
 
     def dens(e):
@@ -279,7 +339,16 @@ def fd_ohmic_values(C, nc_s, nv_s, ln_gn, eg_kt, V, VT):
 
     def g(e):
         n_, p_ = dens(e)
-        return n_ - p_ - C
+        if ion is None:
+            return n_ - p_ - C
+        # the eta-space form, evaluated at the SAME clamped etas the
+        # densities above use -- identical to Device1D's own
+        # _fd_neutral_eta, which this replaces for 2D/3D contacts
+        nd, na, T_ = ion
+        c_, _, _ = ionized_eta_doping(
+            nd, na, np.minimum(e, FERMI_ETA_MAX),
+            np.minimum(-e - eg_kt, FERMI_ETA_MAX), ionized_dE_kt(T_))
+        return n_ - p_ - c_
 
     flo, fhi = g(lo), g(hi)
     if np.any(flo > 0) or np.any(fhi < 0):
@@ -854,32 +923,13 @@ class Device1D:
             N_A- = N_A / (1 + g_A e^{eta_p + dEa/kT}),   g_A = 4
 
         Shallow hydrogenic B/P/As only (dE = 45 meV); single-species
-        (majority side carries all dopants)."""
-        en, ep = self._fd_eta(n, p)
-        ded_kt = 0.045 / (KB_EV * self.T)
-        ed_n = np.exp(np.minimum(en + ded_kt, 700.0))    # e^{eta_n+dE/kT}
-        ea_p = np.exp(np.minimum(ep + ded_kt, 700.0))
-        ndp = self.nd_arr / (1.0 + 2.0 * ed_n)
-        nam = self.na_arr / (1.0 + 4.0 * ea_p)
-        # chain: d(eta)/d(density) = 1/(Nc_s F'(eta)) with the exact
-        # tail derivative exp(eta) below the validated range
-        # (consistent with fd_density's piecewise policy)
-        tail_n = np.exp(np.minimum(en, 700.0))
-        tail_p = np.exp(np.minimum(ep, 700.0))
-        den_n = np.where(en >= FERMI_ETA_MIN,
-                         f_mhalf(np.clip(en, FERMI_ETA_MIN,
-                                         FERMI_ETA_MAX)), tail_n)
-        den_p = np.where(ep >= FERMI_ETA_MIN,
-                         f_mhalf(np.clip(ep, FERMI_ETA_MIN,
-                                         FERMI_ETA_MAX)), tail_p)
-        detn = 1.0 / np.maximum(self.nc_s * den_n, 1e-300)
-        detp = 1.0 / np.maximum(self.nv_s * den_p, 1e-300)
-        dndp_dn = -2.0 * ed_n / (1.0 + 2.0 * ed_n) ** 2 \
-            * self.nd_arr * detn
-        dnam_dp = -4.0 * ea_p / (1.0 + 4.0 * ea_p) ** 2 \
-            * self.na_arr * detp
-        cion = ndp - nam                 # scaled (ND+ - NA-)/Ns
-        return cion, dndp_dn, -dnam_dp   # d cion/dn, d cion/dp
+        (majority side carries all dopants).
+
+        M41 factored the body out to the module-level `ionized_doping`
+        so Device2D/Device3D evaluate the SAME formula rather than a
+        third copy of it; this method is the 1D binding."""
+        return ionized_doping(self.nd_arr, self.na_arr, n, p,
+                              self.nc_s, self.nv_s, self.T)
 
     def _fd_neutral_eta(self, C):
         """Vectorized ohmic-contact / bulk-equilibrium root in eta.
@@ -903,15 +953,11 @@ class Device1D:
                             np.minimum(-e - self.eg_kt,
                                        FERMI_ETA_MAX))
             if getattr(self.models, "incomplete_ion", False):
-                ded_kt = 0.045 / (KB_EV * self.T)
-                ndp = self.nd_arr / (1.0 + 2.0 * np.exp(
-                    np.minimum(np.minimum(e, FERMI_ETA_MAX) + ded_kt,
-                               700.0)))
-                nam = self.na_arr / (1.0 + 4.0 * np.exp(
-                    np.minimum(np.minimum(-e - self.eg_kt,
-                                          FERMI_ETA_MAX) + ded_kt,
-                               700.0)))
-                cion = ndp - nam
+                cion, _, _ = ionized_eta_doping(
+                    self.nd_arr, self.na_arr,
+                    np.minimum(e, FERMI_ETA_MAX),
+                    np.minimum(-e - self.eg_kt, FERMI_ETA_MAX),
+                    ionized_dE_kt(self.T))
             else:
                 cion = C
             return n_ - p_ - cion

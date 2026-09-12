@@ -372,6 +372,22 @@ precedent).
   assert the replace applied ("assert old in s").
 - The bash tool's cwd RESETS to /home/nihal between calls -- always
   `cd` or pass workdir; the #1 cause of lost edits.
+- A `pgrep`/`pkill`/`ps | grep` WAIT CONDITION MATCHES ITS OWN COMMAND
+  LINE, so it never terminates.  `until ! pgrep -f "python -m pytest";
+  do sleep 10; done` finds the very shell that is running it (the
+  pattern is a substring of that shell's own argv) and waits forever;
+  so does `ps -eo args | grep -c "conda run"`, which reports 1 when the
+  answer is 0.  Confirmed directly 2026-09-12: four such loops sat
+  blocked for 13-38 minutes waiting on runs that had already finished.
+  Fix: use the Bash tool's own `run_in_background` on the real command
+  (the harness tracks THAT process and notifies on exit) rather than
+  polling for it; if you must poll, use a bracket (`[p]ytest`), match
+  on `$!`/a pidfile, or wait on an artifact the job writes.  Two
+  related traps from the same session: a loop waiting on a log file
+  belonging to a run that was killed waits forever (nothing will ever
+  write it), and a loop waiting for a task-output file's last line to
+  match `passed|failed` never fires because the harness appends its own
+  `[exited with code N]` line after pytest's summary.
 - Writing a doc in two parts to the SAME path truncates it (second
   write replaces the file) -- write once, or append via bash.
 - Keep engine/QObject references alive in tests: dropping the engine
@@ -643,6 +659,35 @@ what that scope actually was and what's honestly still deferred):
     sparse triangular linear system, done in compiled code). Device2D/
     Device3D's impact_nonlocal refusal is now Device1D's own
     precondition (needs impact=True, lambda>0), not a hard refusal.
+  M41 incomplete ionization -> 2D/3D -- LANDED 2026-09-12, the first of
+    ARCHITECTURE.md 4d.3's dimensional-lift milestones (see
+    pytcad/M41-INCOMPLETE-ION-2D3D-PLAN.md). M13's shallow-dopant
+    freeze-out model now enters Poisson's charge term as
+    rho = n - p - C_ion in structured Device2D/Device3D exactly as in
+    Device1D; the constructor refusals are gone. A port, not new
+    physics -- so the gate is the 1D code that already passed
+    (4d.4's rule), and no new constant was introduced. The formula was
+    NOT copied a third time: Device1D's `_ionized_C` body and the
+    ionized half of its neutrality root were factored to module level
+    in device.py (ionized_doping, ionized_eta_doping, ionized_dE_kt,
+    plus an optional ion= argument to fd_ohmic_values), so all three
+    devices evaluate one implementation and Device1D's own arithmetic
+    is unchanged (M13's gates and all six m13 golden md5s re-checked
+    after the extraction). Two things to know before touching it:
+    the equilibrium (carriers slaved to psi) and coupled (n, p
+    independent unknowns) Poisson blocks need DIFFERENT chain rules and
+    so have SEPARATE FD-Jacobian gates -- the convergence gates do not
+    substitute, since Newton tolerates a wrong Jacobian by iterating
+    more (mutation-tested: dropping the equilibrium chain moves the
+    probe to 0.52 against a 5e-5 threshold, while every convergence
+    gate still passes); and band_offset='affinity' + incomplete_ion is
+    REFUSED in 2D/3D exactly as in 1D (the eta-space contact solver and
+    the affinity shift each carry their own ln(Nc/nie) offset), rather
+    than silently composed. Also on the 4d.1 matrix and still open:
+    local Kane BTBT in structured 2D/3D, planned in
+    pytcad/M16-S2-PLAN.md (written 2026-09-12) but NOT implemented --
+    the last inversion in that matrix, since nonlocal BTBT already
+    reaches 2D/3D through M34-S3 while the simpler local model does not.
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

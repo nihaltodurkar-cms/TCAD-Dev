@@ -344,14 +344,17 @@ _MODELS = {
             "gated vs literature bands at 77/150/250/300 K "
             "(tests/test_m13_solver.py G7b/c)",
         ),
-        applicability="1D (device.py); independent of the fd flag; "
+        applicability="1D and structured 2D/3D (device.py, device2d.py, "
+                      "device3d.py, M41: device.py's ionized_doping is "
+                      "shared by all three); independent of the fd flag; "
                       "single-species per profile (majority side carries "
                       "all dopants); below the Mott transition "
                       "(~4e18 cm^-3 for Si:P)",
         enabled_by_default=False,
         limitations="Hydrogenic model invalid at degenerate doping and "
                     "for deep levels; no dopant-species input on net-"
-                    "doping profiles; not ported to 2D/3D.",
+                    "doping profiles. Unstructured Device2D refuses it, "
+                    "as does band_offset='affinity' in every device.",
     ),
 }
 

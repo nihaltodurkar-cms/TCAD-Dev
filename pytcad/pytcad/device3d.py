@@ -55,6 +55,7 @@ from .materials import (
 )
 from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
                      fd_ddensity_deta, fd_node_factors, fd_ohmic_values,
+                     ionized_dE_kt, ionized_doping, ionized_eta_doping,
                      Models, NewtonOptions)
 from .fermi import FERMI_ETA_MAX
 from .mesh3d import Mesh3D
@@ -276,13 +277,12 @@ class Device3D:
                 "Refusing rather than silently ignoring the flag -- a "
                 "silently dropped physics model is a hidden failure."
             )
-        if getattr(self.models, "incomplete_ion", False):
-            raise NotImplementedError(
-                "Incomplete dopant ionization "
-                "(Models(incomplete_ion=True)) is implemented in "
-                "Device1D only (M13 plan section 3.3).  Refusing rather "
-                "than silently ignoring the flag."
-            )
+        # M41: Models(incomplete_ion=True) is implemented here as well
+        # now -- the M13 shallow-dopant model on the same grid
+        # (device.py's ionized_doping, shared with Device1D/Device2D),
+        # entering Poisson's charge term as rho = n - p - C_ion.
+        # Independent of the fd flag, exactly as in 1D.  See
+        # M41-INCOMPLETE-ION-2D3D-PLAN.md.
         if getattr(self.models, "thermionic", False):
             raise NotImplementedError(
                 "Thermionic-emission interface flux (Models(thermionic="
@@ -324,6 +324,11 @@ class Device3D:
                    * self.dVx[None, None, :])    # (Nz,Ny,Nx), scaled volume
 
         self.C = self.doping / self.Ns
+        # M41 (incomplete ionization): single-species per node -- the
+        # majority side carries all dopants, because a net-doping
+        # profile cannot say otherwise.  Device1D/Device2D's convention.
+        self.nd_arr = np.maximum(self.doping, 0.0) / self.Ns   # scaled N_D
+        self.na_arr = np.maximum(-self.doping, 0.0) / self.Ns  # scaled N_A
 
         # M11-S4: per-material grouping (mirrors Device1D/Device2D).
         shp = (self.Nz, self.Ny, self.Nx)
@@ -374,9 +379,10 @@ class Device3D:
         # exact +0.0), not by tolerance. ---
         self.chi_arr = np.array([m.chi for m in self.mats]).reshape(shp)
         if self.models.band_offset == "affinity":
-            if self.fd:
+            if self.fd or getattr(self.models, "incomplete_ion", False):
                 raise NotImplementedError(
-                    "Models(band_offset='affinity') with fd is refused: "
+                    "Models(band_offset='affinity') with fd/"
+                    "incomplete_ion is refused: "
                     "the FD eta-space contact solver and neutral-guess "
                     "bisection both carry their own ln(Nc/nie) offset, "
                     "and composing them with the affinity shift has not "
@@ -449,7 +455,12 @@ class Device3D:
     def _bulk_psi_guess(self):
         """Neutral-bulk potential per node (FD eta-space root or the
         classic arcsinh)."""
-        if not self.fd:
+        ion = self._ion_root_args()
+        # M41: freeze-out moves the neutral potential, so the Boltzmann
+        # arcsinh guess is wrong under incomplete ionization for the
+        # same reason it is wrong under FD -- Device1D's equilibrium
+        # takes the eta-space branch on `fd or ion` too.
+        if not self.fd and ion is None:
             # M33-S5: the neutral guess is a statement about the
             # CARRIER law, so it is derived in the shifted variable;
             # -band_shift brings it back to the electrostatic
@@ -463,7 +474,13 @@ class Device3D:
             n_ = fd_density(self.nc_s, np.minimum(e, FERMI_ETA_MAX))
             p_ = fd_density(self.nv_s,
                             np.minimum(-e - self.eg_kt, FERMI_ETA_MAX))
-            return n_ - p_ - self.C
+            if ion is None:
+                return n_ - p_ - self.C
+            c_, _, _ = ionized_eta_doping(
+                self.nd_arr, self.na_arr, np.minimum(e, FERMI_ETA_MAX),
+                np.minimum(-e - self.eg_kt, FERMI_ETA_MAX),
+                ionized_dE_kt(self.T))
+            return n_ - p_ - c_
 
         flo, fhi = g(lo0), g(hi)
         if np.any(flo > 0) or np.any(fhi < 0):
@@ -481,6 +498,40 @@ class Device3D:
             raise ValueError(
                 "FD substrate eta beyond the validated range (G7).")
         return e0 + self.ln_gn
+
+    def _ionized_C(self, n, p):
+        """M41: net ionized doping (scaled) and d/dn, d/dp, from the
+        shared M13 kernel -- see device.py's `ionized_doping`, which
+        Device1D and Device2D call identically."""
+        return ionized_doping(self.nd_arr, self.na_arr, n, p,
+                              self.nc_s, self.nv_s, self.T)
+
+    def _ion_root_args(self):
+        """`ion=` payload for fd_ohmic_values' neutrality root, or None
+        under full ionization."""
+        if getattr(self.models, "incomplete_ion", False):
+            return (self.nd_arr, self.na_arr, self.T)
+        return None
+
+    def _poisson_charge(self, psi, n, p, dnp):
+        """M41: Poisson's charge term and its d/dpsi under the
+        equilibrium slaving, for either statistics.
+
+        rho = n - p - C_ion, so the slaved-density chain picks up
+        d(rho)/dpsi = (1-dcden) dn/dpsi + (1+dcdp) |dp/dpsi| -- eta_p
+        FALLS as psi rises, which cancels the carrier sign.  Returns
+        (c_eff, dnp); identical to Device1D's own equilibrium block."""
+        if not getattr(self.models, "incomplete_ion", False):
+            return self.C, dnp
+        cion, dcden, dcdp = self._ionized_C(n, p)
+        if self.fd:
+            dn_dpsi = fd_ddensity_deta(
+                self.nc_s, np.minimum(psi - self.ln_gn, FERMI_ETA_MAX))
+            dp_dpsi = fd_ddensity_deta(
+                self.nv_s, np.minimum(-psi - self.ln_gp, FERMI_ETA_MAX))
+        else:
+            dn_dpsi, dp_dpsi = n, p
+        return cion, dnp - dcden * dn_dpsi + dcdp * dp_dpsi
 
     def _fd_slaved_densities(self, psi):
         """Equilibrium slaving under FD + d(n+p)/d(psi).
@@ -511,11 +562,19 @@ class Device3D:
         if cached is not None:
             return cached
         k, j, i = bc.k, bc.j, bc.i
-        if self.fd:
+        ion = self._ion_root_args()
+        # M41: incomplete ionization routes through the SAME eta-space
+        # root even under Boltzmann statistics (it reduces exactly to
+        # the closed form as F -> exp), so the flag stays independent
+        # of `fd` -- Device1D's _contact_values does the same.
+        if self.fd or ion is not None:
             psi0, n0, p0 = fd_ohmic_values(self.C[k, j, i], self.nc_s[k, j, i],
                                   self.nv_s[k, j, i],
                                   self.ln_gn[k, j, i],
-                                  self.eg_kt[k, j, i], V, self.VT)
+                                  self.eg_kt[k, j, i], V, self.VT,
+                                  ion=None if ion is None
+                                  else (self.nd_arr[k, j, i],
+                                        self.na_arr[k, j, i], self.T))
         else:
             psi0, n0, p0 = _ohmic_values(self.C[k, j, i], self.nie_s[k, j, i],
                                 V, self.VT)
@@ -552,6 +611,10 @@ class Device3D:
             n = nie * np.exp(np.clip(psi_c, -700, 700))
             p = nie * np.exp(np.clip(-psi_c, -700, 700))
             dnp = n + p
+        # M41: rho = n - p - C_ion under EITHER statistics; C is
+        # returned unchanged when the flag is off, so this path stays
+        # bit-identical.
+        C, dnp = self._poisson_charge(psi, n, p, dnp)
 
         # M11-S4: position-dependent eps in flux form (uniform => 1.0)
         Fx = self.et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
@@ -797,6 +860,14 @@ class Device3D:
         hx, hy, hz = self.hx, self.hy, self.hz
         dVx, dVy, dVz, dV = self.dVx, self.dVy, self.dVz, self.dV
         C = self.C
+        # M41 incomplete ionization: Poisson's charge term becomes
+        # rho = n - p - C_ion(n, p).  Here n and p are INDEPENDENT
+        # unknowns (unlike the slaved equilibrium block), so the two
+        # density columns of the Poisson row pick up d(C_ion)/dn and
+        # d(C_ion)/dp directly.  None when the flag is off.
+        dcden = dcdp = None
+        if getattr(self.models, "incomplete_ion", False):
+            C, dcden, dcdp = self._ionized_C(n, p)
 
         # --- M13: nu-factor SG (plan section 3.2bis; shared with the
         # 1D/2D cores): electron deltas gain +dL_n, hole deltas -dL_p;
@@ -1029,8 +1100,15 @@ class Device3D:
         # local (same-node) diagonal terms: Poisson's charge term,
         # continuity's recombination cross terms
         diag_k = np.arange(N)
-        rows.append(3 * diag_k); cols.append(3 * diag_k + 1); vals.append(-dV.ravel())
-        rows.append(3 * diag_k); cols.append(3 * diag_k + 2); vals.append(dV.ravel())
+        if dcden is None:
+            rows.append(3 * diag_k); cols.append(3 * diag_k + 1); vals.append(-dV.ravel())
+            rows.append(3 * diag_k); cols.append(3 * diag_k + 2); vals.append(dV.ravel())
+        else:
+            # d/dn (n - p - C_ion) = 1 - dcden;  d/dp = -1 - dcdp
+            rows.append(3 * diag_k); cols.append(3 * diag_k + 1)
+            vals.append(-dV.ravel() * (1.0 - dcden.ravel()))
+            rows.append(3 * diag_k); cols.append(3 * diag_k + 2)
+            vals.append(dV.ravel() * (1.0 + dcdp.ravel()))
 
         rows.append(3 * diag_k + 1); cols.append(3 * diag_k + 1)
         vals.append(-dRs_dn.ravel() * dV.ravel())

@@ -35,9 +35,9 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from .ii_nonlocal import E_STRONG_VCM, LAMBDA_E_SLOTBOOM_CM
+from .ii_nonlocal import E_STRONG_VCM
 
-__all__ = ["effective_field_grid", "E_STRONG_VCM", "LAMBDA_E_SLOTBOOM_CM"]
+__all__ = ["effective_field_grid", "E_STRONG_VCM"]
 
 
 def _to_lines(flat, edge_shape, vary):
