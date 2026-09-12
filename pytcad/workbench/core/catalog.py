@@ -178,8 +178,8 @@ _MODELS = {
                       "breakdown regime requires voltage continuation",
         enabled_by_default=False,
         limitations="The nonlocal (effective-field) variant is "
-                    "`impact_nonlocal` (1D, M34-S2); unstructured "
-                    "Device2D refuses it; no "
+                    "`impact_nonlocal` (1D M34-S2, structured 2D/3D "
+                    "M34-S6c); unstructured Device2D refuses both; no "
                     "carrier-temperature coupling; devsim backend not "
                     "supported; near-BV convergence requires the "
                     "staged-generation continuation.",
@@ -264,7 +264,9 @@ _MODELS = {
             "van Overstraeten & de Man, Solid-State Electron. 13, 583 "
             "(1970) -- the coefficients evaluated at E_eff",
         ),
-        applicability="1D (device.py); modifies `impact` and requires it",
+        applicability="1D and structured 2D/3D (device.py, device2d.py, "
+                      "device3d.py, M34-S6c: pytcad/ii_nonlocal_grid.py); "
+                      "modifies `impact` and requires it",
         enabled_by_default=False,
         limitations="Only the IEDM abstract was accessible: the "
                     "relaxation equation is the drift-dominated form of "
@@ -272,8 +274,9 @@ _MODELS = {
                     "not a quotation. lambda_p = lambda_n (no hole value "
                     "was accessible). Transport direction from the field "
                     "on edges above 100 V/cm, inherited from the nearest "
-                    "such edge below it. Not ported to 2D/3D, which have "
-                    "no coupled local impact model to modify.",
+                    "strong edge on the SAME grid line (2D/3D: fixed "
+                    "transverse indices, varying only along that edge's "
+                    "own axis). Unstructured Device2D refuses it.",
     ),
     "surface_mobility": ModelInfo(
         key="surface_mobility",

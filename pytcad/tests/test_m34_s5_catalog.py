@@ -102,7 +102,10 @@ def test_impact_nonlocal_job_runs_through_the_wire_format():
     assert device._ii_gs_cache is not None and device._ii_gs_cache.max() > 0
 
 
-def test_2d_jobs_accept_btbt_nonlocal_and_refuse_impact_nonlocal():
+def test_2d_jobs_accept_btbt_nonlocal_and_impact_nonlocal():
+    """M34-S6c ported the nonlocal effective field onto the 2D grid
+    (pytcad/ii_nonlocal_grid.py) -- Device2D now accepts the flag given
+    its precondition (impact=True), same as Device1D."""
     x = np.linspace(0.0, 2e-5, 11)
     y = np.linspace(0.0, 1e-5, 6)
     mesh = MeshSpec(dimensionality=2, axes={"x": x.tolist(), "y": y.tolist()})
@@ -117,5 +120,7 @@ def test_2d_jobs_accept_btbt_nonlocal_and_refuse_impact_nonlocal():
         return solver_runner.build_device(spec, mesh_obj, dop, ntot)
 
     assert build({"btbt_nonlocal": True, "bgn": False}).models.btbt_nonlocal
-    with pytest.raises(NotImplementedError, match="impact_nonlocal"):
+    assert build({"impact": True,
+                 "impact_nonlocal": True}).models.impact_nonlocal
+    with pytest.raises(ValueError, match="impact=True"):
         build({"impact_nonlocal": True})

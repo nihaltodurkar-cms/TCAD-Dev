@@ -35,6 +35,7 @@ from .nonlocal_path import build_structured as _nl_build_structured
 from .nonlocal_path import evaluate as _nl_evaluate
 from .dirichlet import eliminate_csr
 from .ii_grid import grid_impact as _ii_grid
+from .ii_nonlocal_grid import effective_field_grid as _ii_eff_grid
 from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
                      _STIFF_DENSITY_FLOOR)
 
@@ -167,13 +168,20 @@ class Device2D:
             )
         # Models(impact=True): M15's coupled model, ported by M34-S6
         # (pytcad/ii_grid.py; see _residual_jacobian and solve_bias).
+        # Models(impact_nonlocal=True): S6c, the same effective field on
+        # the grid (pytcad/ii_nonlocal_grid.py) -- same precondition as
+        # Device1D (M34-S2): needs impact=True, needs a positive lambda.
         if getattr(self.models, "impact_nonlocal", False):
-            raise NotImplementedError(
-                "Nonlocal impact ionization (Models(impact_nonlocal=True), "
-                "M34-S2) is implemented in Device1D only: it modifies the "
-                "coefficients of the local impact model, which this device "
-                "does not have.  Refusing rather than silently ignoring the "
-                "flag.")
+            if not getattr(self.models, "impact", False):
+                raise ValueError(
+                    "Models(impact_nonlocal=True) modifies the impact-"
+                    "ionization coefficients and needs Models(impact=True) "
+                    "as well.")
+            for lam in (self.models.impact_lambda_n,
+                        self.models.impact_lambda_p):
+                if not lam > 0.0:
+                    raise ValueError(
+                        f"impact_lambda_n/p must be > 0 cm, got {lam}")
         if getattr(self.models, "btbt", False):
             raise NotImplementedError(
                 "Band-to-band tunneling (Models(btbt=True)) is implemented "
@@ -1030,8 +1038,19 @@ class Device2D:
                      dJp_dpsiR=dJp_dpsiR_y.ravel(),
                      dJp_dpL=dJp_dp_L_y.ravel(), dJp_dpR=dJp_dp_R_y.ravel()),
             ]
+            if getattr(self.models, "impact_nonlocal", False):
+                En_ii, Dn_ii = _ii_eff_grid(
+                    (Ny, Nx), axes, psi.ravel(), self.VT, self.LD, "n",
+                    self.models.impact_lambda_n)
+                Ep_ii, Dp_ii = _ii_eff_grid(
+                    (Ny, Nx), axes, psi.ravel(), self.VT, self.LD, "p",
+                    self.models.impact_lambda_p)
+                eff = (En_ii, Dn_ii, Ep_ii, Dp_ii)
+            else:
+                eff = None
             G, g_r, g_c, g_v, self._ii_fields = _ii_grid(
-                N, axes, psi.ravel(), self.VT, self.LD, self.J0, self.R0)
+                N, axes, psi.ravel(), self.VT, self.LD, self.J0, self.R0,
+                eff=eff)
             live = np.ones(N, dtype=bool)
             for bc in self.bcs.values():
                 if isinstance(bc, DirichletBC):

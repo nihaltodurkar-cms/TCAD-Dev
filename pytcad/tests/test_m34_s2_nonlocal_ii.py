@@ -89,23 +89,34 @@ def test_requires_impact_and_a_positive_lambda():
         _diode(impact=True, impact_nonlocal=True, impact_lambda_n=0.0)
 
 
-def test_device2d_and_device3d_refuse():
-    """Device2D/Device3D have no coupled impact model to modify; the
-    flag must raise, not be silently dropped (the M16 G-F pattern)."""
+def test_device2d_and_device3d_require_impact_and_positive_lambda():
+    """M34-S6c ported the effective field onto the grid (pytcad/
+    ii_nonlocal_grid.py) -- Device2D/Device3D no longer refuse the flag
+    outright, but the same precondition as Device1D applies: it needs
+    the coupled local model on, and a positive lambda. See
+    tests/test_m34_s6_impact_2d3d.py for the functioning-model gates."""
     from pytcad.mesh import uniform_mesh
     from pytcad.mesh2d import Mesh2D
     from pytcad.device2d import Device2D
     from pytcad.device3d import Device3D
     from pytcad.mesh3d import Mesh3D
     mesh2d = Mesh2D(x=uniform_mesh(1e-4, 4), y=uniform_mesh(1e-4, 4))
-    with pytest.raises(NotImplementedError, match="impact_nonlocal"):
+    with pytest.raises(ValueError, match="impact=True"):
         Device2D(mesh2d, np.full((5, 5), 1e15),
                  models=Models(impact_nonlocal=True))
+    with pytest.raises(ValueError, match="> 0"):
+        Device2D(mesh2d, np.full((5, 5), 1e15),
+                 models=Models(impact=True, impact_nonlocal=True,
+                               impact_lambda_n=0.0))
     mesh3d = Mesh3D(x=uniform_mesh(1e-4, 2), y=uniform_mesh(1e-4, 2),
                     z=uniform_mesh(1e-4, 2))
-    with pytest.raises(NotImplementedError, match="impact_nonlocal"):
+    with pytest.raises(ValueError, match="impact=True"):
         Device3D(mesh3d, np.full((3, 3, 3), 1e15),
                  models=Models(impact_nonlocal=True))
+    with pytest.raises(ValueError, match="> 0"):
+        Device3D(mesh3d, np.full((3, 3, 3), 1e15),
+                 models=Models(impact=True, impact_nonlocal=True,
+                               impact_lambda_p=0.0))
 
 
 def test_reverse_ramp_converges_and_generation_is_live(s2_at_40):

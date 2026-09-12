@@ -222,3 +222,106 @@ converge.
 count). Fast, `PYTCAD_ACCEL=1`: 1738 passed, 5 skipped, 1 xfailed, 39
 warnings. Slow battery: 27 passed, 10 warnings. The six m13 golden md5s
 match section 1 of `M34-PLAN.md` before and after. Nothing committed.
+
+## 6. S6c landed (2026-09-12)
+
+Kernel: `pytcad/pytcad/ii_nonlocal_grid.py` (`effective_field_grid`),
+one function for Device2D and Device3D, generalizing `ii_nonlocal.
+effective_field`'s 1D relaxation chain to the grid's edge graph exactly
+as section 2 specified: direction per axis LINE (strong edges from the
+field sign, weak edges inherit the nearest strong edge's direction by
+cumulative physical distance along that line, tie to the earlier edge);
+a node's inflow edges averaged; the relaxation solved EXACTLY (not
+walked node by node -- see the performance finding below) via one
+sparse LU factorization of `I - M` (`M` the per-node mean-inflow
+adjacency, kept only for edges that run forward in a Kahn topological
+order over all axes combined, cycle leftovers broken by potential
+order) applied to the source vector (E_eff) and, for the Jacobian, to N
+right-hand sides at once (`scipy.sparse.linalg.splu`). Wired into
+`device2d.py`/`device3d.py`'s existing `impact` block: `impact_nonlocal
+=True` builds `(En, Dn, Ep, Dp)` and passes it to `ii_grid.grid_impact`
+`eff=`, a path that block already supported unused since S6a. The
+Device2D/Device3D constructor refusals are replaced by Device1D's own
+precondition (`impact=True` required, `impact_lambda_n/p > 0`), and
+`M34-S2`'s `test_device2d_and_device3d_refuse` /
+`test_2d_jobs_accept_btbt_nonlocal_and_refuse_impact_nonlocal` are
+rewritten to that new behavior (`workbench/core/catalog.py`'s
+`impact_nonlocal` metadata updated to match).
+
+**A real performance finding, not just an implementation detail: the
+per-line direction search MUST be vectorized, not a Python loop over
+grid lines.** The first version looped over every grid line in Python
+(hundreds per axis on the test devices); measured: the S6a/S6b-scale
+gate suite (8 tests) finishes in ~70s, the equivalent first-draft S6c
+suite did not finish in 30 minutes on a ~3000-node 3D device. Fixed by
+reshaping each axis's edges into (n_lines, line_length) -- exact, not
+an approximation, because every line on a structured axis has the same
+length -- and running the strong-edge-nearest search as O(1) vectorized
+numpy calls (`np.maximum/minimum.accumulate`, `np.take_along_axis`)
+over all lines of an axis at once. Verified bit-identical to the
+per-line version on the standalone reduction/FD probes before and
+after.
+
+**A second, larger finding: the exact per-node Jacobian walk (a Python
+dict-based DP over the DAG, mirroring the design's own "sparse W,
+pruned below 1e-15 of a row's max" language literally) is itself too
+slow, independent of the line-search fix.** On a fine mesh (h_min 2e-8
+cm, the S6a test mesh) `a = exp(-h_cm/lambda)` sits close to 1 per
+edge, so a chain needs on the order of `ln(1e-15)/ln(a)` hops before
+the prune bites -- measured rows averaging ~400 entries -- and that
+Python-level accumulation, run once per Newton iteration of every
+strength-ladder stage of every bias step, dominated. Recognizing the
+walk as solving `(I - M) E = Source` exactly (`M`/`Source` built from
+the SAME per-node mean-of-inflows the design specifies) replaced the
+Python DP with one `scipy.sparse.linalg.splu` factorization, applied to
+the source vector for `E` and, for the exact Jacobian, to N right-hand
+sides at once -- compiled sparse linear algebra instead of a Python
+object walk. Both changes are pure reimplementation of the SAME
+mathematical object; verified unchanged on the standalone probes (1D
+reduction to round-off, independent random-state FD check at 1e-9)
+after each rewrite.
+
+**Even after both fixes, this model is inherently much more expensive
+per Newton iteration than the local one** (a real sparse factor-and-
+solve vs. vectorized numpy), so S6c's own test meshes are deliberately
+coarser than S6a/S6b's (documented per-mesh in
+`tests/test_m34_s6c_impact_nonlocal_grid.py`): the reduction gates use
+`h_min` 2e-7 cm (vs. S6a's 2e-8 cm) on the SAME one-sided junction,
+which cut a 3D reduction ramp from 237s to 64s; the 2D and 3D FD-gate
+corner meshes are tuned separately from each other, because the two
+gates they must satisfy (`_fd_gate`'s `hot.size > 10`, needing enough
+nodes near G's peak, and `used_top >= 2`, see below) pull the mesh
+resolution in opposite directions. All six physics gates are
+`@pytest.mark.slow` (measured ~470s together); the kernel's own 1D-line
+reduction/Jacobian unit test stays in the fast tier (0.6s).
+
+**One S6a assertion does not transfer to the nonlocal branch, and is
+not a defect.** `_fd_gate`'s `used_top >= 2` check requires perturbing
+the psi/n/p at the smoothing-eps-setting edge (globally largest |J|) to
+move G by more than FD round-off, verified true for the LOCAL model.
+In the nonlocal branch, `ii_grid.grid_impact`'s `eff is not None` path
+uses `gSn = K*alpha*u` (alpha's E-dependence is carried by the SEPARATE
+`Dn`/`Dp` Jacobian block, not by the local node field), dropping the
+local branch's `dalpha*(Ea - E*u)` term from the eps-Jacobian chain --
+so `dG/d(eps)` is genuinely smaller here, not broken. Measured directly
+at S6a's own full-resolution corner (N=5978, 25s to reach the check):
+every one of the eps edge's 6 columns still lands below the `_fd_gate`
+resolvability floor there too, so this is a model property, not a
+mesh-coarseness artifact. `tests/test_m34_s6c_impact_nonlocal_grid.py`
+uses its own `_fd_gate_nl` (identical methodology, this one check
+dropped, with the measurement recorded in its docstring) rather than
+editing the shared `_fd_gate`.
+
+**Gates, as landed** (`tests/test_m34_s6c_impact_nonlocal_grid.py`):
+kernel reduction to `ii_nonlocal.effective_field` on a single grid line
+(E to 1.8e-12 V/cm, Jacobian to floating-point noise); 2D and 3D
+reduction to Device1D's own M34-S2 (`impact` + `impact_nonlocal`)
+undamped-Newton fixed point, same tolerances as S6a's local reduction
+gate; 2D and 3D FD Jacobian via `_fd_gate_nl`; a narrow-vs-wide field
+peak (E_eff below the local peak field at a narrow peak, Slotboom's
+claim, exercised through the grid kernel rather than `ii_nonlocal`
+directly); a reverse-ramp convergence gate in both 2D and 3D. Suite:
+1 (fast) + 6 (slow) passed. Default-off (`impact_nonlocal=False`)
+behavior untouched -- the S6a/S6b suite and the six m13 golden md5s are
+unaffected by this slice (S6c only adds a new `eff is not None` branch
+already present but unexercised in `ii_grid.grid_impact` since S6a).

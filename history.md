@@ -1790,4 +1790,86 @@ section 5.
   xfailed, 39 warnings (the pre-existing count). Fast, `PYTCAD_ACCEL=1`:
   1738 passed, 5 skipped, 1 xfailed, 39 warnings. Slow battery: 27
   passed, 10 warnings. Golden md5s re-checked after: unchanged.
-- **Not done:** S6c (nonlocal II on a grid).
+- **Not done (at the time this entry was first written):** S6c
+  (nonlocal II on a grid) -- landed same day, see the entry below.
+
+## 2026-09-12 -- M34-S6c (nonlocal impact ionization, structured 2D/3D grids) -- LANDED, uncommitted
+
+The last piece of `pytcad/M34-S6-PLAN.md` (section 6 is the full
+record). User: "for now complete M34."
+
+- **Kernel.** `pytcad/pytcad/ii_nonlocal_grid.py` (`effective_field_grid`):
+  generalizes `ii_nonlocal.effective_field`'s 1D relaxation chain
+  (`lambda dE_eff/ds + E_eff = |E|`) to the grid's edge graph -- strong
+  edges (>=100 V/cm) set direction from the field sign, weak edges
+  inherit the nearest strong edge's direction on the SAME grid line
+  (fixed transverse indices, varying only along that edge's own axis),
+  a node's inflow edges averaged, solved EXACTLY across all axes
+  combined (Kahn topological order, potential-order fallback for
+  cycles). Wired into `device2d.py`/`device3d.py`'s existing `impact`
+  block via `ii_grid.grid_impact`'s `eff=` path, unused since S6a. The
+  constructor refusal is replaced by Device1D's own precondition
+  (`impact=True`, `impact_lambda_n/p > 0`); `test_m34_s2_nonlocal_ii.py`
+  and `test_m34_s5_catalog.py`'s refusal tests rewritten to that;
+  catalog `impact_nonlocal` metadata updated.
+- **Two real performance bugs, not just slow tests.** First draft: a
+  Python loop over every grid LINE for the weak-edge direction search
+  (hundreds per axis) -- the equivalent S6a/S6b suite runs in ~70s,
+  this did not finish in 30 minutes on a ~3000-node 3D device. Fixed by
+  reshaping each axis's edges into `(n_lines, line_length)` -- exact,
+  since every line on a structured axis has the same length -- and
+  vectorizing the nearest-strong-edge search with
+  `np.maximum/minimum.accumulate` + `np.take_along_axis` over all lines
+  of an axis at once (~3x speedup alone). Second, larger bug: the exact
+  per-node Jacobian walk was a Python dict-based DP mirroring the
+  plan's own "sparse W, pruned below 1e-15" language literally --
+  correct, but on a fine mesh `a = exp(-h/lambda)` sits close to 1 per
+  edge, so a chain needs hundreds of hops before the prune bites
+  (measured rows averaging ~400 entries), and that Python-level
+  accumulation dominated every Newton iteration. Recognized as solving
+  `(I - M) E = Source` exactly and replaced with one
+  `scipy.sparse.linalg.splu` factorization applied to the source vector
+  (E) and, for the Jacobian, to N right-hand sides at once -- compiled
+  linear algebra instead of a Python object walk. The user pushed back
+  mid-session ("why are you writing this in python use cpp",
+  M31-precedent question); answer given and accepted: fix the
+  vectorization first (same math, no build-surface change) and escalate
+  to a real C++ kernel only if still too slow -- it wasn't needed.
+  Both rewrites verified bit-identical (to floating-point noise) against
+  the original on standalone probes (1D-line reduction to
+  `ii_nonlocal.effective_field`, an independent random-state FD check)
+  before and after each change.
+- **Still markedly more expensive per Newton iteration than the local
+  model** (a real sparse solve vs. vectorized numpy), so S6c's gates use
+  deliberately coarser meshes than S6a/S6b's (documented per-mesh in the
+  test file) and are `@pytest.mark.slow` -- measured ~470s together
+  (parallelized to 362s under the `-n 6` slow-battery invocation). The
+  kernel's own 1D-line unit test stays fast (0.6s).
+- **One S6a assertion does not transfer, and is not a defect.**
+  `_fd_gate`'s `used_top >= 2` check needs the smoothing-eps edge's own
+  columns to move G resolvably -- true for the local model, but the
+  nonlocal branch's `gSn = K*alpha*u` drops the local branch's
+  `dalpha*(Ea - E*u)` term (alpha's E-dependence is carried by the
+  separate effective-field Jacobian instead), so `dG/d(eps)` is
+  genuinely smaller here. Measured directly at S6a's own full-resolution
+  corner (N=5978) too, so not a mesh-coarseness artifact. S6c uses its
+  own `_fd_gate_nl` (same methodology, this one check dropped, reason
+  recorded in its docstring) rather than editing the shared `_fd_gate`.
+- **Gates** (`pytcad/tests/test_m34_s6c_impact_nonlocal_grid.py`):
+  kernel reduction to `ii_nonlocal.effective_field` on a single grid
+  line (E to 1.8e-12 V/cm); 2D and 3D reduction to Device1D's own
+  M34-S2 (`impact` + `impact_nonlocal`) undamped-Newton fixed point; 2D
+  and 3D FD Jacobian via `_fd_gate_nl`; a narrow-vs-wide field-peak lag
+  check (Slotboom's claim, through the grid kernel); a reverse-ramp
+  convergence gate in 2D and 3D.
+- **Default-off.** `impact_nonlocal=False` behavior untouched -- S6a/S6b's
+  own suite and the six m13 golden md5s are unaffected (S6c only
+  exercises a branch of `ii_grid.grid_impact` that existed, unused,
+  since S6a).
+- **Suites.** Fast, `PYTCAD_ACCEL=0`: 1731 passed (the +1 is S6c's fast
+  kernel test), 13 skipped, 1 xfailed, 39 warnings. Fast,
+  `PYTCAD_ACCEL=1`: 1739 passed, 5 skipped, 1 xfailed, 39 warnings. Slow
+  battery: 33 passed (+6), 10 warnings. Golden md5s re-checked after:
+  unchanged. Nothing committed -- 4b/M34 is now fully closed per
+  `ARCHITECTURE.md`'s 4d.1 coverage matrix (impact ionization, local and
+  nonlocal, both read Y across 1D/2D/3D structured).

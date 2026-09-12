@@ -620,8 +620,7 @@ what that scope actually was and what's honestly still deferred):
     nonlocal_path._trace_paths_py; both flags in the catalog and wire
     format. 2026-09-12: M34-S6a/b put M15's coupled local impact
     ionization into structured Device2D/Device3D (pytcad/ii_grid.py;
-    alpha at the field along each carrier's current; S6c, nonlocal II
-    on a grid, not started -- pytcad/M34-S6-PLAN.md), and M34-S7 fixed
+    alpha at the field along each carrier's current), and M34-S7 fixed
     the stiff-path Newton convergence test in all three devices: it
     read the line-search-DAMPED update and stopped short (M15's diode
     at -30V returned 0.698 of the discrete solution's current). Stiff
@@ -630,7 +629,20 @@ what that scope actually was and what's honestly still deferred):
     1e-3 correction and halve at most 10 times (device.py
     _STIFF_DENSITY_FLOOR, _LS_NEWTON_REGION, _LS_MAX_HALVINGS); plain
     paths bit-identical. M15's G-C gap was this artifact: M_sim/M_int
-    = 0.76, gate back on the plan's [0.5, 2.0] band.
+    = 0.76, gate back on the plan's [0.5, 2.0] band. Same day, S6c:
+    the nonlocal effective field ported to the same structured grid
+    (pytcad/ii_nonlocal_grid.py; one sparse LU factor-and-solve for the
+    exact E_eff and its Jacobian across all axes at once, generalizing
+    ii_nonlocal.effective_field's 1D relaxation chain to the grid's
+    edge graph -- see M34-S6-PLAN.md section 6). Two real performance
+    bugs were found and fixed before this was fast enough to gate: a
+    per-grid-line Python loop for the weak-edge direction search
+    (vectorized: every line on a structured axis has the same length,
+    so it reshapes into one array op) and a per-node Python dict DP for
+    the exact Jacobian walk (replaced by recognizing it as solving one
+    sparse triangular linear system, done in compiled code). Device2D/
+    Device3D's impact_nonlocal refusal is now Device1D's own
+    precondition (needs impact=True, lambda>0), not a hard refusal.
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for

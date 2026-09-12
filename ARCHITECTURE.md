@@ -1700,21 +1700,40 @@ M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  LANDED 2026-09-11
      `pytcad/ii_nonlocal.py`, Slotboom 1991) in Device1D. The field-
      line tracer is compiled (`core/src/nonlocal/paths.cpp`, bit-
      identical to its Python oracle; benchmark B10). Both flags are in
-     the model catalog and the GUI wire format. Out of scope, stated:
-     nonlocal II in 2D/3D (they have no local II to modify),
-     unstructured meshes and heterojunctions (refused), phonon-assisted
-     BTBT, energy-resolved tunneling channels. Also corrected here:
+     the model catalog and the GUI wire format. Out of scope, stated
+     (at the time -- nonlocal II in 2D/3D was closed 2026-09-12, S6c
+     below): unstructured meshes and heterojunctions (refused),
+     phonon-assisted BTBT, energy-resolved tunneling channels. Also
+     corrected here:
      4d.1 listed local II and local BTBT as working in 2D/3D, which
      both devices refuse.
-     2026-09-12 (`pytcad/M34-S6-PLAN.md` section 5): S6a/S6b put M15's
-     coupled local impact ionization into structured Device2D/Device3D
-     (`pytcad/ii_grid.py`; alpha at the field component along each
-     carrier's current), so 4d.1's local-II row now reads Y; S6c
-     (nonlocal II on a grid) is not started. S7: Device1D's stiff
-     paths (impact, btbt, btbt_nonlocal) judged Newton convergence on
-     the line-search-DAMPED update and stopped short of the discrete
-     solution; fixed in all three devices. M15's long-open G-C gap
-     was that artifact (M_sim/M_int 0.76, inside the plan's band).
+     2026-09-12 (`pytcad/M34-S6-PLAN.md` sections 5-6): S6a/S6b put
+     M15's coupled local impact ionization into structured
+     Device2D/Device3D (`pytcad/ii_grid.py`; alpha at the field
+     component along each carrier's current), so 4d.1's local-II row
+     now reads Y. S7: Device1D's stiff paths (impact, btbt,
+     btbt_nonlocal) judged Newton convergence on the line-search-DAMPED
+     update and stopped short of the discrete solution; fixed in all
+     three devices. M15's long-open G-C gap was that artifact
+     (M_sim/M_int 0.76, inside the plan's band). S6c: the nonlocal
+     effective field ported to the same structured grid
+     (`pytcad/ii_nonlocal_grid.py`, one sparse LU factor-and-solve for
+     the exact E_eff and its Jacobian across all axes, generalizing
+     `ii_nonlocal.effective_field`'s 1D chain), so 4d.1's nonlocal-II
+     row now reads Y too; the Device2D/Device3D constructor refusal is
+     replaced by Device1D's own precondition (impact=True, lambda>0).
+     A real performance lesson from this slice: the naive per-grid-line
+     Python loop and the naive per-node Python dict-DP walk (both
+     literal readings of section 2's own design language) were each,
+     independently, too slow to gate -- fixed by vectorizing the
+     per-line search (every line on a structured axis has the same
+     length, so it reshapes into one array op) and by recognizing the
+     "walk the DAG" step as exactly solving a sparse triangular linear
+     system, which `scipy.sparse.linalg.splu` does in compiled code.
+     Even after both fixes this model is markedly more expensive per
+     Newton iteration than the local one (a real sparse solve vs.
+     vectorized numpy), so its gates use deliberately coarser meshes
+     than S6a/S6b and are marked slow.
 
 M35  3D PROCESS SIMULATION                                [XL]
      M23/M26 shipped structured-mesh slices. Still missing from 4b.1:
@@ -1875,7 +1894,7 @@ NotImplementedError sites, not inferred from filenames.
   Fermi-Dirac statistics            Y     Y     Y    --
   Incomplete ionization             Y     R     R    M41
   Impact ionization (coupled)       Y     Y     Y    -- (structured)
-  Impact ionization, nonlocal       Y     R     R    M34-S6c
+  Impact ionization, nonlocal       Y     Y     Y    -- (structured)
   BTBT, local Kane                  Y     R     R    M16 follow-up
   BTBT, nonlocal                    Y     Y     Y    -- (structured)
   Trap-assisted tunneling           Y     Y     Y    --
