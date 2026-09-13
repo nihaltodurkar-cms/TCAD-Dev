@@ -524,11 +524,19 @@ class NewtonOptions:
     # supports it (every coupled solve_bias, plus device3d.py's
     # structured-3D and the two SCALAR unstructured equilibrium paths).
     # A (dim, unstructured, coupled) combination that has never been
-    # measured resolves to "direct" (Gate
-    # D-3's explicit refusal, not a default guess). The default here
-    # stays "direct" (Phase E-opt-in): nothing changes unless a caller
-    # asks for "auto" explicitly.
-    linsolve: str = "direct"
+    # measured resolves to "direct" (Gate D-3's explicit refusal, not a
+    # default guess).
+    #
+    # 2026-09-13: default changed "direct" -> "auto" at the user's
+    # explicit request (make the PETSc-backed C++ path the default
+    # wherever the evidence table says it wins; unmeasured shapes keep
+    # falling back to plain "direct" via Gate D-3). This breaks bit-
+    # identity for any test that assumed NewtonOptions()'s default
+    # equals scipy spsolve exactly (M22 G1's own documented guarantee) --
+    # PETSc/iterative solves agree with "direct" only to linsolve_rtol,
+    # not bit-for-bit. Any caller that still needs the old guarantee
+    # must pass linsolve="direct" explicitly.
+    linsolve: str = "auto"
     linsolve_rtol: float = 1e-10
     # M31 P5-1 Phase B: expose the preconditioner flavor and block size
     # that every COUPLED (psi/n/p-interleaved) Newton loop's

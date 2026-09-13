@@ -39,14 +39,16 @@ DISPATCH_CELLS = {
 }
 
 
-def test_a2_no_default_moved():
-    """Phase A-2 must not take E-auto by accident."""
+def test_a2_default_is_the_signed_off_e_auto():
+    """Phase E-auto (default linsolve "direct" -> "auto") landed
+    2026-09-13 with explicit user sign-off -- this test used to be
+    named test_a2_no_default_moved and guarded against taking E-auto
+    BY ACCIDENT before that sign-off existed; it now records that the
+    sign-off happened, rather than that it never will."""
     opts = NewtonOptions()
-    assert opts.linsolve == "direct", (
-        "NewtonOptions.linsolve's default moved. That is E-auto, which "
-        "needs its own sign-off -- see the plan's Phase E.")
-    # The two Phase B fields must also still reproduce the pre-P5-1
-    # hardcoding exactly.
+    assert opts.linsolve == "auto"
+    # The two Phase B fields must still reproduce the pre-P5-1
+    # hardcoding exactly -- E-auto only touches `linsolve` itself.
     assert opts.block_size == 3
     assert opts.precond == "auto"
 

@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pytcad import Device2D, Device3D, Models
+from pytcad import Device2D, Device3D, Models, NewtonOptions
 from pytcad.mesh import graded_mesh, uniform_mesh
 from pytcad.mesh2d import Mesh2D, check_mesh2d
 from pytcad.mesh3d import Mesh3D, check_mesh3d
@@ -69,7 +69,13 @@ def _build_3d(models=None, na=1e16, nd=1e17, xj=3.0e-4):
 
 
 def _solve_eq(dev):
-    dev.solve_equilibrium()
+    # This module's convergence/node-growth numbers (e.g.
+    # test_qoi_3d_converges_monotonically's "65,648 nodes on pass 6")
+    # were measured against the "direct" solver -- pinned explicitly
+    # (2026-09-13) rather than riding on NewtonOptions()'s default,
+    # which now resolves to "auto" and would otherwise let solver
+    # choice quietly perturb every refinement-driver test in this file.
+    dev.solve_equilibrium(opts=NewtonOptions(linsolve="direct"))
 
 
 def _qoi_2d(dev):
@@ -146,7 +152,7 @@ def test_adequate_2d_mesh_is_returned_unchanged():
         return Device2D(mesh, dop, T=300.0, models=Models())
 
     direct = _build_2d_flat(mesh0)
-    direct.solve_equilibrium()
+    direct.solve_equilibrium(opts=NewtonOptions(linsolve="direct"))
 
     dev, mesh, hist = adapt.adapt_solve_2d(
         _build_2d_flat, mesh0, solve=_solve_eq, qoi=_qoi_2d,
@@ -186,7 +192,7 @@ def test_adequate_3d_mesh_is_returned_unchanged():
 
     build = _build_3d()
     direct = build(mesh0)
-    direct.solve_equilibrium()
+    direct.solve_equilibrium(opts=NewtonOptions(linsolve="direct"))
 
     dev, mesh, hist = adapt.adapt_solve_3d(
         build, mesh0, solve=_solve_eq, qoi=_qoi_3d,
@@ -220,7 +226,7 @@ def test_adapted_2d_matches_resolved_reference():
 
     build = _build_2d()
     ref = build(mesh_ref)
-    ref.solve_equilibrium()
+    ref.solve_equilibrium(opts=NewtonOptions(linsolve="direct"))
 
     x0 = uniform_mesh(L, 15)
     y0 = uniform_mesh(W, 10)
@@ -260,7 +266,7 @@ def test_adapted_3d_matches_resolved_reference():
 
     build = _build_3d()
     ref = build(mesh_ref)
-    ref.solve_equilibrium()
+    ref.solve_equilibrium(opts=NewtonOptions(linsolve="direct"))
 
     x0 = uniform_mesh(L, 12)
     y0 = uniform_mesh(W, 8)

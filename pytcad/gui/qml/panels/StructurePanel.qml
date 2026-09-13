@@ -27,7 +27,8 @@ Rectangle {
         doping: Qt.UserRole + 4, material: Qt.UserRole + 6,
         dopingProfile: Qt.UserRole + 7, profilePeak: Qt.UserRole + 8,
         profileSigmaY: Qt.UserRole + 9, profileSigmaLat: Qt.UserRole + 10,
-        profileEdgeX: Qt.UserRole + 11, profileHighSide: Qt.UserRole + 12
+        profileEdgeX: Qt.UserRole + 11, profileHighSide: Qt.UserRole + 12,
+        boundsZ: Qt.UserRole + 13
     })
     readonly property var _contactRoles: ({
         id: Qt.UserRole + 1, name: Qt.UserRole + 2,
@@ -86,6 +87,47 @@ Rectangle {
                       + " (read-only)"
                 color: Theme.textDim
                 font.pixelSize: 11
+            }
+
+            // 3D device authoring, GUI wiring phase: the domain model
+            // (StructureModel.depth_cm/RegionSpec.z_min-z_max/
+            // MeshModel.nz) already builds a real 3D DeviceSpec --
+            // see workbench/adapters/spec.py and test_workbench_m1.py.
+            // This is the "make it 3D" control; depth 0 clears back to
+            // 2D. Phase-1 scope: ohmic contacts only, no gates, no
+            // range-restricted contact faces (StructureModel.
+            // to_device_spec's own runtime refusals cover both).
+            Label { text: "3D DOMAIN"; color: Theme.textDim; font.pixelSize: 11; font.letterSpacing: 1 }
+            RowLayout {
+                Label { text: "Depth [um]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+                ThemedSpinBox {
+                    id: depthBox
+                    fieldWidth: 90
+                    from: 0; to: 100000
+                    value: root.controller ? Math.round(root.controller.domainDepthCm * 1e7) : 0
+                }
+                Label { text: "Nz"; color: Theme.textDim }
+                ThemedSpinBox {
+                    id: nzBox
+                    fieldWidth: 60
+                    from: 0; to: 200
+                    value: root.controller ? root.controller.meshNz : 0
+                }
+                Button {
+                    id: applyDepthButton
+                    text: root.controller && root.controller.is3D ? "Update" : "Make 3D"
+                    onClicked: if (root.controller)
+                        root.controller.setDomainDepth(depthBox.value / 1e7, nzBox.value)
+                    background: Rectangle {
+                        radius: Theme.radiusSm
+                        color: applyDepthButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
+                               : applyDepthButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
+                               : Theme.panelRaised
+                        border.width: 1
+                        border.color: Theme.border
+                        Behavior on color { ColorAnimation { duration: Theme.animFast } }
+                    }
+                }
             }
 
             RegionList {

@@ -179,7 +179,14 @@ def test_default_linsolve_is_bit_identical_to_pre_m22():
     assert np.array_equal(dev.Jn, goldf["Jn"])
     assert np.array_equal(dev.Jp, goldf["Jp"])
 
-    assert NewtonOptions().linsolve == "direct"
+    # 2026-09-13: the default moved "direct" -> "auto" at the user's
+    # explicit request (make the PETSc-backed C++ path the default
+    # wherever linsolve.select_auto's evidence table says it wins).
+    # The bit-identity proved above still holds: 1D coupled (dim=1) is
+    # not in that evidence table, so select_auto falls back to
+    # "direct" via Gate D-3's explicit refusal -- this test's Device1D
+    # solves are unaffected. Only the literal default value changed.
+    assert NewtonOptions().linsolve == "auto"
 
 
 def test_device1d_bias_solve_with_iterative_linsolve():

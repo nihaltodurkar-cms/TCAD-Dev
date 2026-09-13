@@ -436,6 +436,26 @@ class AppController(QObject):
     def structureMaterial(self):
         return self.structure.material if self.structure else "Silicon"
 
+    # 3D device authoring, GUI wiring phase: the domain model
+    # (StructureModel.depth_cm, RegionSpec.z_min/z_max, MeshModel.nz)
+    # already builds a real 3D DeviceSpec (workbench/adapters/spec.py,
+    # proven bit-identical against resistor_3d_example_spec() -- see
+    # tests/test_workbench_m1.py); what was missing was a QML-reachable
+    # way to set any of it. is3D/domainDepthCm expose the read side.
+    @Property(bool, notify=structureChanged)
+    def is3D(self):
+        return bool(self.structure and self.structure.depth_cm is not None)
+
+    @Property(float, notify=structureChanged)
+    def domainDepthCm(self):
+        d = self.structure.depth_cm if self.structure else None
+        return d if d is not None else 0.0
+
+    @Property(int, notify=structureChanged)
+    def meshNz(self):
+        nz = self.mesh_model.nz if self.mesh_model else None
+        return nz if nz is not None else 0
+
     # Plain self.structure/self.mesh_model attributes are, per the same
     # v0.1 treeModel/propertiesModel bug, invisible to QML property
     # lookup -- exposed here so ViewportPanel.setViewMode() can hand them
@@ -959,6 +979,51 @@ class AppController(QObject):
         self._push(lambda: self.structure.add_region(region),
                   lambda: self.structure.remove_region(region.id),
                   f"add region {name}")
+
+    # 3D device authoring, GUI wiring phase: setDomainDepth is the "make
+    # this structure 3D" action. depth_cm=0 clears it back to a 2D
+    # structure (StructureModel.depth_cm's own None-means-2D contract) --
+    # both nz and depth_cm always move together, the same both-or-
+    # neither convention MeshModel.to_mesh_spec already enforces, so a
+    # half-set 3D structure can never reach to_device_spec().
+    @Slot(float, int)
+    def setDomainDepth(self, depth_cm, nz):
+        if depth_cm <= 0.0:
+            old_depth, old_nz = self.structure.depth_cm, self.mesh_model.nz
+            def clear():
+                self.structure.depth_cm = None
+                self.mesh_model.nz = None
+            def restore():
+                self.structure.depth_cm, self.mesh_model.nz = old_depth, old_nz
+            self._push(clear, restore, "clear domain depth (2D)")
+            return
+        if not math.isfinite(depth_cm) or nz < 2:
+            self.errorRaised.emit(
+                "Invalid 3D domain",
+                "Depth must be a finite positive number and Nz must be "
+                "at least 2.")
+            return
+        old_depth, old_nz = self.structure.depth_cm, self.mesh_model.nz
+        def apply():
+            self.structure.depth_cm = depth_cm
+            self.mesh_model.nz = nz
+        def undo():
+            self.structure.depth_cm, self.mesh_model.nz = old_depth, old_nz
+        self._push(apply, undo, "set domain depth (3D)")
+
+    # RegionSpec's own both-or-neither contract (z_min/z_max) applies
+    # here exactly as setRegionBounds enforces x/y: this Slot only ever
+    # sets both together, never one alone.
+    @Slot(str, float, float)
+    def setRegionZBounds(self, region_id, z_min, z_max):
+        region = self.structure.find_region(region_id)
+        if region is None:
+            return
+        old = (region.z_min, region.z_max)
+        new = (z_min, z_max)
+        def apply(vals):
+            region.z_min, region.z_max = vals
+        self._push(lambda: apply(new), lambda: apply(old), "resize region (z)")
 
     @Slot(str)
     def removeRegion(self, region_id):

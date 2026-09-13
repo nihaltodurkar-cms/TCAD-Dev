@@ -312,15 +312,24 @@ def test_3d_poisson_with_a_gate_is_bit_identical_to_the_pre_p50_loop():
         pytest.skip("the gated slab fixture does not expose contact+gate tags")
     gates = {"gate": {"faces": gate_faces, "tox_cm": 3e-7, "Vfb": 0.0, "Vg": 1.0}}
 
+    # This test's purpose is proving the P5-0 refactor (solve_linear/
+    # stamp_dirichlet_rows abstraction) didn't change the numeric
+    # result vs. the original inline spsolve loop -- it is not about
+    # solver-CHOICE equivalence, so both calls pin linsolve="direct"
+    # explicitly rather than riding on NewtonOptions()'s default
+    # (which now resolves to "auto", 2026-09-13).
     args = (mesh.nodes, mesh.tets, edges, node_vols, trans, C, contacts)
-    psi, scale = ud3.solve_poisson_equilibrium3d(*args, gates=gates)
+    direct_opts = NewtonOptions(linsolve="direct")
+    psi, scale = ud3.solve_poisson_equilibrium3d(*args, gates=gates,
+                                                 opts=direct_opts)
 
     raw_stamp = ud3.stamp_dirichlet_rows
     raw_solve = ud3.solve_linear
     ud3.stamp_dirichlet_rows = lambda J, rows: _lil_reference(J, rows)
     ud3.solve_linear = lambda A, b, **kw: (spsolve(A, b), {"method": "direct"})
     try:
-        psi_o, scale_o = ud3.solve_poisson_equilibrium3d(*args, gates=gates)
+        psi_o, scale_o = ud3.solve_poisson_equilibrium3d(*args, gates=gates,
+                                                         opts=direct_opts)
     finally:
         ud3.stamp_dirichlet_rows = raw_stamp
         ud3.solve_linear = raw_solve

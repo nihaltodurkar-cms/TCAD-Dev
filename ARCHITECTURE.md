@@ -2501,11 +2501,29 @@ Independent candidates for the next milestone (any order):
   input -- proven to match `resistor_3d_example_spec()`'s hand-built
   equivalent bit-for-bit and to solve correctly on a real `Device3D`
   (see `pytcad/tests/test_workbench_m1.py`'s 3D-authoring tests). What
-  is STILL absent is the GUI wiring on top of that domain model: no
-  QML z-axis controls, no `AppController` Slot overloads for a 3D
-  region/contact, and no "Build 3D device" click-path in the running
-  app -- a device author still has to construct the domain objects in
-  Python, not through the Structure/Mesh workbench panels.
+  GUI WIRING LANDED 2026-09-13: `AppController.setDomainDepth(depth_cm,
+  nz)` (the "make it 3D" action, both-or-neither with `MeshModel.nz`,
+  0 clears back to 2D) and `setRegionZBounds(region_id, z_min, z_max)`,
+  plus `is3D`/`domainDepthCm`/`meshNz` read properties and a
+  `RegionListModel.BoundsZRole`; `StructurePanel.qml` gained a "3D
+  DOMAIN" depth/Nz control and `DopingEditor.qml` a per-region z-bounds
+  row (shown only once `is3D`). Found and fixed while wiring it:
+  `StructureModel.validate()` unconditionally called
+  `mesh_model.to_mesh_spec(width, height)` (2D-only) for a
+  `vfb_mode="computed"` gate check, which crashed as soon as `nz` was
+  set on a structure that still had gates (unreachable before, since
+  there was previously no GUI path to set `nz`) -- fixed by flagging
+  "gates not supported on a 3D structure" as a validation error instead
+  of falling into that 2D-only branch. Phase-1 scope carries over
+  unchanged: ohmic contacts only (no gates), no range-restricted 3D
+  contact faces, uniform doping only in 3D -- all three already refused
+  loudly by `StructureModel`/`resolve_boundary_indices`. Gated in
+  `gui/tests/test_structure_3d_authoring.py` (7 tests, including an
+  end-to-end depth+z-bounds+`to_device_spec()` build). A device author
+  can now go 2D-region-authored -> 3D through the Structure panel alone
+  for a simple ohmic-contact device; template-driven 3D examples
+  (`resistor_3d`) and a freeform "Build 3D device" wizard beyond this
+  panel remain future work.
 - Experiments/calibration/interop (M30) -- Part I (library-level
   parameter splits/run-matrix, Nelder-Mead calibration, batch
   parallelism, DeckBuild-dialect import) LANDED 2026-09-07; the GUI/

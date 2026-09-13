@@ -9,7 +9,7 @@ import ".."
 ColumnLayout {
     property var controller
     property string regionId: ""
-    property var regionData: null   // {name, bounds:[xmin,xmax,ymin,ymax], doping, material}
+    property var regionData: null   // {name, bounds:[xmin,xmax,ymin,ymax], boundsZ:[zmin,zmax], doping, material}
 
     Label { text: "Doping region"; color: Theme.textDim; font.pixelSize: 11 }
 
@@ -72,6 +72,42 @@ ColumnLayout {
             radius: Theme.radiusSm
             color: applyBoundsButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
                    : applyBoundsButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
+                   : Theme.panelRaised
+            border.width: 1
+            border.color: Theme.border
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
+        }
+    }
+
+    // 3D device authoring, GUI wiring phase: z-bounds only make sense
+    // (and only apply) once the domain itself has a depth -- hidden for
+    // a 2D structure exactly as the DomainDepth control's own z fields
+    // in StructurePanel.qml are.
+    RowLayout {
+        visible: controller ? controller.is3D : false
+        Label { text: "z [um]"; color: Theme.textDim; Layout.preferredWidth: 90 }
+        BoundsSpinBox {
+            id: zMinBox
+            value: regionData && regionData.boundsZ && regionData.boundsZ[0] !== null
+                   ? Math.round(regionData.boundsZ[0] * 1e7) : 0
+        }
+        Label { text: "to"; color: Theme.textDim }
+        BoundsSpinBox {
+            id: zMaxBox
+            value: regionData && regionData.boundsZ && regionData.boundsZ[1] !== null
+                   ? Math.round(regionData.boundsZ[1] * 1e7) : 0
+        }
+    }
+    Button {
+        id: applyZBoundsButton
+        visible: controller ? controller.is3D : false
+        text: "Apply z bounds"
+        onClicked: if (regionId) controller.setRegionZBounds(
+            regionId, zMinBox.value / 1e7, zMaxBox.value / 1e7)
+        background: Rectangle {
+            radius: Theme.radiusSm
+            color: applyZBoundsButton.pressed ? Qt.darker(Theme.panelRaised, 1.15)
+                   : applyZBoundsButton.hovered ? Qt.tint(Theme.panelRaised, Theme.hoverOverlay)
                    : Theme.panelRaised
             border.width: 1
             border.color: Theme.border

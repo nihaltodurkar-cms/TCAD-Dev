@@ -321,6 +321,21 @@ class StructureModel:
                 errors.append(ValidationError(
                     f"Contact '{c.name}' has an empty boundary range", c.id))
 
+        # 3D device authoring, phase 1: gates aren't supported on a 3D
+        # structure at all (to_device_spec's own runtime refusal, plus
+        # resolve_gate_vfb/get_gate_substrate_doping below are written
+        # against 2D mesh_spec only) -- flag it here as a validation
+        # error, rather than falling through to the 2D-only Vfb branch
+        # below, which would otherwise crash on mesh_model.to_mesh_spec's
+        # both-or-neither depth_cm/nz check whenever nz happens to be
+        # set (nz and self.depth_cm move together, but this call never
+        # passes depth_cm).
+        is_3d = self.depth_cm is not None
+        if is_3d and self.gates:
+            errors.append(ValidationError(
+                "Gates are not supported on a 3D structure in this "
+                "phase -- remove all gates or clear the domain depth"))
+
         seen = set()
         mesh_spec = None
         for g in self.gates:
@@ -337,8 +352,9 @@ class StructureModel:
             if g.vfb_mode == "manual" and g.vfb_manual is None:
                 errors.append(ValidationError(
                     f"Gate '{g.name}' is in manual Vfb mode but has no Vfb value", g.id))
-            elif g.vfb_mode == "computed" and self.width_cm > 0 and self.height_cm > 0 \
-                    and mesh_model.nx >= 2 and mesh_model.ny >= 2:
+            elif (not is_3d and g.vfb_mode == "computed"
+                    and self.width_cm > 0 and self.height_cm > 0
+                    and mesh_model.nx >= 2 and mesh_model.ny >= 2):
                 if mesh_spec is None:
                     mesh_spec = mesh_model.to_mesh_spec(self.width_cm, self.height_cm)
                 try:

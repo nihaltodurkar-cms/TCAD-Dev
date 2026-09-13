@@ -93,6 +93,60 @@ def _build_pn_diode(v):
     )
 
 
+def _build_resistor(v):
+    """A single uniformly-doped bar between two ohmic contacts -- no
+    junction, no gate. The simplest possible drift-diffusion device:
+    real physics (majority-carrier conduction under an applied field),
+    used to recover Ohm's law from first principles rather than assume
+    it, and as a baseline before adding a junction or gate."""
+    w, h = v["length_cm"], v["height_cm"]
+    return DomainDevice(
+        id="resistor", name="Resistor",
+        dimensionality=2, width_cm=w, height_cm=h,
+        mesh_nx=int(v["nx"]), mesh_ny=int(v["ny"]),
+        regions=[
+            Region("body", "Body", 0.0, w, 0.0, h, v["doping_cm3"]),
+        ],
+        contacts=[
+            ContactDef(id="left_c", name="left", kind="ohmic",
+                       V=v["v_left"], boundary=Boundary(edge="left")),
+            ContactDef(id="right_c", name="right", kind="ohmic",
+                       V=v["v_right"], boundary=Boundary(edge="right")),
+        ],
+    )
+
+
+def _build_pin_diode(v):
+    """P-i-N diode: a wide, lightly-doped (nominally intrinsic) region
+    between p+ and n+ ohmics. The depletion region spans the intrinsic
+    layer directly rather than the doping-dependent width an abrupt
+    p-n junction would give -- more linear C-V, much higher reverse
+    breakdown for the same p+/n+ doping, and (with a lit boundary) the
+    basis for a photodiode. `ni_cm3` is the intrinsic layer's own net
+    doping: nominally near zero, not exactly zero, matching how real
+    PIN wafers carry a small residual dopant concentration."""
+    wp, wi, wn, h = (v["p_width_cm"], v["i_width_cm"], v["n_width_cm"],
+                     v["height_cm"])
+    w = wp + wi + wn
+    x1, x2 = wp, wp + wi
+    return DomainDevice(
+        id="pin_diode", name="P-i-N diode",
+        dimensionality=2, width_cm=w, height_cm=h,
+        mesh_nx=int(v["nx"]), mesh_ny=int(v["ny"]),
+        regions=[
+            Region("p_side", "P+ side", 0.0, x1, 0.0, h, v["na_cm3"]),
+            Region("intrinsic", "Intrinsic", x1, x2, 0.0, h, v["ni_cm3"]),
+            Region("n_side", "N+ side", x2, w, 0.0, h, v["nd_cm3"]),
+        ],
+        contacts=[
+            ContactDef(id="p_c", name="p", kind="ohmic", V=v["v_p"],
+                       boundary=Boundary(edge="left")),
+            ContactDef(id="n_c", name="n", kind="ohmic", V=v["v_n"],
+                       boundary=Boundary(edge="right")),
+        ],
+    )
+
+
 def _build_mos_capacitor(v):
     w, h = v["length_cm"], v["height_cm"]
     return DomainDevice(
@@ -235,6 +289,26 @@ def _build_hbt(v):
 _T = lambda *a, **k: DeviceTemplate(*a, **k)
 
 TEMPLATES = {
+    "resistor": _T(
+        "resistor", "Resistor",
+        "A single uniformly-doped bar between two ohmic contacts -- "
+        "no junction, no gate. The simplest drift-diffusion device, "
+        "for recovering Ohm's law from first principles.",
+        (
+            TemplateParam("length_cm", "Length", "cm", 1e-4, lo=1e-7),
+            TemplateParam("height_cm", "Height", "cm", 2e-5, lo=1e-7),
+            TemplateParam("doping_cm3", "Doping (signed: + Nd / - Na)",
+                          "cm^-3", 1e17, lo=-1e21, hi=1e21),
+            TemplateParam("v_left", "Left contact bias", "V", 0.0,
+                          lo=-50, hi=50),
+            TemplateParam("v_right", "Right contact bias", "V", 0.1,
+                          lo=-50, hi=50),
+            TemplateParam("nx", "Mesh nx", "nodes", 40, lo=8, hi=400,
+                          integer=True),
+            TemplateParam("ny", "Mesh ny", "nodes", 10, lo=6, hi=400,
+                          integer=True),
+        ),
+        _build_resistor),
     "pn_diode": _T(
         "pn_diode", "P-N diode",
         "Abrupt junction formed by two uniformly doped rectangles.",
@@ -253,6 +327,33 @@ TEMPLATES = {
                           integer=True),
         ),
         _build_pn_diode),
+    "pin_diode": _T(
+        "pin_diode", "P-i-N diode",
+        "P+ and n+ ohmics separated by a wide, nominally intrinsic "
+        "layer -- the depletion region spans the intrinsic layer "
+        "directly, giving a more linear C-V response and much higher "
+        "reverse breakdown than an abrupt p-n junction of the same "
+        "doping.",
+        (
+            TemplateParam("p_width_cm", "P+ width", "cm", 2e-5, lo=1e-7),
+            TemplateParam("i_width_cm", "Intrinsic width", "cm",
+                          4e-5, lo=1e-7),
+            TemplateParam("n_width_cm", "N+ width", "cm", 2e-5, lo=1e-7),
+            TemplateParam("height_cm", "Height", "cm", 2e-5, lo=1e-7),
+            TemplateParam("na_cm3", "P+ doping (Na)", "cm^-3",
+                          -1e19, lo=-1e21, hi=1e21),
+            TemplateParam("nd_cm3", "N+ doping (Nd)", "cm^-3",
+                          1e19, lo=-1e21, hi=1e21),
+            TemplateParam("ni_cm3", "Intrinsic layer net doping", "cm^-3",
+                          1e13, lo=-1e17, hi=1e17),
+            TemplateParam("v_p", "P contact bias", "V", 0.0, lo=-50, hi=50),
+            TemplateParam("v_n", "N contact bias", "V", 0.0, lo=-50, hi=50),
+            TemplateParam("nx", "Mesh nx", "nodes", 60, lo=8, hi=400,
+                          integer=True),
+            TemplateParam("ny", "Mesh ny", "nodes", 10, lo=6, hi=400,
+                          integer=True),
+        ),
+        _build_pin_diode),
     "mos_capacitor": _T(
         "mos_capacitor", "MOS capacitor",
         "Uniform substrate with a poly gate over oxide; the classic C-V "

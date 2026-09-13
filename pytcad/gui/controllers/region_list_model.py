@@ -18,6 +18,10 @@ class RegionListModel(QAbstractListModel):
     ProfileSigmaLatRole = Qt.UserRole + 10
     ProfileEdgeXRole = Qt.UserRole + 11
     ProfileHighSideRole = Qt.UserRole + 12
+    # 3D device authoring, GUI wiring phase: z_min/z_max, None for a 2D
+    # region (RegionSpec's own default) -- QML reads [null, null] and
+    # hides the z fields, exactly as bounds already does for 2D vs. 3D.
+    BoundsZRole = Qt.UserRole + 13
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +40,8 @@ class RegionListModel(QAbstractListModel):
             return r.id
         if role == self.BoundsRole:
             return [r.x_min, r.x_max, r.y_min, r.y_max]
+        if role == self.BoundsZRole:
+            return [r.z_min, r.z_max]
         if role == self.DopingRole:
             return r.net_doping_cm3
         if role == self.MaterialRole:
@@ -70,7 +76,8 @@ class RegionListModel(QAbstractListModel):
                 self.ProfileSigmaYRole: b"profileSigmaY",
                 self.ProfileSigmaLatRole: b"profileSigmaLat",
                 self.ProfileEdgeXRole: b"profileEdgeX",
-                self.ProfileHighSideRole: b"profileHighSide"}
+                self.ProfileHighSideRole: b"profileHighSide",
+                self.BoundsZRole: b"boundsZ"}
 
     def refresh(self, regions):
         self.beginResetModel()

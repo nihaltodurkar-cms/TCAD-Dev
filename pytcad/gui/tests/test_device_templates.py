@@ -29,7 +29,7 @@ from workbench.core.templates import TEMPLATES, get_template, list_templates
 # ----------------------------------------------------------------------
 def test_registry_lists_the_three_founder_templates():
     assert list_templates() == ["hbt", "hemt", "mos_capacitor", "nmos",
-                                "pn_diode"]
+                                "pin_diode", "pn_diode", "resistor"]
     for tid in ("pn_diode", "nmos", "mos_capacitor"):
         t = get_template(tid)
         assert t.title and t.description and t.params
@@ -88,7 +88,7 @@ def _solve(tmp_path, tag, template_id):
     return proc, out
 
 
-@pytest.mark.parametrize("tid", ["pn_diode", "mos_capacitor", "nmos"])
+@pytest.mark.parametrize("tid", ["pn_diode", "pin_diode", "resistor", "mos_capacitor", "nmos"])
 def test_each_template_builds_and_solves(tmp_path, tid):
     from gui.services.solver_backend import validate_result
     proc, out = _solve(tmp_path, tid, tid)
@@ -103,6 +103,45 @@ def test_built_domain_devices_pass_validation():
         get_template(tid).build({}).validate()
 
 
+def test_resistor_solves_to_a_current_of_the_right_sign_and_order(tmp_path):
+    """Real physics, not just 'it builds': a positively-biased n-type
+    bar drives conventional current out of the higher-potential (right)
+    contact, and the magnitude is within an order of magnitude of the
+    textbook Ohm's-law estimate (I = V/R, R = L/(q n mu_n H)) -- loose
+    because this is drift-diffusion, not a fitted resistor model, but
+    tight enough to catch a sign error or a units bug."""
+    proc, out = _solve(tmp_path, "resistor_iv", "resistor")
+    assert proc.returncode == 0, proc.stderr
+    d = np.load(out)
+    I = float(d["terminal__right__value"])
+    assert I > 0.0, "current should flow out of the higher-potential contact"
+
+    dev_domain = get_template("resistor").build({})
+    q, mu_n = 1.602176634e-19, 1350.0  # cm^2/(V s), silicon low-field
+    L, H = dev_domain.width_cm, dev_domain.height_cm
+    n = 1e17  # the template's default doping_cm3
+    R_ohmic = L / (q * n * mu_n * H)   # Ohm*cm (per unit depth)
+    I_ohmic = 0.1 / R_ohmic            # A/cm, matching the 2D current unit
+    assert 0.1 * I_ohmic < I < 10.0 * I_ohmic, (I, I_ohmic)
+
+
+def test_pin_diode_has_three_regions_with_a_wide_intrinsic_layer():
+    """The template's defining feature: an intrinsic region wider than
+    either doped region, sitting strictly between them -- not just
+    'three regions exist', but that the geometry actually matches what
+    a PIN diode is."""
+    dev = get_template("pin_diode").build({})
+    assert [r.name for r in dev.regions] == \
+        ["P+ side", "Intrinsic", "N+ side"]
+    p, i, n = dev.regions
+    assert p.x_max == i.x_min and i.x_max == n.x_min
+    assert (i.x_max - i.x_min) > (p.x_max - p.x_min)
+    assert (i.x_max - i.x_min) > (n.x_max - n.x_min)
+    assert p.doping_cm3 < 0.0 and n.doping_cm3 > 0.0
+    assert abs(i.doping_cm3) < abs(p.doping_cm3)
+    assert abs(i.doping_cm3) < abs(n.doping_cm3)
+
+
 # ----------------------------------------------------------------------
 #  BuilderController: adoption into the existing Structure workbench
 # ----------------------------------------------------------------------
@@ -114,7 +153,7 @@ def test_builder_adopts_into_structure_workbench(qapp=None):
     b = BuilderController(app)
 
     assert b.templateIds == ["hbt", "hemt", "mos_capacitor", "nmos",
-                             "pn_diode"]
+                             "pin_diode", "pn_diode", "resistor"]
     b.selectTemplate("pn_diode")
     b.setParameterValue("na_cm3", "-1e18")
     b.build()
@@ -155,7 +194,7 @@ def test_qml_panel_drives_a_real_build(gapp=None):
     panel = root.findChild(object, "deviceTemplatesPanel")
     assert panel is not None
     box = root.findChild(object, "templateBox")
-    assert box.property("count") == 5      # pn_diode, mos_cap, nmos, hemt, hbt
+    assert box.property("count") == 7      # pn_diode, pin_diode, resistor, mos_cap, nmos, hemt, hbt
 
     titles = [str(t) for t in
               root.findChild(object, "templateParamColumn").children()] if False else None
