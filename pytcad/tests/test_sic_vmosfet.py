@@ -106,7 +106,8 @@ def test_build_succeeds_with_the_supported_model_combination():
     ("field_mobility", dict(field_mobility=True)),
     # "impact" left this list with M34-S6: Device3D implements M15's
     # coupled model now (tests/test_m34_s6_impact_2d3d.py).
-    ("btbt", dict(btbt=True)),
+    # "btbt" left this list with M16-S2: Device3D implements local Kane
+    # BTBT now (tests/test_m16_s2_btbt_grid.py).
     ("dg", dict(dg=True)),
     # "incomplete_ion" left this list with M41: Device3D implements
     # M13's shallow-dopant freeze-out model now

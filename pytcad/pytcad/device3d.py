@@ -42,6 +42,7 @@ from .nonlocal_path import build_structured as _nl_build_structured
 from .nonlocal_path import evaluate as _nl_evaluate
 from .dirichlet import eliminate_csr
 from .ii_grid import grid_impact as _ii_grid
+from .btbt_grid import grid_btbt as _btbt_grid
 from .ii_nonlocal_grid import effective_field_grid as _ii_eff_grid
 from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
                      _STIFF_DENSITY_FLOOR)
@@ -261,14 +262,14 @@ class Device3D:
         self._ii_gs_cache = None
         self._ii_jac_cache = None
         self._ii_fields = None
-        if getattr(self.models, "btbt", False):
-            raise NotImplementedError(
-                "Band-to-band tunneling (Models(btbt=True)) is implemented "
-                "in Device1D only (M16 scope; 2D/3D ports are a follow-"
-                "up slice).  Refusing rather than silently ignoring the "
-                "flag -- a silently dropped physics model is a hidden "
-                "failure."
-            )
+        # M16-S2: local BTBT's last stamped generation (scaled, zero at
+        # contacts) and the node field it was evaluated at.
+        self._btbt_gs_cache = None
+        self._btbt_fields = None
+        # Models(btbt=True): M16-S2, local Kane BTBT on the structured
+        # grid (pytcad/btbt_grid.py) -- a dimensional lift of the
+        # already-gated Device1D model, no new constant.  No lambda-style
+        # precondition and no heterojunction restriction.
         if getattr(self.models, "dg", False):
             raise NotImplementedError(
                 "Density-gradient quantum correction (Models(dg=True)) is "
@@ -1141,7 +1142,9 @@ class Device3D:
         # the continuity rows, before the Dirichlet stamping, not at
         # contact or pinned nodes; the ladder's strength scales the live
         # term and its Jacobian together. ---
-        if getattr(self.models, "impact", False):
+        impact_on = getattr(self.models, "impact", False)
+        btbt_on = getattr(self.models, "btbt", False)
+        if impact_on or btbt_on:
             axes = [
                 dict(kL=kLx, kR=kRx,
                      h=np.broadcast_to(hx[None, None, :],
@@ -1168,6 +1171,12 @@ class Device3D:
                      dJp_dpsiR=dJp_dpsiR_z.ravel(),
                      dJp_dpL=dJp_dp_L_z.ravel(), dJp_dpR=dJp_dp_R_z.ravel()),
             ]
+            live = np.ones(N, dtype=bool)
+            for bc in self.bcs.values():
+                if isinstance(bc, (DirichletBC, PinnedBC)):
+                    live[bc.k * Nx * Ny + bc.j * Nx + bc.i] = False
+            dVf = dV.ravel()
+        if impact_on:
             if getattr(self.models, "impact_nonlocal", False):
                 En_ii, Dn_ii = _ii_eff_grid(
                     (Nz, Ny, Nx), axes, psi.ravel(), self.VT, self.LD, "n",
@@ -1181,14 +1190,9 @@ class Device3D:
             G, g_r, g_c, g_v, self._ii_fields = _ii_grid(
                 N, axes, psi.ravel(), self.VT, self.LD, self.J0, self.R0,
                 eff=eff)
-            live = np.ones(N, dtype=bool)
-            for bc in self.bcs.values():
-                if isinstance(bc, (DirichletBC, PinnedBC)):
-                    live[bc.k * Nx * Ny + bc.j * Nx + bc.i] = False
             strength = self._ii_strength
             Gs = np.where(live, strength * G, 0.0)
             self._ii_gs_cache = Gs.copy()
-            dVf = dV.ravel()
             F[1::3] += Gs * dVf
             F[2::3] -= Gs * dVf
             keep = live[g_r]
@@ -1197,6 +1201,21 @@ class Device3D:
             w = strength * dVf[g_r[keep]] * g_v[keep]
             rows.append(3 * g_r[keep] + 1); cols.append(g_c[keep]); vals.append(w)
             rows.append(3 * g_r[keep] + 2); cols.append(g_c[keep]); vals.append(-w)
+
+        # --- M16-S2: local Kane BTBT on the structured grid (Device2D's
+        # block; same ordering invariant, interior/live nodes only). ---
+        if btbt_on:
+            Gb, b_r, b_c, b_v, self._btbt_fields = _btbt_grid(
+                N, axes, psi.ravel(), self.VT, self.LD, self.R0)
+            strength = self._ii_strength
+            Gbs = np.where(live, strength * Gb, 0.0)
+            self._btbt_gs_cache = Gbs.copy()
+            F[1::3] += Gbs * dVf
+            F[2::3] -= Gbs * dVf
+            keep_b = live[b_r]
+            w_b = strength * dVf[b_r[keep_b]] * b_v[keep_b]
+            rows.append(3 * b_r[keep_b] + 1); cols.append(b_c[keep_b]); vals.append(w_b)
+            rows.append(3 * b_r[keep_b] + 2); cols.append(b_c[keep_b]); vals.append(-w_b)
 
         # --- M34-S3: nonlocal path BTBT along field lines (Device2D's
         # block; same invariant: after the continuity rows, before the
@@ -1335,11 +1354,16 @@ class Device3D:
         # measured reasons).  impact=False keeps the single full-step
         # pass, arithmetic unchanged.
         ii_on = getattr(self.models, "impact", False)
-        stages = _II_STAGES if ii_on else (1.0,)
-        backtrack = ii_on
+        # M16-S2: local BTBT is a Zener-stiff generation source exactly
+        # like impact ionization; drives the same ladder/backtrack/floor
+        # gating (Device1D's own stiff_gen includes btbt_enabled).
+        btbt_on = getattr(self.models, "btbt", False)
+        stiff_on = ii_on or btbt_on
+        stages = _II_STAGES if stiff_on else (1.0,)
+        backtrack = stiff_on
         # the stiff path's update-test floor (device._STIFF_DENSITY_FLOOR);
         # the plain path keeps M11-S5's 1e-10, bit-identical
-        dens_floor = _STIFF_DENSITY_FLOOR if ii_on else 1e-10
+        dens_floor = _STIFF_DENSITY_FLOOR if stiff_on else 1e-10
         self._ii_strength = 1.0
         while True:
             for stage in stages:

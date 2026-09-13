@@ -449,22 +449,47 @@ def test_g_d_coefficients_match_analysis_layer():
         assert fd == pytest.approx(dbtbt_dF(f), rel=1e-5), f"F={f:g}"
 
 
-def test_g_f_2d_and_3d_refuse():
-    """G-F: Device2D/Device3D must raise, not silently drop the flag."""
-    from pytcad.mesh import uniform_mesh
+def test_g_f_2d_and_3d_accept():
+    """G-F (M16-S2): Device2D/Device3D now implement local Kane BTBT
+    (structured grids) instead of refusing the flag -- a reverse-biased
+    one-sided junction must converge with btbt=True and produce a
+    finite, non-negative generation field."""
+    from pytcad.mesh import graded_mesh
     from pytcad.mesh2d import Mesh2D
     from pytcad.device2d import Device2D
     from pytcad.device3d import Device3D
     from pytcad.mesh3d import Mesh3D
-    mesh2d = Mesh2D(x=uniform_mesh(1e-4, 4), y=uniform_mesh(1e-4, 4))
-    dop2d = np.full((5, 5), 1e15)
-    with pytest.raises(NotImplementedError, match="btbt"):
-        Device2D(mesh2d, dop2d, models=Models(btbt=True))
-    mesh3d = Mesh3D(x=uniform_mesh(1e-4, 2), y=uniform_mesh(1e-4, 2),
-                    z=uniform_mesh(1e-4, 2))
-    with pytest.raises(NotImplementedError, match="btbt"):
-        Device3D(mesh3d, np.full((3, 3, 3), 1e15),
-                 models=Models(btbt=True))
+
+    x = graded_mesh(1.0e-5, [5.0e-6], h_min=1e-8, h_max=2e-7)
+    dop1d = np.where(x < 5.0e-6, -5e19, 5e19)
+    y = np.linspace(0.0, 1e-5, 3)
+    dop2d = np.tile(dop1d, (y.size, 1))
+    dev2d = Device2D(Mesh2D(x, y), dop2d, T=300.0,
+                      models=Models(bgn=False, srh=True, btbt=True))
+    dev2d.add_contact("left", i=[0], j=list(range(y.size)), V=0.0)
+    dev2d.add_contact("right", i=[x.size - 1], j=list(range(y.size)), V=0.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        dev2d.solve_bias({"left": -2.0, "right": 0.0})
+    assert np.all(np.isfinite(dev2d._btbt_gs_cache))
+    assert np.all(dev2d._btbt_gs_cache >= 0.0)
+    assert dev2d._btbt_gs_cache.max() > 0.0
+
+    z = np.linspace(0.0, 1e-5, 3)
+    dop3d = np.broadcast_to(dop1d, (z.size, y.size, x.size)).copy()
+    dev3d = Device3D(Mesh3D(x=x, y=y, z=z), dop3d, T=300.0,
+                      models=Models(bgn=False, srh=True, btbt=True))
+    kk, jj = np.meshgrid(range(z.size), range(y.size), indexing="ij")
+    dev3d.add_contact("left", i=[0] * jj.size, j=jj.ravel().tolist(),
+                       k=kk.ravel().tolist(), V=0.0)
+    dev3d.add_contact("right", i=[x.size - 1] * jj.size,
+                       j=jj.ravel().tolist(), k=kk.ravel().tolist(), V=0.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        dev3d.solve_bias({"left": -2.0, "right": 0.0})
+    assert np.all(np.isfinite(dev3d._btbt_gs_cache))
+    assert np.all(dev3d._btbt_gs_cache >= 0.0)
+    assert dev3d._btbt_gs_cache.max() > 0.0
 
 
 def test_g_f_catalog_and_wire_format():

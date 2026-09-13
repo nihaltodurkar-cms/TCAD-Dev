@@ -199,8 +199,9 @@ _MODELS = {
             "Kane, J. Phys. Chem. Solids 12, 181 (1960) -- the "
             "F^2 exp(-B/F) local form's origin",
         ),
-        applicability="1D (device.py); local-field model; silicon "
-                      "coefficients; Zener/GIDL regime",
+        applicability="1D (device.py) and structured 2D/3D "
+                      "(pytcad/btbt_grid.py, M16-S2); local-field model; "
+                      "silicon coefficients; Zener/GIDL regime",
         enabled_by_default=False,
         limitations="The nonlocal path model is the separate, "
                     "first-principles `btbt_nonlocal` (M34), not a "
@@ -209,8 +210,9 @@ _MODELS = {
                     "leakage at large reverse bias relative to nonlocal "
                     "BTBT (single average field stands in for the whole "
                     "tunneling path); gated on its known failure mode "
-                    "(the M16 high-bias non-plateau gate). Not ported "
-                    "to 2D/3D; no Modified-Hurkx dynamic correction.",
+                    "(the M16 high-bias non-plateau gate). Unstructured "
+                    "Device2D refuses it; no Modified-Hurkx dynamic "
+                    "correction.",
     ),
     "btbt_nonlocal": ModelInfo(
         key="btbt_nonlocal",

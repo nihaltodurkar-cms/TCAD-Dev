@@ -1905,7 +1905,7 @@ NotImplementedError sites, not inferred from filenames.
   Incomplete ionization             Y     Y     Y    -- (structured)
   Impact ionization (coupled)       Y     Y     Y    -- (structured)
   Impact ionization, nonlocal       Y     Y     Y    -- (structured)
-  BTBT, local Kane                  Y     R     R    M16 follow-up
+  BTBT, local Kane                  Y     Y     Y    -- (structured)
   BTBT, nonlocal                    Y     Y     Y    -- (structured)
   Trap-assisted tunneling           Y     Y     Y    --
   Density gradient / quantum        Y     -     -    M42
@@ -2068,14 +2068,10 @@ published number, it is the lower-dimensional code that already passed.
 
 Cheapest first, and each is independently shippable:
      M41 [S] -> M43 [L] -> M42 [L] -> M46 [L] -> M45 [XL] -> M44 [XL]
-STATUS (2026-09-12): M41 LANDED; M43 is the next one on this line.
-Also open on the 4d.1 matrix, and NOT one of M41-M46: local Kane BTBT
-in structured 2D/3D (the "M16 follow-up" row).  It is planned but not
-implemented -- `pytcad/M16-S2-PLAN.md`, written 2026-09-12.  Worth
-doing early: it is the one remaining inversion in the matrix (the
-harder nonlocal BTBT already reaches 2D/3D via M34-S3 while the local
-model does not), and M34-S6's `ii_grid.py` already built the
-per-node-generation-on-a-grid machinery it needs.
+STATUS (2026-09-13): M41 LANDED; M16-S2 (local Kane BTBT in structured
+2D/3D) LANDED same day -- `pytcad/btbt_grid.py`, gated in
+`tests/test_m16_s2_btbt_grid.py`; the 4d.1 matrix's one remaining
+inversion is closed. M43 is the next item on this line.
 M35 (3D process) runs as its own track throughout; it is the widest gap
 and the least coupled to the others. M47 (3D engine completion) is the
 largest, least-scoped item on this list and sits LAST deliberately --

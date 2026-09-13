@@ -610,6 +610,20 @@ what that scope actually was and what's honestly still deferred):
     comparing two negative slopes, a correlation-sign check that could
     never pass for a genuine negative-slope fit) -- not the physics.
     All 13 pass now. See pytcad/M16-BTBT-PLAN.md.
+    M16-S2 (2026-09-13): local Kane BTBT ported to structured
+    Device2D/Device3D -- pytcad/btbt_grid.py, a dimensional lift of
+    the already-gated 1D model (no new constant), following
+    pytcad/M16-S2-PLAN.md. G depends on psi alone (no carrier-density
+    dependence, unlike M34-S6's impact ionization), so the Jacobian
+    has exactly two nonzero columns per (node, incident edge) pair.
+    Drives the same stiff-generation ladder/backtrack/floor as impact
+    ionization (Device1D already grouped btbt into stiff_gen; Device2D/
+    Device3D's solve_bias did not -- fixed here). Gated in
+    tests/test_m16_s2_btbt_grid.py (G1-G7: kernel's 1D reduction, FD-
+    Jacobian in 2D and 3D, transverse-uniform reduction to Device1D in
+    2D/3D, btbt=False bit-identity, reverse-ramp steepness). Closes the
+    ARCHITECTURE.md 4d.1 matrix's one remaining local/nonlocal BTBT
+    inversion.
   M20 density gradient -- Ancona-Stafford DG quantum correction
     (equilibrium-only, MOSCapacitor dg flag + Device1D Models.dg), plus
     the pytcad/dg.py analysis layer (quantum_potential, Airy reference,
@@ -683,11 +697,10 @@ what that scope actually was and what's honestly still deferred):
     gate still passes); and band_offset='affinity' + incomplete_ion is
     REFUSED in 2D/3D exactly as in 1D (the eta-space contact solver and
     the affinity shift each carry their own ln(Nc/nie) offset), rather
-    than silently composed. Also on the 4d.1 matrix and still open:
-    local Kane BTBT in structured 2D/3D, planned in
-    pytcad/M16-S2-PLAN.md (written 2026-09-12) but NOT implemented --
-    the last inversion in that matrix, since nonlocal BTBT already
-    reaches 2D/3D through M34-S3 while the simpler local model does not.
+    than silently composed. The 4d.1 matrix's other remaining
+    inversion -- local Kane BTBT in structured 2D/3D -- was planned in
+    pytcad/M16-S2-PLAN.md (2026-09-12) and LANDED 2026-09-13; see the
+    M16 entry above for what that closed.
 GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
 drives the real rendered QML tree (create_engine() + findChild +
 QMetaObject.invokeMethod -- never a controller call as a substitute for
