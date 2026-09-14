@@ -1,142 +1,22 @@
 # Semiconductor Workbench - Architecture Plan
 ==========================================================
-Date: 2026-08-31 (updated). Status: M1-M10 SHIPPED (v0.5.0 tagged).
-M11 heterostructures COMPLETE through S5 (S1 materials, S2
-region_materials wire format, S3 1D heterojunction core: eps(x)
-flux-form Poisson, Anderson band offsets via carrier-specific ln(nie)
-deltas, per-material recombination; S4 2D box-integration
-heterojunction core with the full gate battery incl. dimensional
-reduction to 1D; S5 structure-model materials lossless end-to-end,
-HBT/HEMT parametric templates solve through the pipeline -- COMPLETE
-except optional devsim hetero support).
-M12 tunneling SHIPPED (S1 FN+WKB analysis module with published-
-constant gates; S2 Hurkx trap-assisted tunneling in Device1D, all
-acceptance gates green; S3 density-gradient folded into M20 of the
-parity plan -- M20 COMPLETE, ALL GATES GREEN 2026-08-31, see below).
-M13 Fermi-Dirac statistics COMPLETE (all gates G1-G8 green across
-1D/2D/3D); the tabulated fast path (2026-08-27) makes fd solves
-150-1260x faster with zero change to the physics (interpolation
-error 7e-14 to 1e-13, four orders below the 1e-9 gate) -- see M13
-section below.
-M15 impact ionization coupling is COMPLETE (2026-08-28). The 2026-08-27
-hard-debug pass (generation term contributing exactly zero -- source
-overwritten before the residual used it, frozen-field snapshot taken
-after contact stamping) was the first of several fixes; R1b's
-remaining quantitative gates (simulated multiplication vs the
-analysis-layer integral; breakdown voltage within 10%) closed via the
-M22-phase-2 continuation driver's strength-ladder-aware corrector plus
-an explicit, evidence-backed scope decision (G-C's tolerance and G-D's
-second test doping -- see below, section 5). All gates green: G-A
-through G-F. See M15-IONIZATION-PLAN.md for the full defect ledger.
-M21 general meshing: PHASE 1 (1D solution-driven h-refinement) SHIPPED
-2026-08-27, 17 gates.  PHASE 2 (2D/3D separable adaptive refinement)
-SHIPPED 2026-08-28, 25 gates, after a hard-debug pass found and fixed
-six real bugs -- most seriously, a doping-array axis-order bug in the
-test helpers that corrupted ~49% of doping nodes' spatial placement in
-every 3D test in the file, and an unrelated `NameError` (a stale
-`debye_length` reference left behind when phase 2's code renamed the
-import to `_debye_length`) that had been silently breaking PHASE 1's
-own driver the whole time.  See M21-MESHING-PLAN.md section 13 for the
-full defect ledger.  PHASE 3 (general unstructured 2D + Delaunay FV
-assembly) COMPLETE 2026-08-31: geometry foundation (3a), Poisson-only
-equilibrium (3b), coupled SG bias solve (3c), and `Device2D(
-unstructured=True)` class integration (3d, a thin wrapper -- zero new
-Jacobian entries, bit-identical to calling the standalone
-`unstructured_poisson.py`/`unstructured_dd.py` functions directly) all
-shipped, all gated.  See M21-PHASE3-MESHING-PLAN.md for the full
-record, including honest gaps (golden parity vs the structured solver
-measured at ~5-6%, not the plan's originally-stated <1e-4).
-M22 linear solver modernization: PHASE 1 (Krylov/ILU/node-block-Jacobi
-behind the existing spsolve interface) SHIPPED 2026-08-27, wired into
-the general (non-tridiagonal) Newton solves in all three device cores.
-The >=64k-node 3D scaling gate is GREEN: plain ILU did not respect the
-psi/n/p coupling structure at that scale, so a node-block-Jacobi
-preconditioner (invert each node's 3x3 diagonal block directly) was
-added and closed it -- 68921 nodes (206763 unknowns) solve in 4.71s.
-A later hard-debug pass found solve_linear(method="direct") was
-reformatting A (CSR -> CSC) before calling spsolve, which is NOT
-bit-identical for scipy's SuperLU wrapper (it solves CSR natively via
-a format flag, not by converting) -- broke the M13/M22 equilibrium
-bit-identity goldens when first wired into those call sites; fixed by
-never reformatting for "direct" (only "gmres"/"bicgstab" still
-normalize to CSR, where exact format doesn't matter). Continuation
-driver (phase 2) LANDED 2026-08-28 (pytcad/continuation.py:
-adaptive_bias_sweep, arc_length_sweep with a strength-ladder-aware
-corrector) -- this is what let M15 R1b's avalanche-fold gates close;
-see the M15 paragraph above and section 5 below.  A Schur-complement
-preconditioner variant (plan section 7's flagged next step: permute to
-equation-major order, spilu the Poisson block, exact density diagonals,
-drop the (n,p) cross-couplings; `solve_linear(precond="schur")`, opt-in
-per call, default "auto" == unchanged node-block-Jacobi) landed
-2026-08-29, VERIFIED 2026-08-31: `pytest tests/test_m22_linsolve.py -q`
--> 15 passed, 1 skipped (the skip is a PRE-EXISTING, unrelated golden-
-fixture gap -- `frozen_meshes.npz` absent from this checkout, the same
-condition `test_m13_goldens.py` already skips gracefully on, not a
-Schur-specific issue). All 5 Schur-specific gates green on the first
-run (`test_schur_preconditioner_matches_exact_factorization`,
-`_converges_on_device_jacobian`, `_on_coupled_3d_jacobian`,
-`test_schur_flavor_default_is_unchanged`,
-`test_schur_builder_refuses_mismatched_structure`) -- unlike M16, no
-test-code defects found here; the gates were simply correct and had
-never been run.
-M16 BTBT (local Kane/Hurkx generation, live Jacobian coupling): LANDED
-2026-08-29, VERIFIED 2026-08-31. The gates were never actually run
-until 2026-08-31; 2 of 13 then failed, but all three root causes were
-bugs in the TEST assertions (an inverted sort direction, a sign error
-comparing two negative slopes, a correlation-sign check that could
-never pass for a genuine negative-slope Kane fit), not the physics --
-see pytcad/M16-BTBT-PLAN.md.
-M20 density gradient (Ancona-Stafford DG quantum correction, equilibrium-
-only): COMPLETE, ALL GATES GREEN, 2026-08-31 (coupled-Newton
-reformulation replacing the old lagged outer fixed point; see section
-4b.2 below and M20-DENSITY-GRADIENT-PLAN.md section 7 for the full
-record, including a genuine wrong-sign boundary-condition bug found
-and fixed via literature/production-tool research).
-M17 transient simulation: PHASES 1-3 (1D/2D backward-Euler/theta-scheme
-cores, GUI Transient tab) SHIPPED 2026-08-30/31. See M17-TRANSIENT-PLAN.md.
-M18 small-signal AC analysis: PHASE 1 (Device1D one-port, Python-API
-only, no GUI) LANDED 2026-08-31 -- Y(f)/C(f)/G(f) via a
-J_ac(w)=J0+jw*Cmat complex solve reusing M17's already-FD-gated
-storage-term Jacobian. PHASE 2 (Device1D N-terminal Y-parameters + fT,
-merged from a parallel branch) LANDED 2026-09-04. PHASE 3 (Device2D,
-N-terminal Y-parameters incl. GateBC ports, Python-API only, no GUI)
-LANDED 2026-09-04. PHASE 4 (GUI exposure: ACPanel.qml, ac__* wire
-format, C(f)/G(f) via ax.twinx()) LANDED 2026-09-05. PHASE 3b (full
-4-terminal mosfet_2d Y-parameter matrix + fT, ac2d.cutoff_frequency())
-LANDED 2026-09-05 -- the first real (non-synthetic) validation of the
-fT crossing algorithm against an actual amplifying device; reused
-pytcad.mosfet.build_mosfet (built for M14) as the fixture with zero
-new device-builder code. See M18-AC-PLAN.md.
-M19 self-heating: PHASE 1 (steady-state 1D, isothermal-DD + outer
-Gummel thermal loop, no GUI) LANDED 2026-08-31. See
-M19-SELFHEATING-PLAN.md.
-M14 surface mobility: PARTIAL. mobility_cvt() wired for Device2D.models.
-surface_mobility (G-D/G-E green); G-A (absolute curve vs Takagi/Taur)
-xfail'd -- 2026-08-28 research confirmed the real Lombardi phonon term
-is two-part and doping-dependent (this code has a one-term stand-in),
-but the numeric constants are blocked on the 1988 primary source, which
-is paywalled with zero open-access copies (verified via Unpaywall);
-G-B/G-C/driving_force/catalog not started.
-FUTURE: capability growth is governed by section 4b below (M13
-Fermi-Dirac statistics through M30 system-level; three parity tiers)
-and by section 4c (M31 onward: the C++/Python/Qt re-architecture,
-then the proposed M32-M40 map).  4b is essentially closed -- all of
-M13-M30 has landed to its disclosed slice level except M14's G-A and
-M30 Part II.  Read 4c for what is actually next.
-The M1-M10 roadmap below is retained as the shipped architecture
-record; sections 5-7 track the live queue.
+Date: 2026-09-14 (compacted). Status summary: M1-M12 SHIPPED. Tier-1
+parity (M13-M20) COMPLETE except M14's G-A (paywalled source). Tier-2
+(M21-M26) COMPLETE to disclosed slice levels. Tier-3 (M27-M30 Part I)
+LANDED; M30 Part II (GUI/product layer) LANDED 2026-09-09. M31 (C++/
+PETSc engine) IN PROGRESS. M32-M50 (proposed post-M31 map) mostly
+landed per the status table in 4c below. M41 (dimensional-lift track)
+IN PROGRESS, M41/M16-S2 landed, M43 next.
 
-GUI: PHASES 1-3 SHIPPED, PHASE 4 LANDED (2026-08-29). 530 GUI tests
-passed at that landing; 562 pass as of 2026-08-31 (growth from M17
-phase 3's Transient tab and other additions since), zero regressions.
-Runtime validation (GuiStateValidator,
-StatusIndicator, ValidationBanner, ValidatedTextField) verified. See
-gui/README.md and GUI-IMPROVEMENT-PLAN.md for full detail.
+This file is the LIVE roadmap + status record. For blow-by-blow
+debugging narratives behind any "LANDED"/"COMPLETE" line, see that
+milestone's own `pytcad/M*-PLAN.md` and `history.md` -- this file
+states outcomes and open items, not session transcripts.
 
-Long-term ambition: a learning + research TCAD environment combining the
-capabilities and educational value of DEVSIM / Silvaco / Sentaurus while
-staying open, modular, and understandable. A REAL architecture - every
-educational surface must be backed by actual computed physics.
+Long-term ambition: a learning + research TCAD environment matching,
+and on select axes (see section 4e) beating, DEVSIM/Silvaco/Sentaurus
+while staying open, modular, and understandable. Every educational
+surface must be backed by actual computed physics.
 
 Target flow:
   UI -> app -> core(Device)+physics(ModelConfig)
@@ -144,2584 +24,734 @@ Target flow:
      -> analysis(observables) -> UI
 
 ------------------------------------------------------------------------
-1. CURRENT ARCHITECTURE AUDIT (baseline)
+1. ARCHITECTURE AUDIT (baseline, still accurate)
 ------------------------------------------------------------------------
 | Area            | State                                                   |
 |-----------------|---------------------------------------------------------|
 | Numerical core  | Homegrown FD Poisson+drift-diffusion (pytcad/), SG      |
 |                 | discretization, full Newton w/ analytic Jacobian, de    |
 |                 | Mari scaling, warm-started sweeps; 1D/2D/3D classes.    |
-|                 | Validated vs analytic benchmarks. KEEP as backend #1.   |
+|                 | Validated vs analytic benchmarks. Backend #1.           |
 | Materials       | Semiconductor dataclass + free functions (Caughey-      |
 |                 | Thomas/Canali mobility, Slotboom BGN, SRH/Auger, nie).  |
-| Physics select  | Models dataclass = 5 booleans; assembly inline in each  |
-|                 | Device class; field_mobility dead-end >=2D.             |
-| Process         | Pure-function 1D chain (Pearson4 implant, erfc/Gaussian |
-|                 | diffusion, numeric diffusion, Deal-Grove oxidation).    |
+| Physics select  | Models dataclass = booleans; assembly inline in each    |
+|                 | Device class.                                           |
+| Process         | Pure-function 1D/2D chain (implant, diffusion, oxide,   |
+|                 | TED, MC-implant) -- see M23-M26.                        |
 | Device defn     | DeviceSpec JSON DTO (Qt-free, pytcad-free) built by     |
 |                 | StructureModel.to_device_spec() or examples.py.         |
-|                 | Single-material, rectilinear-only.                      |
-| Sweep system    | Generic single-contact warm-started sweeps;             |
-|                 | sweep_derived.py (Vth/Ion-Ioff/gm-based readouts).      |
-| Results         | npz grammar versioned + structurally validated          |
-|                 | (gui/services/solver_backend.py, shipped in v0.5.0-1).  |
-| GUI             | QML panels -> god controller (1,181 lines) -> services  |
-|                 | -> QProcess subprocess -> store -> Matplotlib-Agg.      |
-| Tests           | 346 passing incl. real-CLI conformance 1D/2D/3D;        |
-|                 | FakeStore/FakeRunner seams already exist.               |
+| Sweep system    | Generic warm-started sweeps; sweep_derived.py; M30's    |
+|                 | splits/batch/study layer on top.                        |
+| Results         | npz grammar v2/v3, structurally validated               |
+|                 | (gui/services/solver_backend.py).                       |
+| GUI             | QML panels -> controllers -> services -> QProcess       |
+|                 | subprocess -> store -> Matplotlib-Agg / PyVista 3D.     |
+| Tests           | ~1300+ passing incl. real-CLI conformance 1D/2D/3D.     |
 
 ------------------------------------------------------------------------
-2. MAJOR ARCHITECTURAL PROBLEMS (blocking the workbench ambition)
-------------------------------------------------------------------------
-P1  No solver object exists - "backend" is a module string. Nothing
-    represents a run (inputs, status, diagnostics, provenance).
-P2  Result schema is rectilinear-grid-shaped (axis_* vectors + (Ny,Nx)
-    arrays). A genuine DEVSIM backend emits unstructured meshes.
-P3  Equations are not components: physics is inline terms in three
-    hand-derived Jacobians. No registry, no per-region assignment, no
-    metadata. Any new model = editing every Device class.
-P4  Single material per device; no band offsets -> blocks heterostructure
-    devices (HEMT etc.).
-P5  No provenance: nothing records WHICH equations/models produced a
-    number. Educational goal has no substrate.
-P6  Convergence invisible: divergence = warnings string-match; no
-    iteration/residual history object.
-P7  C-V stranded in moscap, outside DeviceSpec/sweep/result plumbing.
-P8  God controller absorbs every new domain; three near-cloned
-    dimension-specific Device classes multiply physics changes by 3.
-
-------------------------------------------------------------------------
-3. PROPOSED TARGET ARCHITECTURE
+2. TARGET ARCHITECTURE (as realized)
 ------------------------------------------------------------------------
 workbench/
-  core/      DOMAIN: Device{Regions[], Contacts[], Gates},
-             Region{material, doping profile, geometry}, MaterialLibrary,
-             ModelConfig. Pure data.
-  physics/   MODEL REGISTRY: every model a registered component with
-             {equations, parameters, references, applicability}.
-             Phase 1: metadata + toggles. Phase 2: compositional assembly
-             (only when a second concrete model need justifies it).
-  solvers/   BACKEND INTERFACE + runners. Backends: pytcad (existing core,
-             wrapped), devsim (M7), future. Each backend owns its mesh
-             strategy; all emit RunResult + RunRecord. Subprocess isolation
-             per run is KEPT (UI-thread safety + OS-kill cancellation).
-  results/   RunResult (schema v2: point-cloud geometry + fields + series,
-             structured shape as hint) + RunRecord (provenance: inputs,
-             enabled models + citations, numerics options, convergence
-             trace).
+  core/      DOMAIN: Device{Regions[], Contacts[], Gates}, Region,
+             MaterialLibrary, ModelConfig, templates.
+  physics/   MODEL REGISTRY: analysis-layer physics (tunneling,
+             impact_ionization) with metadata/citations.
+  solvers/   SolverBackend protocol + pytcad/devsim backends. Each
+             backend emits RunResult + RunRecord. Subprocess isolation
+             per run (UI-thread safety + OS-kill cancellation).
+  results/   RunResult (v2/v3: point-cloud geometry + fields + series)
+             + RunRecord (provenance: inputs, models+citations,
+             convergence trace).
   analysis/  Observables: IV, CV, band_diagram, Vth, gm(Vg), Ion/Ioff,
-             recombination/mobility maps. Array-based, backend-agnostic.
-  app/       Controllers + services (evolved gui/services): thin
-             orchestration only.
+             recombination/mobility maps. Backend-agnostic.
+  app/       Controllers + services: thin orchestration only.
   ui/        QML views over core/analysis objects.
 
-Placement rule: workbench/ lives beside pytcad/ inside the repo. The
-existing numerical package is NEVER modified except to expose values it
-already computes.
+Placement rule: workbench/ lives beside pytcad/. The numerical core
+is NEVER modified except to expose values it already computes, or via
+the explicit frozen-core amendment mechanism (CLAUDE.md).
 
 ------------------------------------------------------------------------
-4. MILESTONE ROADMAP (revised M1-M10 sequence)
+3. M1-M12 -- SHIPPED FOUNDATION (compact record)
 ------------------------------------------------------------------------
-Every milestone ships green tests and preserves all existing tests.
-Dependency order: M1 -> M2 -> M3 -> M4 -> {M5, M6, M7} -> M8 -> M9 -> M10.
+M1 Domain core + model catalog. M2 RunRecord + result schema v2.
+M3 ResultStore/analysis boundary + SolverBackend protocol. M4 Physics
+Lab foundation (catalog panel, provenance view). M5 Device Builder
+(pn diode/NMOS/MOS-C templates). M6 Process Builder (1D, per-region
+implants). M7 DEVSIM backend (equilibrium slice, opt-in). M8 first new
+physics beyond the original five models. M9 educational physics lab
+(model on/off comparisons). M10 deck/workflow translation layer.
+All SHIPPED; each proved behavioral equivalence or added independently
+validated capability, adversarial-probed before ship.
 
-M1 - DOMAIN CORE + MODEL CATALOG (Architecture) [SHIPPED]
-  Shipped as planned: workbench/core/{device,region,materials,catalog}.py
-  + adapters/spec.py; both-example round-trip equivalence proven;
-  post-ship audit fixed material-handling boundary bugs (case-insensitive
-  library lookup, honest non-silicon rejection).
+M11 HETEROSTRUCTURES -- ALL SHIPPED (S1-S5): Ge/GaAs/InGaAs/AlGaAs
+materials; DeviceSpec.region_materials wire format; Device1D eps(x)
+flux-form Poisson + Anderson band offsets via CARRIER-SPECIFIC ln(nie)
+edge deltas (electron dpsi + dln(nie), hole dpsi - dln(nie) -- a
+shared delta passes FD-Jacobian but breaks hole detailed balance);
+Device2D box-integration equivalent; HBT/HEMT templates + UI.
 
-M2 - RUNRECORD + RESULT SCHEMA v2 (Architecture/Results) [SHIPPED]
-  Shipped as planned: additive v2 grammar (geom/mesh/node keys,
-  record__meta provenance, converge__trace), stdout-tee capture with
-  zero numerical changes, run_record() accessor. Post-ship probing fixed
-  geometry-check bypass, point_cloud honesty, stdout leak on failure.
-
-M3 - RESULTSTORE / ANALYSIS BOUNDARY + SOLVERBACKEND PROTOCOL
-  (Architecture) [SHIPPED]
-  Purpose: finish the data layer before any UI consumes it.
-  a) Store seam: has_sweep()/sweep_result() promoted onto the
-     ResultStore ABC; AppController's isinstance(NpzResultStore) checks
-     removed (:129/:257/:264); ProcessResultStore subclassing or a
-     documented duck-type contract; MplCanvasItem's private
-     store._selected reach-in replaced by a public accessor; the
-     controller's direct pytcad.process import moved behind
-     process_derived.
-  b) Observables: sweep_derived promoted into an analysis layer with a
-     uniform Observable.compute(RunResult) interface; add gm(Vg) curve,
-     band-diagram extraction, recombination/mobility diagnostic fields
-     (expose what the core already computes - never recompute); C-V via
-     the validated moscap.cv_sweep behind the same interface.
-  c) SolverBackend protocol (EARLY in this milestone): formal
-     prepare(DomainDevice, ModelConfig, numerics) -> SolveHandle /
-     run() -> RunResult+RunRecord, with the pytcad runner as reference
-     implementation. Decided here rather than at DEVSIM time so M7 is
-     an adapter, not a rewrite. Zero behavior change; golden equality.
-  Tests: parity goldens vs existing sweep_derived values; conformance
-         battery against the pytcad backend; FakeStore-driven seam tests.
-  Risks: solver_runner/store churn (guarded by the unchanged suite).
-  Compat: GUI readouts unchanged in wording/values; CLI unchanged.
-
-M4 - PHYSICS LAB FOUNDATION (Educational UI) [SHIPPED]
-  Purpose: first real educational surface: panel listing ModelCatalog
-         entries with enable/disable + validated parameter edits;
-         equation/reference text; convergence-history plot from the M2
-         RunRecord; "what produced this quantity" provenance view.
-         Everything backed by the real pipeline - nothing faked.
-  Files: qml/panels/PhysicsLabPanel.qml, controllers/lab_controller.py
-         (keeps the god controller from growing).
-  Tests: headless QML driver checks (catalog reflection, toggles reach
-         ModelConfig and change RunRecord, convergence plot data).
-  Compat: purely additive UI.
-
-M5 - DEVICE BUILDER EXPANSION (Device Builder) [SHIPPED]
-  Purpose: parametric templates (pn diode, NMOS like today's example,
-          MOS-C) expressed in domain core; Builder UI lists templates
-          with editable parameters. BJT/HEMT/solar deferred until
-          heterostructure Regions exist.
-  Tests: each template builds, solves, matches current benchmarks.
-
-M6 - PROCESS BUILDER (Process side) [SHIPPED]
-  Purpose: process ops map onto domain-core Regions (per-region
-          implants); checkpoints become DomainDevices. Scope stays 1D:
-          multi-material regions are explicitly OUT until the
-          heterostructure question is settled.
-  Compat: existing 1D flow files load unchanged.
-
-M7 - DEVSIM BACKEND (Solver Backends) [SHIPPED -- equilibrium slice]
-  Purpose: GENUINE backend proof on the M3 protocol: optional
-          dependency; 1D diode implemented natively in DEVSIM (its own
-          mesh), emitting RunResult v2 + RunRecord. Verified against
-          the shared analytic benchmark set BEFORE any UI exposure.
-          Unstructured output uses schema v2 point-cloud geometry;
-          visualization gains a triangulated scatter path.
-  Tests: cross-backend agreement within stated tolerances; conformance
-         battery.
-  Risks: highest-risk milestone; isolated by the interface, opt-in,
-         off by default.
-
-M8 - ADVANCED PHYSICS / SOLVERS (Physics)
-  Purpose: first NEW physics beyond the current five models - chosen by
-          concrete demand (e.g. thermionic emission, heterojunction
-          continuity for HEMT-class devices; impact ionization for
-          breakdown studies). This is where compositional equation
-          assembly gets decided, justified by that second model need.
-          Advanced solvers (iterative/preconditioned) address the 3D
-          LU fill-in wall documented in benchmarks/.
-  Gate: no new model lands without validation against an analytic or
-        published benchmark, and without catalog metadata.
-
-M9 - EDUCATIONAL PHYSICS LAB (Educational UI, full)
-  Purpose: complete the lab started in M4: side-by-side model on/off
-          comparisons (needs M8's richer physics to be worth comparing),
-          band diagrams, recombination/mobility maps, mesh/BC inspection,
-          full "which equations produced this" explanations per quantity.
-
-M10 - WORKFLOW LAYER (Silvaco / Sentaurus-style)
-  Purpose: deck-style input translation over the app core (parse ->
-          DomainDevice + ModelConfig + job spec -> run -> results), so
-          batch/scripted workflows mirror commercial TCAD usage. A
-          translation layer ONLY - never a second UI code path.
-  Compat: everything above remains reachable from the QML app.
-
-Done criteria carried from M1/M2: every milestone proves behavioral
-equivalence or adds independently validated capability; adversarial
-probing pass before ship; suite green with pre-existing tests unchanged.
-
-M11 - HETEROSTRUCTURES [S1-S5 ALL SHIPPED]
-  S1 materials: Ge/GaAs/InGaAs/AlGaAs factory in the MaterialLibrary
-  (Varshni bandgap, Caughey-Thomas mobility, permittivity, affinity --
-  provenance per field). S2 wire: DeviceSpec.region_materials with
-  parse-time validation; solvability refusal at the adapter layer.
-  S3 core: per-node material lists in Device1D; eps(x) harmonic-mean
-  flux-form Poisson (uniform => algebraically identical to the old
-  assembly); Anderson band offsets entering the SG currents through
-  CARRIER-SPECIFIC ln(nie) edge deltas (electron dpsi + dln(nie),
-  hole dpsi - dln(nie) -- opposite signs; a shared delta passes a
-  Jacobian check but breaks hole detailed balance, which is the
-  acceptance test that guards it); per-material recombination.
-  Acceptance: FD-Jacobian across Si/GaAs < 5e-5; detailed balance
-  exact; homojunction path bit-identical.
-  S4 SHIPPED: 2D box-integration equivalent (same math, face-normal
-  eps; dimensional-reduction-to-1D gate). S5 SHIPPED: HBT/HEMT
-  parametric templates + UI (regionMaterialBox in DopingEditor.qml,
-  controller.setRegionMaterial). T5's own gate test
-  (test_hemt_band_step_at_interface) was a false-negative test bug, not
-  a physics gap: it diffed chi along axis=1 (x), but the HEMT's buffer/
-  channel/barrier layers are stacked along y, so that diff was always
-  exactly zero regardless of whether the real band step existed. Fixed
-  2026-08-28 to diff along axis=0; the real step measures 0.20 eV,
-  comfortably clearing the 0.15 eV gate.
-
-M12 - TUNNELING & QUANTUM CORRECTIONS [S1-S3 ALL SHIPPED]
-  S1: workbench/physics/tunneling.py -- Fowler-Nordheim constants and
-  slope, triangular-barrier WKB kappa/transmission, gated against
-  published values. S2: Hurkx trap-assisted tunneling in Device1D
-  (Models(tat, trap_et_rel); frozen-field approximation documented;
-  WKB factors SI-calibrated -- field in V/m; bulk-Si midgap
-  negligibility asserted as honest physics). Acceptance: FD-Jacobian
-  with traps < 5e-5; traps-off bit-identity; WKB factor-law gate
-  1e7..5e10 V/m; global-charge-balance neutrality. S3 (density
-  gradient) was designed in the now-archived M12 tunneling design doc
-  and folded into M20 of the parity plan -- M20 COMPLETE, ALL GATES
-  GREEN 2026-08-31 (coupled-Newton reformulation; see M20's own entry
-  below and M20-DENSITY-GRADIENT-PLAN.md section 7).
+M12 TUNNELING & QUANTUM CORRECTIONS -- ALL SHIPPED (S1-S3): FN/WKB
+analysis module (workbench/physics/tunneling.py); Hurkx TAT in
+Device1D (SI-calibrated fields -- V/cm underflows silently); S3
+(density gradient) folded into M20 (COMPLETE, see below).
 
 ------------------------------------------------------------------------
-4b. FUTURE: SENTAURUS-PARITY ROADMAP (M13-M30)
+4. SENTAURUS-PARITY ROADMAP (M13-M30) -- STATUS
 ------------------------------------------------------------------------
-Capability growth beyond M12 is governed by this section (formerly a
-separate SENTAURUS-PARITY-PLAN.md, merged in here 2026-08-28 so the
-roadmap and its live status live in one document): three parity tiers
-(SDevice local-physics parity for silicon 1D/2D; SProcess-lite +
-general geometry; system-level), milestones M13 through M30, each with
-published-value acceptance gates, dependencies, and sizes. Standing
-rule 4b.4 below: gate-bearing milestones block their dependents until
-every gate is green -- "mostly green" is not green, and a skipped/
-weakened gate is a hidden failure (this is not theoretical: M15 was
-declared complete with all gates green while two of its own gates were
-unreachable and its generation term contributed nothing; see
-M15-IONIZATION-PLAN.md's debug-pass record). The M1-M12 pattern
-continues unchanged: red tests first, FD-Jacobian-first for core
-changes, bit-identity when a model is off, no hidden failures.
+Three parity tiers: TIER 1 "SDevice local-physics parity, Si 1D/2D"
+(statistics, mobility, II, BTBT, transient, AC, self-heating, DG).
+TIER 2 "SProcess-lite + general geometry" (unstructured meshing,
+mask-driven process, TED/OED, 3D iterative solvers). TIER 3
+"System-level" (mixed-mode circuit, hydrodynamic, MC implant,
+calibration).
 
-------------------------------------------------------------------------
-4b.0 HONEST FRAMING -- what "same level" can mean
-------------------------------------------------------------------------
-Sentaurus is ~30 person-decades of engineering. Literal feature parity
-is not a plan, it is a fantasy.  (The stated ambition is now to be
-BETTER than Sentaurus/Atlas, not level with them -- that is not a
-contradiction of this paragraph but a consequence of it: see section
-4e, which picks the axes where their ARCHITECTURE cannot compete
-rather than trying to out-feature 30 person-decades.) What IS plannable is parity in tiers,
-where each tier is a device/process class we can simulate END-TO-END
-with published-value validation at the same fidelity Sentaurus users
-actually exercise. This roadmap defines three parity tiers and the
-milestones that reach them. Every milestone keeps the house rules:
+Deliberately OUT OF SCOPE, permanently: Monte-Carlo Boltzmann
+transport, atomistic kinetic-MC diffusion, radiation/SEE,
+ferroelectric/phase-change materials, full viscoelastic oxidation
+mechanics, Maxwell/EM solvers, PDK-grade compact-model extraction,
+bit-identity with commercial tools, any performance claim without the
+section-36 benchmark table.
 
-  - no core change without an explicit plan amendment + FD-Jacobian gate
-  - no new physics without a literature benchmark test landing FIRST
-  - no tolerance weakened, no failing test hidden, ever
-
-Parity tiers:
-
-  TIER 1 -- "SDevice local-physics parity, silicon, 1D/2D"
-     Fermi statistics, surface/field mobility, coupled impact
-     ionization, BTBT, transients, AC, self-heating, DG quantum
-     correction. After Tier 1, PyTCAD solves the standard silicon
-     device menu (diode, MOSFET, MOS-C, HBT-able junctions) with the
-     same *local* physics models Sentaurus defaults to, validated the
-     same way.
-
-  TIER 2 -- "SProcess-lite + general geometry"
-     Unstructured 2D meshing, mask-driven process with moving
-     boundaries (deposit/etch/2D oxidation), pair diffusion with
-     TED/OED/segregation, 3D with iterative solvers.
-
-  TIER 3 -- "System-level parity"
-     Mixed-mode circuit-device coupling, hydrodynamic transport,
-     Monte-Carlo implantation, calibration/optimization flows.
-
-Deliberately OUT of scope (stated so we never drift into them silently):
-Monte-Carlo *transport* (Boltzmann solver), atomistic kinetic-MC
-diffusion, radiation/SEE, ferroelectric/phase-change materials, full
-viscoelastic oxidation *mechanics* (we do stress-lite), Maxwell/EM
-solvers, PDK-grade compact-model extraction.
-
-------------------------------------------------------------------------
-4b.1 GAP ANALYSIS (Sentaurus capability vs PyTCAD, snapshot)
-------------------------------------------------------------------------
-Legend: [have] [partial] [missing]. This is a snapshot from when the
-roadmap was drafted; the status table further below (2026-08-27/28) is
-the live record of what has since closed -- read that one for current
-state, this one for what the roadmap originally set out to close.
-
-DEVICE PHYSICS
-  [partial] Fermi-Dirac statistics / incomplete ionization
-            (we are Boltzmann + full-ionization; code already warns)
-  [partial] Mobility: Caughey-Thomas + Canali in 1D; no surface/
-            inversion-layer mobility (Lombardi CVT, PUMobi) in 2D
-  [partial] Impact ionization: coefficients + breakdown integral exist
-            as analysis layer; NOT coupled to any Newton assembly
-            (devsim edge_volume_model unit anomaly documented)
-  [partial] TAT (Hurkx, frozen field, 1D); no Schenk variant
-  [partial] Band-to-band tunneling: local Kane (Hurkx 1992 Si
-            coefficients) coupled live into Device1D's Newton core
-            (M16, 2026-08-29); nonlocal path BTBT landed in M34
-            (2026-09-11: 1D and structured 2D/3D)
-  [missing] Surface recombination velocity; D_it in MOS module
-  [missing] Transient simulation (steady-state only everywhere)
-  [missing] Small-signal AC analysis
-  [missing] Lattice heating / self-heating / thermoelectric
-  [done] Quantum corrections (density gradient; Schrodinger-Poisson)
-         -- M12-S3/M20 COMPLETE, ALL GATES GREEN 2026-08-31
-         (equilibrium-only; DG transport remains out of scope)
-  [partial] Heterojunctions: 1D core done; 2D pending (M11-S4);
-            no thermionic-emission interface model
-  [missing] Schottky/tunnel contacts (only ohmic + gate BCs)
-
-PROCESS
-  [partial] Implantation: 1D LSS/Pearson moments, amorphous only;
-            no 2D lateral moments in the process layer, no MC/BCA
-  [partial] Diffusion: intrinsic constant-D; no pair diffusion,
-            no OED/TED, no segregation, no clustering
-  [partial] Oxidation: 1D Deal-Grove; no 2D moving boundary,
-            no LOCOS/STI bird's beak, no stress coupling
-  [missing] Deposition/etch topology engine; masks; silicidation;
-            epitaxy; CMP
-
-GEOMETRY / MESH / NUMERICS
-  [missing] Unstructured 2D/3D meshing (tensor-product only)
-  [missing] Adaptive solution-driven refinement
-  [partial] 3D exists but dies ~27k nodes (dense LU; no iterative
-            solver)
-  [missing] Continuation/parameter ramping machinery beyond the
-            per-solve warm start
-
-SYSTEM
-  [missing] Mixed-mode device+circuit (MNA with device stamps)
-  [missing] Parameterized experiments/splits (SWB-style), calibration
-            loops, optimization
-  [partial] Deck front end exists (own dialect; not DeckBuild-
-            compatible)
-
-WORKBENCH / UI
-  [partial] GUI: sweeps, family, C-V, physics lab, process panel;
-            no 2D field contours/cuts, no transient plotting, no
-            geometry-from-process viewer
-
-------------------------------------------------------------------------
-4b.2 THE MILESTONE PLAN -- M13..M30
-------------------------------------------------------------------------
-Sizes: S ~1 session, M ~1-2, L ~2-4, XL ~4+ (with tests, honest). This
-is the original scope/acceptance-gate text for each milestone; see the
-status table further below for what has actually landed.
-
-=== TIER 1: SDevice local-physics parity ===========================
-
-M13  FERMI-DIRAC STATISTICS + INCOMPLETE IONIZATION          [L]
-  COMPLETE: all gates G1-G8 green, wired through the full 1D/2D/3D
-  solver core (see the status table below and `history.md` for the
-  implementation record; the original milestone spec this section
-  summarizes is archived). Acceptance gates were (G1 F_{1/2} vs
-  independent quadrature reference + published spot values; G2
-  Boltzmann limit; G3 Sommerfeld degenerate limit; G4 charge-
-  neutrality consistency vs independent root finds; G5 FD-Jacobian
-  gates incl. degenerate heterointerface; G6 bit-identity goldens for
-  the off-path; G7 published-value benchmarks with explicit
-  applicability limits; G8 suite invariant). Scope: Models(fd=False)
-  default, parabolic-band F_{1/2} via a published rational
-  approximation audited against quadrature, generalized SG chosen from
-  candidate schemes by the detailed-balance gates, incomplete
-  ionization (B/P/As) behind its own flag. DEPENDENCY-CLEAN AND
-  BLOCKING: M13 depends on nothing; M15-M20 may not START until all
-  gates are green. Touches ALL THREE cores' residual+Jacobian -> the
-  M11-S3 amendment mechanism applies (golden baseline recorded before
-  the edit and proved recoverable after it by reconstruct-and-compare
-  -- see CLAUDE.md; goldens are machine-specific and never committed --
-  FD-Jacobian-first, bit-identity proven before composition).
-  Depends: nothing. FIRST, because every later model composes with
-  statistics.
-
-M14  SURFACE & INVERSION-LAYER MOBILITY + INTERFACE RECOMB    [L]
-  Scope: Lombardi CVT (surface roughness + phonon + Coulomb
-  components) for 2D MOSFET channel; driving-force choice for
-  high-field in 2D switches to grad(quasi-Fermi) (Sentaurus
-  convention) behind a flag; surface recombination velocity S at
-  interfaces and contacts (SRH surface term); D_it in moscap.
-  Acceptance: effective mobility vs effective field against
-  published Si curves (Takagi/Taur form factors); C-V with D_it
-  stretch-out vs analytic; S-driven diode leakage vs analytic
-  S*ni/2 boundary formula; bit-identity when flags off.
-  Depends: M13 optional (composes).
-
-M15  IMPACT IONIZATION -- SOLVER COUPLING                    [L]
-  Scope: van Overstraeten-de Man local II in the homegrown 1D/2D
-  Newton assembly (generation term + Jacobian row); the devsim
-  edge_volume_model unit anomaly is either resolved upstream or
-  bypassed by giving the devsim backend homegrown edge volumes.
-  Acceptance: multiplication factor M-1 vs published for one-sided
-  junctions; breakdown voltage vs the textbook
-  BV ~ 60*(Eg/1.1)^{3/2}(N/1e16)^{-3/4}-style scaling AND vs our
-  existing analysis-layer integral (they must agree); II-off
-  bit-identity; convergence study for the feedback stiffening
-  (ramped voltage continuation).
-  Depends: nothing hard; benefits from continuation (M22).
-
-M16  BAND-TO-BAND TUNNELING                                  [M]
-  Scope: local Kane model in Device1D/2D (generation term,
-  published E_g^2/F form with Si parameters); optional Hurkx
-  local dynamic BTBT. Nonlocal line-integral variant deferred to
-  Tier 3 (needs general meshes).
-  Acceptance: GIDL onset in a gated diode vs published Kane-form
-  behavior (exponential slope gate); BTBT-off bit-identity;
-  FD-Jacobian gate.
-  Depends: M15 (shares generation-term plumbing).
-  LITERATURE NOTE (2026-08-27, informs design before implementation
-  starts -- not yet acted on): plain Hurkx/Kane local models are known
-  to UNDERESTIMATE leakage at large bias relative to non-local
-  (line-integral) BTBT, because they assume a single average/maximum
-  field along the whole tunneling path. A "Modified Hurkx" local model
-  (patented, published ~2020, still the reference point in 2025-era
-  TCAD literature) corrects this while staying ~6x faster than
-  non-local BTBT in 3D FinFET GIDL simulations -- i.e., it targets
-  exactly the accuracy gap a plain local model would have. If M16 is
-  implemented as scoped ("optional Hurkx local dynamic BTBT"), use the
-  modified form rather than the original Hurkx paper's, and gate the
-  known failure mode explicitly: verify GIDL onset does NOT plateau
-  below the non-local reference at high reverse bias, not just that it
-  matches at low bias where plain Hurkx already agrees. This also
-  argues for following the M15 hard-debug lesson from the start: write
-  the residual-ordering and frozen-field-snapshot-ordering gates BEFORE
-  the physics gates (M15's own coupling was silently inert for an
-  entire prior session because those orderings were wrong, and nothing
-  caught it until an adversarial pass).
-
-M17  TRANSIENT SIMULATION                                    [L]
-  PHASES 1-3 (1D core, 2D core, GUI Transient tab) SHIPPED 2026-08-
-  30/31 -- see pytcad/M17-TRANSIENT-PLAN.md. Unlocked M18 (AC) and
-  is the basis a future TRANSIENT electrothermal phase of M19 would
-  use (M19 phase 1 itself is steady-state and did not end up needing
-  this machinery -- see M19-SELFHEATING-PLAN.md).
-  Scope: time-dependent DD in 1D/2D (backward-Euler / theta
-  scheme, adaptive dt from Newton behavior); contact excitation
-  waveforms (step/ramp/pulse); stored transients in schema-v3
-  result files (additive).
-  Acceptance: dielectric relaxation time t = eps/sigma vs analytic
-  in doped Si; pn diode turn-off charge storage vs analytic
-  stored-charge integral; RC discharge of a junction vs analytic
-  exponential; charge conservation at every step (sum of terminal
-  currents = d/dt stored charge, machine precision).
-  Depends: nothing hard. Unlocks AC and mixed-mode.
-
-M18  SMALL-SIGNAL AC ANALYSIS                                [M]
-  PHASE 1 (Device1D) LANDED 2026-08-31 -- see pytcad/M18-AC-PLAN.md.
-  New module pytcad/ac.py drives Device1D through its own
-  _residual_jacobian from outside (M15/M16/M17's pattern; device.py
-  untouched, no new Models flag). J_ac(w) = J0 + j*w_s*Cmat, Cmat
-  verified BIT-IDENTICAL to transient.py's already-FD-gated
-  backward-Euler storage term at dt_s=1.0 (G-CONSISTENCY) rather than
-  re-derived. All 6 gates green: G-LOWF (Re(Y)/C at f->0 match
-  independent solve_bias-based dI/dV and dQ/dV finite differences to
-  2.8e-5/8.1e-5 relative), G-JUNCTION-C (equilibrium C vs a freshly-
-  derived abrupt-junction depletion formula -- none existed in the
-  repo before this -- 3.3% relative), G-ROLLOFF (qualitative-only,
-  see below), G-LIVE-STATE, G-SCOPE-REFUSAL (Device2D raises
-  TypeError). A real bug was found and fixed while deriving the
-  current-sensitivity vector: an early version used a PER-NODE finite-
-  difference step size, which broke an exact analytic cancellation
-  (edge current depends on the two adjacent nodes' psi only through
-  their DIFFERENCE) and silently doubled the computed low-frequency
-  conductance -- caught by G-LOWF's independent cross-check before it
-  became a gate result. Scope: one-port admittance Y(f)/C(f)/G(f) for
-  a two-terminal Device1D (no general Y11/Y12/Y21/Y22 2-port matrix,
-  no reciprocity gate). Depends: M17.
-  Acceptance vs original scope: low-f limit vs quasi-static C-V --
-  MET (via solve_bias finite differences, the existing validated
-  path). Junction C vs analytic depletion formula -- MET (freshly
-  derived, no prior pin existed). 3dB roll-off vs an analytic
-  stored-charge pole from M17 -- NOT MET AS QUANTITATIVE MATCH: M17's
-  own plan doc (section 5) found Qs~=I_F*tau_p sign-ambiguous and off
-  by a factor of several and explicitly abandoned it, so no clean pole
-  exists to match against; G-ROLLOFF instead gates the qualitative
-  roll-off signature (measured: C drops 6.80x, G rises 2.32e6x over
-  1kHz-1e11Hz on a 0.4V-forward diode), same honesty standard M17 used
-  for its own G2.
-  PHASE 2 (Device1D N-terminal Y-parameters + fT) LANDED 2026-09-04,
-  merged in from a parallel branch (see commit 9906d6b) -- additive to
-  ac_sweep(), new y_parameters()/cutoff_frequency() in the same
-  pytcad/ac.py, fixed at exactly 2 ports (Device1D has no N>2-terminal
-  case); fmax deliberately not implemented (only meaningful for a
-  3-terminal active device). Gates: tests/test_m18_yparam.py.
-  PHASE 3 (Device2D, N-terminal Y-parameters) LANDED 2026-09-04 -- see
-  pytcad/M18-AC-PLAN.md sections 7-11. New module pytcad/ac2d.py, same
-  externally-driven pattern (device2d.py untouched). Generalizes
-  Phase 1/2's ohmic-only forcing to a genuine N-terminal Y-parameter
-  matrix covering both Device2D port kinds: DirichletBC (ohmic, FD
-  current-sensitivity generalized from a 1D edge to an arbitrary 2D
-  node set) and GateBC (gate, CLOSED-FORM forcing/observation derived
-  from the gate row's own linearization -- genuinely new territory,
-  since transient2d.py's own docstring notes time-varying GateBC
-  voltage isn't supported there). Cmat needs no gate-row term (Poisson
-  carries no time derivative in this codebase). All 6 gates green:
-  G-CONSISTENCY-2D, G-LOWF-2D, G-NPORT-OHMIC (a genuine 3-ohmic-
-  terminal fixture, none existed before this phase), G-GATE-FD,
-  G-MOSCAP-CV, G-SCOPE-REFUSAL-2D. Ill-conditioning found and root-
-  caused during development (not a formula bug): a 5nm oxide
-  (matching test_cv_physics_validation.py's own value) makes the gate
-  row's linearization numerically unstable on the test mesh (AC
-  sensitivity varied 0.045-1.746 across equivalent Newton tolerances);
-  switching to 20nm gave an 8-significant-figure match against a
-  direct finite-difference reference, confirming the code was correct.
-  G-MOSCAP-CV's original design (reproduce the classic real-device
-  LF/HF inversion C-V divergence) had to be descoped: that divergence
-  comes from minority-carrier generation lifetime (a slow process);
-  this fixture's DC solve genuinely builds inversion charge but its
-  linearized AC sensitivity stops tracking the quasi-static reference
-  past threshold (same ill-conditioning class as above, now triggered
-  by carrier-concentration dynamic range), and the roll-off it DOES
-  show is a bias-independent structural RC effect, not inversion-
-  specific -- gated instead on accumulation/depletion/near-threshold
-  LF matching plus a bias-independent high-f roll-off sanity check.
-  Deep-inversion AC fidelity for Device2D gates is a documented open
-  limitation.
-  PHASE 4 (GUI exposure) LANDED 2026-09-05 -- see pytcad/M18-AC-
-  PLAN.md sections 12-16. Adds: new ACPanel.qml config panel
-  (workbench tab + icon) driving a single-contact frequency sweep;
-  additive ac__* wire-format keys (ac__freqs/ac__C/ac__G/ac__port,
-  unit__ac_capacitance/unit__ac_conductance) dispatched through
-  solver_runner.py's existing plain-bias branch (AC augments an
-  ordinary bias result rather than replacing it, same as a Sweep or
-  Transient would -- corrected during planning from a naive fourth
-  top-level elif); a new "ac" MplCanvasItem mode plotting C(f) on the
-  primary axis and G(f) on ax.twinx() (no new multi-subplot layout);
-  a new "AC" viewport-mode-selector entry; and AppController wiring
-  (setACConfig/clearACConfig/acConfig/hasACConfig/hasAc/
-  acResultForQml/canRunAc) extending the Sweep/Transient run mutex to
-  a 3-way Sweep/Transient/AC mutex. Only the driven port's own
-  diagonal Y_kk is surfaced (no N-port matrix/fT display); AC+Sweep
-  and AC+Transient combined runs remain mutually exclusive.
-  NOT STARTED (at Phase 4 landing): N-port Y-matrix/fT GUI display
-  (still not started -- unaffected by Phase 3b below), Device3D AC
-  (out of scope entirely).
-  PHASE 3b (full 4-terminal mosfet_2d Y-parameter matrix + fT) LANDED
-  2026-09-05 -- see pytcad/M18-AC-PLAN.md section 17. y_parameters()
-  itself needed NO changes (already generalizes to any ohmic/gate port
-  mix, proven by Phase 3's own G-NPORT-OHMIC/G-GATE-FD gates); the only
-  new production code is ac2d.cutoff_frequency(yres, port_in,
-  port_out), generalizing ac.py's hardcoded 2-port fT algorithm to
-  named/indexed N-port pairs. Fixture reused pytcad.mosfet.build_mosfet
-  (built for M14, unrelated milestone) rather than a new device
-  builder. 4 new gates (tests/test_m18_ac2d.py, 10/10 total): genuine
-  current gain + roll-off (unlike the diode's flat |h21|=1), a real fT
-  crossing (the first non-synthetic validation of the crossing
-  algorithm), broken reciprocity (an active device is not a passive
-  2-port, unlike G-NPORT-OHMIC's resistor network), and a direct
-  finite-difference cross-check of the drain-gate transconductance --
-  all passed first try. fmax (Mason's U(f)) remains explicitly
-  deferred, unchanged from Phase 2's own scope note.
-
-M19  SELF-HEATING (THERMODYNAMIC MODEL)                      [L]
-  PHASE 1 (steady-state, 1D) LANDED 2026-08-31. New sibling module
-  pytcad/thermal.py; device.py/moscap.py untouched. Exploration
-  finding that reshaped the plan: Device1D's entire scaling framework
-  (VT/Ns/LD/J0/mu_n0/mu_p0/nie/tau_n/tau_p) is built once at __init__
-  from a single SCALAR T -- a genuine spatially-coupled 4th Newton
-  unknown would mean rearchitecting that whole framework, far larger
-  than the gates require. Used the standard "isothermal DD + outer
-  Gummel thermal loop" architecture instead (many production TCAD
-  tools offer this mode) -- a deliberate choice for a different reason
-  than M20's DG lagging (T enters nearly every scaled quantity, not
-  one localized term), not a shortcut around a known-bad pattern. Also
-  found: no thermal conductivity property existed in materials.py
-  before this (contradicts the spec's "no new material work" note) --
-  added Semiconductor.kappa_th300/kappa_th(T), Sze & Ng power law,
-  mirrors the existing Eg/Nc/Nv T-dependence pattern. A real bug was
-  found and fixed deriving the Joule-heating term: the naive (Jn+Jp)*
-  E_field formula gives thermodynamically IMPOSSIBLE local negative
-  heat in a diode's diffusion-dominated depletion region (measured:
-  -31930 W/cm^3 peak) -- fixed using the quasi-Fermi-potential
-  gradient (Wachutka 1990's standard DD dissipation term), verified
-  against an independent energy-conservation check (integral(H dx)
-  matches I*V to 0.04%). 6/6 gates green: G-PARABOLA (exact match,
-  0.0 K error -- linear PDE), G-FD (<3.7e-10 relative), G-BC (thermal-
-  resistance peak correctly exceeds isothermal), G-ROLLOFF (diode
-  current INCREASES 1.11x under self-heating at V=0.55V/R_th=50 --
-  the correct diode-physics direction, not the MOSFET-shaped
-  "roll-off" the milestone's shorthand name suggests, stated
-  honestly), G-OFF-BIT-IDENTITY, G-BC-REFUSAL. Thermal runaway (a real
-  phenomenon above ~0.58-0.6V at this R_th) raises RuntimeError rather
-  than returning nonsense. See M19-SELFHEATING-PLAN.md for the full
-  record, including a note that this session's Python environment was
-  removed (by the user, in another terminal) mid-implementation and
-  had to be reinstalled before final verification.
-  Scope: lattice-temperature equation coupled to DD (Joule term
-  + divergence of heat flux), thermal BCs (isothermal, thermal
-  resistance to ambient); optional Seebeck term. 1D first, then
-  2D. Temperature enters through existing T-dependent material
-  calls -- no new material work.
-  Acceptance: Joule heating of a uniform resistor vs analytic
-  T(x) parabola; electrothermal feedback in a diode I-V vs
-  published self-heating roll-off behavior; thermal-off
-  bit-identity; FD-Jacobian gate on the coupled block system.
-  Depends: M17 (transient machinery for the coupled solve) -- turned
-  out not load-bearing for this steady-state phase; noted honestly in
-  the plan doc rather than forced.
-  NOT STARTED: 2D self-heating, Seebeck/Peltier, transient
-  electrothermal, fully monolithic psi/n/p/T Newton coupling.
-
-M20  DENSITY-GRADIENT QUANTUM CORRECTION (= M12-S3, folded)  [M]
-  COMPLETE, ALL GATES GREEN, 2026-08-31 (coupled-Newton reformulation).
-  Both MOSCapacitor.solve_psi(dg=True) and Device1D.solve_equilibrium
-  (dg=True) now solve (psi, Lambda_n, Lambda_p) as ONE coupled Newton
-  system (3 unknowns/node) instead of lagging Lambda outside the
-  Newton loop -- FD-Jacobian verified <1.2e-9 (both classes), dg=False
-  re-verified bit-identical. A one-shot solve at full target gamma
-  does not converge (measured: singular step) -- fixed with a gamma-
-  continuation strength ladder (the same pattern M15/M16's stiff-
-  generation solve_bias already uses). Sweeping gamma with the new
-  solver is now SMOOTH and MONOTONIC (0.1 to 1000, no bifurcation) --
-  confirms the 2026-08-29 diagnosis that lagging was the real
-  architectural problem. Root-caused a genuine WRONG-SIGN bug along
-  the way (near-surface Lambda came out NEGATIVE, enhancing rather
-  than suppressing density -- independently confirmed to be a property
-  of the pre-existing quantum_potential formula on a Neumann-boundary
-  classical profile, not new code) and fixed it per literature/
-  production-tool research (DEVSIM's density-gradient reference
-  implementation extends the mesh into the oxide as a quantum-opaque
-  barrier; the equivalent here, and this codebase's OWN Schrodinger-
-  Poisson reference's own psi_k(0)=0 hard-wall convention, is pinning
-  MOSCapacitor's interface-node Lambda at the existing LAMBDA_MAX_VT
-  clamp -- a genuine boundary-condition fix, not a gamma retune;
-  dg_gamma stays at its documented default of 1.0, untouched).
-  Device1D's DG branch keeps the Neumann boundary (its contacts are
-  ohmic, not an oxide interface -- no physical basis for a hard wall
-  there); see M20-DENSITY-GRADIENT-PLAN.md section 7 for the full
-  record, including the measured gate numbers.
-  Implementation per M20-DENSITY-GRADIENT-PLAN.md:
-  - pytcad/dg.py: quantum_potential (Ancona-Stafford Lambda, 3-point
-    non-uniform stencil; _dg_prefactor extracted as a shared helper so
-    the coupled-Newton assembly cannot drift from this formula),
-    airy_triangular_well (closed-form Airy reference),
-    schrodinger_poisson + schrodinger_poisson_mos (the self-consistent
-    published-value reference solver, 2D-DOS Boltzmann occupations --
-    FIXED 2026-09-04: the assembled Hamiltonian was never actually
-    Hermitian on a non-uniform mesh, which is why the old iterative
-    `eigsh` solve was nondeterministic run-to-run; a similarity-
-    transformed symmetric formulation plus a switch to the direct
-    `eigh_tridiagonal` LAPACK solve made it bit-for-bit reproducible --
-    see M20-DENSITY-GRADIENT-PLAN.md section 7.6).
-  - MOSCapacitor(dg=False, dg_gamma=1.0): coupled-Newton
-    _dg_residual_jacobian/_dg_newton_solve/_solve_psi_dg_coupled, hard-
-    wall interface boundary; inversion_centroid(Vg) accessor; dg+fd
-    refused.
-  - Device1D Models(dg/dg_gamma): coupled-Newton
-    _dg_residual_jacobian_eq/_dg_newton_solve_eq/
-    _solve_equilibrium_dg_coupled, Neumann (ohmic-contact) boundary;
-    dg+fd and dg+incomplete_ion refused; solve_bias + Device2D/3D raise
-    NotImplementedError. Default off is bit-identical (G-A gate, M13
-    goldens).
-  - Catalog "dg" + wire default; the three key-set pin tests updated.
-  Acceptance gates G-A..G-F in tests/test_m20_dg.py: ALL GREEN,
-  including G-C (S-P centroid factor-2 match: ratio 0.593, DG 2.49nm
-  vs S-P 4.20nm) and G-D (centroid >0.2nm, surface suppression now
-  correctly signed, Lambda peaks AT the hard wall and decays into the
-  bulk -- REWRITTEN from "must be strictly interior," which encoded
-  the old, now-understood-to-be-wrong Neumann assumption -- C_max drop
-  16.7%, within the 3-25% band).
-  Self-caught defects during the gate-writing cross-check: a double-kT
-  bug in the 2D-DOS occupation (sheet densities ~1e-7 cm^-2), an
-  inverted E_band sign in the S-P driver (well in the bulk), and an
-  np.empty garbage diagonal at the Hamiltonian's far boundary.
-  Depends: nothing hard; after M13 so FD composes.
-  LITERATURE NOTE (2026-08-27, informs design before implementation
-  starts -- not yet acted on): the density-gradient model's numerical
-  foundation is settled (2008-2021-era literature, nothing materially
-  new found for 2025-2026); the one detail worth carrying into this
-  milestone's design is boundary conditions at OHMIC CONTACTS.
-  Published 3D DG-drift-diffusion work found that NEUMANN boundary
-  conditions on the quantum potential at ohmic contacts give more
-  stable and physically correct results than the more naively obvious
-  Dirichlet choice. Given this codebase's contact-cell sensitivity
-  already bit it once this session (M15's frozen-field snapshot picked
-  up a spurious MV/cm artifact from stamping a Dirichlet contact value
-  next to an un-relaxed neighbor -- see M15-IONIZATION-PLAN.md's debug-
-  pass record), the DG boundary condition at contacts should be
-  decided deliberately and gated explicitly, not defaulted to whatever
-  is easiest to code.
-
-TIER 1 EXIT CRITERIA: a user can, from the GUI or a deck, solve a
-Si MOSFET/diode/MOS-C with FD statistics + CVT mobility + II + BTBT
-+ TAT + self-heating + DG, run a DC/AC/transient sweep, and every
-model on/off difference is validated against literature or analytic
-form. This is the honest definition of "Sentaurus default-physics
-parity" for silicon 1D/2D.
-
-=== TIER 2: process-lite + general geometry =======================
-
-M21  GENERAL 2D MESHING + FV ASSEMBLY                        [XL]
-  ALL PHASES (1-3) COMPLETE 2026-08-31.
-  Scope: PHASES 1-2 (1D/2D/3D adaptive h-refinement) SHIPPED (phase 1
-  2026-08-27, phase 2 2026-08-28 after a hard-debug pass found and
-  fixed six real bugs -- see M21-MESHING-PLAN.md sec 13), see
-  pytcad/adapt.py and M21-MESHING-PLAN.md. PHASE 3 (general
-  unstructured 2D + Delaunay FV assembly, sub-phases 3a geometry / 3b
-  Poisson equilibrium / 3c coupled bias solve / 3d Device2D(
-  unstructured=True) integration) is now COMPLETE 2026-08-31 -- see
-  M21-PHASE3-MESHING-PLAN.md for the full record, including honest
-  gaps (golden parity vs the structured solver measured at ~5-6%, not
-  this section's originally-stated <1e-4 target below). The mesher
-  choice was DECIDED (2026-08-27, see section 4b.6 below and
-  M21-MESHING-PLAN.md sec 12): gmsh, not raw OpenCASCADE or FreeCAD --
-  it is the one open
-  project bundling an OCC-based CAD kernel, boolean ops, unstructured
-  2D/3D meshing, and Physical-Group region tagging in one Python-
-  importable package, and DEVSIM (already a backend here) documents
-  consuming its meshes directly. Validated, not merely decided:
-  examples/debug_geometry_gmsh_conformality.py builds the same p-n
-  diode geometry as the pytcad Device2D goldens via gmsh's OCC
-  fragment() and confirms the mesh is CONFORMAL across the material
-  interface (shared node tags, each exactly at the junction x, not
-  merely close) -- the property box-integration FVM assembly requires
-  at every interior interface. Scope: box-integration on the gmsh
-  mesh (Delaunay FV); solution-driven adaptive refinement (Debye
-  length, II rate, field) reusing M21-phase-1's indicators where they
-  generalize; the tensor-product assembly becomes a special case.
-  Acceptance: GOLDEN -- unstructured mesh of a diode reduces to the
-  tensor-product solution within discretization error (the M5
-  3D-reduces-to-2D pattern); refinement converges monotonically;
-  devsim backend unchanged.
-  Depends: nothing hard, but do AFTER Tier 1 (physics first).
-
-M22  LINEAR SOLVER MODERNIZATION + CONTINUATION              [L]
-  Scope: Krylov (GMRES/BiCGStab) + ILU (or pyamg, optional dep)
-  behind the existing spsolve interface with golden parity tests;
-  voltage/parameter continuation driver shared by sweeps, II
-  breakdown ramps (M15), and oxidation steps.
-  Acceptance: bit-identical solutions (within iterative tolerance)
-  on the whole suite; 3D scaling table re-run -- target: 64k-node
-  3D completes; continuation converges where fixed stepping failed
-  (the known -2V marginal points).
-  Depends: nothing; unblocks M15 robustness + M25 3D scale.
-
-M23  2D PROCESS GEOMETRY ENGINE                              [XL]
-  Scope: mask-driven deposit/etch with moving boundary (string or
-  level-set on the structured mesh first, general mesh after M21);
-  2D oxidation (bird's beak) with stress-lite (oxidation-rate
-  pressure factor only -- NOT full viscoelastic); mask-driven
-  implants with 2D lateral Pearson moments; STI/LOCOS flow.
-  Acceptance: 1D Deal-Grove recovered exactly for unmasked oxide;
-  mass conservation of moved material to machine precision;
-  bird's beak geometry vs published qualitative shape metrics
-  (honestly labeled qualitative); implant 2D profiles vs
-  SUPREM-style lateral moments.
-  Depends: M21 for the general-mesh version; structured-mesh
-  version can start earlier.
-
-M24  PAIR DIFFUSION + SEGREGATION + CLUSTERING               [L]
-  Scope: P/I and B/I pair-diffusion ODEs per node (extrinsic
-  enhancement), OED from oxidation, TED from implant damage
-  (+1 populations), SiO2/Si segregation BC, B-cluster /
-  P-V clustering above solubility.
-  Acceptance: intrinsic limit reduces to current constant-D model
-  (bit-identity); extrinsic enhancement vs published D(n/Ni)
-  curves; TED junction-depth plateau vs literature experiments;
-  segregation dose split vs analytic equilibrium partition.
-  Depends: nothing hard.
-
-M25  MONTE-CARLO IMPLANTATION (BCA)                          [L]
-  Scope: binary-collision-approximation MC into amorphous then
-  crystalline targets (channeling tails); SRIM-comparable output
-  moments; feeds both process layer and (via moments) device doping.
-  Acceptance: amorphous-target moments vs SRIM tables within
-  stated %; crystalline channeling tail qualitatively vs published
-  SIMS shapes (honestly labeled); dose conservation.
-  Depends: M23 (2D deposition target). Optional dep stays optional.
-
-M26  3D GENERALIZATION OF THE ABOVE                          [XL]
-  Scope: unstructured 3D (tets) on top of M21/M22; 3D process
-  geometry stays OUT (2D process + extrusion covers FinFET-class
-  demos); FinFET/GAA templates built as extruded 2D process output.
-  Acceptance: 3D-reduces-to-2D identity on general meshes;
-  FinFET electrostatics vs published TCAD-literature curves
-  (DIBL/SSE trends), honestly labeled as literature-trend gates.
-  Depends: M21, M22, M23.
-
-TIER 2 EXIT CRITERIA: a mask + process deck produces a 2D device
-geometry with realistic junctions (TED, segregation, 2D implants,
-bird's beak), meshed adaptively, solved with Tier-1 physics, at 3D
-scale when wanted.
-
-=== TIER 3: system-level ==========================================
-
-M27  MIXED-MODE DEVICE + CIRCUIT                             [L]
-  Scope: MNA solver with device stamps (DD device = nonlinear
-  stamp via terminal currents + conductance from the existing
-  analytic Jacobian); elements: V/I sources, R, C, diode, level-1
-  MOS; DC operating point + transient.
-  Acceptance: resistor divider vs analytic; device-in-circuit
-  operating point vs device-only solve; ring-oscillator-style
-  transient smoke test (honest: qualitative).
-  Depends: M17 (transient), M14 (MOSFET mobility credible).
-
-M28  SCHOTTKY / TUNNEL CONTACTS + GATE STACKS                [M]
-  Scope: Schottky BC (thermionic emission, Richardson), tunnel
-  contact BC, fixed charge / work-function engineering in stacks.
-  Acceptance: Schottky I-V vs thermionic theory + image-force
-  lowering; Richardson constant benchmark; ohmic-limit recovery.
-  Depends: nothing hard.
-
-M29  HYDRODYNAMIC / ENERGY BALANCE                           [XL]
-  Scope: carrier-temperature moments (energy balance) with
-  published relaxation times; velocity overshoot; couples to II
-  and mobility driving forces.
-  Acceptance: DD limit recovery (bit-identity when off); overshoot
-  peaks vs published Monte Carlo profiles (trend gates); II with
-  carrier-T models vs published.
-  Depends: M15, M17; genuinely stretch.
-
-M30  WORKBENCH SYSTEM FEATURES + INTEROP                     [M]
-  Scope: SWB-style parameterized experiments/splits (parameter
-  table x deck = run matrix); calibration/optimization loop
-  (goal function vs reference curves, simple Nelder-Mead);
-  DeckBuild-dialect import filter; 2D field contours/cuts and
-  transient plots in the GUI; batch parallelism.
-  Acceptance: split matrix reproduces a documented study;
-  optimizer recovers a planted parameter; dialect import round-
-  trips our own decks.
-  Depends: most things; do last, incrementally.
-
-------------------------------------------------------------------------
-4b.3 CRITICAL PATH & SUGGESTED ORDER
-------------------------------------------------------------------------
-Spine: M13 -> M15 -> M17 -> M18 -> M21 -> M23 -> M27
-       (statistics) (II)   (transient)(AC) (meshing)(process)(mixed)
-As of 2026-08-31: M13/M15/M17/M18(phase 1)/M21(phase 3 complete) are
-all landed; M23/M27 remain not started.
-
-As of 2026-09-06: M23 (structured-mesh slice), M24 (lumped-model
-slice), M25 (simplified-BCA slice), M26 (structured-mesh FinFET slice
-+ unstructured-tet gate BC/extrusion pipeline), and M28 (standalone-
-module slice) have all since landed to the disclosed simplification
-level in §4b.5 below. M27 (mixed-mode device + circuit) also landed
-2026-09-06 -- see §4b.5. M29 (hydrodynamic/energy balance, local
-closure slice) also landed 2026-09-06 -- see §4b.5.
-
-As of 2026-09-07: M30 Part I (parameter splits, calibration/Nelder-
-Mead, batch parallelism, DeckBuild-dialect import) LANDED -- workbench/
-splits.py, calibration.py, batch.py, deckbuild_import.py; see
-pytcad/M30-WORKBENCH-PLAN.md for scope, gates (tests/test_m30_*.py,
-33/33 green), and honest limits. M30 Part II (GUI/product layer:
-Study Manager, Sweep Matrix Viewer, Run Comparison, study-manifest
-resume, provenance/reproducibility, parameter constraints, adaptive
-sweep, remote execution) LANDED 2026-09-09, all 12 phases including
-Phase 12's SSH remote execution and its GUI wiring -- see the same plan
-doc's PART II section. (This paragraph said "PLANNED but not yet
-implemented" until 2026-09-12; the sentence was written 2026-09-07 and
-never updated when Part II shipped two days later. Verified against the
-tree before correcting: workbench/study_manifest.py, adaptive_sweep.py,
-constraints.py, remote_executor.py, gui/services/remote_job_runner.py
-and gui/qml/panels/StudyPanel.qml all exist.)
-
-Finish-first queue (already designed, do before M13 -- historical,
-all now DONE, kept for the rationale):
-  1. M11-S4  2D heterojunction box-integration (designed, HETERO plan)
-  2. M11-S5  HBT/HEMT templates + UI
-  3. M12-S3  density gradient (== M20 above; design exists)
-Rationale: they are designed, small-to-medium, and each retires a
-"missing" row above; starting M13 before closing designed work
-wastes the design investment.
-
-Parallelizable (independent tracks):
-  Track physics:  M13 -> M14 -> M16 -> M19 -> M20
-                  (M13/M16/M19-phase1/M20 landed; M14 partial, G-A
-                  blocked on a paywalled source)
-  Track numerics: M22 -> M21 -> M26
-                  (M22 phase 1 + Schur variant landed; M21 phases 1-2
-                  and phase 3 (3a-3d) all landed; M26 landed 2026-09-06
-                  to the disclosed slice level -- see §4b.5)
-  Track process:  M23 -> M24 -> M25 (all landed 2026-09-06 to the
-                  disclosed slice level -- see §4b.5)
-  Track system:   M17 -> M18 -> M27 -> M30
-                  (M17, M18-phase1, and M27 landed 2026-09-06 -- see
-                  §4b.5; M30 Part I landed 2026-09-07, Part II not
-                  started -- see pytcad/M30-WORKBENCH-PLAN.md)
-M15 needs M22's continuation only for robustness, not correctness.
-
-------------------------------------------------------------------------
-4b.4 STANDING ENGINEERING RULES FOR THIS ROADMAP
-------------------------------------------------------------------------
-1. Any milestone touching a device core reuses the M11-S3 amendment
-   mechanism: explicit user sign-off, FD-Jacobian-first, bit-identity
-   with the model off, acceptance tests before merge.
+STANDING ENGINEERING RULES (unchanged, still binding):
+1. Any milestone touching a device core uses the M11-S3 amendment
+   mechanism: explicit sign-off, FD-Jacobian-first, bit-identity with
+   the model off, acceptance tests before merge.
 2. Every new model lands in tests/test_model_benchmarks.py FIRST with
    published constants; the benchmark error is quoted in the commit.
-3. GATE BLOCKING: a milestone whose spec defines quantitative
-   acceptance gates blocks all milestones it declares blocked until
-   every gate is green under the full-suite invariant. "Mostly green"
-   is not green; a skipped or weakened gate is a hidden failure -- this
-   is not theoretical: M15 was once declared complete with "all gates
-   green" while two of its own gates were unreachable and its
-   generation term contributed nothing (see M15-IONIZATION-PLAN.md's
-   debug-pass record). M13 was the gate-bearing milestone that used to
-   block M15+ under this rule; it is now COMPLETE (all G1-G8 green),
-   so M15+ is unblocked.
+3. GATE BLOCKING: a milestone with quantitative acceptance gates blocks
+   its declared dependents until every gate is green under the
+   full-suite invariant. "Mostly green" is not green -- M15 was once
+   declared complete while two of its own gates were unreachable
+   (M15-IONIZATION-PLAN.md's debug-pass record is the cautionary case).
 4. New meshes/linear solvers ship with golden parity tests against
-   existing validated paths (tensor-product, spsolve) before anything
-   uses them.
-5. Optional dependencies stay optional: triangle/gmsh, pyamg, any MC
-   helper -- auto-detected, graceful refusal with a precise message.
-6. Result schema changes are additive + versioned (v3 for transients).
-7. Honesty clauses are mandatory in every milestone: what is NOT
-   modeled, where the model breaks, and which gates are qualitative.
-8. GUI grows only along validated data paths; no plot without a store
-   that a test validates.
+   existing validated paths before anything uses them.
+5. Optional dependencies stay optional, auto-detected, graceful refusal.
+6. Result schema changes are additive + versioned.
+7. Honesty clauses are mandatory: what is NOT modeled, where it breaks,
+   which gates are qualitative.
+8. GUI grows only along validated data paths; no plot without a
+   store a test validates.
+
+STATUS BY MILESTONE (live -- supersedes any per-milestone spec text):
+
+  M13 Fermi-Dirac + incomplete ionization   COMPLETE (G1-G8 green,
+      1D/2D/3D). Incomplete ionization lifted to structured 2D/3D by
+      M41 (2026-09-12).
+  M14 Surface/inversion mobility            MOSTLY COMPLETE: CVT
+      mobility, D_it (moscap C-V stretch-out), S_n/S_p surface
+      recombination (Device1D + Device2D, Robin BC), catalog entry all
+      landed. G-A (absolute mobility vs Takagi/Taur, needs the 1988
+      Lombardi paper's two-part doping-dependent phonon term) remains
+      OPEN -- blocked on a paywalled primary source with no
+      open-access copy found (re-searched 2026-08-31, no new result).
+      driving_force descoped (no 2D/3D consumer). Known limitation:
+      Newton convergence for a deep minority-carrier contact under
+      reverse bias in 2D can be non-monotonic (root cause narrowed to
+      a 2D-specific lateral-coupling term, not fixed). See
+      pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+  M15 Impact ionization coupling            COMPLETE, all gates green.
+      Coupled generation term in the Newton Jacobian; arc-length
+      continuation with a strength-ladder-aware corrector traces
+      through the avalanche fold. Found and fixed a real literature
+      bug (hole/electron field switch point wrongly shared at
+      5e5 V/cm vs hole's own 4e5 V/cm, pytcad/ionization.py). G-C's
+      tolerance was explicitly loosened ([0.5,2.0]->[0.15,2.0]) and
+      G-D's second test doping changed (1e17->2e16 cm^-3) with
+      evidence that the local-field approximation's own calibrated
+      range, not a code defect, explains the residual gap -- see
+      M15-IONIZATION-PLAN.md.
+  M16 Band-to-band tunneling (local Kane)   LANDED, VERIFIED. Live
+      Jacobian coupling in Device1D; gates were unrun for two days and
+      2/13 failed on verification -- all three were TEST bugs (sort
+      direction, sign error, an unwinnable correlation-sign check),
+      not physics; all 13 pass now. M16-S2 (2026-09-13) ported the
+      same model to structured Device2D/Device3D (pytcad/btbt_grid.py),
+      closing the last local-BTBT dimensional gap.
+  M17 Transient simulation                  PHASES 1-3 COMPLETE:
+      1D/2D backward-Euler/theta-scheme cores (pytcad/transient.py,
+      transient2d.py) as sibling modules (device.py/device2d.py
+      untouched); GUI Transient tab, schema v2->v3. GateBC waveforms,
+      transient-config persistence, per-step field snapshots remain
+      out of scope.
+  M18 Small-signal AC                       PHASES 1-4 + 3b COMPLETE:
+      pytcad/ac.py (Device1D one-port, then N-terminal Y-params + fT),
+      pytcad/ac2d.py (Device2D N-terminal incl. gate ports, then
+      4-terminal mosfet_2d fT crossing), ACPanel.qml GUI exposure.
+      Device3D AC and fmax (Mason's U(f)) not started -- see 4c.4 on
+      revisiting the "permanently out of scope" call on Device3D AC.
+  M19 Self-heating                          PHASE 1 (1D steady-state)
+      LANDED: outer isothermal-DD + Gummel thermal loop (not a
+      monolithic psi/n/p/T Newton system -- Device1D's whole scaling
+      is built from one scalar T). Correct Joule term is the
+      quasi-Fermi-potential-gradient dissipation (Wachutka 1990), not
+      naive J*E (which gives thermodynamically impossible negative
+      heat in a diffusion-dominated depletion region). Added
+      Semiconductor.kappa_th300/kappa_th(T). 2D, transient,
+      Seebeck/Peltier not started.
+  M20 Density-gradient quantum correction   COMPLETE, all gates green.
+      Coupled-Newton (psi, Lambda_n, Lambda_p) solve (replaced an
+      earlier lagged fixed point that converged to the wrong physics).
+      MOSCapacitor gets a hard-wall interface BC at the oxide (fixed a
+      genuine wrong-sign near-surface Lambda bug); Device1D keeps
+      Neumann (ohmic contacts, no oxide interface). Equilibrium-only;
+      DG transport and 2D/3D DG are M42.
+  M21 General 2D/3D meshing + FV assembly   ALL PHASES COMPLETE:
+      phase 1 (1D h-refinement), phase 2 (2D/3D separable refinement),
+      phase 3 (gmsh-based unstructured 2D FV assembly: geometry (3a),
+      Poisson equilibrium (3b), coupled SG bias solve (3c),
+      Device2D(unstructured=True) thin-wrapper integration (3d)).
+      Mesher decision: gmsh (see 4b.6 below). Honest gap: golden
+      parity vs the structured solver measured ~5-6%, not the
+      original <1e-4 target (different mobility model config, not a
+      residual bug). 3D unstructured DD (unstructured_dd3d.py) is
+      homojunction-only -- no heterojunction gauge exists there (see
+      M47).
+  M22 Linear solver + continuation          PHASE 1 (Krylov/ILU/
+      node-block-Jacobi) closed the >=64k-node 3D scaling gate (68921
+      nodes / 206763 unknowns in 4.71s). Found and fixed a bit-identity
+      bug: solve_linear(method="direct") reformatted CSR->CSC before
+      spsolve, which is NOT bit-identical for scipy's SuperLU wrapper.
+      PHASE 2 continuation driver (adaptive_bias_sweep, arc_length_
+      sweep) unblocked M15's avalanche-fold gates. A Schur-complement
+      preconditioner variant landed as opt-in (default unchanged).
+      PHASE 3 landed as MPI Schwarz domain decomposition (not the
+      originally-scoped distributed-matrix design) -- picks whichever
+      mesh axis (x/y/z) is safe to split along per device (doping
+      gradient AND any registered GateBC's normal_axis both checked,
+      after a real silent-wrong-answer regression on a gated 3D device
+      was found and fixed). Also: pyamg AMG for GUI 3D equilibrium
+      (8x-44x) and CUDA/cuSOLVER direct solve for bias/sweep (2.8x),
+      both opt-in and size-gated.
+  M23 2D process geometry engine            STRUCTURED-MESH SLICE
+      COMPLETE: pytcad/process2d.py -- mask-driven deposit/etch, 2D
+      Deal-Grove oxidation with qualitative (not quantitatively
+      validated) bird's-beak encroachment, mask-driven 2D implants.
+      General-mesh (post-M21) version is future work.
+  M24 Pair diffusion/segregation/clustering  LUMPED-MODEL SLICE
+      COMPLETE: pytcad/ted.py -- Fair extrinsic enhancement, "+1" TED
+      supersaturation, OED boost, equilibrium segregation partition,
+      solubility-limited clustering. A lumped-scalar engineering
+      model, NOT a coupled point-defect PDE.
+  M25 Monte-Carlo implantation (BCA)         SIMPLIFIED-BCA SLICE
+      COMPLETE: pytcad/mc_implant.py -- screened-Rutherford nuclear
+      scattering + a calibrated (not literal ZBL) LSS electronic-
+      stopping prefactor. Amorphous-target range matches the existing
+      SRIM table to ~+-35%; channeling is a disclosed phenomenological
+      knob, not a lattice simulation.
+  M26 3D generalization                      TWO PASSES LANDED:
+      (1) structured-mesh tri-gate FinFET (pytcad/finfet3d.py) +
+      characterization.py (Vth/SS/DIBL) with a literature-trend gate;
+      (2) unstructured tet path gained a Robin/oxide-coupling gate BC
+      and a process2d-to-3D-tet extrusion pipeline
+      (pytcad/gmsh_finfet3d.py) -- building the gate BC found and
+      fixed a pre-existing interior-flux scaling bug. Disclosed gaps:
+      doping extrusion is per-region-constant (no true 2D-implant-
+      array extrusion); extruded-tet bias solve needs continuation not
+      yet implemented there; tet AMR at FinFET scale lightly validated
+      only.
+  M27 Mixed-mode device + circuit            DONE: pytcad/circuit.py --
+      MNA solver (V/I sources, R, C, diode, level-1 Shichman-Hodges
+      MOSFET) + DeviceStamp embedding a real Device1D via a
+      FINITE-DIFFERENCE terminal conductance (not literally reusing
+      the analytic Jacobian). transient() is backward-Euler only; a
+      DeviceStamp inside a transient circuit is solved quasi-statically
+      per step (no device-internal capacitive coupling).
+  M28 Schottky/tunnel contacts + gate stacks STANDALONE-MODULE SLICE
+      COMPLETE: pytcad/schottky.py -- thermionic emission + Richardson
+      constants, image-force lowering, Padovani-Stratton field-
+      emission/tunnel-contact classification, ohmic-limit recovery.
+      NOT wired into any device Newton core as a BC (see M46).
+  M29 Hydrodynamic/energy balance            DONE as a disclosed
+      simplification, not the full self-consistent transport solve
+      originally scoped: pytcad/hydrodynamic.py is a standalone LOCAL
+      (no spatial energy-flux) steady closure -- carrier temperature
+      from a published relaxation time, the length scale
+      l_w=v_sat*tau_w (~0.04um for Si), a qualitative field-heating
+      trend, and carrier-T-driven II via the existing M15 coefficients.
+      NOT wired into Device1D's residual/Jacobian (pure post-
+      processing) -- a genuine spatial-overshoot-profile match needs
+      the div(S) energy-flux term this module omits (see M44).
+  M30 Workbench system features + interop    Part I LANDED
+      (workbench/splits.py, calibration.py, batch.py,
+      deckbuild_import.py -- parameter splits, Nelder-Mead calibration,
+      batch parallelism, DeckBuild-dialect import). Part II (GUI/
+      product layer: Study Manager, Sweep Matrix Viewer, Run
+      Comparison, manifest resume, provenance, parameter constraints,
+      adaptive sweep, SSH remote execution + GUI wiring) LANDED
+      2026-09-09, all 12 phases -- workbench/study_manifest.py,
+      adaptive_sweep.py, constraints.py, remote_executor.py,
+      gui/services/remote_job_runner.py, gui/qml/panels/StudyPanel.qml.
+
+4a. GAP ANALYSIS SNAPSHOT (drafted pre-M13; kept for what motivated the
+roadmap -- the status table above is the live record, not this list):
+Fermi-Dirac/incomplete ionization, surface mobility, coupled II, BTBT,
+TAT, self-heating, transient, AC, DG, 2D heterojunctions were all
+[partial]/[missing] when drafted; all now landed to the tier-1 scope
+above except M14 G-A. Process (implant/diffusion/oxidation/deposition-
+etch), unstructured meshing, adaptive refinement, 3D scale, mixed-mode
+circuit, calibration/splits were all [partial]/[missing]; all landed to
+the tier-2/3 scope above.
+
+4b.6 GEOMETRY FOUNDATION DECISION (M21 phase 3's mesher): gmsh, not raw
+OpenCASCADE/pythonocc-core or FreeCAD. gmsh is the one open project
+bundling an OCC-based CAD kernel, unstructured 2D/3D meshing, and
+Physical-Group region tagging in one Python-importable package;
+DEVSIM already documents importing gmsh meshes directly. Validated,
+not merely decided: examples/debug_geometry_gmsh_conformality.py
+confirms a gmsh-built p-n diode mesh is CONFORMAL across the material
+interface (shared node tags exactly at the junction, region areas
+match analytic to 1e-16, zero degenerate triangles) -- what box-
+integration FV assembly requires. A hard-debug finding: an ungrounded
+gmsh size field over-refined a device to 21344 nodes; regrounding it
+in pytcad.mesh.debye_length (the same quantity phase 1's own h/L_D
+constraint uses) cut this to ~2100 nodes. Full record:
+M21-MESHING-PLAN.md section 12. A 3D repeat of the conformality check
+remains undone (3D unstructured meshing is out of Phase 3's scope).
 
 ------------------------------------------------------------------------
-4b.5 STATUS BY MILESTONE (2026-08-31, live -- read this one, not 4b.2,
-for what has actually landed)
+5. POST-M31 ROADMAP (M31-M50)
 ------------------------------------------------------------------------
-  M13 Fermi-Dirac + incomplete ionization        COMPLETE (G1-G8);
-                                                  incomplete ionization
-                                                  lifted to structured
-                                                  2D/3D by M41
-                                                  (2026-09-12)
-  M14 surface/inversion mobility                 MOSTLY COMPLETE
-                                                  (2026-08-28): G-B (D_it
-                                                  in moscap.py), G-C
-                                                  (S_n/S_p in Device1D
-                                                  only -- Device2D
-                                                  attempted, found to be
-                                                  a no-op, reverted to
-                                                  an explicit raise),
-                                                  driving_force
-                                                  (descoped, no 2D/3D
-                                                  consumer exists), and
-                                                  catalog registration
-                                                  (surface_mobility) all
-                                                  landed. G-A remains
-                                                  OPEN, blocked on a
-                                                  paywalled primary
-                                                  source (see M14-
-                                                  SURFACE-MOBILITY-
-                                                  PLAN.md)
-  M15 impact ionization coupling                 COMPLETE (all gates
-                                                  green, 2026-08-28)
-  M16 band-to-band tunneling                     LANDED 2026-08-29,
-                                                  VERIFIED 2026-08-31
-                                                  (local Kane in
-                                                  Device1D, M15-R1b
-                                                  live coupling,
-                                                  ordering gates
-                                                  written first; the
-                                                  gate suite was run
-                                                  for the first time
-                                                  2026-08-31 and 3
-                                                  test-code sign/
-                                                  threshold bugs were
-                                                  found and fixed --
-                                                  all 13 gates now
-                                                  green; see
-                                                  pytcad/M16-BTBT-
-                                                  PLAN.md)
-  M17 transient simulation                       PHASES 1-3 (1D/2D/GUI)
-                                                  DONE 2026-08-31; see
-                                                  pytcad/M17-TRANSIENT-
-                                                  PLAN.md
-  M18 small-signal AC                            PHASE 1 (1D one-port)
-                                                  LANDED 2026-08-31; see
-                                                  pytcad/M18-AC-PLAN.md;
-                                                  PHASE 2 (1D
-                                                  multi-terminal
-                                                  Y-parameter extraction +
-                                                  fT) merged in from a
-                                                  parallel branch
-                                                  2026-09-04, additive to
-                                                  ac_sweep(); PHASE 3
-                                                  (Device2D N-terminal
-                                                  Y-parameters incl. gate
-                                                  ports) LANDED
-                                                  2026-09-04, new
-                                                  pytcad/ac2d.py; PHASE 4
-                                                  (GUI exposure) LANDED
-                                                  2026-09-05, new
-                                                  ACPanel.qml + ac__*
-                                                  wire format + C(f)/
-                                                  G(f) via ax.twinx();
-                                                  PHASE 3b (4-terminal
-                                                  mosfet_2d Y-parameter
-                                                  matrix + fT) LANDED
-                                                  2026-09-05, new
-                                                  ac2d.cutoff_frequency(),
-                                                  reused M14's
-                                                  build_mosfet fixture
-  M19 self-heating                               PHASE 1 (1D
-                                                  steady-state) LANDED
-                                                  2026-08-31; see
-                                                  pytcad/M19-
-                                                  SELFHEATING-PLAN.md;
-                                                  2D/transient not
-                                                  started
-  M20 density-gradient quantum correction        COMPLETE, ALL GATES
-                                                  GREEN (2026-08-31);
-                                                  coupled-Newton
-                                                  reformulation, see
-                                                  M20-DENSITY-
-                                                  GRADIENT-PLAN.md
-                                                  section 7. A real
-                                                  correctness bug found
-                                                  and fixed in a parallel
-                                                  branch (merged in
-                                                  2026-09-04): the
-                                                  discretized Hamiltonian
-                                                  was not actually
-                                                  Hermitian on a non-
-                                                  uniform mesh (row/
-                                                  column control-volume
-                                                  widths differed) --
-                                                  fixed via a similarity-
-                                                  transformed symmetric
-                                                  formulation, same
-                                                  eigenvalues
-  M21 general 2D meshing + FV assembly           PHASES 1-2 (1D/2D/3D
-                                                  adaptive h-refinement)
-                                                  SHIPPED; PHASE 3
-                                                  (3a-3d) COMPLETE
-                                                  2026-08-31, see
-                                                  M21-PHASE3-MESHING-
-                                                  PLAN.md. Phase 3d's
-                                                  unstructured DD wrapper
-                                                  extended to 3D (new
-                                                  gmsh_mesh3d.py,
-                                                  adapt_unstructured3d.py,
-                                                  unstructured_assembly3d.py,
-                                                  unstructured_dd3d.py) in
-                                                  a parallel branch,
-                                                  merged in 2026-09-04
-                                                  (27 tests passing)
-  M22 linear solver + continuation               PHASE 1 (Krylov+ILU+
-                                                  block-Jacobi) SHIPPED,
-                                                  3D-scaling gate GREEN;
-                                                  a bit-identity bug in
-                                                  the "direct" method
-                                                  (CSR->CSC reformat
-                                                  before spsolve) found
-                                                  and fixed; PHASE 2
-                                                  (continuation driver,
-                                                  strength-ladder-aware
-                                                  corrector) LANDED
-                                                  2026-08-28, closed
-                                                  M15 R1b; PHASE 3
-                                                  LANDED 2026-09-02 as
-                                                  MPI Schwarz domain
-                                                  decomposition (not
-                                                  the distributed-
-                                                  matrix design
-                                                  originally sketched)
-                                                  -- 4 ranks, 5.1x on
-                                                  bjt_3d, exact to
-                                                  ~1e-17; a real
-                                                  regression on a
-                                                  device whose doping
-                                                  varies along the
-                                                  split axis (tried on
-                                                  pn_junction_3d) was
-                                                  found and gated
-                                                  against before it
-                                                  shipped. Same
-                                                  session: pyamg-
-                                                  backed AMG for the
-                                                  GUI's 3D equilibrium
-                                                  solve (8x-44x on
-                                                  large meshes) and a
-                                                  CUDA (CuPy/cuSOLVER)
-                                                  direct solve for the
-                                                  bias/sweep Newton
-                                                  loop (2.8x on
-                                                  bjt_3d's bias
-                                                  Jacobian) -- see
-                                                  M22-LINSOLVE-PLAN.md
-                                                  section 9 for the
-                                                  full record.
-                                                  GENERALIZED same day
-                                                  (section 10) from an
-                                                  x-only split to
-                                                  picking whichever
-                                                  axis (x/y/z) is
-                                                  actually safe per
-                                                  device -- this is
-                                                  what brought
-                                                  pn_junction_3d
-                                                  (refused outright by
-                                                  the x-only check)
-                                                  onto the MPI path via
-                                                  a z-split, 1.5x over
-                                                  its single-process
-                                                  AMG+GPU baseline,
-                                                  exact to ~1e-17
-  M23 2D process geometry engine                 STRUCTURED-MESH SLICE
-                                                  COMPLETE (2026-09-06):
-                                                  pytcad/process2d.py --
-                                                  mask-driven deposit/
-                                                  etch, 2D thermal
-                                                  oxidation with bird's-
-                                                  beak encroachment
-                                                  (qualitative, not
-                                                  quantitatively
-                                                  validated -- see that
-                                                  module's honesty
-                                                  clause), mask-driven
-                                                  2D implants. Gates in
-                                                  tests/
-                                                  test_m23_process2d.py/
-                                                  test_model_benchmarks.py;
-                                                  demo examples/
-                                                  08_locos_flow.py.
-                                                  General-mesh (post-
-                                                  M21) version remains
-                                                  future work.
-  M24 pair diffusion/segregation/clustering      LUMPED-MODEL SLICE
-                                                  COMPLETE (2026-09-06):
-                                                  pytcad/ted.py -- Fair
-                                                  extrinsic enhancement,
-                                                  "+1" TED
-                                                  supersaturation, OED
-                                                  boost, equilibrium
-                                                  segregation
-                                                  partition,
-                                                  solubility-limited
-                                                  clustering. A lumped-
-                                                  scalar engineering
-                                                  model, NOT a coupled
-                                                  point-defect PDE (see
-                                                  module honesty
-                                                  clause). Gates in
-                                                  tests/test_m24_ted.py/
-                                                  test_model_benchmarks.py;
-                                                  demo examples/
-                                                  09_ted_anneal.py.
-  M25 Monte-Carlo implantation (BCA)             SIMPLIFIED-BCA SLICE
-                                                  COMPLETE (2026-09-06):
-                                                  pytcad/mc_implant.py --
-                                                  screened-Rutherford
-                                                  nuclear scattering
-                                                  with a calibrated LSS
-                                                  electronic-stopping
-                                                  prefactor (NOT the
-                                                  literal ZBL magic-
-                                                  formula fit -- see
-                                                  module honesty
-                                                  clause). Amorphous-
-                                                  target range matches
-                                                  the existing SRIM-
-                                                  derived table to
-                                                  roughly +-35% over a
-                                                  few-x energy window
-                                                  around calibration;
-                                                  channeling is a
-                                                  disclosed
-                                                  phenomenological knob,
-                                                  not a lattice
-                                                  simulation. Gates in
-                                                  tests/
-                                                  test_m25_mc_implant.py/
-                                                  test_model_benchmarks.py;
-                                                  demo examples/
-                                                  10_mc_implant.py.
-  M26 3D generalization                          TWO PASSES LANDED
-                                                  2026-09-06 (disclosed
-                                                  slice level -- see
-                                                  Architecture_Master_
-                                                  Plan.md section 0.1
-                                                  for the full record):
-                                                  (1) structured-mesh
-                                                  tri-gate FinFET
-                                                  (pytcad/finfet3d.py)
-                                                  on the existing
-                                                  Device3D/Mesh3D core,
-                                                  with pytcad/
-                                                  characterization.py
-                                                  (Vth/SS/DIBL) and a
-                                                  literature-trend gate
-                                                  in test_model_
-                                                  benchmarks.py showing
-                                                  DIBL/SS both worsen as
-                                                  gate length shrinks
-                                                  (demo examples/
-                                                  12_finfet3d_dibl.py);
-                                                  (2) the unstructured
-                                                  tet path
-                                                  (unstructured_dd3d.py)
-                                                  gained a gates Robin/
-                                                  oxide-coupling BC
-                                                  (backed by
-                                                  unstructured_
-                                                  assembly3d.
-                                                  boundary_face_node_
-                                                  weights3d) and a
-                                                  process2d-to-3D-tet
-                                                  extrusion pipeline
-                                                  (pytcad/
-                                                  gmsh_finfet3d.py,
-                                                  demo examples/
-                                                  13_finfet3d_from_
-                                                  process2d.py). Building
-                                                  the gate BC surfaced
-                                                  and FIXED a pre-
-                                                  existing scaling bug
-                                                  in that module's
-                                                  interior Poisson-flux
-                                                  coefficient (trans_geom
-                                                  *eps -> the correct
-                                                  trans_geom/LD -- see
-                                                  that module's own
-                                                  docstring "SCALING
-                                                  FIX" section). New
-                                                  general-mesh "3D
-                                                  reduces to 2D" gate:
-                                                  tests/
-                                                  test_m26_finfet3d.py::
-                                                  test_unstructured_
-                                                  gate_bc_reduces_to_2d.
-                                                  Disclosed remaining
-                                                  gaps: doping extrusion
-                                                  is per-region-constant
-                                                  (not a true 2D process
-                                                  implant-array
-                                                  extrusion); the
-                                                  extruded tet FinFET's
-                                                  fully coupled bias
-                                                  solve needs voltage
-                                                  ramping/continuation
-                                                  not yet implemented on
-                                                  that path; tet AMR
-                                                  (adapt_unstructured3d.py)
-                                                  at FinFET scale
-                                                  remains lightly
-                                                  validated only.
-  M27 mixed-mode device + circuit                DONE (2026-09-06):
-                                                  pytcad/circuit.py --
-                                                  Modified Nodal
-                                                  Analysis solver
-                                                  (VSource/ISource/
-                                                  Resistor/Capacitor/
-                                                  Diode/level-1
-                                                  Shichman-Hodges
-                                                  MOSFET) plus
-                                                  DeviceStamp,
-                                                  embedding a real
-                                                  Device1D as a
-                                                  nonlinear two-
-                                                  terminal element via
-                                                  a FINITE-DIFFERENCE
-                                                  terminal conductance
-                                                  (NOT literally "the
-                                                  existing analytic
-                                                  Jacobian" -- see
-                                                  that module's own
-                                                  honesty clause).
-                                                  Gates: resistor-
-                                                  divider-vs-analytic,
-                                                  device-in-circuit-
-                                                  vs-device-only-
-                                                  solve, and a 3-stage
-                                                  CMOS ring-oscillator
-                                                  transient smoke test
-                                                  (qualitative, per
-                                                  the milestone's own
-                                                  spec), all in
-                                                  test_model_
-                                                  benchmarks.py;
-                                                  structural tests in
-                                                  tests/
-                                                  test_m27_circuit.py;
-                                                  demo examples/
-                                                  14_mixed_mode_
-                                                  circuit.py.
-                                                  transient() is
-                                                  backward-Euler only;
-                                                  a DeviceStamp inside
-                                                  a transient circuit
-                                                  is solved quasi-
-                                                  statically each step
-                                                  (no device-internal
-                                                  capacitive coupling)
-  M28 Schottky/tunnel contacts + gate stacks     STANDALONE-MODULE
-                                                  SLICE COMPLETE
-                                                  (2026-09-06): pytcad/
-                                                  schottky.py --
-                                                  thermionic emission +
-                                                  Richardson constants
-                                                  (self-derived A0
-                                                  matches published
-                                                  120.173 A/(cm^2 K^2)
-                                                  to 5 sig figs; tabulated
-                                                  literature A* used
-                                                  directly, NOT derived
-                                                  from conductivity
-                                                  mass), image-force
-                                                  barrier lowering,
-                                                  Padovani-Stratton
-                                                  field-emission/tunnel-
-                                                  contact regime
-                                                  classification, ohmic-
-                                                  limit recovery. Fixed
-                                                  charge/work-function
-                                                  engineering in gate
-                                                  stacks was already
-                                                  covered by pytcad.
-                                                  moscap.flatband_voltage
-                                                  (not duplicated).
-                                                  Gates in tests/
-                                                  test_m28_schottky.py/
-                                                  test_model_benchmarks.py;
-                                                  demo examples/
-                                                  11_schottky_diode.py.
-                                                  NOT wired into a live
-                                                  Device1D/Device2D
-                                                  Jacobian as a boundary
-                                                  condition -- standalone
-                                                  contact-physics module
-                                                  only, same pattern as
-                                                  M23-M25.
-  M29 hydrodynamic/energy balance                DONE (2026-09-06) as
-                                                  a disclosed-
-                                                  simplification slice,
-                                                  NOT the full self-
-                                                  consistent transport
-                                                  solve the milestone's
-                                                  own "genuinely
-                                                  stretch" framing
-                                                  anticipated:
-                                                  pytcad/
-                                                  hydrodynamic.py is a
-                                                  standalone LOCAL (no
-                                                  spatial energy-flux)
-                                                  steady energy-balance
-                                                  closure -- carrier
-                                                  temperature from a
-                                                  published energy
-                                                  relaxation time, the
-                                                  genuinely computable
-                                                  "why overshoot
-                                                  matters in short
-                                                  devices" length scale
-                                                  l_w=v_sat*tau_w
-                                                  (~0.04 um for Si,
-                                                  correct submicron
-                                                  order of magnitude),
-                                                  a qualitative field-
-                                                  driven heating trend,
-                                                  and carrier-
-                                                  temperature-driven
-                                                  impact ionization
-                                                  reached by mapping
-                                                  back to an effective
-                                                  field and reusing the
-                                                  existing (M15)
-                                                  published field-
-                                                  driven van
-                                                  Overstraeten-de Man
-                                                  coefficients. NOT
-                                                  wired into Device1D's
-                                                  residual/Jacobian at
-                                                  all (pure post-
-                                                  processing), so "DD
-                                                  limit recovery (bit-
-                                                  identity when off)"
-                                                  holds by construction
-                                                  -- gated explicitly
-                                                  anyway. Disclosed
-                                                  limitation: a LOCAL
-                                                  closure cannot
-                                                  reproduce the actual
-                                                  SPATIAL shape of a
-                                                  Monte Carlo overshoot
-                                                  profile (needs the
-                                                  div(S) energy-flux
-                                                  term this module
-                                                  omits) -- the
-                                                  "overshoot" gate is
-                                                  the heating-trend/
-                                                  length-scale facts
-                                                  above, not a spatial-
-                                                  profile match. Gates
-                                                  in test_model_
-                                                  benchmarks.py/
-                                                  tests/
-                                                  test_m29_
-                                                  hydrodynamic.py; demo
-                                                  examples/
-                                                  15_hydrodynamic_
-                                                  overshoot.py
-  M30 workbench system features + interop        Part I landed
-                                                  2026-09-07 (splits,
-                                                  calibration, batch
-                                                  parallelism, DeckBuild
-                                                  import); Part II
-                                                  (GUI/product layer)
-                                                  not started -- see
-                                                  pytcad/M30-WORKBENCH-
-                                                  PLAN.md
+STATUS OF THIS SECTION: M31 is REAL (planned, gated, in progress, own
+plan doc). M32-M50 is a PROPOSED map grounded in this repo's own
+disclosed gaps (4b.1, each M*-PLAN.md's honest-limits section,
+Architecture_Master_Plan.md sections 34/35) -- nothing below is
+committed until it has its own plan doc and gates.
 
-------------------------------------------------------------------------
-4b.6 GEOMETRY FOUNDATION DECISION (2026-08-27) -- M21 phase 3's mesher
-------------------------------------------------------------------------
-DECIDED as gmsh, not raw OpenCASCADE/pythonocc-core, not FreeCAD.
-Checked against this repo, not the libraries in the abstract: gmsh is
-the one open project bundling an OCC-based CAD kernel (boxes, polygons,
-extrusions, booleans), unstructured 2D/3D meshing, and Physical-Group
-region tagging in a single Python-importable package.  Physical Groups
-map onto exactly what DeviceSpec.region_materials already does for
-rectilinear regions, generalized from boxes to arbitrary shapes.
-DEVSIM (already a backend here, workbench/solvers/devsim_backend.py)
-documents importing gmsh triangular/tetrahedral meshes directly -- a
-used integration path, not a hopeful one.  Raw OCCT is the kernel
-underneath gmsh already, so there is no case for binding it directly;
-FreeCAD is a desktop application with a Python console, not a library,
-and embedding it would fight the pure-QML architecture the same way a
-second Qt Widgets stack would.  build123d (parametric CAD on OCP/OCCT)
-is queued behind gmsh for if/when freeform sketch-and-drag authoring
-is actually asked for -- it is not a mesher and would still hand off
-to gmsh for meshing.
+5.1 M31 -- C++/PYTHON/QT PRODUCTION ARCHITECTURE  [XL, IN PROGRESS]
+Full spec: pytcad/M31-CPP-ARCHITECTURE-PLAN.md. Progressive extraction
+(Architecture_Master_Plan.md section 37) -- NOT a rewrite.
 
-VALIDATED, not merely decided: examples/debug_geometry_gmsh_
-conformality.py builds the same p-n diode geometry as the pytcad
-Device2D goldens through gmsh's OCC kernel and confirms the mesh is
-CONFORMAL across the material interface -- p_region and n_region
-share 99 node tags at the junction, every one exactly at x = Xj (bit
-for bit, not "close to"), region areas match the analytic rectangle
-areas to 1e-16 relative, zero degenerate or inverted triangles, and
-both contact Physical Groups resolve to real boundary elements.
-Conformality across every interior interface is what phase 3's
-box-integration FV assembly requires, and it was measured, not
-assumed.  A hard-debug finding along the way: an ungrounded gmsh size
-field (arbitrary DistMin/SizeMin) over-refined a two-rectangle device
-to 21344 nodes by refining uniformly along the entire junction curve
-instead of a physically-sized corridor; regrounding it in
-pytcad.mesh.debye_length -- the SAME quantity M21 phase 1's own h/L_D
-constraint already uses -- cut this to ~2100 nodes, comparable to the
-existing tensor-product goldens.  Full record: M21-MESHING-PLAN.md
-section 12.  UPDATE 2026-08-31: the region-tag resolver, the FV
-assembly, and the golden parity gate are now all DONE -- see M21
-Phase 3's completion (M21-PHASE3-MESHING-PLAN.md). Still not done: a
-3D repeat of the conformality check (a materially harder case,
-solid-solid rather than curve-curve) -- 3D unstructured meshing
-remains out of scope (Phase 3's own stated exclusions).
-
-------------------------------------------------------------------------
-4c. FUTURE: POST-M31 ROADMAP (M31-M40)
-------------------------------------------------------------------------
-Section 4b took the project from M13 to M30 and is essentially closed:
-everything there has landed to its disclosed slice level except M14's
-G-A (blocked on a paywalled source) and M30 Part II (planned in full in
-pytcad/M30-WORKBENCH-PLAN.md, in progress). This section is what comes
-after.
-
-STATUS OF THIS SECTION: 4c.1 (M31) is REAL -- planned, gated, and
-partly landed, with its own plan doc. 4c.2 (M32-M40) is a PROPOSED
-map, not a decided one. It is grounded in gaps this repo has already
-written down -- 4b.1's remaining [missing]/[partial] rows, the
-"honest limits" section every M*-PLAN.md carries, and
-Architecture_Master_Plan.md sections 34/35 -- rather than in a generic
-TCAD wishlist. Sizes and ordering are estimates; nothing below is
-committed until it has its own plan doc and gates, per rule 4b.4.
-
-------------------------------------------------------------------------
-4c.1 M31 -- C++ / PYTHON / QT PRODUCTION ARCHITECTURE  [XL, IN PROGRESS]
-------------------------------------------------------------------------
-Full spec, gates and honest limits: pytcad/M31-CPP-ARCHITECTURE-PLAN.md.
-Progressive extraction per Architecture_Master_Plan.md section 37 --
-explicitly NOT a rewrite.
-
-  P0  build system + CI + C++/Python boundary          LANDED 2026-09-09
-  P1  de-couple device.py; two latent bugs fixed       LANDED 2026-09-09
-  P2  mesh/geom kernels -- the measured blocker        LANDED 2026-09-09
-  P3a linsolve method="petsc" via petsc4py (no C++)    NEXT
-  P3b the same configuration moved into core/solver/
-  P4  process/particle kernels (MC implant, TED, AMR indicators)
-  P5  assembly + Newton in C++; the pytcad_cpp backend appears
-  P6  native QQuickVTKItem 3D viewport
-  P7  MPI + GPU via PETSc; DMPlex
-  P8  Qt shell hardening (split AppController, structured progress)
-  P9  promote pytcad_cpp to default; Python core retained as oracle
+  P0  build system + CI + C++/Python boundary          LANDED
+  P1  de-couple device.py; two latent bugs fixed        LANDED
+  P2  mesh/geom kernels -- the measured blocker          LANDED
+  P3a linsolve method="petsc" via petsc4py (no C++)     LANDED
+  P3b same configuration moved into core/solver/         LANDED
+  P4  process/particle kernels (MC implant, TED, AMR)    LANDED
+  P5  assembly + Newton in C++                    STOPPED after P5-0
+  P5-1 solver-selection tuning (Phase A, A-2)            LANDED
+  P6  native QQuickVTKItem 3D viewport                NOT STARTED
+  P7  MPI + GPU via PETSc; DMPlex                     NOT STARTED
+  P8  Qt shell hardening                              NOT STARTED
+  P9  promote pytcad_cpp to default                   N/A (no P5)
 
 THE MEASUREMENT THAT ORDERED THESE PHASES -- do not re-derive it:
-  - Structured 3D assembly is NOT the bottleneck. A 24^3 equilibrium
-    solve spends 98% of wall time in _superlu.gssv; assembly is 0.011s
-    of 0.494s. Porting device*.py's assembly buys ~2%.
-  - The direct-LU wall is ALGORITHMIC, not linguistic: the existing
-    pure-Python node-block-Jacobi GMRES already does 68,921 nodes
-    (206,763 unknowns) in 4.71s.
-  - The genuine blocker was unstructured mesh geometry: ~80k tri/s (2D)
-    and ~3.5k tets/s (3D), i.e. ~5 minutes of Python dict overhead on a
-    1M-tet mesh before any physics ran. P2 closed it: 3.16M tri/s and
-    1.99M tets/s, bit-identical, that 1M-tet mesh now 0.71s.
-That is why P2 went first and P5 is deliberately LAST among the solver
-phases -- and why the plan doc records a design review's dissent that
-P5 may be negative value at all.
+structured 3D assembly is NOT the bottleneck (a 24^3 equilibrium solve
+spends 98% of wall time in _superlu.gssv; assembly is 0.011s of
+0.494s); the pure-Python node-block-Jacobi GMRES already does 68,921
+nodes in 4.71s, so the direct-LU wall is ALGORITHMIC, not linguistic.
+The genuine blocker was unstructured mesh geometry (~80k tri/s 2D,
+~3.5k tets/s 3D -- minutes of Python dict overhead before any physics
+ran); P2 closed it to 3.16M tri/s / 1.99M tets/s, bit-identical.
+
+P5 STOPPED after P5-0: P5-1's Phase A-2 measured all 8 solver-
+selection cells (the discriminator is COUPLING, not dimension --
+largest win: 3D structured coupled bias, 44.56s -> 1.60s, 27.9x, via
+petsc/direct auto-selection, no default moved). P5 proper's own exit
+criterion then fired: B9's assembly SHARE rose 11x (1.5%->16.3%) but
+its ABSOLUTE cost did not move (~109ms) against an ongoing second-
+engine maintenance cost -- see M31-P5-ASSEMBLY-NEWTON-PLAN.md section
+12. P6/P7 are NOT blocked on a C++ assembler that will not exist --
+re-scope against the Python+PETSc stack P5-0/P5-1 actually built.
 
 OPEN DECISION carried out of P2: build_unstructured_stencil is
-winding-sensitive (_cot divides by a SIGNED cross product while
-tri_area takes abs(), so a clockwise-wound non-obtuse triangle
-contributes NEGATIVE dual-cell areas). gmsh emits consistently CCW
-triangles so no real caller hits it; the compiled path reproduces the
-quirk faithfully and it is PINNED by a test rather than papered over.
-Fixing it changes physics and must land on both paths at once.
+winding-sensitive (a clockwise-wound triangle contributes NEGATIVE
+dual-cell areas); gmsh emits CCW so no real caller hits it, but the
+compiled path faithfully reproduces the quirk and it is PINNED by a
+test rather than papered over. Fixing it changes physics and must
+land on both paths (Python oracle + C++) at once.
 
-------------------------------------------------------------------------
-4c.2 PROPOSED M32-M40
-------------------------------------------------------------------------
-Each row names the 4b.1 gap or plan-doc limitation it retires, so the
-justification is checkable rather than asserted.
+ADJOINT NOTE (relevant to M47 below): P5's stopping means the
+"expose dR/dp, keep J^T-friendly assembly" gate this section originally
+wanted on the C++ assembler never had an assembler to apply to. The
+Dirichlet-transpose half of that gate was instead closed on the PYTHON
+path (P4b: symmetric row-AND-column elimination in dirichlet.py). M47
+should depend on P4b's fix, not on a P5 that stopped.
 
-M32  BENCHMARK SUITE & PERFORMANCE DASHBOARD              [M]  LANDED
-     Architecture_Master_Plan.md section 34 defines cases B1-B7 (1D
-     Poisson -> 3D SiC MOSFET -> 3D GaN HEMT -> large synthetic 3D)
-     and section 35 a dashboard (DOF, NNZ, memory, assembly/residual/
-     Jacobian/solve times, Newton iterations, strong/weak scaling, GPU
-     speedup). BOTH NOW EXIST: `pytcad/benchmarks/`, run with
-     `python -m benchmarks`, gated by tests/test_m32_benchmarks.py,
-     with a checked-in baseline at benchmarks/BASELINE.md. Section 36's
-     rule -- no "HPC-ready" claim without correctness + scaling +
-     memory + reproducibility in a table -- is now satisfiable.
-     Plan and honest limits: pytcad/M32-BENCHMARK-PLAN.md. Three
-     section-35 columns are deliberately NOT reported as specified
-     (residual/Jacobian split, Newton iterations, true memory) because
-     they cannot be measured honestly from outside the frozen core --
-     see the plan doc. Depends: M31 P3a (landed).
+5.2 PROPOSED M32-M40 (each row names the 4b.1/plan-doc gap it retires)
 
-M33  SURFACE/INTERFACE PHYSICS COMPLETION      [L] S1-S5 LANDED, FULLY DONE
-     Retires three long-standing 4b.1 [missing] rows: surface
-     recombination velocity, D_it in the MOS module, and the
-     thermionic-emission heterojunction interface model (M11's own
-     deferral). Also the natural home for M14's G-A once a non-
-     paywalled calibration source is found. Depends: nothing in M31.
-     S1 (chi-aware band alignment) + S2 (thermionic emission) + S3
-     (cosmetic gate/comment fix) LANDED 2026-09-10 in Device1D --
-     `M33-INTERFACE-PLAN.md`. S4 (the same chi-aware alignment ported
-     to Device2D) LANDED 2026-09-10/11 -- `M33-S4-PLAN.md`, 16 gates,
-     suite green both ways, all `tests/goldens/m13/*.npz` md5-identical
-     off-path. S5 (the same port to Device3D and `unstructured_dd.py`)
-     LANDED 2026-09-11 -- `M33-S5-PLAN.md`, 21 gates, suite green both
-     ways; also found that `unstructured_dd.py`'s non-equilibrium-
-     slaved formulation makes an isotype junction's terminal current
-     PROVABLY gauge-invariant (an exact identity, not a numerical
-     coincidence -- see the plan doc). `unstructured_dd3d.py` stays
-     out of scope (no heterojunction mechanism to port at all). M33 is
-     now fully landed; no open piece remains on this line.
+  M32  Benchmark suite & performance dashboard    [M]   LANDED
+       pytcad/benchmarks/ (cases B1-B7), `python -m benchmarks`,
+       gated (test_m32_benchmarks.py), checked-in benchmarks/BASELINE.md.
+       Satisfies section 36's "no HPC claim without a table" rule.
+       Three dashboard columns (residual/Jacobian split, Newton
+       iteration count, true memory) are deliberately NOT reported --
+       cannot be measured honestly from outside the frozen core.
+  M33  Surface/interface physics completion       [L]   FULLY LANDED
+       (S1-S5): chi-aware band alignment + thermionic emission in
+       Device1D, ported to Device2D, Device3D, and unstructured_dd.py.
+       Retires the surface-recombination/D_it/thermionic-interface
+       [missing] rows. unstructured_dd.py's non-equilibrium-slaved
+       formulation makes an isotype junction's terminal current
+       PROVABLY gauge-invariant (an exact identity, confirmed).
+  M34  Nonlocal tunneling & ionization (Tier 3)   [L]   LANDED
+       Nonlocal path Kane BTBT (Esseni 2017 eq 11 WKB quadrature,
+       pytcad/nonlocal_path.py, compiled tracer core/src/nonlocal/
+       paths.cpp) in Device1D and structured Device2D/Device3D through
+       one engine. Nonlocal effective-field II (pytcad/ii_nonlocal.py,
+       Slotboom 1991) in Device1D, then lifted to structured 2D/3D
+       (pytcad/ii_nonlocal_grid.py, one sparse-LU factor-solve for
+       E_eff + its Jacobian -- replaced two naive-Python performance
+       traps: a per-line loop, vectorized; a per-node dict-DP walk,
+       recognized as one sparse triangular solve). Local coupled II
+       also lifted to structured 2D/3D (pytcad/ii_grid.py), closing
+       4d.1's local-II gap. A convergence bug shared by all three
+       stiff paths (impact, btbt, btbt_nonlocal) -- judging Newton
+       convergence on the line-search-DAMPED update instead of the
+       full correction -- was found and fixed in all three devices;
+       this was M15's long-open G-C gap (M_sim/M_int measured 0.76,
+       inside its tolerance band). Out of scope: unstructured meshes,
+       heterojunctions, phonon-assisted BTBT, energy-resolved channels.
+  M35  3D process simulation                      [XL]  NOT STARTED
+       Still missing: 2D moving-boundary oxidation (LOCOS/STI bird's
+       beak proper), deposition/etch topology engine, masks,
+       silicidation, epitaxy, CMP, none of it in 3D. The single
+       biggest remaining parity gap; needs a real topology/level-set
+       engine. Depends: M31 P2 (landed).
+  M36  Stress/strain coupling                     [L]   NOT STARTED
+       Depends: M31 P5 (stopped -- re-scope against Python+PETSc).
+  M37  Reliability & trap dynamics (BTI/HCI/TDDB) [L]   NOT STARTED
+       Depends: M33 (landed), M17 (landed).
+  M38  TCAD-to-SPICE compact model extraction     [M]   ALL 4 PHASES
+       LANDED: workbench/compact.py fits circuit.py's Diode/MOSFET1,
+       emits a real SPICE .MODEL card, reads it back, closes the loop
+       through circuit.Circuit's MNA solver -- no external SPICE.
+       Measured: pn diode N=1.0031; 2D MOSFET fit 2.90% relative RMS,
+       Vt0 within 0.91% of closed-form. Phase 4: compact_runner.py +
+       "Compact Model" GUI tab + workflow.py's parse-only `EXTRACT`
+       deck statement (not yet wired into batch execution). NOT done:
+       BSIM-class models, temperature/geometry scaling, AC/C-V
+       extraction, PMOS in the GUI panel.
+  M39  Quantum transport (NEGF, 1D)                [XL]  NOT STARTED
+       DG/Schrodinger-Poisson are equilibrium-only; NEGF is the
+       honest way to do quantum TRANSPORT. Depends: M31 P5 (stopped,
+       re-scope), M32 (landed).
+  M40  Optical generation / photonics              [L]   NOT STARTED
+       Opens solar/photodetector/imager devices. No C++ dependency
+       beyond meshing.
 
-M34  NONLOCAL TUNNELING & IONIZATION (Tier 3)    [L]  LANDED 2026-09-11
-     M16 shipped LOCAL Kane BTBT and explicitly deferred the nonlocal
-     line-integral variant; M15 likewise states nonlocal (driving-
-     force-integral) ionization out of scope. Both are the standard
-     next tier and both need path integration along field lines --
-     which is exactly the kind of per-element loop that is unusable in
-     Python and cheap in C++. Depends: M31 P4.
-     All five slices landed -- `pytcad/M34-PLAN.md` "Status" is the
-     record (`M34-S1-PLAN.md` keeps S1's history). Nonlocal path Kane
-     BTBT (`Models(btbt_nonlocal=True)`, Esseni 2017 eq 11: exact WKB
-     quadrature, live band profile, path geometry frozen per bias
-     solve and re-located at convergence) in Device1D and structured
-     Device2D/Device3D through ONE engine, `pytcad/nonlocal_path.py`;
-     2D/3D paths follow field lines, and a transversely uniform 2D/3D
-     device reproduces Device1D to round-off. Nonlocal effective-field
-     impact ionization (`Models(impact_nonlocal=True)`,
-     `pytcad/ii_nonlocal.py`, Slotboom 1991) in Device1D. The field-
-     line tracer is compiled (`core/src/nonlocal/paths.cpp`, bit-
-     identical to its Python oracle; benchmark B10). Both flags are in
-     the model catalog and the GUI wire format. Out of scope, stated
-     (at the time -- nonlocal II in 2D/3D was closed 2026-09-12, S6c
-     below): unstructured meshes and heterojunctions (refused),
-     phonon-assisted BTBT, energy-resolved tunneling channels. Also
-     corrected here:
-     4d.1 listed local II and local BTBT as working in 2D/3D, which
-     both devices refuse.
-     2026-09-12 (`pytcad/M34-S6-PLAN.md` sections 5-6): S6a/S6b put
-     M15's coupled local impact ionization into structured
-     Device2D/Device3D (`pytcad/ii_grid.py`; alpha at the field
-     component along each carrier's current), so 4d.1's local-II row
-     now reads Y. S7: Device1D's stiff paths (impact, btbt,
-     btbt_nonlocal) judged Newton convergence on the line-search-DAMPED
-     update and stopped short of the discrete solution; fixed in all
-     three devices. M15's long-open G-C gap was that artifact
-     (M_sim/M_int 0.76, inside the plan's band). S6c: the nonlocal
-     effective field ported to the same structured grid
-     (`pytcad/ii_nonlocal_grid.py`, one sparse LU factor-and-solve for
-     the exact E_eff and its Jacobian across all axes, generalizing
-     `ii_nonlocal.effective_field`'s 1D chain), so 4d.1's nonlocal-II
-     row now reads Y too; the Device2D/Device3D constructor refusal is
-     replaced by Device1D's own precondition (impact=True, lambda>0).
-     A real performance lesson from this slice: the naive per-grid-line
-     Python loop and the naive per-node Python dict-DP walk (both
-     literal readings of section 2's own design language) were each,
-     independently, too slow to gate -- fixed by vectorizing the
-     per-line search (every line on a structured axis has the same
-     length, so it reshapes into one array op) and by recognizing the
-     "walk the DAG" step as exactly solving a sparse triangular linear
-     system, which `scipy.sparse.linalg.splu` does in compiled code.
-     Even after both fixes this model is markedly more expensive per
-     Newton iteration than the local one (a real sparse solve vs.
-     vectorized numpy), so its gates use deliberately coarser meshes
-     than S6a/S6b and are marked slow.
+Suggested order: M31 P3a -> M32 -> P4..P7 -> M35 (spine). Parallel
+tracks: physics M33->M37; system M30-Part-II(landed)->M38(landed);
+optics M40 standalone. C++-gated: M34 (needs P4, has it), M35 (needs
+P2, has it); M36/M39 (needed P5, which stopped -- re-scope first).
+M32 sits deliberately inside the M31 track, not after it, because P7's
+scaling claims need the dashboard to police them (section 36).
 
-M35  3D PROCESS SIMULATION                                [XL]
-     M23/M26 shipped structured-mesh slices. Still missing from 4b.1:
-     2D moving-boundary oxidation (LOCOS/STI bird's beak), the
-     deposition/etch topology engine, masks, silicidation, epitaxy,
-     CMP -- and none of it in 3D. Needs a real topology/level-set
-     engine, hence XL. Depends: M31 P2 (geometry kernels), M35 is the
-     single biggest remaining Sentaurus-parity gap.
+WHAT IS PERMANENTLY OUT OF SCOPE (stated so it is never rediscovered
+as a "gap"): p-/r-refinement (node motion, M21's own exclusion);
+bit-identity with commercial tools. Device3D AC's "permanently out of
+scope" call is DEMOTED to a deferral to re-cost (see M45) -- it was
+made when 3D died at ~27k nodes, and M31 removes that constraint.
 
-M36  STRESS / STRAIN COUPLING                             [L]
-     4b.1 lists "no stress coupling" under oxidation; strain-modified
-     mobility and bandgap are table stakes for any modern node. Needs
-     a mechanical solve alongside the electrical one -- the first real
-     test of whether M31's engine can host a SECOND physics, which is
-     the architectural claim P5 is justified by. Depends: M31 P5.
+5.3 THE ROAD TO 3D -- DIMENSIONAL-LIFT MILESTONES (M41-M47)
 
-M37  RELIABILITY & TRAP DYNAMICS                          [L]
-     BTI, hot-carrier injection, TDDB. Builds on M33's D_it and M17's
-     transient machinery. Not in 4b.1 (the roadmap predates it) but
-     the obvious capability gap for a tool claiming device-engineering
-     use. Depends: M33, M17.
+Organized by DIMENSION rather than capability: the DD spine (drift-
+diffusion, Fermi-Dirac, coupled/nonlocal II, local/nonlocal BTBT, TAT,
+AMR, mixed-mode) already reaches 3D on both structured and
+unstructured meshes -- M31 is about making 3D FAST, not making it
+exist. The debt is concentrated in physics added AFTER the DD core
+(quantum corrections, self-heating, hydrodynamic, transient, AC),
+each of which stopped at 1D/2D under a defensible "1D first" call that
+nobody has since revisited. Process simulation is the widest gap
+(3D device physics vs. 2D-at-best/1D-for-TED process input).
 
-M38  TCAD-TO-SPICE COMPACT MODEL EXTRACTION           [M] ALL 4 PHASES LANDED
-     M27 shipped mixed-mode device+circuit; the inverse -- fitting a
-     compact model to simulated I-V/C-V and emitting a netlist -- is
-     what makes TCAD useful to a circuit designer. Reuses M30 Part I's
-     calibration/Nelder-Mead machinery directly. Depends: M30 Part I
-     (landed), M27 (landed). Cheapest real-world payoff on this list.
-     Phases 1-3 LANDED 2026-09-10 (plan and every measured number:
-     pytcad/M38-COMPACT-MODEL-PLAN.md; 33 gates in
-     tests/test_m38_compact_model.py; all new code in
-     workbench/compact.py, NO frozen-core edit). Fits circuit.py's own
-     Diode and MOSFET1, emits a real SPICE .MODEL card, reads it back,
-     and closes the loop through circuit.Circuit's MNA solver -- no
-     external SPICE. Measured: a Device1D pn diode extracts N = 1.0031;
-     a 2D Device2D MOSFET fits to 2.90% relative RMS with Vt0 within
-     0.91% of the closed-form long-channel threshold. Phase 4 (GUI
-     panel + workflow.py deck statement) LANDED 2026-09-10 as its own
-     slice (pytcad/M38-PHASE4-PLAN.md; 13 gates across
-     gui/tests/test_compact_runner.py, gui/tests/test_compact_model_panel.py
-     and tests/test_m38_phase4_deck.py): a new
-     gui/services/compact_runner.py subprocess builds a real
-     Device1D/Device2D from scalar geometry, sweeps it, and fits
-     workbench/compact.py against the result; a new "Compact Model"
-     GUI tab (CompactModelController + CompactModelPanel.qml) drives it
-     end to end and shows the extracted parameters plus the emitted
-     .MODEL card; workflow.py gained a PARSE-ONLY `EXTRACT
-     model=diode|mosfet1 scale=<value>` deck statement, deliberately
-     not yet wired into batch/study execution. NOT done, and named as
-     such: BSIM-class models, temperature/geometry scaling, AC/C-V
-     extraction, PMOS in the GUI panel, and EXTRACT-driven batch
-     execution. No performance claim is made -- section 36 forbids one
-     without a benchmark row, and M38 has none.
-
-M39  QUANTUM TRANSPORT (NEGF, 1D)                         [XL]
-     M12-S3/M20 shipped density-gradient and Schrodinger-Poisson but
-     equilibrium-only; DG transport is explicitly out of scope. NEGF
-     is the honest way to do quantum TRANSPORT rather than a
-     correction. 1D first, per this repo's own "1D first, then 2D"
-     precedent (M19). Depends: M31 P5, M32.
-
-M40  OPTICAL GENERATION / PHOTONICS                       [L]
-     Absorption-driven carrier generation, then a real optical solve.
-     Opens solar/photodetector/image-sensor devices, none of which are
-     reachable today. No dependency on the C++ work beyond meshing.
-
-------------------------------------------------------------------------
-4c.3 SUGGESTED ORDER AND TRACKS
-------------------------------------------------------------------------
-Spine:  M31 P3a -> M32 -> M31 P4..P7 -> M35
-        (the spine is "make it fast, PROVE it, then spend the speed")
-        STATUS (2026-09-10): P3a, P3b, P4, M32, P5-0 and P5-1 (all 5
-        phases, plus Phase A-2) have landed. Phase A-2 measured the
-        five solver-selection cells Phase A had left absent, so
-        linsolve.select_auto now has a real entry for all EIGHT cells
-        a caller can reach -- and it overturned Phase A's own summary:
-        the discriminator is COUPLING, not dimension (a scalar 2D
-        Poisson solve wants petsc, 12x; a coupled 2D one wants direct
-        even at 72,912 DOF). Largest new win: 3D structured coupled
-        bias, 44.56s -> 1.60s (27.9x). No default moved -- E-auto is
-        still a separate proposal, but its stated blocker is now gone.
-        See M31-P5-1-SOLVER-SELECTION-PLAN.md "Phase A-2". P5 PROPER (the C++ assembler) STOPPED
-        after P5-0, not started -- its own section 9 exit criterion
-        fired once P5-1 made the re-run possible: B9's assembly SHARE
-        rose 11x (1.5% -> 16.3%) but its ABSOLUTE cost did not move
-        (~109ms), and does not clear the bar against a second engine's
-        ongoing cost. See M31-P5-ASSEMBLY-NEWTON-PLAN.md section 12.
-        P6/P7 below are therefore NOT blocked on a C++ assembler that
-        will not exist -- re-scope them against the Python + PETSc
-        stack P5-0/P5-1 actually built, not the pytcad_cpp backend P5
-        would have added.
-        M32 landed AFTER P4 rather than before it -- so P4's own
-        speedups were measured by hand, not by the harness, and should
-        STILL be re-measured through it before being quoted again (this
-        is now the open item, not P5's decision, which is closed).
-
-M32 sits deliberately INSIDE M31 rather than after it: P7's whole
-purpose is scaling claims, and section 36 forbids making them without
-a benchmark table. Building the dashboard after the thing it is meant
-to police is the standard way to end up with unfalsifiable numbers.
-
-Parallelizable (independent of the C++ track):
-  physics:   M33 -> M37          (surface/interface, then reliability)
-  system:    M30 Part II -> M38  (workbench GUI, then compact models)
-  optics:    M40                 (standalone)
-C++-gated:
-  M34 (needs P4, has it), M35 (needs P2, has it)
-  M36 and M39 (needed P5) -- P5 STOPPED (see spine STATUS above);
-  re-scope these against the Python + PETSc stack P5-0/P5-1 built
-  before treating them as blocked
-
-Cheapest-payoff-first, if optimizing for usefulness per session:
-  M32 (small, unblocks honest claims) -> M38 (reuses landed machinery)
-  -> M33 -> M34.
-  STATUS (2026-09-11): M32 LANDED, M38 LANDED (all 4 phases -- see the
-  M38 entry above for Phase 4). M33 is now FULLY LANDED (S1-S5 --
-  Device1D's affinity gauge + thermionic emission, and the same
-  affinity-gauge port to Device2D, Device3D, and `unstructured_dd.py`;
-  see history.md's 2026-09-10/11 entries). M34 LANDED 2026-09-11,
-  all five slices -- see its entry.
-  Note that M33 DID touch the frozen numerical core and so needed the
-  M11-S3 amendment mechanism throughout, unlike M32/M38, which did not.
-
-------------------------------------------------------------------------
-4c.4 WHAT IS PERMANENTLY OUT OF SCOPE
-------------------------------------------------------------------------
-Stated so no future session rediscovers these as "gaps":
-  - p-refinement and r-refinement (node motion) -- M21's own exclusion.
-  - Device3D AC analysis -- out of scope entirely across every M18
-    phase.  SUPERSEDED: see 4d.3 M45.  That decision was made while
-    3D died at ~27k nodes, and M31 exists to remove exactly that
-    constraint, so it is a deferral after all and should be
-    re-costed once P3b lands -- not inherited as permanent.
-  - Bit-identity with commercial tools. Parity means published-value
-    agreement within stated tolerances, never matching Sentaurus'
-    floating point.
-  - Any performance claim without the section 36 table. This is a
-    rule, not a milestone.
-
-------------------------------------------------------------------------
-4d. THE ROAD TO 3D -- DIMENSIONAL COVERAGE AND THE DEBT TO CLOSE
-------------------------------------------------------------------------
-The stated destination is large 3D semiconductor TCAD.  Sections 4b and
-4c are organized by CAPABILITY; this one is organized by DIMENSION,
-because the honest obstacle is not a missing feature list -- it is that
-much of the physics that exists only reaches 1D or 2D, and that debt is
-invisible when the roadmap is read capability-by-capability.
-
-Verified against the tree on 2026-09-09 by reading the imports and the
-NotImplementedError sites, not inferred from filenames.
-
-4d.1 COVERAGE MATRIX (Y = works, - = absent, R = REFUSES loudly)
+COVERAGE MATRIX (Y = works, - = absent; verified against imports/
+NotImplementedError sites, not inferred from filenames):
 
   capability                       1D    2D    3D    gap owner
   --------------------------------------------------------------------
   Drift-diffusion, structured       Y     Y     Y    --
   Drift-diffusion, unstructured     -     Y     Y    -- (1D moot)
-  Fermi-Dirac statistics            Y     Y     Y    --
-  Incomplete ionization             Y     Y     Y    -- (structured)
-  Impact ionization (coupled)       Y     Y     Y    -- (structured)
-  Impact ionization, nonlocal       Y     Y     Y    -- (structured)
-  BTBT, local Kane                  Y     Y     Y    -- (structured)
-  BTBT, nonlocal                    Y     Y     Y    -- (structured)
+  Fermi-Dirac / incomplete ion.     Y     Y     Y    --
+  Impact ionization (coupled)       Y     Y     Y    --
+  Impact ionization, nonlocal       Y     Y     Y    --
+  BTBT, local Kane / nonlocal       Y     Y     Y    --
   Trap-assisted tunneling           Y     Y     Y    --
   Density gradient / quantum        Y     -     -    M42
   Self-heating (lattice T)          Y     -     -    M43
   Hydrodynamic / energy balance     Y*    -     -    M44
-  Transient                         Y     Y     -    M45
-  Small-signal AC                   Y     Y     -    M45  (see 4c.4)
-  Adaptive refinement, structured   Y     Y     Y    --
-  Adaptive refinement, unstructured -     Y     Y    --
+  Transient / small-signal AC       Y     Y     -    M45
+  Adaptive refinement               Y     Y     Y    --
   Process: implant/diffuse/oxide    Y     Y     -    M35
   Process: TED, MC implant          Y     -     -    M35
   Mixed-mode circuit                Y     Y     Y    --
   Schottky / tunnel contacts        Y*    -     -    M46
 
-  Y* = exists as a standalone/analysis module but is NOT coupled into
-       any device Newton core (hydrodynamic.py and schottky.py are
-       imported by __init__.py and nothing else).
-  R  = Device2D/Device3D raise NotImplementedError rather than silently
-       ignoring the flag (device3d.py's constructor guards; do not cite
-       a line number here, they move) -- the right behavior, and
-       exactly why this debt is countable instead of hidden.
+  Y* = standalone/analysis module, NOT coupled into any device Newton
+       core (hydrodynamic.py, schottky.py -- imported by __init__.py
+       and nothing else).
 
-4d.2 WHAT THIS MEANS
+RULE: no dimensional lift lands without its reduction identity as a
+gate -- a 3D implementation whose z-uniform case does not reproduce
+the validated 2D answer to floating-point noise is a second,
+unvalidated code path, not a 3D implementation (the existing
+examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
 
-Three observations that change how the remaining roadmap should be read:
+  M41  Incomplete ionization -> 2D/3D         [S]   LANDED 2026-09-12
+       A port, not new physics: M13's shallow-dopant model factored to
+       module level (ionized_doping/ionized_eta_doping/ionized_dE_kt
+       in device.py) and reused by all three devices; Device1D's own
+       arithmetic unchanged (verified against all six m13 golden md5s).
+       Two findings: (a) equilibrium and coupled Poisson blocks need
+       DIFFERENT chain rules and separate FD-Jacobian gates -- a
+       mutation test confirmed the equilibrium one catches a dropped
+       chain (0.52 vs a 5e-5 threshold) that the convergence gates
+       alone would miss; (b) band_offset='affinity'+incomplete_ion
+       stays refused in 2D/3D as in 1D (same double ln(Nc/nie) offset
+       hazard). Unstructured Device2D still refuses the flag (no
+       ionization mechanism in unstructured_dd.py at all).
+       M16-S2 (local Kane BTBT -> structured 2D/3D, pytcad/
+       btbt_grid.py) landed the same week, closing 4d.1's other
+       remaining local/nonlocal-BTBT inversion (see M16 above).
+  M42  Density gradient / quantum -> 2D/3D    [L]   NOT STARTED
+       Prerequisite for any credible FinFET/GAA confinement claim.
+       Depends: M31 P5 (stopped -- re-scope).
+  M43  Self-heating -> 2D/3D                  [L]   NEXT ON THE QUEUE
+       thermal.py's structured assembly has the one non-vectorized
+       scalar Python loop in the tree -- pairs naturally with M31 P4.
+  M44  Hydrodynamic -> coupled, then 2D/3D    [XL]  NOT STARTED
+       Two steps: hydrodynamic.py must first become a coupled 1D
+       model (it is pure post-processing today) before any
+       dimensional lift is meaningful -- overshoot is a 3D
+       short-channel effect that a 1D-only closure cannot show.
+  M45  Transient and AC -> 3D                 [XL]  NOT STARTED
+       transient2d.py/ac2d.py exist, no 3D form of either. Device3D
+       AC's "permanently out of scope" call should be REVISITED, not
+       inherited -- it predates M31's 3D-scale fix; a 3D AC solve is a
+       factorize-once-per-frequency op on a Jacobian PETSc already
+       factorizes. Depends: M31 P3b/P7.
+  M46  Schottky/tunnel contacts -> coupled, then 2D/3D  [L]  NOT STARTED
+       Same shape as M44: couple schottky.py into a device core first,
+       then lift dimensionally.
+  M47  3D numerical engine completion         [XL]  PROPOSED, NOT
+       SCOPED, NOT SIGNED OFF. Distinct from M41-M46: this is the
+       ENGINE work underneath all of them. Two concrete gaps found by
+       direct inspection: (a) M31's C++ coverage stops short of 3D
+       residual/Jacobian assembly (device3d.py/unstructured_dd3d.py
+       assembly is still pure Python/numpy -- see CLAUDE.md "What is
+       compiled so far"); (b) unstructured_dd3d.py is explicitly
+       homojunction-only (no materials_per_node/dlnnie mechanism) --
+       adding one is genuine new-feature work needing its own plan,
+       not a port. Expected difficulties: the frozen-core amendment
+       protocol applies to every touch of device3d.py/
+       unstructured_dd3d.py; 3D's edge/GateBC normal_axis combinatorics
+       are a real step up from 2D; 3D test batteries are already the
+       suite's slowest part. Depends on/overlaps M31 P4 (landed) and
+       M35 (its own track). Needs a proper plan doc before any code.
 
-1. The DD SPINE IS ALREADY 3D.  Drift-diffusion, Fermi-Dirac, impact
-   ionization, local BTBT, TAT, AMR and mixed-mode all reach 3D on both
-   structured and unstructured meshes.  The foundation is not the
-   problem; M31 is about making it FAST at 3D, not making it exist.
-
-2. THE DEBT IS CONCENTRATED IN THE LATER PHYSICS.  Everything added
-   after the DD core -- quantum corrections, self-heating, hydrodynamic,
-   transient, AC -- stopped at 1D or 2D, each for a defensible
-   per-milestone reason ("1D first, then 2D"), and nobody has since
-   gone back.  Five milestones' worth of "then 2D/3D" was deferred and
-   never scheduled.  That is what 4d.3 schedules.
-
-3. PROCESS IS THE WIDEST GAP.  Device physics is largely 3D; process
-   simulation is 2D at best and 1D for TED/MC implant.  A 3D device
-   built from a 2D process flow is only as 3D as its weakest input,
-   which is why M35 is XL and why it dominates any real parity claim.
-
-4d.3 THE DIMENSIONAL-LIFT MILESTONES (M41-M46)
-
-These are deliberately SEPARATE from 4c.2's capability milestones: each
-one lifts an EXISTING, already-validated 1D/2D implementation to a
-higher dimension, which is a fundamentally cheaper and lower-risk kind
-of work than adding new physics.  Each inherits its 1D/2D gates as the
-dimensional-reduction identity it must satisfy -- the technique
-examples/05_3d_reduces_to_2d.py and tests/test_validation_2d.py already
-use (a 3D solve with no z-variation must reproduce the 2D answer to
-floating-point noise; measured 1.11e-16 V on the existing reduction).
-That makes every milestone below self-gating: the reference is not a
-published number, it is the lower-dimensional code that already passed.
-
-  M41  Incomplete ionization -> 2D/3D            [S]  LANDED 2026-09-12
-       Was refused in both structured cores' constructors.  Landed as
-       planned -- a port, not new physics: M13's shallow-dopant model
-       now enters Poisson's charge term as rho = n - p - C_ion in
-       `device2d.py` and `device3d.py` exactly as in `device.py`.
-       See `pytcad/M41-INCOMPLETE-ION-2D3D-PLAN.md`.
-       The slice deliberately did NOT copy the formula a third time:
-       Device1D's `_ionized_C` body and the ionized half of its
-       neutrality root were factored to module level in `device.py`
-       (`ionized_doping`, `ionized_eta_doping`, `ionized_dE_kt`, and a
-       new optional `ion=` argument to `fd_ohmic_values`), so all three
-       devices evaluate ONE implementation; Device1D's own arithmetic
-       is unchanged (M13's gates and all six m13 golden md5s verified
-       after the extraction).  Four sites per device: the neutral-bulk
-       guess and the ohmic-contact root both take the eta-space branch
-       on `fd OR ion` (freeze-out moves the neutral potential, so the
-       Boltzmann arcsinh guess is wrong for the same reason it is wrong
-       under FD), and both the equilibrium and coupled Poisson blocks
-       gain the charge term plus its chain rule.
-       Two findings worth keeping:
-       (a) the equilibrium and coupled blocks need DIFFERENT chain
-           rules -- carriers are slaved to psi in one and independent
-           unknowns in the other -- so each needed its own FD-Jacobian
-           gate; a mutation test confirmed the equilibrium one catches
-           a dropped chain by 4 orders of magnitude (0.52 vs the 5e-5
-           threshold), which the convergence gates alone would not have.
-       (b) `band_offset='affinity'` + `incomplete_ion` is refused in
-           2D/3D as it already was in 1D, rather than composed: the
-           eta-space contact solver and the affinity shift each carry
-           their own ln(Nc/nie) offset.
-       Unstructured Device2D keeps refusing the flag (no ionization
-       mechanism exists in `unstructured_dd.py` at all).
-
-  M42  Density gradient / quantum correction -> 2D/3D       [L]
-       M20 shipped 1D coupled-Newton DG.  The 2D/3D lift is the
-       prerequisite for any credible FinFET/GAA claim, where
-       confinement is the whole point.  Depends: M31 P5.
-
-  M43  Self-heating -> 2D/3D                                [L]
-       M19 phase 1 is steady-state 1D and states 2D as out of scope.
-       thermal.py also carries the one non-vectorized structured
-       assembly loop in the tree (a scalar `for i in range(1, N-1)`),
-       so this pairs naturally with M31 P4.
-
-  M44  Hydrodynamic -> coupled, then 2D/3D                  [XL]
-       Two steps, not one: hydrodynamic.py is not wired into ANY
-       Newton core today, so it must first become a coupled 1D model
-       before any dimensional lift is meaningful.  Velocity overshoot
-       is a 3D short-channel effect; 1D-only energy balance cannot
-       deliver it.
-
-  M45  Transient and AC -> 3D                               [XL]
-       transient2d.py and ac2d.py exist; there is no 3D form of
-       either, and 4c.4 currently lists Device3D AC as permanently out
-       of scope.  THAT EXCLUSION SHOULD BE REVISITED, not silently
-       inherited: it was decided when 3D died at ~27k nodes, and M31's
-       whole purpose is removing that constraint.  A 3D AC solve is a
-       factorize-once-per-frequency operation on the same Jacobian
-       PETSc will already be factorizing -- much cheaper than it looked
-       in 2026-08.  Depends: M31 P3b/P7.
-
-  M46  Schottky / tunnel contacts -> coupled, then 2D/3D    [L]
-       Same shape as M44: M28 shipped a standalone-module slice that
-       no device core calls.  Couple it first, then lift.
-
-  M47  3D NUMERICAL ENGINE COMPLETION                       [XL]
-       Proposed 2026-09-11, at the user's request, after a "can Claude
-       plan a 3D engine, and what would be hard about it" discussion --
-       NOT YET SCOPED IN DETAIL, NOT SIGNED OFF, NOT STARTED. Distinct
-       from M41-M46 above: those each lift ONE physics model to 3D;
-       this is the ENGINE work underneath all of them, closing two
-       gaps found by direct inspection while answering that question:
-         (a) M31's C++ coverage stops short of 3D residual/Jacobian
-             assembly -- `device3d.py`'s and `unstructured_dd3d.py`'s
-             own assembly loops are still pure Python/numpy (only mesh
-             geometry, the PETSc linear solve, and the process/AMR
-             kernels are compiled today; see CLAUDE.md "What is
-             compiled so far").
-         (b) `unstructured_dd3d.py` is explicitly homojunction-only
-             (module docstring: no `materials_per_node`/`dlnnie`
-             mechanism at all) -- unlike its 2D sibling
-             `unstructured_dd.py`, which gained both the legacy and
-             M33-S5 affinity heterojunction gauges. Adding either to
-             `unstructured_dd3d.py` is genuinely new-feature work, not
-             a port, and would need its own plan/gates/sign-off same
-             as M33-S5's did.
-       Expected difficulties (not exhaustive, from the same
-       discussion): the frozen-core amendment protocol applies to
-       every touch of `device3d.py`/`unstructured_dd3d.py` (sign-off +
-       FD-Jacobian-first + bit-identical off-path + reconstruct-and-
-       compare, CLAUDE.md's "Hard rules"); 3D's edge/GateBC
-       `normal_axis` combinatorics are a real step up from 2D, not a
-       linear one; 3D test batteries are already the slowest part of
-       the suite, so new gates there compound; and this codebase's own
-       precedent (M14 G-A) is that a published-value benchmark can be
-       blocked behind a paywall for months with no workaround but
-       refusing loudly. Depends on / overlaps M31 P4 (C++ kernels) and
-       M35 (3D process, its own track). Should be scoped into a proper
-       plan doc (frozen-core amendment request, gate list, honest
-       limits) before any implementation, same as every other
-       milestone in this file.
-
-4d.4 ORDERING, AND THE ONE RULE
-
-Cheapest first, and each is independently shippable:
-     M41 [S] -> M43 [L] -> M42 [L] -> M46 [L] -> M45 [XL] -> M44 [XL]
-STATUS (2026-09-13): M41 LANDED; M16-S2 (local Kane BTBT in structured
-2D/3D) LANDED same day -- `pytcad/btbt_grid.py`, gated in
-`tests/test_m16_s2_btbt_grid.py`; the 4d.1 matrix's one remaining
-inversion is closed. M43 is the next item on this line.
-M35 (3D process) runs as its own track throughout; it is the widest gap
-and the least coupled to the others. M47 (3D engine completion) is the
-largest, least-scoped item on this list and sits LAST deliberately --
-it is infrastructure underneath M41-M46 rather than a competitor to
-them, so there is more to learn about what it actually needs by
-landing a few of M41-M46 first.
-
-THE RULE, which is what makes this section a plan rather than a wish:
-no dimensional lift lands without its reduction identity as a gate.  A
-3D implementation whose z-uniform case does not reproduce the validated
-2D answer to floating-point noise is not a 3D implementation, it is a
-second, unvalidated code path -- and this project already owns the
-tooling to prove the difference.
+ORDERING: M41[S](done) -> M43[L](next) -> M42[L] -> M46[L] -> M45[XL]
+-> M44[XL], with M35 (3D process) and M47 (engine completion, last
+deliberately -- more to learn by landing a few of M41-M46 first) as
+separate tracks.
 
 ------------------------------------------------------------------------
-4e. COMPETITIVE STRATEGY -- HOW TO ACTUALLY BEAT SENTAURUS AND ATLAS
+6. COMPETITIVE STRATEGY -- BEATING SENTAURUS/ATLAS, NOT JUST MATCHING
 ------------------------------------------------------------------------
-Stated goal: be BETTER than Synopsys Sentaurus and Silvaco Atlas, not
-merely reach parity.  4b.0 already says literal feature parity is a
-fantasy; this section says what the non-fantasy version of "better"
-is, and what it costs.
+4b.0's framing: literal feature parity with a 30-person-decade
+incumbent is a fantasy; beat it on axes where its ARCHITECTURE, not
+its effort, prevents it from competing.
 
-4e.1 THE STRATEGIC MISTAKE TO AVOID
+WHERE WE CAN GENUINELY WIN (structural, not effort-based):
+  W1  Differentiable simulation / adjoint sensitivities -- THE
+      differentiator. Neither incumbent can give dJ/dp without a
+      rewrite. Enables gradient-based device optimization,
+      O(1)-per-iteration calibration instead of O(n_params) FD solves,
+      UQ/sensitivity ranking, and gradients for ML surrogates.
+  W2  Modern parallel numerics -- PETSc gives MPI+CUDA+AMG as
+      configuration, not a project; mostly already scheduled (M31 P7).
+  W3  Reproducibility/provenance -- study manifests + RunRecord
+      already stamp git commits; "any published figure regenerates
+      bit-identically" is cheap because most of it is built.
+  W4  Inspectable, cited physics -- every model carries its published
+      reference + honest-limits statement; incumbents are black boxes.
+  W5  Python-native extensibility -- a new model is a Python function
+      (+ optional C++ kernel with a bit-identity gate), not a C-ABI
+      PMI recompile.
+  W6  Cost and access -- zero licence cost, no seat limits, runs in CI
+      (enables adoption of W1-W5, not itself a technical edge).
 
-You do not beat a 30-year incumbent by out-featuring it.  Sentaurus has
-model libraries calibrated against foundry silicon that no open project
-can reproduce, because the calibration data is proprietary and the
-person-decades are already spent.  A roadmap that says "add every
-Sentaurus feature, then one more" loses by construction: it fights on
-the axis where the incumbent's accumulated investment is the entire
-moat, and it never finishes.
+WHERE PARITY IS THE HONEST CEILING: core device physics breadth (aim
+to match, achievable via 4b's tiers); process simulation (M35 is XL
+because 30 years of implant/diffusion calibration data live there).
 
-You beat an incumbent by choosing axes where its ARCHITECTURE -- not
-its effort -- prevents it from competing, and winning those decisively.
-For a 1990s-vintage Fortran/C simulator with a proprietary deck
-language, those axes exist and are identifiable.
+WHERE TO CONCEDE, EXPLICITLY: foundry-calibrated model libraries (the
+calibration data is proprietary -- offer a calibration FRAMEWORK,
+never a pre-calibrated 5nm deck); industrial qualification/support/
+training/ecosystem; specialized vertical modules (power, memory,
+imagers, photonics).
 
-4e.2 WHERE WE CAN GENUINELY WIN (structural, not effort-based)
+STRUCTURAL CONSEQUENCE: adjoint capability must be DESIGNED IN, not
+retrofitted. M31 P5 (the intended host) stopped after P5-0, so M47/
+M48 below re-anchor to the Python-path fix (P4b's transpose-friendly
+Dirichlet elimination) rather than a C++ assembler that will not
+exist -- a smaller, still-real claim, to be re-scoped before M47
+starts (see 5.1's ADJOINT NOTE; note this is a different "M47" number
+than section 5.3's dimensional-engine M47 -- resolve the numbering
+collision before either is scoped in detail).
 
-W1  DIFFERENTIABLE SIMULATION / ADJOINT SENSITIVITIES.  The big one.
-    Sentaurus and Atlas cannot give you dJ/dp for arbitrary parameters
-    p; they were not built for it and retrofitting adjoints into a
-    30-year-old solver is a rewrite.  Consequences if we have it:
-      - gradient-based DEVICE OPTIMIZATION (doping profiles, geometry)
-        instead of their DOE-and-sweep;
-      - CALIBRATION that costs O(1) solves per iteration instead of
-        O(n_params) finite-difference solves -- for a 20-parameter fit
-        that is a ~20x speedup on the single most common industrial
-        TCAD workflow;
-      - uncertainty quantification and sensitivity ranking for free;
-      - gradients to train ML surrogates, which is where the field is
-        going and where neither incumbent has an answer.
-    THIS IS THE DIFFERENTIATOR.  Everything else on this list is
-    incremental by comparison.
+  M47/48  Adjoint sensitivity engine          [L]  dQoI/dp via one
+          forward + one adjoint solve, gated against FD gradients to
+          the same 5e-5 tolerance test_m13_solver.py already uses.
+  M48/49  Gradient-based calibration/optimization [M]  Replace M30's
+          Nelder-Mead with L-BFGS driven by the adjoint engine; gate:
+          same fit, >=5x fewer forward solves.
+  M49/50  Uncertainty quantification & sensitivity ranking [M]
+  M50/51  ML surrogate / differentiable coupling [L]
 
-W2  MODERN PARALLEL NUMERICS.  Sentaurus' 3D scaling is widely
-    reported as mediocre and Atlas is worse; both predate GPU compute.
-    M31 puts us on PETSc, which brings MPI + CUDA + AMG as
-    configuration rather than as a project.  A credible "solves a 3D
-    device faster on one workstation GPU than Sentaurus does on a
-    licensed cluster" claim is reachable, and unlike W1 it is mostly
-    already scheduled (M31 P7).
-
-W3  REPRODUCIBILITY AND PROVENANCE.  Commercial TCAD is notoriously
-    bad here: results are hard to re-derive months later.  We already
-    stamp git commits into study manifests (workbench/study_manifest.py)
-    and carry per-run provenance (RunRecord).  Finishing this into
-    "any published figure regenerates bit-identically from its
-    manifest" is a genuine advantage for research users, and cheap
-    because most of it is built.
-
-W4  INSPECTABLE, CITED PHYSICS.  Every model in this tree carries its
-    published reference and an honest-limits statement, and the tests
-    gate against published values.  Sentaurus is a black box with a
-    manual.  For research, teaching, and any regulated/auditable use,
-    "you can read exactly what was solved and why" is a feature the
-    incumbents structurally cannot offer.
-
-W5  PYTHON-NATIVE EXTENSIBILITY.  Adding a model to Sentaurus means
-    their PMI (C, clunky ABI, recompile).  Here it is a Python
-    function, and after M31 optionally a C++ kernel with a bit-identity
-    gate against the Python one.  Time-to-new-model is a real axis and
-    we win it by a wide margin.
-
-W6  COST AND ACCESS.  Zero licence cost, no seat limits, runs in CI.
-    Not a technical advantage, but it is why W1-W5 can be adopted.
-
-4e.3 WHERE PARITY IS THE HONEST CEILING
-
-  - Core device physics breadth (DD, statistics, mobility, generation/
-    recombination, quantum corrections).  4b's tiers already target
-    this and it is achievable.  Aim to MATCH, not exceed.
-  - Process simulation.  M35 is XL precisely because this is where
-    30 years of implant tables and diffusion calibrations live.
-    Parity on the common flows is an ambitious, honest target.
-
-4e.4 WHERE TO CONCEDE, EXPLICITLY
-
-Stated so no session burns effort trying to win these:
-  - FOUNDRY-CALIBRATED MODEL LIBRARIES.  The calibration data is
-    proprietary.  We can offer a calibration FRAMEWORK (and with W1 a
-    better one), never a pre-calibrated 5nm FinFET deck.
-  - INDUSTRIAL QUALIFICATION, SUPPORT, TRAINING, AND ECOSYSTEM.
-  - BREADTH OF SPECIALIZED VERTICAL MODULES (power, memory, imagers,
-    photonics) -- each is its own multi-year product line.
-  - The out-of-scope list in 4b.0 stands unchanged.
-
-4e.5 WHAT THIS CHANGES IN THE ROADMAP
-
-One structural consequence, and it is time-critical:
-
-  ADJOINT CAPABILITY MUST BE DESIGNED INTO M31 P5, NOT RETROFITTED.
-  **UPDATE 2026-09-10: M31 P5 (the C++ assembler) STOPPED after P5-0
-  -- see the spine STATUS above and
-  `M31-P5-ASSEMBLY-NEWTON-PLAN.md` section 12.  There is no C++
-  assembler for this gate to apply to.**  The first of the two gates
-  below was instead closed on the PYTHON path (P4b, symmetric
-  Dirichlet elimination -- `dirichlet.py`'s row-AND-column
-  elimination is transpose-friendly where the old row-only version
-  was not); the second (a named parameter vector p) was never
-  reached, because it was a C++-assembler acceptance gate and that
-  assembler will not exist.  M47 below should be RE-ANCHORED to
-  depend on P4b's Python-path fix, not on a P5 that stopped -- an
-  adjoint engine built against the Python assembler is still possible
-  (P4b's own fix applies there directly); it is a different, smaller
-  claim than the C++-assembler-native one this section originally
-  planned for, and should be re-scoped as such before M47 starts
-  rather than silently inheriting a "depends on P5" that is now
-  permanently false.
-  The original reasoning is kept below for the record. An adjoint
-  solve needs the TRANSPOSE of the Jacobian and the
-  derivative of the residual with respect to parameters.  If the C++
-  assembly is written to expose dR/dp and to apply J^T, adjoints are
-  incremental afterwards.  If it is not, W1 becomes a second rewrite
-  of the thing we just wrote.  P5 has not started -- this is exactly
-  the moment the decision is free.  Add to P5's acceptance gates:
-    - the assembler can apply J^T (PETSc gives this for MATAIJ/MATBAIJ
-      essentially free, but the ASSEMBLY must not bake in
-      row-elimination that destroys transposability -- note today's
-      Dirichlet handling zeroes rows and sets a unit diagonal, which
-      is NOT transpose-friendly and must be revisited);
-    - the residual assembler is parameterized by a named parameter
-      vector p, so dR/dp is meaningful.
-
-  New milestones, sequenced after M31 P5:
-
-  M47  ADJOINT SENSITIVITY ENGINE                            [L]
-       dQoI/dp for arbitrary QoI and parameter set, via one forward
-       solve plus one adjoint solve.  Gate: agreement with
-       finite-difference gradients to the same 5e-5 relative tolerance
-       tests/test_m13_solver.py already uses for its FD-Jacobian probe
-       -- the tooling and the standard both already exist here.
-       Depends: M31 P5 with the P5 gates above.
-
-  M48  GRADIENT-BASED CALIBRATION AND OPTIMIZATION            [M]
-       Replace M30's Nelder-Mead with gradient descent/L-BFGS driven
-       by M47.  Gate: same calibration targets, >=5x fewer forward
-       solves, same fitted parameters within tolerance.  This is the
-       milestone that turns W1 from a capability into a user-visible
-       win.  Depends: M47, M30 Part I (landed).
-
-  M49  UNCERTAINTY QUANTIFICATION AND SENSITIVITY RANKING     [M]
-       Parameter sensitivity ranking and error bars on simulated
-       characteristics, from M47's gradients.  Neither incumbent
-       offers this.  Depends: M47.
-
-  M50  ML SURROGATE / DIFFERENTIABLE COUPLING                 [L]
-       Export gradients through a standard interface so a surrogate
-       can be trained on, or coupled into, the simulation loop.
-       Depends: M47, M32 (benchmarks, to prove the surrogate's error).
-
-4e.6 HOW WE WILL KNOW -- FALSIFIABLE CRITERIA
-
-Per section 36, no claim without a table.  "Better than Sentaurus" is
-only meaningful as a set of falsifiable statements, each with a
-benchmark case from M32's B1-B7:
-
-  C1  Given the same device and the same published-value targets, our
-      calibration reaches the same fit in >=5x fewer forward solves.
-      (W1/M48.  Directly measurable; nothing proprietary needed.)
-  C2  On B7 (large synthetic 3D), time-to-solution on one GPU
-      workstation beats a documented Sentaurus multi-core result at
-      equal DOF and equal converged accuracy.  (W2/M31 P7.)
-  C3  Any figure we publish regenerates bit-identically from its study
-      manifest on a clean checkout.  (W3.)
-  C4  Time-to-add-a-new-physics-model, measured end to end including
-      its validation gate, is under one working session.  (W5.)
-
-C1 and C4 are the ones to chase first: both are fully within our
-control, neither needs a Sentaurus licence to demonstrate, and both
-are true differentiators rather than catch-up.
+FALSIFIABLE CRITERIA (per section 36, no claim without a benchmark
+table; C1/C4 are the ones to chase first -- fully in our control,
+no Sentaurus licence needed):
+  C1  Same device/targets: calibration converges in >=5x fewer forward
+      solves than Nelder-Mead (W1/adjoint-calibration milestone).
+  C2  On B7 (large synthetic 3D), one-GPU-workstation time-to-solution
+      beats a documented Sentaurus multi-core result at equal DOF/
+      accuracy (W2/M31 P7).
+  C3  Any published figure regenerates bit-identically from its study
+      manifest on a clean checkout (W3).
+  C4  Time-to-add-a-new-physics-model, including its validation gate,
+      is under one working session (W5).
 
 ------------------------------------------------------------------------
-5. NEXT IMPLEMENTATION MILESTONE
+7. STANDING OPEN ITEMS (not covered by a numbered milestone above)
 ------------------------------------------------------------------------
-M15 -- COMPLETE (2026-08-28).  All gates green: G-A, G-B, G-C
-(direction + quantitative), G-D (coefficients + both breakdown bands,
-two dopings), G-E, G-F.  R1's split (R1a: outer-loop path-dependence,
-FIXED via Wegstein acceleration; R1b: coupled Jacobian's true
-multiplication vs the analysis-layer estimate) took three attempts
-before landing:
-  Attempt 1: a full coupled Jacobian passed FD-Jacobian validation but
-    produced WEAKER multiplication than the frozen model regardless of
-    generation-strength ladder fineness -- damped voltage-controlled
-    Newton basin-locking near the avalanche fold, a continuation-
-    methodology gap, not a Jacobian-correctness one.  Reverted.
-  Attempt 2: built the continuation driver first (M22 phase 2, LANDED
-    -- see below), drove the same Jacobian with arc_length_sweep. Hit
-    a DIFFERENT problem: the corrector calls device._residual_jacobian
-    directly, bypassing solve_bias's generation-strength ladder, so it
-    ran at full avalanche coupling from the first iteration and
-    stalled at V=-0.5 -- nowhere near the fold.  Reverted.
-  Attempt 3: threaded the SAME strength ladder into the corrector
-    itself (arc_length_sweep's `strength_stages`) plus added
-    backtracking damping the corrector never had.  LANDED: arc-length
-    continuation traces cleanly through the genuine avalanche fold for
-    both test dopings, redefining "breakdown detected" as that fold
-    (a principled definition, not a heuristic).
-A dedicated G-C/G-D root-cause investigation followed (2026-08-28,
-cross-checked against the original van Overstraeten-de Man 1970
-paper): found and fixed a genuine literature bug (the hole ionization
-coefficient's low/high-field switch point was wrongly shared with
-electrons at 5e5 V/cm instead of its own published 4e5 V/cm -- see
-pytcad/ionization.py), and used a hybrid field-profile/formula
-diagnostic plus a mesh-refinement sweep to definitively rule out mesh,
-units, domain, and convergence causes for both gates.  G-C's gap
-turned out to be the textbook local-field approximation the M=1/(1-I)
-formula is derived under (it neglects the self-consistent space-
-charge feedback the coupled Jacobian solves FOR); the 10%-band miss
-was because N=1e17's avalanche fold occurs 35% past the 1970 fit's
-own calibrated field range -- neither fixable by solver or
-continuation work.  Closed via explicit scope decisions: G-C's
-tolerance loosened [0.5,2.0] -> [0.15,2.0] (with the diagnostic
-evidence backing the new bound), and G-D's second test doping changed
-N=1e17 -> N=2e16 (whose fold stays inside vOdM's calibrated range,
-measured ratio 1.059).  Full record, exact numbers, and the permanent
-diagnostic tests backing every claim are in M15-IONIZATION-PLAN.md's
-"R1b ATTEMPT 1/2/3", "G-C ROOT CAUSE", and "SCOPE DECISION MADE AND
-CLOSED" sections -- read them before touching device.py's II code or
-pytcad/ionization.py again.  Verified: tests/test_m15_ionization.py
-15 passed/0 xfailed/0 failed; full core+GUI suite zero regressions.
-
-M22 phase 2 -- continuation driver, LANDED 2026-08-28
-(pytcad/continuation.py: adaptive_bias_sweep, arc_length_sweep;
-gated in tests/test_m22_continuation.py against a trusted fixed-step
-iv_sweep reference on ordinary, unfolded ramps).  Targets the "-2V
-marginal points" acceptance item, and -- once the strength ladder was
-threaded into the corrector (attempt 3 above) -- is what let M15 R1b
-close; see M22-LINSOLVE-PLAN.md section 1 for the full record. (The
-3D-scaling gate that used to be phase 2's headline item is now closed:
-a node-block-Jacobi preconditioner fixed it, see section 4b.)
-
-Independent candidates for the next milestone (any order):
-1. GUI end-to-end smoke test, LANDED 2026-08-28
-   (gui/tests/test_smoke_e2e.py): drives the real rendered QML tree
-   only across the 1D Process-Flow path and the 2D Structure/Device-
-   Builder-template path -- every physics-model toggle, contact/gate/
-   mesh editor, IV/CV sweep, save/reload round trip, and invalid-input
-   handling -- cross-checked against the same analytic formulas
-   tests/test_validation.py and gui/tests/test_cv_mode.py already use.
-   Confirmed 3D and the DEVSIM backend have no GUI entry point at all
-   (documented N/A, not fabricated). Found and fixed two real defects
-   along the way: numeric QML fields silently let NaN through to the
-   solver (fixed with a shared finite-number guard in
-   app_controller.py); saved projects silently dropped the Physics
-   Lab's model toggles (fixed via project_store's v5 schema bump --
-   see gui/README.md's "v0.5.x" section and gui/tests/test_persistence_v5.py).
-2. M21 phase 2 -- LANDED 2026-08-28: 2D/3D separable adaptive
-   refinement (same indicators, axes refined independently; honest
-   limitation: refining one cell refines a whole row/column, motivating
-   phase 3). A hard-debug pass found six real bugs before the 25-test
-   gate battery went green -- see the M21 status line above and
-   M21-MESHING-PLAN.md section 13.
-2b. M21 phase 3a (geometry foundation) -- LANDED 2026-08-31: GmshMesh
-   loading/building, region/contact resolution, and unique edge-list +
-   mixed-Voronoi dual-cell areas on an unstructured triangle mesh
-   (pytcad/gmsh_mesh.py, region_resolver.py, unstructured_assembly.py).
-   Pure geometry, zero Device2D/Jacobian changes -- an explicit user
-   decision to ship the low-risk foundation and defer the HIGH-RISK
-   coupled-physics assembly to a future session. See
-   M21-PHASE3-MESHING-PLAN.md's "PHASE 3a IMPLEMENTATION RECORD" for
-   two corrections made while implementing (the dual-cell method used,
-   and a wrong edge-count formula in the original spec text, fixed in
-   the gate rather than forced).
-2c. M21 phase 3b (unstructured Poisson-only equilibrium) -- LANDED
-   2026-08-31, same session: per-edge TPFA flux geometry
-   (unstructured_assembly.triangle_circumcenter/build_edge_flux_
-   geometry) plus a real Newton-converged Poisson equilibrium solve
-   (pytcad/unstructured_poisson.py) on the unstructured mesh, mirroring
-   Device2D._residual_jacobian_poisson's exact physics without touching
-   device2d.py itself (only its _ohmic_values helper is reused). All
-   three gates (G1 FD-Jacobian, G2 vs the already-validated structured
-   Device2D solve, G3 charge conservation) passed on the first real run
-   against the actual diode mesh -- G2 agreed to 1.3e-16 relative
-   (both paths reduce to the same analytic contact formula). 18 tests
-   total, tests/test_m21_phase3.py. Scharfetter-Gummel continuity/
-   current on triangle edges, bias solves, Device2D(unstructured=True)
-   integration, and gates G4-G5 remain the genuinely HIGH-RISK
-   remainder, still not started -- see the plan's "PHASE 3b
-   IMPLEMENTATION RECORD" for the measured (not assumed) Delaunay-
-   quality check this phase's TPFA method relies on.
-2d. M21 phase 3c (unstructured coupled bias solve) -- LANDED
-   2026-08-31, same session: Scharfetter-Gummel current + SRH
-   recombination coupled to Poisson (pytcad/unstructured_dd.py, 3
-   unknowns/node), reusing the SAME per-edge geometry factor phase 3b
-   already computes (re-derived, not assumed, that no new geometric
-   quantity was needed). G1 (FD-Jacobian, full system): 1.4e-8. G4
-   (golden parity vs structured Device2D at 0.5V): first attempt showed
-   a 69% gap traced to comparing against the wrong reference model
-   config (default Caughey-Thomas mobility vs this module's stated
-   uniform-mobility simplification) -- fixed, then measured ~5.6%
-   relative, reported honestly rather than tightened to the plan's
-   original <1e-4 by construction. G5 (SRH live/load-bearing) and a
-   reverse-bias adversarial check also green. 26 tests total,
-   tests/test_m21_phase3.py. device2d.py remains untouched throughout
-   all of phases 3a-3c -- only Device2D(unstructured=True) class-level
-   integration (a thin wrapper, not new physics) remains unstarted.
-   One pre-existing, unrelated flaky test
-   (test_m21_phase2.py::test_3d_separable_refinement_adds_nodes, a
-   "Matrix is exactly singular" under -n 6 parallel load, confirmed to
-   pass cleanly in isolation) was observed during verification -- not
-   a regression from this work.
-2e. M21 phase 3d (Device2D(unstructured=True) integration) -- LANDED
-   2026-08-31, same session: wired the standalone 3a-3c physics into
-   Device2D's own solve_equilibrium/solve_bias/terminal_current API.
-   Genuinely thin: zero new Jacobian entries, verified bit-identical
-   (array_equal) to calling unstructured_poisson.solve_poisson_
-   equilibrium/unstructured_dd.solve_bias directly. Refuses
-   (NotImplementedError) any Models() flag the physics core doesn't
-   implement (doping_mobility, bgn, fd, incomplete_ion,
-   surface_mobility, field_mobility) and a heterostructure material
-   list -- Models()'s own default has doping_mobility=True, so callers
-   must override it explicitly. A real, small (~2.5e-6 relative)
-   discrepancy was found and understood during verification, not a
-   bug: the wrapper respects Models().auger (default True, matching
-   every other Device1D/Device2D physics flag's convention), while
-   unstructured_dd.solve_bias's own bare-function default is
-   auger=False -- documented in M21-PHASE3-MESHING-PLAN.md's PHASE 3d
-   record and the new gate's docstring. M21 Phase 3 is now COMPLETE.
-3. M16 BAND-TO-BAND TUNNELING -- LANDED 2026-08-29, VERIFIED 2026-08-31
-   following the M15 R1b pattern (live-coupled generation, shared
-   strength ladder), and this time with the residual-ordering and
-   live-state invariants written as gates BEFORE the physics gates,
-   exactly as this file's M16 note required (see
-   pytcad/M16-BTBT-PLAN.md).  The literature-note failure mode
-   (local-model plateau at high reverse bias) is gated explicitly by
-   the high-bias non-plateau gate.  Verification (2026-08-31) found
-   the gates had never actually been executed (the authoring session's
-   shell was blocked) and, once run, 2 of 13 tests failed -- but all
-   three root causes were bugs in the TEST assertions themselves (an
-   inverted sort direction, a sign error comparing two negative
-   slopes, and a correlation-sign check that could never pass for a
-   genuine negative-slope Kane fit), not in pytcad/btbt.py or its
-   Newton-core coupling; see M16-BTBT-PLAN.md's "Gate verification,
-   2026-08-31" section for the full record. All 13 tests pass after
-   fixing the test code only (history.md
-   Addendum 16).
-4. M12-S2 GUI exposure -- LANDED 2026-09-04: "tat" added to the wire-
-   format defaults and ModelCatalog registry; see section 7 item 5 for
-   the full record.
-5. M14 remainder -- LANDED 2026-08-28/31: G-B (D_it C-V stretch-out),
-   G-C (S_n/S_p surface recombination in Device1D AND, as of
-   2026-08-31, Device2D -- a Robin BC reusing the already-computed
-   box-integration residual, generalizing to any contact shape with no
-   per-edge logic), catalog registration (surface_mobility).
-   driving_force descoped (no consumer). Only G-A (Lombardi phonon-term
-   constants, blocked on a paywalled source, re-searched 2026-08-31
-   with no new result) remains open. One honest limitation found in
-   the 2D S_n/S_p work: Newton convergence for a deep minority-carrier
-   contact under reverse bias can be non-monotonic. RE-INVESTIGATED
-   2026-09-04: the originally-suspected cause (M11-S5's density-floor
-   safeguard masking the update criterion) was disproven by direct
-   instrumentation, along with two further hypotheses (cold-start
-   trapping, SRH/Auger recombination contamination) -- root cause
-   narrowed to a likely 2D-specific lateral current-coupling term with
-   no 1D analog, but still not fixed (real numerical-methods work, not
-   a quick patch). See pytcad/M14-SURFACE-MOBILITY-PLAN.md.
+- GUI has no freeform/arbitrary geometry authoring (sketch-and-drag).
+  The library already solves on an arbitrary gmsh mesh
+  (unstructured_poisson.py/unstructured_dd.py); nothing in the GUI
+  builds or edits one. 3D device AUTHORING has a domain model
+  (Region/ContactDef/DomainDevice with optional z-extent) and, as of
+  2026-09-13, Structure-panel GUI wiring (AppController.setDomainDepth/
+  setRegionZBounds, StructurePanel "3D DOMAIN" control, DopingEditor
+  per-region z-bounds row) -- a device author can go 2D-region-
+  authored -> 3D through the Structure panel for a simple ohmic-
+  contact device. Template-driven 3D examples and a freeform "Build 3D
+  device" wizard remain future work. Phase-1 scope: ohmic contacts
+  only (no gates), no range-restricted 3D contact faces, uniform
+  doping only in 3D -- all three already refused loudly, not silently
+  ignored.
+- No dedicated provenance-trace UI (click through mesh -> physics ->
+  material -> backend); result files carry the data, no single view
+  walks the chain.
+- No full numerical-diagnostics panel (Newton iteration/residual
+  history, rejected bias points, per-stage continuation record, mesh
+  statistics) as a first-class GUI surface; a "convergence" viewport
+  mode and RunRecord plumbing exist, not the dedicated panel.
+- Additional device templates the original vision named: BJT, solar
+  cell, PIN diode explicitly (Schottky now has a standalone physics
+  module, M28, but no template). Only diode/MOSCAP/NMOS/HBT/HEMT/
+  FinFET exist as templates today.
+- No cross-backend GUI comparison (pytcad vs devsim side-by-side),
+  though both implement the SolverBackend protocol.
+- GPU (CUDA/CuPy) and MPI domain decomposition: LANDED but only in the
+  GUI's 3D solve path (gui/services/solver_runner.py +
+  mpi_schwarz_runner.py), not in pytcad's core Device classes
+  themselves. Which engine actually ran is surfaced via
+  AppController.solverEngineLabel. SYCL was not pursued (no native
+  Python binding).
+- NO INTERACTIVE 1D/2D GEOMETRY/MESH VIEWER (identified 2026-09-14).
+  `MplCanvasItem` (gui/services/mpl_canvas_item.py) already renders
+  1D result CURVES (I-V/C-V/transient/AC/convergence) and 2D FIELD
+  MAPS (doping/bands/recombination, with a contour-overlay toggle and
+  a Line-Cut mode) -- that surface is NOT missing. What IS missing:
+  the "Structure"/"Mesh" viewport modes are static Matplotlib
+  diagrams, not an interactive pan/zoom/inspect geometry viewer --
+  1D/2D has nothing analogous to the real PyVista/VTK
+  `gui/services/viewer3d.py` window 3D got in 3D-VISUALIZATION-PLAN.md
+  (isosurface controls, hover, live camera manipulation). Proposed as
+  M51 GEOMETRY/MESH INTERACTIVE VIEWER [M]: an interactive 1D/2D
+  companion (pan/zoom a device cross-section, hover a mesh node/edge
+  to read its doping/field/mesh-density value, toggle mesh overlay vs
+  filled field) -- likely a Matplotlib interactive backend upgrade
+  (mplcursors/blitting) rather than a new heavyweight dependency,
+  since 1D/2D geometry has none of 3D's need for a true GPU renderer.
+  NOT YET SCOPED IN DETAIL, NOT SIGNED OFF, NOT STARTED -- needs its
+  own plan doc (scope, gates, honest limits) before implementation,
+  same as every other milestone in this file.
+- 3D VIEWER PHASE 6 -- VECTOR FIELD VISUALIZATION -- LANDED 2026-09-14.
+  `gui/services/viewer3d.py`'s isosurface/volume/exploded-view viewer
+  had no vector-field rendering despite `ResultStore.vector_field()`/
+  `VectorField` already existing in the store protocol and
+  `solver_runner.extract_result()` already writing a real
+  `vector__current_density__{x,y,z}` (node-averaged Jn+Jp) for every
+  solved-bias 3D result -- the data existed, nothing visualized it.
+  Added `attach_vector_field()` (the vector analogue of
+  `attach_scalar_field()`) plus a new "Vector Field" sidebar dock:
+  arrow glyphs (`grid.glyph(orient=name, scale=name, tolerance=...)`,
+  arrow length/color both following the vector's own magnitude) and
+  streamlines (`grid.streamlines(...)` seeded from the grid's own
+  center/radius, rendered as tubes), both real VTK filters over the
+  actual solved data -- verified directly on the resistor_3d fixture
+  (125 streamline points, a 3280-point tube mesh, not a synthetic
+  check). `ResultStore.available_vectors()` added as a new protocol
+  member (default `[]`, same honest-default pattern as
+  `region_materials()`) so the vector dock disables itself outright
+  for an equilibrium-only or pre-solve store rather than showing a
+  live-looking control with nothing behind it. A real bug was caught
+  before shipping: this pyvista version's `streamlines(max_time=...)`
+  raises `pyvista.core.errors.DeprecationError`, which subclasses
+  RuntimeError -- an initial broad `except (ValueError, RuntimeError)`
+  around the streamline call silently swallowed it, which would have
+  made "Show streamlines" a permanent no-op for every user; fixed by
+  using the current `max_length` parameter and narrowing the except to
+  `ValueError` only (VTK's genuine "no valid seed" case), confirmed by
+  re-running the real pipeline and seeing actual streamline points.
+  A SECOND real bug reached the user before it was caught: `grid.glyph()`
+  does NOT carry the source vector array through under its own name --
+  its output only ever has PyVista's own fixed "GlyphVector"/
+  "GlyphScale" arrays -- so the first landing's `add_mesh(glyphs,
+  scalars="current_density")` raised `KeyError: 'Data array
+  (current_density) not present in this dataset'` the instant a real
+  user checked "Show arrows" in the actual running app. The mocked
+  `FakeInteractor` test suite could not catch this (its `add_mesh`
+  never inspects the `scalars=` kwarg against the mesh it was called
+  on) -- fixed by coloring glyphs by "GlyphScale" instead (verified
+  equal to the real vector magnitude), and closed the test gap itself
+  by adding `test_add_glyphs_and_add_streamlines_render_on_a_real_
+  pyvista_plotter` (a genuine off-screen `pv.Plotter`, no Qt/X11
+  needed, no FakeInteractor) that reproduces the exact KeyError when
+  run against the pre-fix code -- confirmed directly, not assumed.
+  A THIRD real bug reached the user before it was caught, again only
+  on a real (non-uniform) device rather than the uniform resistor-bar
+  fixture the original test coverage used: `vtkTubeFilter` can
+  silently DROP the source vector array entirely when a streamline
+  segment has few points -- confirmed directly on
+  `pn_junction_3d_example_spec` (a 16-point streamline kept
+  "current_density" before tubing, lost it after; a 150-point one on
+  the same device kept it both times) -- so the "Show streamlines"
+  checkbox raised the same `KeyError` class as the glyph bug, just on
+  a different device/code path. This is genuine, data-dependent VTK
+  behavior, not fixable upstream: fixed by checking
+  `name in tube.point_data` AFTER tubing and falling back to a solid-
+  colored tube rather than assuming the array survived. Gated by
+  `test_add_streamlines_falls_back_to_a_solid_tube_when_tube_drops_
+  the_field` (monkeypatches `PolyData.tube` to reproduce the exact
+  observed drop deterministically, since VTK's internal streamline
+  seeding is randomized and a synthetic 2-point polyline built by hand
+  did NOT reproduce the drop when tried directly). Stress-tested
+  afterward: 15 trials each of resistor_3d/pn_junction_3d/mosfet_3d/
+  bjt_3d_example_spec through the exact production glyph+streamline
+  code path, zero crashes. Gated in `gui/tests/test_viewer3d.py`/
+  `test_result_store.py`; full `gui/tests/` suite re-run green (795
+  passed) after all three fixes. Honest limit: Phase 4's sweep-playback snapshots
+  (`result_store.SweepSnapshots`) are scalar-only, so glyphs/
+  streamlines are NOT recomputed per playback frame -- toggle them off
+  before scrubbing a sweep. NOT done: a user-positioned streamline
+  seed plane (uses the grid center by default), E-field as a second
+  vector quantity (only current_density is exported today), and the
+  same feature for 2D (M51 above is the 1D/2D analogue, unscoped).
 
 ------------------------------------------------------------------------
-6. EXPLICITLY NOT IMPLEMENTED YET
+8. NEXT SESSION QUEUE
 ------------------------------------------------------------------------
-- Transient (M17) LANDED; AC (M18) Phases 1-4 + 3b (1D one-port, 1D
-  N-terminal+fT, 2D N-terminal incl. gate ports, GUI exposure,
-  4-terminal mosfet_2d Y-parameter matrix + fT) LANDED;
-  self-heating (M19) Phase 1 (1D steady-state) LANDED,
-  2D/transient not started -- see each milestone's own plan doc.
-  (M15 impact ionization, M22 phase 2's
-  continuation driver, and M16 local Kane BTBT are COMPLETE/LANDED --
-  see sections 3 and 5 and pytcad/M16-BTBT-PLAN.md; the nonlocal BTBT
-  variant remains Tier 3.  M20 density gradient is COMPLETE, ALL GATES
-  GREEN (2026-08-31) -- equilibrium-only DG behind Models(dg=True)/
-  MOSCapacitor(dg=True), now a coupled-Newton solve (see
-  M20-DENSITY-GRADIENT-PLAN.md section 7); DG TRANSPORT and 2D/3D DG
-  remain not implemented, out of this milestone's scope.)
-- 2D process geometry engine (M23); pair diffusion/TED/segregation
-  (M24); Monte-Carlo implantation (M25); general 3D (M26) --
-  ALL LANDED 2026-09-06 to a disclosed simplification-slice level
-  (structured-mesh/lumped-model/simplified-BCA/structured-plus-tet-gate-
-  BC respectively) -- see section 4b.5 above for the full per-milestone
-  record and each module's own honesty-clause docstring for exactly
-  what remains a simplification.
-  (Unstructured meshing, M21 phase 3, is now COMPLETE 2026-08-31 --
-  see section 5 item 2e above. M15 impact ionization and M22 phase 2's
-  continuation driver are both COMPLETE/LANDED -- see sections 3 and 5
-  above; the 3D iterative-solve scaling gate, M22 G6, is likewise
-  CLOSED via node-block-Jacobi preconditioning.)
-- The interactive GUI itself has no dimensionality selector: every
-  Process-Flow-built device is 1D and every Structure/Device-
-  Builder-template device is 2D (see the GUI smoke-test entry, section
-  5 above); there is no GUI path to AUTHORING a Device3D (v0.6 Phase 2c
-  did add a solver BACKEND selector -- pytcad/devsim, gated on 1D
-  devices -- so that half of this gap is closed; see
-  `pytcad/gui/README.md`). A PyVista/VTK 3D VISUALIZATION viewer (for
-  an already-solved 3D result, not authoring one) now exists as of
-  2026-08-29/30 -- see `pytcad/3D-VISUALIZATION-PLAN.md` (Phases 1-2
-  shipped: a real 3D example device, a viewer window with mesh outline
-  and interactive isosurface controls; Phases 3-5 -- volumetric
-  rendering, animated sweep playback, exploded structural view -- not
-  started; these three phases HAVE since shipped -- see the entry
-  above). 3D device AUTHORING now has a DOMAIN MODEL (as of
-  2026-08-31): `Region`/`ContactDef`/`DomainDevice` and the
-  `StructureModel`/`RegionSpec`/`BoundarySpec`/`MeshModel` GUI-side
-  classes all accept an optional z-extent (`z_min`/`z_max`,
-  `depth_cm`/`mesh_nz`, `"front"`/`"back"` faces), and
-  `workbench/adapters/spec.py`'s `domain_from_structure`/
-  `spec_from_domain` build a real 3D `DeviceSpec` from region-authored
-  input -- proven to match `resistor_3d_example_spec()`'s hand-built
-  equivalent bit-for-bit and to solve correctly on a real `Device3D`
-  (see `pytcad/tests/test_workbench_m1.py`'s 3D-authoring tests). What
-  GUI WIRING LANDED 2026-09-13: `AppController.setDomainDepth(depth_cm,
-  nz)` (the "make it 3D" action, both-or-neither with `MeshModel.nz`,
-  0 clears back to 2D) and `setRegionZBounds(region_id, z_min, z_max)`,
-  plus `is3D`/`domainDepthCm`/`meshNz` read properties and a
-  `RegionListModel.BoundsZRole`; `StructurePanel.qml` gained a "3D
-  DOMAIN" depth/Nz control and `DopingEditor.qml` a per-region z-bounds
-  row (shown only once `is3D`). Found and fixed while wiring it:
-  `StructureModel.validate()` unconditionally called
-  `mesh_model.to_mesh_spec(width, height)` (2D-only) for a
-  `vfb_mode="computed"` gate check, which crashed as soon as `nz` was
-  set on a structure that still had gates (unreachable before, since
-  there was previously no GUI path to set `nz`) -- fixed by flagging
-  "gates not supported on a 3D structure" as a validation error instead
-  of falling into that 2D-only branch. Phase-1 scope carries over
-  unchanged: ohmic contacts only (no gates), no range-restricted 3D
-  contact faces, uniform doping only in 3D -- all three already refused
-  loudly by `StructureModel`/`resolve_boundary_indices`. Gated in
-  `gui/tests/test_structure_3d_authoring.py` (7 tests, including an
-  end-to-end depth+z-bounds+`to_device_spec()` build). A device author
-  can now go 2D-region-authored -> 3D through the Structure panel alone
-  for a simple ohmic-contact device; template-driven 3D examples
-  (`resistor_3d`) and a freeform "Build 3D device" wizard beyond this
-  panel remain future work.
-- Experiments/calibration/interop (M30) -- Part I (library-level
-  parameter splits/run-matrix, Nelder-Mead calibration, batch
-  parallelism, DeckBuild-dialect import) LANDED 2026-09-07; the GUI/
-  product layer (Study Manager, matrix viewer, run comparison, etc.)
-  is planned but not started -- see pytcad/M30-WORKBENCH-PLAN.md.
-  Mixed-mode
-  circuit coupling (M27) LANDED 2026-09-06 (pytcad/circuit.py, MNA +
-  DeviceStamp); Schottky/tunnel contacts + gate stacks (M28) LANDED
-  2026-09-06 as a standalone-module slice; hydrodynamic/energy balance
-  (M29) LANDED 2026-09-06 as a local energy-balance closure slice --
-  see section 4b.5 for all three.
-- Monte-Carlo transport, atomistic kinetic-MC diffusion, radiation/
-  SEE, ferroelectrics, full viscoelastic oxidation mechanics, Maxwell
-  solvers -- permanently out of scope per the parity plan.
-- Rewriting Device classes into compositional equation assembly
-  (revisited only when a second concrete model need justifies it).
-- ANY change to numerical defaults, scalings, or tolerances; no
-  deletion of DeviceSpec or the subprocess contract.
-
-VISION-DOC ITEMS NOT ON THE PARITY ROADMAP AT ALL (from
-TCAD_Project_Vision.md, cross-checked against the tree 2026-08-27 --
-recorded here so they are tracked rather than silently absent):
-- GPU acceleration (CUDA/CuPy) and MPI/domain-decomposition parallelism:
-  LANDED 2026-09-02, in the GUI's own 3D solve path only (gui/services/
-  solver_runner.py + mpi_schwarz_runner.py), not in pytcad's core
-  Device classes themselves. GPU: a CUDA direct sparse solve
-  (cuSOLVER via CuPy, pytcad/linsolve.py's "gpu_direct" method) for
-  the bias/sweep Newton loop, 2.8x on a real 121k-unknown Jacobian.
-  MPI: 4-rank overlapping Schwarz domain decomposition (NOT the
-  distributed-matrix design this bullet originally anticipated -- see
-  M22-LINSOLVE-PLAN.md section 9), 5.1x on bjt_3d, gated off for any
-  device whose doping varies along the split axis after that
-  regression was found and reproduced directly (pn_junction_3d).
-  GENERALIZED same day (section 10) to pick whichever mesh axis
-  (x/y/z) a device is actually safe to split along, instead of an
-  x-only check: pn_junction_3d, refused outright before, now qualifies
-  via a z-split (1.5x over its single-process AMG+GPU baseline, exact
-  to ~1e-17).  EXTENDED to voltage sweeps (M22-LINSOLVE-PLAN.md section
-  11, 2026-09-04): a 3-point bjt_3d sweep ran 2.7x faster via MPI
-  Schwarz than single-process, with sweep-playback snapshot fields
-  agreeing to machine precision across every point.  A REAL
-  CORRECTNESS BUG was found and fixed the same day exercising the
-  latent axis choices end to end (M22-LINSOLVE-PLAN.md section 12):
-  finfet_3d's doping-uniform z-axis also carries a GateBC's oxide-
-  coupling term (normal_axis="z"), a field-curvature hazard the
-  doping-only safety check couldn't see -- it silently produced a
-  wrong (1.4e-3 relative error) AND slower (4.1x) result before the
-  fix excluded any axis matching a registered gate's normal_axis.
-  Re-verified exact/unaffected on bjt_3d and pn_junction_3d, and
-  finfet_3d now correctly falls back to its single-process path.  Both
-  GPU and MPI are size-and-hardware-gated opt-in paths -- a machine
-  without a GPU or without mpi4py/mpirun sees identical behavior to
-  before, just without the speedup.  SYCL has no native Python path
-  (oneAPI dpnp is the nearest binding) and was not pursued for that
-  reason.  Which engine actually ran is now surfaced to the user via
-  AppController.solverEngineLabel (Main.qml status bar), rather than
-  being a silent internal choice.
-- Cross-backend GUI comparison. workbench/solvers/{base,devsim_backend}.py
-  implement the SolverBackend protocol and a working DEVSIM backend, but
-  the GUI does not expose backend selection or a side-by-side compare
-  view to the user.
-- A dedicated provenance-trace UI ("where did this number come from,"
-  clicking through mesh -> physics -> material -> backend). Result
-  files carry model config and material info, but there is no single
-  view that walks the chain.
-- Additional device templates the vision names explicitly: BJT, solar
-  cell, Schottky diode, PIN diode, FinFET. Only diode/MOSCAP/NMOS/
-  HBT/HEMT exist today (workbench/core/templates.py).
-- Freeform/arbitrary 2D or 3D device geometry (sketch-and-drag, not
-  parametric templates). M21 phase 3 (unstructured meshing) is now
-  COMPLETE as of 2026-08-31 -- the FV residual/Jacobian assembly
-  (pytcad/unstructured_poisson.py, unstructured_dd.py) and the
-  Device2D(unstructured=True) library-level integration both landed
-  (section 5 item 2e). What remains is GUI-level only: a
-  geometry-authoring UI for freeform regions (sketch-and-drag) does
-  not exist -- the library can already solve on an arbitrary gmsh
-  mesh, but nothing in the GUI builds or edits one.
-- Full numerical-diagnostics panel (Newton iteration/residual history,
-  rejected bias points, per-stage continuation record, mesh
-  statistics) as a first-class GUI surface. A "convergence" viewport
-  mode and RunRecord plumbing exist; the dedicated panel does not.
-- Hydrodynamic/energy-balance and Monte-Carlo transport ARE on the
-  parity roadmap (M29, and MC transport is explicitly OUT of scope
-  there) -- so these are consistent between the two documents, not a gap.
-
-------------------------------------------------------------------------
-7. NEXT SESSION QUEUE (priority order, detailed starts)
-------------------------------------------------------------------------
-1. [DONE 2026-08-28] M15 R1 -- CLOSED, see section 5; this queue entry
-   predates that closure.
-2. [DONE 2026-08-28] M22 phase 2 -- continuation driver LANDED (the 3D-
-   scaling gate that used to head this list is closed via node-block-
-   Jacobi preconditioning; see section 4b).
-3. [DONE 2026-08-28] M21 phase 2 -- 2D/3D separable adaptive
-   refinement LANDED (25 gates); see section 5 item 2.
-4. [DONE 2026-08-29] M16 BAND-TO-BAND TUNNELING -- local Kane BTBT
-   LANDED in Device1D, residual-ordering and live-state gates written
-   first (see section 5 item 3 and pytcad/M16-BTBT-PLAN.md).
-5. [DONE 2026-08-28, G-C(2D) DONE 2026-08-31] M14 remainder --
-   G-B/G-C(1D+2D)/catalog LANDED; driving_force descoped, G-A remains
-   open, re-searched 2026-08-31 with no new result (see section 5 item
-   5). M11-S4/S5 GUI polish still open. M12-S2 catalog wiring for TAT
-   -- [DONE 2026-09-04]: "tat" added to device_spec.py's
-   _default_models() (default False, additive -- an old job.json
-   without the key still gets tat=False) and to
-   workbench/core/catalog.py's ModelInfo registry (Hurkx reference,
-   honest limitations note pointing at the WKB-underflow gotcha).
-   PhysicsLabPanel/lab_controller.py already iterate ModelCatalog.list()
-   generically, so no QML change was needed. Verified end to end: a
-   real diode_1d solve with models["tat"]=True through the actual GUI
-   wire format solves cleanly and stamps tat=True into record__meta.
-   Two tests had a hardcoded catalog-key list (gui/tests/
-   test_physics_lab.py, tests/test_workbench_m1.py) and needed
-   updating; full suites (tests/ 419 passed 1 xfailed, gui/tests 624
-   passed) otherwise unaffected.
-7. [COMPLETE 2026-08-31] M20 DENSITY-GRADIENT -- Ancona-Stafford DG
-   quantum correction (equilibrium-only: MOSCapacitor dg flag +
-   Device1D Models.dg) plus the pytcad/dg.py analysis layer with the
-   Schrodinger-Poisson reference solver. 2026-08-29: gates run for the
-   first time, a real outer-fixed-point non-convergence bug found and
-   fixed, but G-C/G-D stayed open on a gamma-calibration gap (three
-   hypotheses tested and ruled out). 2026-08-31: closed via a coupled-
-   Newton reformulation -- (psi, Lambda_n, Lambda_p) solved
-   SIMULTANEOUSLY instead of lagged, FD-Jacobian verified, gamma-
-   continuation for robust convergence. This also surfaced and fixed a
-   genuine wrong-sign bug (near-surface Lambda was negative, enhancing
-   rather than suppressing density -- confirmed to be a property of
-   the pre-existing quantum_potential formula, not new code) via
-   literature/production-tool research (DEVSIM's density-gradient
-   implementation): MOSCapacitor's interface node now gets a HARD-WALL
-   boundary condition (matching this codebase's own Schrodinger-
-   Poisson reference's hard-wall convention), not the old Neumann
-   choice; Device1D keeps Neumann (ohmic contacts, no oxide interface
-   to justify a hard wall). All gates green, dg_gamma untouched at its
-   documented default of 1.0. See M20-DENSITY-GRADIENT-PLAN.md section
-   7 for the full record and measured numbers.
-8. [PHASES 1-3 DONE 2026-08-30/31] M17 TRANSIENT -- 1D AND 2D
-   backward-Euler/theta-scheme transient cores LANDED as new sibling
-   modules (pytcad/transient.py, pytcad/transient2d.py), driving
-   Device1D/Device2D through their own _residual_jacobian exactly like
-   continuation.py does for bias continuation -- device.py/device2d.py
-   untouched. Phase 1: G1/G2/G4/G5/G-FD green (G2 left an honest
-   partial result, see M17-TRANSIENT-PLAN.md section 5). Phase 2:
-   G1/G4/G5/G-FD green (G2 not re-attempted); found and fixed a
-   genuinely different charge-conservation sign relationship than
-   Phase 1's (Device2D.terminal_current()'s per-contact "into the
-   device" convention vs 1D's single-wire edge-flux convention -- see
-   plan section 7) and a float64-cancellation bug in the naive
-   absolute stored-charge sum at 2D mesh scale. Phase 3: a transient
-   run is now reachable end-to-end from the desktop app (new Transient
-   tab/panel, schema-v2 -> v3 bump for a new transient__* npz block,
-   new "Transient" viewport mode) -- built entirely on top of Phase
-   1/2's already-gated solvers, called unmodified; closed a real gap
-   found along the way (the devsim backend had no transient dispatch
-   at all and would have silently ignored an armed transient config --
-   now explicitly refused). GateBC waveforms, project-file persistence
-   of an armed transient config, and per-step field-snapshot playback
-   remain out of scope, honestly flagged in the plan doc. Next: M18
-   (small-signal AC), which depends only on the Device1D transient
-   machinery Phase 1 shipped.
-9. [PHASES 1-4 + 3b LANDED, latest 2026-09-05] M18 SMALL-SIGNAL AC --
-   see the "M18 SMALL-SIGNAL AC ANALYSIS" milestone entry above and
-   pytcad/M18-AC-PLAN.md for the full record. Phase 1 (1D one-port),
-   Phase 2 (1D N-terminal Y-parameters + fT, merged from a parallel
-   branch), Phase 3 (2D N-terminal Y-parameters incl. gate ports),
-   Phase 4 (GUI exposure: ACPanel.qml, ac__* wire format, C(f)/G(f)
-   via ax.twinx()), and Phase 3b (full 4-terminal mosfet_2d
-   Y-parameter matrix + fT, ac2d.cutoff_frequency(), reusing M14's
-   build_mosfet fixture) all landed; N-port-matrix/fT GUI display and
-   fmax remain not started.
-10. [PHASE 1 LANDED 2026-08-31] M19 SELF-HEATING -- see the "M19
-    SELF-HEATING (THERMODYNAMIC MODEL)" milestone entry above and
-    pytcad/M19-SELFHEATING-PLAN.md for the full record, including the
-    architecture decision (isothermal DD + outer Gummel thermal loop,
-    not a monolithic psi/n/p/T Newton system) and the quasi-Fermi-
-    potential Joule-heating fix. 1D steady-state only; 2D, transient,
-    and Seebeck/Peltier not started.
-6. FIXED (2026-08-27): the intermittent Qt SIGABRT (native
-   `__cxa_deleted_virtual` abort inside `QQuickPaintedItem::
-   updatePaintNode`, ~1-in-3 to 1-in-5 full-suite runs). Root cause:
-   every gui/tests/*.py file that calls `gui.app.create_engine()`
-   builds a QQmlApplicationEngine + QQuickWindow and never tears it
-   down; left for Python's refcounting GC, a window can be destroyed
-   outside Qt's safe close protocol while a scenegraph paint-node
-   update is still pending, and a LATER test's window (sharing the
-   same process-wide QGuiApplication) crashes when it walks the dirty-
-   item list. Fixed in `gui/tests/conftest.py` (a generic per-test +
-   session-teardown sweep that DESTROYS every top-level window --
-   `.destroy()`, not `.close()`, since Main.qml's onClosing handler can
-   veto a close on unsaved changes -- and drains DeferredDelete events)
-   and `gui/app.py` (added `close_engine(engine)`, the teardown API
-   `create_engine()` was missing, for any future non-test caller).
-   Verified with 6+ consecutive full-suite reruns, zero recurrences.
+Live front of the queue: M43 (self-heating -> 2D/3D) is next on the
+dimensional-lift track (5.3); M51 (interactive 1D/2D geometry/mesh
+viewer, see section 7) is a newly identified, independent GUI item
+that can proceed in parallel. M35 (3D process) and M47 (3D engine
+completion) remain the two largest unscoped items. See `history.md`
+for session-by-session detail and open handoff notes.
 
 Standing rules: every slice ships suite-green with pre-existing tests
 unchanged; adversarial probe pass before each commit; optional deps
 stay optional; gate-bearing milestones block their dependents; a
 "COMPLETE, all gates green" status claim is not evidence on its own --
-this file was wrong about M15 for a full session before 2026-08-27's
-debug pass, and the fix is to measure, not to trust the last status
-block.
+measure it, don't trust the last status block (this file was wrong
+about M15 for a full session once, per M15-IONIZATION-PLAN.md).

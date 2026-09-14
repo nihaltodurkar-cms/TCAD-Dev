@@ -14,7 +14,15 @@ whole pipeline (real 3D solve -> real result store -> real PyVista mesh
 field and a level, see the actual shell that field crosses through the
 device volume. Phase 3 adds volumetric rendering with preset transfer
 functions. Phase 4 adds animated bias-sweep playback with snapshot
-capture and timeline scrubber.
+capture and timeline scrubber. Phase 5 adds an exploded structural
+view. Phase 6 adds vector-field visualization (current density
+Jn+Jp, the one vector quantity solver_runner.extract_result() writes
+today) as arrow glyphs and streamlines through the device volume --
+see attach_vector_field()/_add_glyphs()/_add_streamlines() below.
+Honest limit: sweep-playback snapshots (Phase 4) are scalar-only
+(result_store.SweepSnapshots carries no vector data), so glyphs/
+streamlines are NOT recomputed per playback frame -- toggle them off
+before scrubbing a sweep, or accept a stale vector overlay.
 """
 import numpy as np
 import pyvista as pv
@@ -77,6 +85,43 @@ def attach_scalar_field(grid, mesh_axes, field):
             f"field '{field.name}' has shape {values.shape}, "
             f"expected {expected_shape} to match the mesh axes")
     grid.point_data[field.name] = values.flatten(order="C")
+
+
+def attach_vector_field(grid, mesh_axes, vector_field):
+    """Attach one vector field to an existing grid as point data, in
+    place -- the vector analogue of attach_scalar_field above, shared
+    by Viewer3DWindow's vector sidebar (glyphs/streamlines both need a
+    real (n_points, 3) vector array set as active on the grid, which is
+    what VTK's own glyph()/streamlines() filters key off).
+
+    vector_field: a result_store.VectorField whose `.components` dict
+    carries per-axis arrays, each shaped like this device's node grid
+    (Nz, Ny, Nx) -- same node ordering as attach_scalar_field. A
+    missing axis (e.g. a 2D result's current_density, which has no
+    "z" component) is treated as all-zero, so a genuinely 2D vector
+    quantity still glyphs/streamlines sensibly in a thin 3D grid.
+
+    Raises ValueError if a present component's shape doesn't match the
+    mesh axes -- the same guard attach_scalar_field has always had.
+    """
+    z = np.asarray(mesh_axes.axes["z"], dtype=float)
+    y = np.asarray(mesh_axes.axes["y"], dtype=float)
+    x = np.asarray(mesh_axes.axes["x"], dtype=float)
+    expected_shape = (z.size, y.size, x.size)
+    n_points = z.size * y.size * x.size
+    cols = []
+    for axis in ("x", "y", "z"):
+        if axis not in vector_field.components:
+            cols.append(np.zeros(n_points, dtype=float))
+            continue
+        values = np.asarray(vector_field.components[axis], dtype=float)
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"vector field '{vector_field.name}' component '{axis}' has "
+                f"shape {values.shape}, expected {expected_shape} to match "
+                "the mesh axes")
+        cols.append(values.flatten(order="C"))
+    grid.point_data[vector_field.name] = np.column_stack(cols)
 
 
 def build_rectilinear_grid(mesh_axes, field=None):
@@ -194,6 +239,23 @@ class Viewer3DWindow:
         for name in field_names:
             attach_scalar_field(self.grid, axes, store.scalar_field(name))
 
+        # Phase 6: vector fields (current density Jn+Jp today; any
+        # future vector__* export works unchanged). Same up-front-
+        # attach pattern as scalars -- available_vectors() is empty for
+        # an equilibrium-only or pre-solve store, so this is a no-op
+        # there rather than a special case. Defensive AttributeError
+        # guard, same convention _build_exploded_view already uses for
+        # region_materials()/structure_regions(): a store that predates
+        # this protocol member (an old duck-typed test double, not a
+        # real ResultStore subclass) gets treated as carrying no vector
+        # fields rather than crashing the whole viewer at construction.
+        try:
+            vector_names = store.available_vectors()
+        except AttributeError:
+            vector_names = []
+        for name in vector_names:
+            attach_vector_field(self.grid, axes, store.vector_field(name))
+
         self._closed = False
         self._window = _Viewer3DMainWindow(self._release)
         self._window.setWindowTitle(title)
@@ -245,6 +307,12 @@ class Viewer3DWindow:
         self._exploded_separation = 0.15 * self.grid.length  # cm
         self._region_actors = []  # list of (actor, box) tuples for exploded regions
         self._store = store  # keep reference for region_materials access
+        # Phase 6: vector field (glyph/streamline) state.
+        self._vector_names = vector_names
+        self._glyph_actor = None
+        self._glyph_enabled = False
+        self._streamline_actor = None
+        self._streamline_enabled = False
         self._build_sidebar(field_names)
         if field_names:
             # "doping" first if present (the example every Phase-1/2
@@ -329,6 +397,62 @@ class Viewer3DWindow:
 
         # Phase 4: sweep playback controls in a separate dock.
         self._build_playback_dock()
+        # Phase 6: vector field (glyph/streamline) controls, own dock --
+        # a separate physical quantity from the scalar isosurface/volume
+        # above, not another row on the same form.
+        self._build_vector_dock()
+
+    def _build_vector_dock(self):
+        """Build the vector-field (glyph arrows / streamlines) sidebar
+        dock. Disabled outright when the store carries no vector field
+        at all (an equilibrium-only or pre-solve result) -- same "no
+        data, no live control" convention _on_field_changed's NaN guard
+        and the field_names-empty branch in __init__ both already use,
+        rather than a control that looks live but silently does
+        nothing."""
+        dock = QDockWidget("Vector Field", self._window)
+        panel = QWidget()
+        form = QFormLayout(panel)
+
+        self._vector_field_box = QComboBox()
+        self._vector_field_box.addItems(sorted(self._vector_names))
+        self._vector_field_box.currentTextChanged.connect(
+            self._on_vector_field_changed)
+        form.addRow("Field", self._vector_field_box)
+
+        self._glyph_toggle = QCheckBox("Show arrows (glyphs)")
+        self._glyph_toggle.stateChanged.connect(self._on_glyph_toggle_changed)
+        form.addRow("Glyphs", self._glyph_toggle)
+
+        self._glyph_density_spin = QDoubleSpinBox()
+        # Fraction of grid points that get an arrow, via glyph()'s own
+        # `tolerance` (a fraction of the mesh's bounding-box diagonal
+        # used to merge nearby glyph points) -- 0.0 draws one arrow per
+        # node, which overdraws into a solid block on any real mesh, so
+        # default sparse enough to read as individual vectors on the
+        # ~1e3-node examples this GUI ships. Same "expose the real VTK
+        # knob, sensibly defaulted" choice as the isosurface level box.
+        self._glyph_density_spin.setRange(0.0, 0.5)
+        self._glyph_density_spin.setSingleStep(0.01)
+        self._glyph_density_spin.setDecimals(3)
+        self._glyph_density_spin.setValue(0.05)
+        self._glyph_density_spin.valueChanged.connect(
+            self._on_glyph_density_changed)
+        self._glyph_density_spin.setEnabled(False)
+        form.addRow("Glyph spacing", self._glyph_density_spin)
+
+        self._streamline_toggle = QCheckBox("Show streamlines")
+        self._streamline_toggle.stateChanged.connect(
+            self._on_streamline_toggle_changed)
+        form.addRow("Streamlines", self._streamline_toggle)
+
+        dock.setWidget(panel)
+        self._window.addDockWidget(Qt.RightDockWidgetArea, dock)
+
+        if not self._vector_names:
+            self._vector_field_box.setEnabled(False)
+            self._glyph_toggle.setEnabled(False)
+            self._streamline_toggle.setEnabled(False)
 
     def _build_playback_dock(self):
         """Build the sweep playback dock widget with play/pause, step,
@@ -716,6 +840,132 @@ class Viewer3DWindow:
             self.plotter.remove_actor(self._volume_actor)
             self._volume_actor = None
 
+    def _on_vector_field_changed(self, _name):
+        if self._glyph_enabled:
+            self._remove_glyphs()
+            self._add_glyphs()
+        if self._streamline_enabled:
+            self._remove_streamlines()
+            self._add_streamlines()
+
+    def _on_glyph_toggle_changed(self, state):
+        """Toggle vector-field glyph arrows on/off (Phase 6)."""
+        self._glyph_enabled = (Qt.CheckState(state) == Qt.Checked)
+        self._glyph_density_spin.setEnabled(self._glyph_enabled)
+        if self._glyph_enabled:
+            self._add_glyphs()
+        else:
+            self._remove_glyphs()
+
+    def _on_glyph_density_changed(self, _value):
+        if self._glyph_enabled:
+            self._remove_glyphs()
+            self._add_glyphs()
+
+    def _on_streamline_toggle_changed(self, state):
+        """Toggle vector-field streamlines on/off (Phase 6)."""
+        self._streamline_enabled = (Qt.CheckState(state) == Qt.Checked)
+        if self._streamline_enabled:
+            self._add_streamlines()
+        else:
+            self._remove_streamlines()
+
+    def _add_glyphs(self):
+        """Add arrow glyphs for the selected vector field, one arrow
+        per surviving point after glyph()'s own `tolerance` merge --
+        the sidebar's "Glyph spacing" control, a fraction of the mesh's
+        bounding-box diagonal, so a sparse/dense choice scales with
+        device size the same way _exploded_separation's default does
+        (see __init__'s note on that bug). Arrow length AND color both
+        follow the vector's own magnitude (orient=scale=field_name),
+        so a stagnant region reads as a visibly shorter arrow, not just
+        a differently colored one of the same size."""
+        name = self._vector_field_box.currentText()
+        if not name or name not in self.grid.point_data:
+            return
+        vectors = self.grid.point_data[name]
+        finite = vectors[np.isfinite(vectors).all(axis=1)]
+        if finite.size == 0 or not np.any(np.linalg.norm(finite, axis=1) > 0):
+            # An all-zero or all-NaN vector field (e.g. an unconverged
+            # solve) has nothing to orient an arrow along -- refuse
+            # rather than hand VTK a degenerate glyph() call.
+            return
+        glyphs = self.grid.glyph(
+            orient=name, scale=name,
+            tolerance=self._glyph_density_spin.value())
+        # glyph() does NOT carry the source array through under its own
+        # name -- confirmed directly: its output only ever has
+        # "GlyphVector"/"GlyphScale" (PyVista's own fixed names for the
+        # orienting vector and the magnitude used to size each arrow),
+        # never "current_density" itself. A first version colored by
+        # `scalars=name` here, which raised
+        # `KeyError: 'Data array (current_density) not present in this
+        # dataset'` the instant a real user checked "Show arrows" --
+        # caught by actually running the app, not by the (mocked-
+        # plotter) test suite, which never inspects add_mesh's scalars
+        # kwarg against the mesh it was called on. "GlyphScale" IS the
+        # same magnitude (verified: matches np.linalg.norm(vectors,
+        # axis=1) to float32 precision), so color by that instead.
+        self._glyph_actor = self.plotter.add_mesh(
+            glyphs, scalars="GlyphScale", cmap="plasma", show_scalar_bar=True)
+
+    def _remove_glyphs(self):
+        if self._glyph_actor is not None:
+            self.plotter.remove_actor(self._glyph_actor)
+            self._glyph_actor = None
+
+    def _add_streamlines(self):
+        """Add streamlines through the selected vector field, seeded
+        from a point source at the grid's own center/radius (PyVista's
+        default seeding strategy for streamlines() with no explicit
+        source_center) -- a reasonable default for a first pass; a
+        user-positioned seed plane is future work, not scoped here."""
+        name = self._vector_field_box.currentText()
+        if not name or name not in self.grid.point_data:
+            return
+        vectors = self.grid.point_data[name]
+        finite = vectors[np.isfinite(vectors).all(axis=1)]
+        if finite.size == 0 or not np.any(np.linalg.norm(finite, axis=1) > 0):
+            return
+        try:
+            lines = self.grid.streamlines(
+                vectors=name, source_center=self.grid.center,
+                source_radius=self.grid.length / 2.0, n_points=100,
+                max_length=self.grid.length * 100.0)
+        except ValueError:
+            # VTK's streamline integrator can legitimately fail to find
+            # any seed inside a degenerate/near-uniform field (e.g. a
+            # resistor bar's current density is nearly constant
+            # everywhere) -- refuse quietly rather than crash the
+            # checkbox's Qt slot, same "no data, no actor" convention
+            # as the empty-isosurface case in _redraw_isosurface.
+            return
+        if lines.n_points == 0:
+            return
+        tube = lines.tube(radius=self.grid.length * 0.002)
+        # A THIRD real bug, caught only by running against a real
+        # (non-uniform) device rather than the uniform resistor-bar
+        # fixture the test suite's original coverage used: vtkTubeFilter
+        # can silently DROP the source vector array entirely when a
+        # streamline segment has very few points -- confirmed directly
+        # (pn_junction_3d_example_spec, a 16-point streamline: `name in
+        # lines.point_data` is True but `name in tube.point_data` is
+        # False after tubing; a 150-point streamline on the same device
+        # keeps it). This is genuine, data-dependent VTK behavior, not
+        # a bug to fix upstream -- check after tubing and fall back to
+        # a solid-colored tube rather than crash the checkbox's Qt slot,
+        # same "no data, no actor/color" convention this module already
+        # uses for a degenerate isosurface/volume.
+        kwargs = {"cmap": "plasma", "show_scalar_bar": True}
+        if name in tube.point_data:
+            kwargs["scalars"] = name
+        self._streamline_actor = self.plotter.add_mesh(tube, **kwargs)
+
+    def _remove_streamlines(self):
+        if self._streamline_actor is not None:
+            self.plotter.remove_actor(self._streamline_actor)
+            self._streamline_actor = None
+
     def _redraw_isosurface(self):
         field_name = self._field_box.currentText()
         if not field_name:
@@ -758,6 +1008,9 @@ class Viewer3DWindow:
         if self._volume_actor is not None:
             self.plotter.remove_actor(self._volume_actor)
             self._volume_actor = None
+        # Clean up Phase 6 vector-field actors.
+        self._remove_glyphs()
+        self._remove_streamlines()
         self.plotter.close()
 
     def show(self):

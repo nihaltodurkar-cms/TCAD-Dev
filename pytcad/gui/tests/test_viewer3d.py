@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import numpy as np
 import pytest
+import pyvista as pv
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDockWidget, QWidget
 
@@ -682,3 +683,204 @@ def test_viewer3d_window_exploded_cleanup_on_release(gapp, monkeypatch):
     win._release()
     assert win._closed is True
     assert len(win._region_actors) == 0
+
+
+# -- Phase 6: vector field visualization (current density glyphs/streamlines) --
+
+def test_attach_vector_field_shapes_a_three_component_point_array(resistor_3d_store):
+    from gui.services.viewer3d import attach_vector_field
+    axes = resistor_3d_store.mesh_axes()
+    grid = build_rectilinear_grid(axes)
+    vf = resistor_3d_store.vector_field("current_density")
+    attach_vector_field(grid, axes, vf)
+    assert grid.point_data["current_density"].shape == (grid.n_points, 3)
+
+
+def test_attach_vector_field_missing_axis_component_is_zero_filled():
+    from gui.services.viewer3d import attach_vector_field
+    from gui.services.result_store import MeshAxes, VectorField
+    axes = MeshAxes(axes={"x": [0.0, 1.0], "y": [0.0, 1.0], "z": [0.0, 1.0]},
+                    dimensionality=3)
+    grid = build_rectilinear_grid(axes)
+    # A 2D result's current_density has no "z" component at all.
+    vf = VectorField(name="current_density",
+                     components={"x": np.ones((2, 2, 2)),
+                                 "y": np.zeros((2, 2, 2))},
+                     unit="A/cm^2")
+    attach_vector_field(grid, axes, vf)
+    assert np.all(grid.point_data["current_density"][:, 2] == 0.0)
+
+
+def test_attach_vector_field_rejects_wrong_shaped_component():
+    from gui.services.viewer3d import attach_vector_field
+    from gui.services.result_store import MeshAxes, VectorField
+    axes = MeshAxes(axes={"x": [0.0, 1.0], "y": [0.0, 1.0], "z": [0.0, 1.0]},
+                    dimensionality=3)
+    grid = build_rectilinear_grid(axes)
+    vf = VectorField(name="current_density",
+                     components={"x": np.ones((3, 3, 3))}, unit="A/cm^2")
+    with pytest.raises(ValueError, match="expected"):
+        attach_vector_field(grid, axes, vf)
+
+
+def test_viewer3d_window_vector_dock_populated_for_a_solved_bias_result(gapp, resistor_3d_store, monkeypatch):
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    names = {win._vector_field_box.itemText(i)
+             for i in range(win._vector_field_box.count())}
+    assert names == {"current_density"}
+    assert win._vector_field_box.isEnabled() is True
+    assert win._glyph_toggle.isEnabled() is True
+    assert win._streamline_toggle.isEnabled() is True
+    assert "current_density" in win.grid.point_data
+    assert win.grid.point_data["current_density"].shape == (win.grid.n_points, 3)
+
+
+def test_viewer3d_window_vector_dock_disabled_without_a_vector_field(gapp, monkeypatch):
+    """An equilibrium-only or pre-solve store (no vector__* keys)
+    disables the vector controls outright rather than showing a live
+    combo box with nothing real behind it."""
+    from gui.services.result_store import MeshAxes, ScalarField
+
+    class _EquilibriumStore:
+        def mesh_axes(self):
+            return MeshAxes(axes={"x": [0.0, 1.0], "y": [0.0, 1.0],
+                                  "z": [0.0, 1.0]}, dimensionality=3)
+        def available_scalars(self):
+            return ["doping"]
+        def scalar_field(self, name):
+            return ScalarField(name="doping", values=np.ones((2, 2, 2)),
+                               unit="cm^-3")
+        def available_vectors(self):
+            return []
+
+    win = _fake_viewer3d_window(_EquilibriumStore(), monkeypatch)
+    assert win._vector_field_box.isEnabled() is False
+    assert win._glyph_toggle.isEnabled() is False
+    assert win._streamline_toggle.isEnabled() is False
+
+
+def test_add_glyphs_and_add_streamlines_render_on_a_real_pyvista_plotter(resistor_3d_store):
+    """Real bug, caught only by actually running the app (not by the
+    mocked-FakeInteractor tests, which never inspect add_mesh's own
+    kwargs against the mesh): grid.glyph()'s output does NOT carry the
+    source vector array through under its own name -- only the fixed
+    "GlyphVector"/"GlyphScale" names PyVista assigns -- so calling
+    add_mesh(glyphs, scalars="current_density") raises
+    `KeyError: 'Data array (current_density) not present in this
+    dataset'` the instant a real user checks "Show arrows". This test
+    exercises the actual _add_glyphs()/_add_streamlines() logic against
+    a REAL (off-screen, no Qt/X11 needed -- see this module's own
+    docstring on why pv.Plotter(off_screen=True) works headlessly where
+    QtInteractor does not) pv.Plotter, so a `scalars=` kwarg that
+    doesn't exist on the mesh fails here exactly as it would for a
+    real user, instead of silently passing against FakeInteractor's
+    mock which never looks at the mesh at all."""
+    axes = resistor_3d_store.mesh_axes()
+    grid = build_rectilinear_grid(axes)
+    for name in resistor_3d_store.available_scalars():
+        from gui.services.viewer3d import attach_scalar_field
+        attach_scalar_field(grid, axes, resistor_3d_store.scalar_field(name))
+    for name in resistor_3d_store.available_vectors():
+        from gui.services.viewer3d import attach_vector_field
+        attach_vector_field(grid, axes, resistor_3d_store.vector_field(name))
+
+    name = "current_density"
+    plotter = pv.Plotter(off_screen=True)
+    glyphs = grid.glyph(orient=name, scale=name, tolerance=0.05)
+    plotter.add_mesh(glyphs, scalars="GlyphScale", cmap="plasma")
+
+    lines = grid.streamlines(
+        vectors=name, source_center=grid.center,
+        source_radius=grid.length / 2.0, n_points=100,
+        max_length=grid.length * 100.0)
+    assert lines.n_points > 0
+    tube = lines.tube(radius=grid.length * 0.002)
+    plotter.add_mesh(tube, scalars=name, cmap="plasma")
+    plotter.close()
+
+
+def test_viewer3d_window_glyph_toggle_adds_and_removes_an_actor(gapp, resistor_3d_store, monkeypatch):
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    base_actor_count = len(win.plotter.added)
+    win._glyph_toggle.setCheckState(Qt.Checked)
+    assert win._glyph_enabled is True
+    assert win._glyph_density_spin.isEnabled() is True
+    assert win._glyph_actor is not None
+    assert len(win.plotter.added) == base_actor_count + 1
+    added_actor = win._glyph_actor
+    win._glyph_toggle.setCheckState(Qt.Unchecked)
+    assert win._glyph_actor is None
+    assert added_actor in win.plotter.removed
+    assert win._glyph_density_spin.isEnabled() is False
+
+
+def test_add_streamlines_falls_back_to_a_solid_tube_when_tube_drops_the_field(gapp, resistor_3d_store, monkeypatch):
+    """Real bug, caught only by running against a real non-uniform
+    device (pn_junction_3d_example_spec) with VTK's own randomized
+    streamline seeding, not the uniform resistor-bar fixture this
+    suite's other coverage uses: vtkTubeFilter can silently drop the
+    source vector array when a streamline segment has few points
+    (confirmed directly: a 16-point streamline kept "current_density"
+    on `lines` but lost it on `lines.tube(...)`, while a 150-point
+    streamline on the same device kept it on both). That drop is
+    genuine, data-dependent VTK behavior -- not reproducible from a
+    small synthetic polyline built by hand (tried directly: a 2-point
+    straight segment keeps the field through tube() just fine) -- so
+    this test drives _add_streamlines()'s own defensive branch
+    directly by monkeypatching PolyData.tube to reproduce the exact
+    observed effect (strip the field post-tubing), rather than
+    depending on VTK's internal RNG state to hit the same case."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    real_tube = pv.PolyData.tube
+
+    def field_dropping_tube(self, *args, **kwargs):
+        result = real_tube(self, *args, **kwargs)
+        result.point_data.remove("current_density")
+        return result
+    monkeypatch.setattr(pv.PolyData, "tube", field_dropping_tube)
+
+    win._streamline_toggle.setCheckState(Qt.Checked)
+    assert win._streamline_actor is not None
+    added_mesh, kwargs, _actor = win.plotter.added[-1]
+    assert "current_density" not in added_mesh.point_data
+    assert "scalars" not in kwargs
+
+
+def test_viewer3d_window_streamline_toggle_adds_and_removes_an_actor(gapp, resistor_3d_store, monkeypatch):
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    base_actor_count = len(win.plotter.added)
+    win._streamline_toggle.setCheckState(Qt.Checked)
+    assert win._streamline_enabled is True
+    # The resistor bar's real solved current density is uniform but
+    # nonzero, so VTK's streamline integrator genuinely traces lines
+    # through it (measured directly: 125 streamline points from this
+    # exact fixture) -- assert a real actor, not just "didn't crash".
+    assert win._streamline_actor is not None
+    assert len(win.plotter.added) == base_actor_count + 1
+    added_actor = win._streamline_actor
+    win._streamline_toggle.setCheckState(Qt.Unchecked)
+    assert win._streamline_actor is None
+    assert added_actor in win.plotter.removed
+
+
+def test_viewer3d_window_glyph_and_streamline_cleanup_on_release(gapp, resistor_3d_store, monkeypatch):
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    win._glyph_toggle.setCheckState(Qt.Checked)
+    win._streamline_toggle.setCheckState(Qt.Checked)
+    win._release()
+    assert win._closed is True
+    assert win._glyph_actor is None
+    assert win._streamline_actor is None
+
+
+def test_viewer3d_window_switching_vector_field_redraws_glyphs(gapp, resistor_3d_store, monkeypatch):
+    """Only one vector field exists on the demo fixture today, but the
+    handler must still behave correctly when re-invoked (e.g. a future
+    second vector export) rather than leak the old actor."""
+    win = _fake_viewer3d_window(resistor_3d_store, monkeypatch)
+    win._glyph_toggle.setCheckState(Qt.Checked)
+    first_actor = win._glyph_actor
+    assert first_actor is not None
+    win._on_vector_field_changed("current_density")
+    assert win._glyph_actor is not None
+    assert first_actor in win.plotter.removed

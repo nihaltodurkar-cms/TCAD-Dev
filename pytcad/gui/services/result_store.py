@@ -299,6 +299,15 @@ class ResultStore(ABC):
         raises."""
         return None
 
+    def available_vectors(self):
+        """Names available to vector_field(name) -- e.g.
+        ["current_density"] for a solved-bias result, [] for an
+        equilibrium-only or pre-solve store. Protocol member with an
+        honest default, same has_sweep/region_materials pattern this
+        ABC's own docstring documents: most stores legitimately carry
+        none. Never raises."""
+        return []
+
 
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
@@ -343,6 +352,18 @@ class NpzResultStore(ResultStore):
             raise KeyError(f"no vector field '{name}' in {self.path}")
         return VectorField(name=name, components=comps,
                            unit=str(self._d[f"unit__{name}"]))
+
+    def available_vectors(self):
+        names = set()
+        for k in self._d.files:
+            if k.startswith("vector__"):
+                # "vector__<name>__<axis>" -- name may itself contain
+                # "__" in principle, so split off only the trailing
+                # single-letter axis component, not naively on "__".
+                rest = k[len("vector__"):]
+                name, _, _axis = rest.rpartition("__")
+                names.add(name)
+        return sorted(names)
 
     def available_terminals(self):
         return sorted(k[len("terminal__"):-len("__value")] for k in self._d.files

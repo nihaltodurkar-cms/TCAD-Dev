@@ -43,6 +43,22 @@ def npz_2d(tmp_path_factory):
     return out
 
 
+@pytest.fixture(scope="module")
+def npz_2d_equilibrium(tmp_path_factory):
+    """Same device as npz_2d but with no bias -- an equilibrium-only
+    solve, which extract_result() never stamps a vector__* key for
+    (see solver_runner.py's own `if solved_bias:` guard)."""
+    tmp = tmp_path_factory.mktemp("res_eq")
+    job, out = str(tmp / "j.json"), str(tmp / "o.npz")
+    spec = _spec_2d()
+    spec.bias = None
+    spec.to_json(job)
+    proc = subprocess.run([sys.executable, "-m", "gui.services.solver_runner", job, out],
+                          cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    return out
+
+
 def test_npz_store_scalar_fields_carry_units(npz_2d):
     store = NpzResultStore(npz_2d)
     psi = store.scalar_field("potential")
@@ -67,6 +83,14 @@ def test_npz_store_vector_field(npz_2d):
     assert set(v.components) == {"x", "y"}
     assert v.components["x"].shape == (8, 12)
     assert v.unit == "A/cm^2"
+
+
+def test_npz_store_available_vectors_lists_current_density(npz_2d):
+    assert NpzResultStore(npz_2d).available_vectors() == ["current_density"]
+
+
+def test_npz_store_available_vectors_empty_for_equilibrium_only(npz_2d_equilibrium):
+    assert NpzResultStore(npz_2d_equilibrium).available_vectors() == []
 
 
 def test_npz_store_terminal_current_is_labeled(npz_2d):
