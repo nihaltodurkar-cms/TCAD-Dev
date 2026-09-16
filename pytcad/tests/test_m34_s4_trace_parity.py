@@ -1,16 +1,15 @@
-"""M34-S4: the compiled nonlocal-BTBT path tracer is bit-identical to its
-Python oracle.
+"""M34-S4: the compiled nonlocal-BTBT path tracer, correctness checks.
 
-pytcad.nonlocal_path.build_structured does its array work in numpy and
-then runs the per-path stepping loop either as `_trace_paths_py` (the
-reference) or as `pytcad._core.trace_paths` (core/src/nonlocal/
-paths.cpp), chosen per call by PYTCAD_ACCEL -- the M31 P4 convention.
-Every output array must match with np.array_equal: the C++ mirrors the
-reference operation for operation (sequential sums, the same products,
-upper_bound for bisect_right, Python's min/max replacement rule), and
-the translation unit is compiled with -ffp-contract=off.
-
-Skips cleanly where the extension is absent or predates the tracer.
+M43 phase 4 (2026-09-16): pytcad.nonlocal_path.build_structured's
+Python oracle (`_trace_paths_py`) was REMOVED at the user's explicit
+request -- there is no second implementation left to diff against, so
+this file no longer compares two paths. What remains: reproducibility
+(same input, called twice, must give bit-identical output -- still a
+real determinism gate on the sole compiled path) over the same input
+scenarios the original parity suite exercised (diagonal uniform field,
+a curved 2D junction with contacts, a noisy field to hit every branch
+of the stepping loop, the empty-candidate case, and a real Device2D
+equilibrium state), plus the malformed-input boundary check.
 """
 import os
 import sys
@@ -36,12 +35,10 @@ EG_EV = SILICON.Eg(300.0)
 FIELDS = ("start", "offset", "sidx", "swts", "seg_len", "gidx", "gwts")
 
 
-def _both(monkeypatch, coords, psi, mask):
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = build_structured(coords, psi, VT, EG_EV, mask)
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = build_structured(coords, psi, VT, EG_EV, mask)
-    return ref, got
+def _twice(coords, psi, mask):
+    a = build_structured(coords, psi, VT, EG_EV, mask)
+    b = build_structured(coords, psi, VT, EG_EV, mask)
+    return a, b
 
 
 def _assert_identical(ref, got):
@@ -53,18 +50,15 @@ def _assert_identical(ref, got):
 
 
 @pytest.mark.parametrize("dim", [2, 3])
-def test_diagonal_uniform_field(monkeypatch, dim):
-    # small grids: the reference is a pure-Python scalar loop and the
-    # fast suite runs it too (PYTCAD_ACCEL=0 CI job)
+def test_diagonal_uniform_field(dim):
     g = np.linspace(0.0, 1e-5, 13 if dim == 3 else 25)
     u = np.array([0.3, 0.5, 0.81][:dim])
     u = u / np.linalg.norm(u)
     grids = np.meshgrid(*[g] * dim, indexing="ij")
     psi = 3e5 * sum(ui * G for ui, G in zip(u, grids)) / VT
-    ref, got = _both(monkeypatch, [g] * dim, psi,
-                     np.zeros(psi.shape, dtype=bool))
-    assert ref.n_paths > 0
-    _assert_identical(ref, got)
+    a, b = _twice([g] * dim, psi, np.zeros(psi.shape, dtype=bool))
+    assert a.n_paths > 0
+    _assert_identical(a, b)
 
 
 def _junction_2d(noise=0.0):
@@ -82,34 +76,34 @@ def _junction_2d(noise=0.0):
     return (y, x), psi, mask
 
 
-def test_curved_2d_junction_with_contacts(monkeypatch):
+def test_curved_2d_junction_with_contacts():
     coords, psi, mask = _junction_2d()
-    ref, got = _both(monkeypatch, coords, psi, mask)
-    assert ref.n_paths > 0
-    _assert_identical(ref, got)
+    a, b = _twice(coords, psi, mask)
+    assert a.n_paths > 0
+    _assert_identical(a, b)
 
 
-def test_noisy_field_exercises_the_branches(monkeypatch):
+def test_noisy_field_exercises_the_branches():
     """Noise makes directions change cell to cell, paths hit faces at
-    odd angles and the boundary projection fire -- every branch of the
-    stepping loop, compared bit for bit."""
+    odd angles and the boundary projection fires -- every branch of the
+    stepping loop, checked for reproducibility."""
     coords, psi, mask = _junction_2d(noise=0.05)
-    ref, got = _both(monkeypatch, coords, psi, mask)
-    assert ref.n_paths > 0
-    _assert_identical(ref, got)
+    a, b = _twice(coords, psi, mask)
+    assert a.n_paths > 0
+    _assert_identical(a, b)
 
 
-def test_no_candidate_gives_identical_empty_paths(monkeypatch):
+def test_no_candidate_gives_empty_paths():
     g = np.linspace(0.0, 1e-5, 11)
     psi = np.zeros((11, 11))
-    ref, got = _both(monkeypatch, [g, g], psi, np.zeros(psi.shape, bool))
-    assert ref.n_paths == got.n_paths == 0
-    _assert_identical(ref, got)
+    a, b = _twice([g, g], psi, np.zeros(psi.shape, bool))
+    assert a.n_paths == b.n_paths == 0
+    _assert_identical(a, b)
 
 
-def test_real_device2d_state(monkeypatch):
+def test_real_device2d_state():
     """The paths of an actual Device2D solution (an L-shaped p+/n+ corner
-    junction at equilibrium) are identical on both paths."""
+    junction at equilibrium) are reproducible."""
     from pytcad.device2d import Device2D
     from pytcad.mesh2d import Mesh2D
     x = graded_mesh(1.0e-5, [5.0e-6], h_min=1e-8, h_max=2e-7)
@@ -124,12 +118,10 @@ def test_real_device2d_state(monkeypatch):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         dev.solve_equilibrium()
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = dev._btbt_nl_build_paths(dev.psi)
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = dev._btbt_nl_build_paths(dev.psi)
-    assert ref.n_paths > 0
-    _assert_identical(ref, got)
+    a = dev._btbt_nl_build_paths(dev.psi)
+    b = dev._btbt_nl_build_paths(dev.psi)
+    assert a.n_paths > 0
+    _assert_identical(a, b)
 
 
 def test_malformed_input_raises_instead_of_reading_out_of_bounds():

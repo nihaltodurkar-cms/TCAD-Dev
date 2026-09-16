@@ -135,27 +135,57 @@ check `git diff --stat` before believing the change is small.  Do not
 "fix" this by adding a repo-wide `.gitattributes` mid-branch: renormalizing
 would touch every CRLF file at once and bury whatever else is in flight.
 
-## The C++ engine (M31) -- optional, and must stay optional
+## The C++ engine (M31) -- REQUIRED as of M43 phase 4 (2026-09-16)
 
 `pytcad/core/` is a C++ numerical engine exposed as the single extension
-module `pytcad._core`. It is **always optional**: `pytcad/_accel.py`
-soft-imports it and falls back to the pure-Python reference path, so a
-checkout with no compiler still passes the full suite. That is
-deliberate and load-bearing -- it is the migration's undo button, and
-the Python bodies (kept as `_<name>_py`) are the ORACLE the compiled
-path is diffed against with `np.array_equal`.
+module `pytcad._core`. Through M43 phase 3 this was **always optional**
+(`pytcad/_accel.py` soft-imported it and fell back to a pure-Python
+reference path per kernel). **At the user's explicit request, that
+fallback was removed in phase 4**: the pure-Python bodies (`_<name>_py`)
+for the mesh-geometry kernels (P2), the process/adaptivity kernels (P4),
+the M34-S4 nonlocal path tracer, and the M43 thermal-grid assembly no
+longer exist. `_accel.require_accel()` raises a clear ImportError,
+naming the build command below, if `_core` is not importable when one
+of those functions is called. `import pytcad` ITSELF still never fails
+without the extension (gate G-F survives in that narrower, import-only
+form -- see `pytcad/_accel.py`'s own docstring) -- but calling
+`process.diffuse_numeric`, `ted.diffuse_with_defects`,
+`adapt_unstructured.indicator_*_tri`/`debye_ratio_tri`,
+`unstructured_assembly{,3d}.build_*`, `nonlocal_path.build_structured`,
+or `thermal_grid._residual_jacobian_grid` now requires it. The ONE
+exception, deliberately out of this scope: `linsolve.py`'s petsc4py
+backend (`_solve_petsc_py`) is a real, independent second implementation
+(PETSc's own official Python bindings), not a pure-Python stand-in for
+lack of a compiler, and was left untouched -- `method="petsc"` still
+works via petsc4py when `_core` was built without PETSc, or is entirely
+absent.
+
+Practical consequence: **a checkout with no compiled `_core` can still
+`import pytcad`, but cannot run process simulation, AMR refinement, the
+nonlocal-BTBT tracer, or M43 self-heating.** `tests/test_accel_parity.py`,
+`test_accel_boundary.py`, `test_m34_s4_trace_parity.py`, and the M43
+thermal test files are all `skipif(not _accel.HAVE_ACCEL)` and were
+rewritten to check correctness/reproducibility on the sole compiled
+path (there is no second implementation left to diff against) rather
+than cross-path parity.
+
+**No C++ compiler was installed on this machine when M43 phase 3
+started.** See the "No C++ compiler was installed..." note further
+below for the full incident record (a compiler installed directly into
+the Python env broke PySide6 once) and why the compiler now lives in a
+SEPARATE conda env (`tcad-cpp`) from the Python env (`tcad-dev`).
 
 ```bash
 # in-place dev build -- nothing installed; the .so lands in pytcad/ so
-# the existing sys.path convention finds it and no test file changes
+# the existing sys.path convention finds it and no test file changes.
+# CMAKE_CXX_COMPILER/CMAKE_AR/CMAKE_RANLIB point at the SEPARATE
+# compiler env if the Python env itself has no compiler -- see
+# core/CMakeLists.txt's header comment.
 cmake -S core -B build/dev -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DTCAD_INPLACE_OUTPUT=ON \
       -DPython_EXECUTABLE="$(conda run -n TCAD which python)"
 cmake --build build/dev
 conda run -n TCAD python -c "from pytcad import _accel; print(_accel.status())"
-
-# remove it again (this must leave the suite green -- gate G-F)
-rm -f pytcad/_core*.so
 
 # wheel / editable install
 conda run -n TCAD python -m build --wheel
@@ -186,18 +216,41 @@ self-heating assembly, `thermal_grid._residual_jacobian_grid_py` ->
 Everything else is still pure Python and none of it is on a
 deprecation path.
 
-**No C++ compiler was installed on this machine until M43 phase 3.**
-`cmake`/`ninja` were already in the `tcad-dev` conda env, but no
-`cl.exe`/`g++`/`clang++` existed anywhere, confirmed by trying to
-compile a trivial `<optional>` translation unit rather than assumed.
-Fixed by `conda install -n tcad-dev -c conda-forge gxx` (plain GCC
-16.2, a real MinGW-w64 toolchain) -- NOT the `cxx-compiler` meta-package,
-which on win-64 activates MSVC via a Visual Studio install and silently
-does nothing useful if that install has no C++ workload (which this
-machine's did not). This is a durable environment change: the
-toolchain and `pytcad/_core*.pyd` both persist. If a fresh checkout
-reports `_accel.status()` as "not built" again, this is the fix, not a
-new investigation.
+**No C++ compiler was installed on this machine until M43 phase 3, and
+the compiler toolchain lives in a SEPARATE conda env from the one
+Python runs in -- `tcad-cpp`, never `tcad-dev`.** `cmake`/`ninja` were
+already in `tcad-dev`, but no `cl.exe`/`g++`/`clang++` existed
+anywhere, confirmed by trying to compile a trivial `<optional>`
+translation unit rather than assumed. The FIRST fix attempt --
+`conda install -n tcad-dev -c conda-forge gxx` -- silently broke
+PySide6 (`ImportError: DLL load failed while importing QtCore`): that
+install channel-switched `libhwloc` from conda-forge to the `defaults`
+channel (same version number, different binary/ABI) and downgraded
+`libxml2`, both as transitive dependency resolution side effects of
+adding a compiler into an env that already had a large, unrelated
+dependency graph. Caught only by actually running the GUI test suite
+afterward, not by anything at build/import time for `_core` itself.
+Fixed by reverting `tcad-dev` to its pre-compiler state
+(`conda install -n tcad-dev -c conda-forge --revision N`) and creating
+a genuinely separate env, `tcad-cpp` (`conda create -n tcad-cpp -c
+conda-forge gxx cmake ninja binutils`), used ONLY to supply
+`CMAKE_CXX_COMPILER`/`CMAKE_AR`/`CMAKE_RANLIB` paths -- `tcad-dev`
+itself gained zero new/changed packages the second time. Because the
+compiler and the Python interpreter now live in different envs,
+`_core.pyd` must not depend on `tcad-cpp`'s runtime DLLs
+(`libstdc++-6.dll`/`libgcc_s_seh-1.dll`/`libwinpthread-1.dll`/
+`libgomp-1.dll`) being reachable at import time -- `core/CMakeLists.txt`
+statically links all four into `_core` (`-static-libgcc
+-static-libstdc++` plus a `-Wl,-Bstatic,--whole-archive
+-lwinpthread -lgomp -Wl,--no-whole-archive,-Bdynamic` group; `objdump
+-p` on the built `.pyd` is the way to confirm zero non-system DLL
+dependencies beyond `python3XX.dll` -- checked directly, not assumed).
+This is now a durable, SAFE environment change: `tcad-cpp` exists
+alongside `tcad-dev` and never touches it; `pytcad/_core*.pyd` persists
+in the repo (gitignored) and imports with no runtime coupling to
+`tcad-cpp` at all. If a fresh checkout reports `_accel.status()` as
+"not built" again, rebuild via `tcad-cpp`'s compiler exactly as above
+-- never install a compiler directly into `tcad-dev` again.
 
 **Where an accelerated function's transcendentals live matters.** The
 P4 kernels take `np.log(n)`, not `n`, and the nodal Debye lengths, not
@@ -236,18 +289,18 @@ Two environment variables govern the boundary:
 
 | var | effect |
 |---|---|
-| `PYTCAD_ACCEL` | `auto` (default) use `_core` if importable; `0` force Python; `1` require `_core`. Also selects the `method="petsc"` backend: `0` forces petsc4py |
+| `PYTCAD_ACCEL` | As of M43 phase 4 (2026-09-16), read ONLY by `linsolve.py`'s PETSc backend selection (`0` forces the petsc4py path, `1`/unset uses the compiled PETSc path when `_core` was built with it). It no longer affects any other kernel -- there is no pure-Python fallback left for `_accel.require_accel()`-gated functions to fall back to, so setting it there is a no-op. |
 | `PYTCAD_NUM_THREADS` | kernel threads. **Defaults to 1** -- threads would oversubscribe `workbench/batch.py`'s pool workers AND make scatter-add reductions non-reproducible, which breaks the `np.array_equal` goldens |
 
-Run the suite **both ways** before claiming a change is done:
-
-```bash
-for A in 0 1; do PYTCAD_ACCEL=$A OPENBLAS_NUM_THREADS=1 \
-  conda run -n TCAD python -m pytest tests/ gui/tests/ -n 6 -m "not slow" -q; done
-```
-
-CI (`.github/workflows/ci.yml`) enforces exactly this: one job with no
-extension at all, one that builds it and reruns the same suite.
+**The "run both ways" / "one CI job with no extension" pattern this
+section used to prescribe is RETIRED as of M43 phase 4.** `_core` is
+now required for most of the numerical core (see "The C++ engine (M31)"
+above) -- a no-extension run can no longer pass the suite, so
+`.github/workflows/ci.yml`'s "one job with no extension at all" leg (if
+still configured that way) needs updating to always build `_core`
+first; this was flagged but NOT itself changed as part of removing the
+pure-Python fallback -- check the actual current CI config before
+assuming either the old or new description is accurate.
 
 One `pip install -r requirements.txt` (repo root: `pytcad/requirements.txt`)
 covers the library, GUI, tests, and all optional deps (gmsh, devsim,

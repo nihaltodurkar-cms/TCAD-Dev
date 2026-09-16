@@ -1,9 +1,11 @@
-"""M43 phase 3: bit-identity parity between the pure-Python
-thermal_grid._residual_jacobian_grid_py oracle and the compiled
-core/src/thermal/grid.cpp kernel it is diffed against -- same
-discipline as test_accel_parity.py's diffuse_numeric/diffuse_with_
-defects tests (M31 P4). Skipped entirely when the extension is not
-built (matches every other accel-parity test in this repo).
+"""M43 phase 4 (2026-09-16): thermal_grid.py's pure-Python oracle
+(`_residual_jacobian_grid_py`) was REMOVED at the user's explicit
+request -- there is no second implementation left to diff against.
+What remains here: reproducibility (same input, called twice, bit-
+identical output) on the sole compiled path, kept as a real
+determinism gate -- correctness itself (FD-Jacobian, reduction
+identity, BC ordering) is already covered by tests/test_m43_thermal2d.py
+and test_m43_thermal3d.py, which do not need an oracle either.
 """
 import os
 import sys
@@ -52,25 +54,23 @@ def _case_3d(seed=1):
 
 
 @pytest.mark.parametrize("case", [_case_2d, _case_3d], ids=["2D", "3D"])
-def test_residual_jacobian_grid_is_bit_identical(case):
-    """Direct kernel-level parity (mirrors indicators.cpp's own tests):
-    same F residual and the same DENSE Jacobian values, not just a
-    close numerical match -- the kernel is pure arithmetic (the one
-    transcendental, kappa_th, is evaluated once in Python either way),
-    so exact equality is the right bar, not a tolerance."""
+def test_residual_jacobian_grid_is_reproducible(case):
+    """Same input, called twice: bit-identical F and dense Jacobian --
+    the kernel is pure arithmetic (the one transcendental, kappa_th, is
+    evaluated once in Python before the call), so nondeterminism here
+    would be a real bug (e.g. an uninitialized-memory read)."""
     coords, T, H, bcs = case()
-    F_py, J_py = tg._residual_jacobian_grid_py(coords, T, H, SILICON, 300.0, bcs)
-    F_acc, J_acc = tg._residual_jacobian_grid_accel(coords, T, H, SILICON, 300.0, bcs)
-    assert np.array_equal(F_py, F_acc), "residual F differs between paths"
-    assert np.array_equal(J_py.toarray(), J_acc.toarray()), \
-        "Jacobian differs between paths"
+    F_a, J_a = tg._residual_jacobian_grid(coords, T, H, SILICON, 300.0, bcs)
+    F_b, J_b = tg._residual_jacobian_grid(coords, T, H, SILICON, 300.0, bcs)
+    assert np.array_equal(F_a, F_b), "residual F not reproducible"
+    assert np.array_equal(J_a.toarray(), J_b.toarray()), \
+        "Jacobian not reproducible"
 
 
-def test_solve_electrothermal_2d_is_bit_identical(monkeypatch):
-    """End-to-end (mirrors test_diffuse_numeric_is_bit_identical):
-    a full outer-Gummel-loop electrothermal solve on a real Device2D,
-    ACCEL=0 vs ACCEL=1, must converge to the bit-identical temperature
-    profile -- confirms the per-call parity above survives being
+def test_solve_electrothermal_2d_is_reproducible():
+    """End-to-end: a full outer-Gummel-loop electrothermal solve on a
+    real Device2D, called twice, must converge to the bit-identical
+    temperature profile -- confirms reproducibility survives being
     called repeatedly inside a Newton loop inside an outer loop."""
     from pytcad import Device2D, Models
     from pytcad.mesh2d import Mesh2D
@@ -94,14 +94,12 @@ def test_solve_electrothermal_2d_is_bit_identical(monkeypatch):
             ThermalBC.adiabatic(), ThermalBC.adiabatic(), SILICON, max_outer=30)
         return T_profile
 
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = run()
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = run()
-    assert np.array_equal(ref, got), "electrothermal 2D result differs between paths"
+    a = run()
+    b = run()
+    assert np.array_equal(a, b), "electrothermal 2D result not reproducible"
 
 
-def test_solve_electrothermal_3d_is_bit_identical(monkeypatch):
+def test_solve_electrothermal_3d_is_reproducible():
     """3D analogue of the above."""
     from pytcad import Device3D, Models
     from pytcad.mesh3d import Mesh3D
@@ -133,8 +131,6 @@ def test_solve_electrothermal_3d_is_bit_identical(monkeypatch):
             SILICON, max_outer=30)
         return T_profile
 
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = run()
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = run()
-    assert np.array_equal(ref, got), "electrothermal 3D result differs between paths"
+    a = run()
+    b = run()
+    assert np.array_equal(a, b), "electrothermal 3D result not reproducible"

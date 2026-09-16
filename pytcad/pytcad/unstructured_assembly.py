@@ -28,43 +28,22 @@ identity the circumcenter construction relies on), so the total over
 all triangles equals the total mesh area to floating-point precision,
 not by tuning a tolerance.
 """
-import numpy as np
-
 # One shared class, not a second same-named one: see pytcad/errors.py for
 # why (an `except` on the 2D name used not to catch the 3D module's).
 # Re-exported here so every existing `from .unstructured_assembly import
 # DegenerateMeshError` keeps working.
-from .errors import DegenerateMeshError
+from .errors import DegenerateMeshError  # noqa: F401 (re-exported)
 
 
-def _triangle_area2(pts):
-    """Twice the signed area of the triangle with vertices pts[0:3, :2]."""
-    return ((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
-           - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
+# ----------------------------------------------------------------------
+#  Compiled dispatch (M31 P2; pure-Python oracle REMOVED 2026-09-16,
+#  M43 phase 4, at the user's explicit request -- these two now require
+#  the compiled extension. core/src/mesh/stencil.cpp has the bodies.)
+# ----------------------------------------------------------------------
+from . import _accel
 
 
-def _cot(p_apex, p_a, p_b):
-    """cot of the angle at p_apex subtended by rays to p_a and p_b.
-
-    The denominator is |cross|, not cross. The undirected angle between
-    two rays lies in (0, pi), so its sine is positive by definition and
-    the cotangent's sign is carried entirely by the dot product. Using
-    the SIGNED cross made this function -- and therefore the dual areas
-    built from it -- depend on the triangle's vertex winding: reverse a
-    non-obtuse triangle and all three contributions flipped sign, while
-    `tri_area` (an abs()) did not, so the partition identity failed by
-    exactly 2x on a clockwise-wound triangle. Fixed in M31 P2b; this is
-    a no-op on counter-clockwise input, so every existing golden and
-    every gmsh-produced mesh is bit-for-bit unaffected.
-    """
-    v1 = p_a - p_apex
-    v2 = p_b - p_apex
-    cross = v1[0] * v2[1] - v1[1] * v2[0]
-    dot = v1[0] * v2[0] + v1[1] * v2[1]
-    return dot / abs(cross)
-
-
-def _build_unstructured_stencil_py(nodes, triangles, min_area=1e-30):
+def build_unstructured_stencil(nodes, triangles, min_area=1e-30):
     """Build the unique undirected edge list and per-node dual-cell
     (Voronoi/mixed) areas for a triangle mesh.
 
@@ -82,100 +61,13 @@ def _build_unstructured_stencil_py(nodes, triangles, min_area=1e-30):
     a non-manifold edge (shared by more than 2 triangles -- a malformed
     or self-overlapping mesh, not a legal 2-manifold triangulation).
     """
-    nodes_xy = np.asarray(nodes, dtype=float)[:, :2]
-    tri = np.asarray(triangles, dtype=int)
-    N = nodes_xy.shape[0]
-    node_areas = np.zeros(N, dtype=float)
-    edge_owners = {}   # (min(i,j), max(i,j)) -> list of triangle indices
-
-    for t_idx, (a, b, c) in enumerate(tri):
-        pts = nodes_xy[[a, b, c]]
-        area2 = _triangle_area2(pts)
-        tri_area = 0.5 * abs(area2)
-        if tri_area < min_area:
-            raise DegenerateMeshError(
-                f"triangle {t_idx} (nodes {a},{b},{c}) has area "
-                f"{tri_area:.3e} < min_area={min_area:.1e} -- degenerate "
-                "or duplicate/collinear vertices")
-
-        for e in ((a, b), (b, c), (c, a)):
-            key = (int(min(e)), int(max(e)))
-            edge_owners.setdefault(key, []).append(t_idx)
-
-        La2 = np.sum((pts[1] - pts[2]) ** 2)   # side opposite a (b-c)
-        Lb2 = np.sum((pts[2] - pts[0]) ** 2)   # side opposite b (c-a)
-        Lc2 = np.sum((pts[0] - pts[1]) ** 2)   # side opposite c (a-b)
-        obtuse_a = La2 > Lb2 + Lc2
-        obtuse_b = Lb2 > La2 + Lc2
-        obtuse_c = Lc2 > La2 + Lb2
-
-        if obtuse_a or obtuse_b or obtuse_c:
-            # Mixed/barycentric split: the obtuse vertex's own Voronoi
-            # region would extend outside the triangle, so it instead
-            # takes half the triangle's area; the other two vertices
-            # split the remainder evenly. Sums to tri_area exactly.
-            if obtuse_a:
-                node_areas[a] += 0.5 * tri_area
-                node_areas[b] += 0.25 * tri_area
-                node_areas[c] += 0.25 * tri_area
-            elif obtuse_b:
-                node_areas[b] += 0.5 * tri_area
-                node_areas[a] += 0.25 * tri_area
-                node_areas[c] += 0.25 * tri_area
-            else:
-                node_areas[c] += 0.5 * tri_area
-                node_areas[a] += 0.25 * tri_area
-                node_areas[b] += 0.25 * tri_area
-        else:
-            # Circumcentric Voronoi contribution (Meyer et al. eq. 7):
-            # each edge (i, j) opposite vertex k contributes
-            # cot(angle_k) * |x_i - x_j|^2 / 8 to BOTH i and j.
-            cot_a = _cot(pts[0], pts[1], pts[2])
-            cot_b = _cot(pts[1], pts[2], pts[0])
-            cot_c = _cot(pts[2], pts[0], pts[1])
-            term_ab = cot_c * Lc2 / 8.0   # edge a-b, opposite c
-            term_bc = cot_a * La2 / 8.0   # edge b-c, opposite a
-            term_ca = cot_b * Lb2 / 8.0   # edge c-a, opposite b
-            node_areas[a] += term_ab + term_ca
-            node_areas[b] += term_ab + term_bc
-            node_areas[c] += term_bc + term_ca
-
-    bad_edges = {k: v for k, v in edge_owners.items() if len(v) > 2}
-    if bad_edges:
-        k0, v0 = next(iter(bad_edges.items()))
-        raise DegenerateMeshError(
-            f"edge {k0} is shared by {len(v0)} triangles (expected 1 or "
-            "2) -- the mesh is not a valid 2-manifold triangulation "
-            "(likely disconnected/overlapping triangles)")
-
-    edge_list = np.array(sorted(edge_owners.keys()), dtype=int)
-    return edge_list, node_areas
+    _accel.require_accel()
+    edges, areas = _accel.core.build_stencil2d(
+        _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3), float(min_area))
+    return _accel.match_empty_edges(edges), areas
 
 
-def _edge_triangle_owners(triangles):
-    """{(min(i,j), max(i,j)): [triangle indices touching this edge]}."""
-    owners = {}
-    for t_idx, (a, b, c) in enumerate(triangles):
-        for e in ((a, b), (b, c), (c, a)):
-            key = (int(min(e)), int(max(e)))
-            owners.setdefault(key, []).append(t_idx)
-    return owners
-
-
-def triangle_circumcenter(pts):
-    """Circumcenter of the triangle with vertices pts[0:3, :2]
-    (standard closed-form determinant formula)."""
-    (Ax, Ay), (Bx, By), (Cx, Cy) = pts[0], pts[1], pts[2]
-    D = 2.0 * (Ax * (By - Cy) + Bx * (Cy - Ay) + Cx * (Ay - By))
-    a2 = Ax * Ax + Ay * Ay
-    b2 = Bx * Bx + By * By
-    c2 = Cx * Cx + Cy * Cy
-    Ux = (a2 * (By - Cy) + b2 * (Cy - Ay) + c2 * (Ay - By)) / D
-    Uy = (a2 * (Cx - Bx) + b2 * (Ax - Cx) + c2 * (Bx - Ax)) / D
-    return np.array([Ux, Uy])
-
-
-def _build_edge_flux_geometry_py(nodes, triangles, edge_list):
+def build_edge_flux_geometry(nodes, triangles, edge_list):
     """Two-Point Flux Approximation (TPFA) geometry factor per INTERIOR
     mesh edge: dual_facet_length / primal_edge_length, where
     dual_facet_length is the distance between the two owning triangles'
@@ -195,56 +87,8 @@ def _build_edge_flux_geometry_py(nodes, triangles, edge_list):
     Delaunay algorithm): 1.39% of triangles are obtuse, meaning a
     small number of edges get a geometrically inconsistent (but still
     well-defined, non-crashing) factor -- not silently assumed away.
-    Not clipped or corrected here; a future session revisiting this
-    should measure whether it actually degrades the physics gates
-    before adding a correction.
     """
-    nodes_xy = np.asarray(nodes, dtype=float)[:, :2]
-    tri = np.asarray(triangles, dtype=int)
-    owners = _edge_triangle_owners(tri)
-    circumcenters = np.array([triangle_circumcenter(nodes_xy[t]) for t in tri])
-
-    interior_edges, trans = [], []
-    for i, j in map(tuple, np.asarray(edge_list, dtype=int).tolist()):
-        owner_tris = owners[(i, j)]
-        if len(owner_tris) != 2:
-            continue   # boundary edge -- no interior flux term
-        t1, t2 = owner_tris
-        dual_len = np.linalg.norm(circumcenters[t1] - circumcenters[t2])
-        primal_len = np.linalg.norm(nodes_xy[j] - nodes_xy[i])
-        interior_edges.append((i, j))
-        trans.append(dual_len / primal_len)
-    return (np.array(interior_edges, dtype=int) if interior_edges
-           else np.zeros((0, 2), dtype=int),
-           np.array(trans, dtype=float))
-
-
-# ----------------------------------------------------------------------
-#  Compiled dispatch (M31 P2)
-# ----------------------------------------------------------------------
-# The two functions above are the REFERENCE. They are kept, reachable,
-# and exercised by tests/test_accel_parity.py, which compares them
-# against the compiled kernels with np.array_equal -- not a tolerance.
-# Measured on a 318k-triangle mesh: 77k tri/s reference, 3.16M tri/s
-# compiled (41x).
-from . import _accel
-
-
-def build_unstructured_stencil(nodes, triangles, min_area=1e-30):
-    if _accel.use_accel():
-        edges, areas = _accel.core.build_stencil2d(
-            _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3), float(min_area))
-        return _accel.match_empty_edges(edges), areas
-    return _build_unstructured_stencil_py(nodes, triangles, min_area)
-
-
-def build_edge_flux_geometry(nodes, triangles, edge_list):
-    if _accel.use_accel():
-        return _accel.core.build_flux_geometry2d(
-            _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3),
-            _accel.as_edge_list(edge_list))
-    return _build_edge_flux_geometry_py(nodes, triangles, edge_list)
-
-
-build_unstructured_stencil.__doc__ = _build_unstructured_stencil_py.__doc__
-build_edge_flux_geometry.__doc__ = _build_edge_flux_geometry_py.__doc__
+    _accel.require_accel()
+    return _accel.core.build_flux_geometry2d(
+        _accel.as_nodes3(nodes), _accel.as_idx(triangles, 3),
+        _accel.as_edge_list(edge_list))

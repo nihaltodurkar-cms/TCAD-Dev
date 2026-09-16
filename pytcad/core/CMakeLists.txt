@@ -13,6 +13,19 @@
 #               -DPython_EXECUTABLE="$(conda run -n TCAD which python)"
 #         cmake --build build/dev
 #
+#       On Windows, where the Python env may have no compiler at all:
+#       put the compiler in a SEPARATE conda env (e.g. `tcad-cpp`,
+#       `conda create -n tcad-cpp -c conda-forge gxx cmake ninja
+#       binutils`), never inside the Python env itself -- installing a
+#       compiler directly into an env that already has PySide6/Qt has
+#       silently broken it here once (a transitive dependency channel-
+#       switch on `libhwloc`, see CLAUDE.md's "What is compiled so
+#       far" section). Point CMAKE_CXX_COMPILER/CMAKE_AR/CMAKE_RANLIB
+#       at that separate env's binaries, keep -DPython_EXECUTABLE
+#       pointed at the Python env. This is why `_core` statically
+#       links its MinGW runtime below -- the compiler env's DLLs must
+#       not need to be on the Python env's PATH at import time.
+#
 #   (b) wheel / editable install -- driven by scikit-build-core from
 #       ../pyproject.toml, which sets cmake.source-dir to this directory.
 #
@@ -131,6 +144,19 @@ nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/thermal_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
+# The compiler toolchain lives in a SEPARATE, dedicated conda env
+# (never installed into the Python env itself -- that collided with
+# PySide6's own dependencies once already, see M43-SELFHEATING-2D3D-
+# PLAN.md's phase 3 section), so _core.pyd must not depend on that
+# env's runtime DLLs (libstdc++-6.dll/libgcc_s_seh-1.dll/
+# libwinpthread-1.dll/libgomp-1.dll) being present at import time.
+# Static-link the MinGW runtime instead -- zero external DLL
+# dependency beyond what Python/Windows already provide.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND MINGW)
+  target_link_options(_core PRIVATE
+    -static-libgcc -static-libstdc++
+    -Wl,-Bstatic,--whole-archive -lwinpthread -lgomp -Wl,--no-whole-archive,-Bdynamic)
+endif()
 
 if(TCAD_INPLACE_OUTPUT)
   set_target_properties(_core PROPERTIES

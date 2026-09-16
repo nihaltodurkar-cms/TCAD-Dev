@@ -4,7 +4,11 @@ These tests do not exercise any kernel -- there are none yet.  They lock
 down the properties every future kernel depends on, so that when kernels
 land the boundary they plug into is already gated:
 
-  * the extension is OPTIONAL and its absence is not an error (gate G-F);
+  * `import pytcad` itself never fails when the extension is absent
+    (gate G-F, now scoped to IMPORT only -- as of M43 phase 4,
+    2026-09-16, individual accelerated kernels REQUIRE the extension
+    and raise a clear ImportError via `_accel.require_accel()` if it
+    is missing, rather than falling back to a pure-Python path);
   * a C++ exception surfaces as the EXISTING Python class, so existing
     `pytest.raises(...)` sites keep working unmodified;
   * the default thread count is 1, because parallel FP reductions would
@@ -106,10 +110,10 @@ def test_convergence_failure_carries_diagnostics_not_state(core):
 
 
 def test_petsc_capability_is_answerable_without_the_extension():
-    """M31 P3b added a THIRD optional layer -- extension present, and
-    built against PETSc, and not overridden by PYTCAD_ACCEL -- and every
-    combination has to answer cleanly rather than raise.  A checkout
-    with no compiler must still be able to ask."""
+    """M31 P3b added a second optional layer on top of the extension
+    itself -- built against PETSc, or not -- and both combinations have
+    to answer cleanly rather than raise.  A checkout with no compiler
+    must still be able to ask."""
     assert isinstance(_accel.have_petsc(), bool)
     assert isinstance(_accel.status(), str)
     if not _accel.HAVE_ACCEL:
@@ -195,18 +199,29 @@ def test_index_errors_stay_index_errors(core):
         core._raise_for_test("index")
 
 
-def test_process_kernels_run_on_the_python_path(monkeypatch):
-    """Gate G-F for P4 from the Python side: the diffusion entry points
-    must work with the compiled path forced OFF, which is what a
-    checkout with no compiler gets. Values are compared against the
-    compiled path in tests/test_accel_parity.py; what is checked here is
-    only that the fallback is REACHABLE and returns."""
-    from pytcad import process, ted
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    x = np.linspace(0.0, 2.0e-4, 40)
-    C = process.implant(x, "B", 50.0, 1e15)
-    out = process.diffuse_numeric(x, C, "B", 1000.0, 1.0)
-    assert out.shape == x.shape and np.all(np.isfinite(out))
-    out = ted.diffuse_with_defects(x, C, "B", 1000.0, 1.0,
-                                   ted_S0=5.0, ted_tau_s=2.0)
-    assert out.shape == x.shape and np.all(np.isfinite(out))
+def test_process_kernels_raise_a_clear_error_without_the_extension():
+    """M43 phase 4 (2026-09-16): process.diffuse_numeric and
+    ted.diffuse_with_defects no longer have a pure-Python fallback --
+    calling them with the extension absent must raise a clear,
+    actionable ImportError (via _accel.require_accel()), not an
+    AttributeError on `_accel.core` being None. Run in a subprocess
+    with the extension hidden, since it is already loaded in this one
+    (same technique test_pytcad_imports_without_touching_the_extension
+    uses above)."""
+    code = (
+        "import sys, numpy as np\n"
+        "sys.modules['pytcad._core'] = None\n"
+        "from pytcad import process\n"
+        "x = np.linspace(0.0, 2.0e-4, 40)\n"
+        "C = process.implant(x, 'B', 50.0, 1e15)\n"
+        "try:\n"
+        "    process.diffuse_numeric(x, C, 'B', 1000.0, 1.0)\n"
+        "    print('NO_RAISE')\n"
+        "except ImportError as exc:\n"
+        "    print('RAISED:' + str(exc)[:30])\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                         text=True, cwd=os.path.dirname(os.path.dirname(
+                             os.path.abspath(__file__))))
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().startswith("RAISED:"), out.stdout

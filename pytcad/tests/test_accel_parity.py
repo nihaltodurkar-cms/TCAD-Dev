@@ -1,22 +1,24 @@
-"""Gate G-A: the compiled kernels must equal the Python reference EXACTLY.
+"""Correctness gates for the compiled kernels in pytcad._core.
 
-`np.array_equal`, never `allclose`. That is the whole point of the
-dual-path design: the Python bodies (`_<name>_py`) are kept forever as
-the oracle, and a compiled kernel earns its place by reproducing them
-bit for bit -- not by being close enough.
-
-This is achievable because the numpy primitives these kernels use were
-measured to be plain scalar arithmetic at these sizes (no BLAS dispatch)
-before any C++ was written; see core/include/tcad/geom/simplex.hpp.
+M43 phase 4 (2026-09-16): the pure-Python reference bodies
+(`_<name>_py`) this file used to diff the compiled kernels against
+were REMOVED at the user's explicit request -- pytcad now REQUIRES
+the compiled extension, there is no Python fallback path. Tests whose
+entire premise was "compiled path == deleted Python path" were removed
+or rewritten into standalone correctness checks (partition identities,
+degenerate-input error handling, reproducibility) that do not need a
+second implementation to compare against. The PETSc section (M31 P3b)
+is UNTOUCHED: petsc4py remains a real, independent second backend
+(linsolve.py's own oracle for `method="petsc"`), not a pure-Python
+fallback for lack of a compiler, and stays out of this milestone's
+scope.
 
 The gates in this file:
-  G-A  outputs identical on structured, jittered, and real gmsh meshes
-  G-C  identical exception TYPE and MESSAGE on degenerate/non-manifold input
+  G-A  mesh-geometry partition identities hold on the compiled path
+  G-C  degenerate/non-manifold input raises the right exception TYPE
   G-D  identical results at PYTCAD_NUM_THREADS in {1, 2, 4, 8}
   G-E  absolute throughput floors (marked slow)
-
-Covering, in order: the mesh geometry kernels (P2), the two PETSc
-solver backends (P3b), and the process/adaptivity kernels (P4).
+  (PETSc section, unchanged) both petsc backends bit-identical
 """
 import os
 import subprocess
@@ -32,33 +34,6 @@ from pytcad import unstructured_assembly3d as ua3
 
 pytestmark = pytest.mark.skipif(
     not _accel.HAVE_ACCEL, reason="compiled extension not built")
-
-# The guard above asks whether the extension is BUILT (`HAVE_ACCEL` is an
-# import-time constant). Most tests in this file are parity checks that
-# set PYTCAD_ACCEL themselves via monkeypatch, so that is the right
-# question for them. It is NOT the right question for the absolute
-# throughput floors (G-E): those time whatever path the AMBIENT
-# PYTCAD_ACCEL selects, and a floor calibrated on the compiled kernel is
-# meaningless against the Python reference path.
-#
-# Found by actually running the owed `-m slow` battery both ways
-# (2026-09-10): under `PYTCAD_ACCEL=0` on a machine where the extension
-# IS built, `test_indicator_throughput_floor[curvature]` measured
-# 2.54e5 tri/s against its 5.0e7 floor -- which is not a regression and
-# not CPU contention, it is exactly the 0.27M tri/s PYTHON reference
-# rate that test's own docstring records for that kernel. Same story for
-# test_throughput_floor[flux3d]: 3.51e3/s against a 3.0e5 floor.
-#
-# `use_accel()` is the per-call reader of PYTCAD_ACCEL, and it RAISES
-# when PYTCAD_ACCEL=1 with no extension -- so short-circuit on
-# HAVE_ACCEL first rather than letting that raise at import time.
-_ACCEL_ACTIVE = _accel.HAVE_ACCEL and _accel.use_accel()
-
-needs_active_accel = pytest.mark.skipif(
-    not _ACCEL_ACTIVE,
-    reason="absolute throughput floors time the compiled path; "
-           "PYTCAD_ACCEL=0 selects the Python reference path, against "
-           "which these floors are meaningless by construction")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -112,200 +87,167 @@ def assert_exact(name, got, ref):
                     f"max abs {d.max():.3e}")
 
 
+# Independent (NOT the production code) triangle-area / tet-volume
+# formulas, for the partition-identity cross-checks below -- kept here
+# rather than importing the deleted `_triangle_area2`/`_tet_volume`
+# internals, so these gates check the compiled kernel's OUTPUT against
+# an independently-computed ground truth, not against itself.
+def _tri_area2_xcheck(pts):
+    return ((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
+            - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
+
+
+def _tet_vol_xcheck(pts):
+    return np.dot(pts[1] - pts[0],
+                  np.cross(pts[2] - pts[0], pts[3] - pts[0])) / 6.0
+
+
 # ----------------------------------------------------------------------
-#  G-A: outputs
+#  G-A: mesh-geometry partition identities (compiled path only)
 # ----------------------------------------------------------------------
-@pytest.mark.parametrize("label,mesh", MESHES_2D, ids=[m[0] for m in MESHES_2D])
-def test_stencil2d_is_bit_identical(label, mesh):
-    nodes, tris = mesh
-    e_ref, a_ref = ua._build_unstructured_stencil_py(nodes, tris)
-    e_got, a_got = ua.build_unstructured_stencil(nodes, tris)
-    assert_exact("edge_list", e_got, e_ref)
-    assert_exact("node_areas", a_got, a_ref)
-
-
-@pytest.mark.parametrize("label,mesh", MESHES_2D, ids=[m[0] for m in MESHES_2D])
-def test_flux_geometry2d_is_bit_identical(label, mesh):
-    nodes, tris = mesh
-    edges, _ = ua._build_unstructured_stencil_py(nodes, tris)
-    ie_ref, tr_ref = ua._build_edge_flux_geometry_py(nodes, tris, edges)
-    ie_got, tr_got = ua.build_edge_flux_geometry(nodes, tris, edges)
-    assert_exact("interior_edges", ie_got, ie_ref)
-    assert_exact("trans", tr_got, tr_ref)
-
-
-@pytest.mark.parametrize("label,mesh", MESHES_3D, ids=[m[0] for m in MESHES_3D])
-def test_stencil3d_is_bit_identical(label, mesh):
-    nodes, tets = mesh
-    e_ref, v_ref = ua3._build_unstructured_stencil3d_py(nodes, tets)
-    e_got, v_got = ua3.build_unstructured_stencil3d(nodes, tets)
-    assert_exact("edge_list", e_got, e_ref)
-    assert_exact("node_volumes", v_got, v_ref)
-
-
-@pytest.mark.parametrize("label,mesh", MESHES_3D, ids=[m[0] for m in MESHES_3D])
-def test_flux_geometry3d_is_bit_identical(label, mesh):
-    """The kernel this whole phase exists for (3.5k tets/s -> 1.99M)."""
-    nodes, tets = mesh
-    edges, _ = ua3._build_unstructured_stencil3d_py(nodes, tets)
-    _, tr_ref = ua3._build_edge_flux_geometry3d_py(nodes, tets, edges)
-    el_got, tr_got = ua3.build_edge_flux_geometry3d(nodes, tets, edges)
-    assert_exact("trans", tr_got, tr_ref)
-    assert el_got is edges, "the reference returns edge_list itself, not a copy"
-
-
-@pytest.mark.parametrize("label,mesh", MESHES_3D, ids=[m[0] for m in MESHES_3D])
-def test_boundary_face_weights_is_bit_identical(label, mesh):
-    nodes, tets = mesh
-    faces = np.ascontiguousarray(tets[:, :3])
-    ni_ref, w_ref = ua3._boundary_face_node_weights3d_py(nodes, faces)
-    ni_got, w_got = ua3.boundary_face_node_weights3d(nodes, faces)
-    assert_exact("node_idx", ni_got, ni_ref)
-    assert_exact("weights", w_got, w_ref)
-
-
 def test_partition_identities_still_hold():
-    """The reference's own G7 gate: the dual measures partition the mesh
-    exactly. Checked on the compiled path, not just inherited.
-
-    The fixture is deliberately untangled (every triangle
-    counter-clockwise), which used to be load-bearing: `_cot` divided by
-    a SIGNED cross while `tri_area` took abs(), so an inverted triangle
-    broke the identity by exactly 2x. That is fixed (M31 P2b) and
-    test_winding_is_irrelevant_to_the_dual_areas below now gates the
-    fix, but the untangled assertion is kept: it makes a fixture that
-    silently starts producing inverted triangles fail HERE, saying so,
-    instead of quietly weakening this gate.
-    """
+    """The dual measures partition the mesh exactly -- the module's own
+    G7 gate, checked against an independently-computed total area/
+    volume (see the _xcheck helpers above), not against a second
+    implementation of the kernel itself."""
     nodes, tris = tri_grid(30, 0.05, 3)
-    assert all(ua._triangle_area2(nodes[t][:, :2]) > 0 for t in tris), \
+    assert all(_tri_area2_xcheck(nodes[t][:, :2]) > 0 for t in tris), \
         "fixture must be untangled for this identity to hold"
     _, areas = ua.build_unstructured_stencil(nodes, tris)
-    total = sum(0.5 * abs(ua._triangle_area2(nodes[t][:, :2])) for t in tris)
+    total = sum(0.5 * abs(_tri_area2_xcheck(nodes[t][:, :2])) for t in tris)
     assert areas.sum() == pytest.approx(total, rel=1e-12)
 
     P, tets = tet_grid(8, 0.2, 4)
     _, vol = ua3.build_unstructured_stencil3d(P, tets)
-    tot = sum(abs(ua3._tet_volume(P[t])) for t in tets)
+    tot = sum(abs(_tet_vol_xcheck(P[t])) for t in tets)
     assert vol.sum() == pytest.approx(tot, rel=1e-12)
 
 
-#  The three ways to write a triangle, each paired with its REVERSAL
-#  (same first vertex, other two swapped). All six describe the same
-#  triangle, so all six must produce the same dual areas -- but only
-#  within a pair is that expected BIT-for-bit, and the distinction is
-#  not pedantry: `_triangle_area2` is a difference of two products, and
-#  a reversal merely negates it (exact), while a cyclic rotation
-#  recomputes it from different coordinate differences and lands a ulp
-#  or two away. So a pair is compared with array_equal and the pairs
-#  with each other only to 1e-14.
+@pytest.mark.parametrize("label,mesh", MESHES_2D, ids=[m[0] for m in MESHES_2D])
+def test_flux_geometry2d_is_sane(label, mesh):
+    """interior_edges is a subset of edge_list, and every TPFA geometry
+    factor is finite and non-negative (a ratio of two non-negative
+    lengths -- exactly 0.0 is a real, legitimate case on a structured
+    right-triangle grid where the two owning circumcenters coincide)."""
+    nodes, tris = mesh
+    edges, _ = ua.build_unstructured_stencil(nodes, tris)
+    interior_edges, trans = ua.build_edge_flux_geometry(nodes, tris, edges)
+    assert interior_edges.shape[1] == 2
+    assert trans.shape[0] == interior_edges.shape[0]
+    assert np.all(np.isfinite(trans)) and np.all(trans >= 0.0)
+    edge_set = {tuple(e) for e in edges.tolist()}
+    assert all(tuple(e) in edge_set for e in interior_edges.tolist())
+
+
+@pytest.mark.parametrize("label,mesh", MESHES_3D, ids=[m[0] for m in MESHES_3D])
+def test_flux_geometry3d_is_sane(label, mesh):
+    nodes, tets = mesh
+    edges, _ = ua3.build_unstructured_stencil3d(nodes, tets)
+    interior_edges, trans = ua3.build_edge_flux_geometry3d(nodes, tets, edges)
+    assert interior_edges is edges, "returns edge_list itself, not a copy"
+    assert trans.shape[0] == edges.shape[0]
+    assert np.all(np.isfinite(trans)) and np.all(trans >= 0.0)
+
+
+@pytest.mark.parametrize("label,mesh", MESHES_3D, ids=[m[0] for m in MESHES_3D])
+def test_boundary_face_weights_partition_the_boundary_area(label, mesh):
+    """Each face's area splits 1/3 to each of its 3 vertices -- the sum
+    of returned weights must equal the total boundary-face area,
+    computed independently via the cross-product formula."""
+    nodes, tets = mesh
+    faces = np.ascontiguousarray(tets[:, :3])
+    node_idx, weights = ua3.boundary_face_node_weights3d(nodes, faces)
+    assert node_idx.shape == weights.shape
+    assert np.all(weights >= 0.0) and np.all(np.isfinite(weights))
+    nodes_xyz = np.asarray(nodes, dtype=float)[:, :3]
+    p0, p1, p2 = nodes_xyz[faces[:, 0]], nodes_xyz[faces[:, 1]], nodes_xyz[faces[:, 2]]
+    total_area = (0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)).sum()
+    assert weights.sum() == pytest.approx(total_area, rel=1e-10)
+
+
+def test_boundary_face_weights_empty_input_returns_empty_arrays():
+    nodes = np.zeros((3, 3))
+    node_idx, weights = ua3.boundary_face_node_weights3d(nodes, np.zeros((0, 3), dtype=int))
+    assert node_idx.shape == (0,) and weights.shape == (0,)
+
+
 _WINDING_PAIRS = [((0, 1, 2), (0, 2, 1)),
                   ((1, 2, 0), (1, 0, 2)),
                   ((2, 0, 1), (2, 1, 0))]
 
 
 @pytest.mark.parametrize("label,pts", [
-    # Non-obtuse: takes the cotangent branch, which is where the defect
-    # lived. Obtuse: takes the 1/2-1/4-1/4 branch, which never had it --
-    # included so the test would catch a "fix" that broke that branch.
     ("acute", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.4, 1.0, 0.0]]),
     ("right", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
     ("obtuse", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-0.8, 0.3, 0.0]]),
 ])
 def test_winding_is_irrelevant_to_the_dual_areas(label, pts):
     """M31 P2b: the dual areas depend on the triangle, not on the order
-    its vertices were listed in.
-
-    This was a real defect, surfaced by fuzzing the compiled path
-    against the reference on a mesh jittered hard enough to invert a
-    triangle: `_cot` divided by a SIGNED cross product while `tri_area`
-    took abs(), so reversing a non-obtuse triangle flipped all three of
-    its dual-area contributions negative and the partition identity
-    failed by exactly 2x. It was pinned rather than fixed in P2 because
-    fixing it changes physics and had to land on both paths at once --
-    which is what this test now gates.
-
-    Reversing a triangle is bit-exact, and asking only for `approx`
-    there would hide a genuine reordering bug: the reversal negates
-    every `cross` (and `abs` of a negated double is exact), leaves
-    `dot` alone (it is symmetric in its arguments), leaves the squared
-    side lengths alone (a negated difference squares identically), and
-    merely swaps the order of the two terms each node receives. See
-    _WINDING_PAIRS for why a cyclic ROTATION is the looser comparison.
-    """
+    its vertices were listed in -- a real defect once (a signed-cross
+    vs. abs() mismatch flipped a reversed triangle's contribution
+    negative). Checked on the compiled path alone, via the same
+    independent area cross-check the partition-identity test uses."""
     nodes = np.array(pts)
     first = None
     for ccw, cw in _WINDING_PAIRS:
-        got = {}
+        vals = {}
         for order in (ccw, cw):
             tri = np.array([order], dtype=int)
-            signed = ua._triangle_area2(nodes[tri[0]][:, :2])
+            signed = _tri_area2_xcheck(nodes[tri[0]][:, :2])
             _, areas = ua.build_unstructured_stencil(nodes, tri)
-            _, areas_py = ua._build_unstructured_stencil_py(nodes, tri)
-            assert_exact(f"{label} {order} compiled vs reference", areas, areas_py)
-            # The partition identity, per triangle: what used to fail by 2x.
             assert areas.sum() == pytest.approx(0.5 * abs(signed), rel=1e-14)
             assert np.all(areas > 0.0), "a dual area is never negative"
-            got[order] = (areas, signed)
+            vals[order] = (areas, signed)
 
-        assert got[ccw][1] > 0 and got[cw][1] < 0, "the pair must differ in winding"
-        assert_exact(f"{label} {cw} vs {ccw}", got[cw][0], got[ccw][0])
+        assert vals[ccw][1] > 0 and vals[cw][1] < 0, "the pair must differ in winding"
+        assert_exact(f"{label} {cw} vs {ccw}", vals[cw][0], vals[ccw][0])
 
         if first is None:
-            first = got[ccw][0]
+            first = vals[ccw][0]
         else:
-            assert got[ccw][0] == pytest.approx(first, rel=1e-14)
+            assert vals[ccw][0] == pytest.approx(first, rel=1e-14)
 
 
 def test_an_inverted_mesh_still_partitions_exactly():
-    """The whole-mesh version of the above: reverse EVERY triangle and
-    the dual areas are unchanged, so the G7 partition identity survives
-    a mesh generator that winds the other way.
-
-    The flip keeps each triangle's first vertex, so the comparison can
-    be bit-exact -- see _WINDING_PAIRS.
-    """
+    """Reverse EVERY triangle and the dual areas are unchanged, so the
+    G7 partition identity survives a mesh generator that winds the
+    other way."""
     nodes, tris = tri_grid(20, 0.05, 7)
     flipped = np.ascontiguousarray(tris[:, [0, 2, 1]])
-    assert all(ua._triangle_area2(nodes[t][:, :2]) < 0 for t in flipped)
+    assert all(_tri_area2_xcheck(nodes[t][:, :2]) < 0 for t in flipped)
 
     _, areas = ua.build_unstructured_stencil(nodes, tris)
     _, areas_flipped = ua.build_unstructured_stencil(nodes, flipped)
     assert_exact("flipped node_areas", areas_flipped, areas)
 
-    total = sum(0.5 * abs(ua._triangle_area2(nodes[t][:, :2])) for t in tris)
+    total = sum(0.5 * abs(_tri_area2_xcheck(nodes[t][:, :2])) for t in tris)
     assert areas_flipped.sum() == pytest.approx(total, rel=1e-12)
 
 
 # ----------------------------------------------------------------------
 #  empty / odd-shaped inputs
 # ----------------------------------------------------------------------
-def test_empty_mesh_matches_the_reference_shapes():
-    """The reference returns shape (0,) for an empty edge list, not
-    (0, 2) -- `np.array(sorted({}), dtype=int)` has no second axis."""
+def test_empty_mesh_returns_shape_0_not_0_2():
+    """An empty edge list is shape (0,), not (0, 2)."""
     n0 = np.zeros((0, 3))
-    e_ref, a_ref = ua._build_unstructured_stencil_py(n0, np.zeros((0, 3), dtype=int))
     e_got, a_got = ua.build_unstructured_stencil(n0, np.zeros((0, 3), dtype=int))
-    assert_exact("empty edges", e_got, e_ref)
-    assert_exact("empty areas", a_got, a_ref)
+    assert e_got.shape == (0,)
+    assert a_got.shape == (0,)
 
-    e_ref, v_ref = ua3._build_unstructured_stencil3d_py(n0, np.zeros((0, 4), dtype=int))
     e_got, v_got = ua3.build_unstructured_stencil3d(n0, np.zeros((0, 4), dtype=int))
-    assert_exact("empty edges 3d", e_got, e_ref)
-    assert_exact("empty vol", v_got, v_ref)
+    assert e_got.shape == (0,)
+    assert v_got.shape == (0,)
 
 
-def test_two_column_nodes_are_accepted_like_the_reference():
-    """2D callers may pass xy only; the kernels read 3 columns."""
+def test_two_column_nodes_are_accepted():
+    """2D callers may pass xy only; the kernel reads 3 columns."""
     nodes2 = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
     tris = np.array([[0, 1, 2], [1, 3, 2]])
-    e_ref, a_ref = ua._build_unstructured_stencil_py(nodes2, tris)
-    e_got, a_got = ua.build_unstructured_stencil(nodes2, tris)
-    assert_exact("edges", e_got, e_ref)
-    assert_exact("areas", a_got, a_ref)
+    edges, areas = ua.build_unstructured_stencil(nodes2, tris)
+    assert edges.shape[1] == 2 and areas.shape[0] == 4
 
 
-def test_non_contiguous_input_is_handled_not_silently_wrong():
+def test_non_contiguous_input_is_handled():
     """A sliced array is not c-contiguous; normalization happens in the
     shim, visibly, rather than as a hidden conversion in the binding."""
     nodes, tris = tri_grid(12)
@@ -313,56 +255,34 @@ def test_non_contiguous_input_is_handled_not_silently_wrong():
     padded[:, :3] = nodes
     view = padded[:, :3]
     assert not view.flags["C_CONTIGUOUS"]
-    e_ref, a_ref = ua._build_unstructured_stencil_py(view, tris)
-    e_got, a_got = ua.build_unstructured_stencil(view, tris)
-    assert_exact("edges", e_got, e_ref)
-    assert_exact("areas", a_got, a_ref)
+    edges, areas = ua.build_unstructured_stencil(view, tris)
+    assert edges.shape[0] > 0 and areas.sum() > 0.0
 
 
 # ----------------------------------------------------------------------
-#  G-C: identical exception type AND message
+#  G-C: degenerate/non-manifold input raises the right exception type
 # ----------------------------------------------------------------------
-def _message(fn, *a):
-    try:
-        fn(*a)
-    except DegenerateMeshError as exc:
-        return str(exc)
-    pytest.fail(f"{fn.__name__} did not raise")
-
-
-def test_degenerate_triangle_message_matches_exactly():
+def test_degenerate_triangle_raises():
     nodes = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
     tris = np.array([[0, 1, 2]])
-    assert (_message(ua.build_unstructured_stencil, nodes, tris) ==
-            _message(ua._build_unstructured_stencil_py, nodes, tris))
+    with pytest.raises(DegenerateMeshError, match="degenerate"):
+        ua.build_unstructured_stencil(nodes, tris)
 
 
-def test_non_manifold_edge_message_matches_exactly():
+def test_non_manifold_edge_raises():
     nodes = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0],
                       [0.5, -1.0, 0.0], [0.5, 2.0, 0.0]])
     tris = np.array([[0, 1, 2], [0, 1, 3], [0, 1, 4]])
-    assert (_message(ua.build_unstructured_stencil, nodes, tris) ==
-            _message(ua._build_unstructured_stencil_py, nodes, tris))
+    with pytest.raises(DegenerateMeshError, match="non-manifold|shared by"):
+        ua.build_unstructured_stencil(nodes, tris)
 
 
-def test_degenerate_tet_message_matches_exactly():
+def test_degenerate_tet_raises():
     nodes = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                       [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
     tets = np.array([[0, 1, 2, 3]])
-    assert (_message(ua3.build_unstructured_stencil3d, nodes, tets) ==
-            _message(ua3._build_unstructured_stencil3d_py, nodes, tets))
-
-
-def test_existing_match_patterns_still_catch_the_compiled_path():
-    """tests/test_m21_phase3.py greps these messages; the compiled path
-    must satisfy the same patterns with no test edit."""
-    nodes = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
     with pytest.raises(DegenerateMeshError, match="degenerate"):
-        ua.build_unstructured_stencil(nodes, np.array([[0, 1, 2]]))
-    nodes = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0],
-                      [0.5, -1.0, 0.0], [0.5, 2.0, 0.0]])
-    with pytest.raises(DegenerateMeshError, match="non-manifold|shared by"):
-        ua.build_unstructured_stencil(nodes, np.array([[0, 1, 2], [0, 1, 3], [0, 1, 4]]))
+        ua3.build_unstructured_stencil3d(nodes, tets)
 
 
 def test_a_failed_call_returns_nothing_at_all():
@@ -385,7 +305,6 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
     """A kernel may only use threads if its result does not depend on
     how many. build_flux_geometry3d parallelizes over OUTPUT edges with
     a thread-private accumulator, so its float addition order is fixed.
-    A kernel that fails this loses its pragma, not its gate.
     """
     code = (
         "import numpy as np, sys; sys.path.insert(0, %r)\n"
@@ -398,7 +317,6 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
     )
     env = dict(os.environ)
     env["PYTCAD_NUM_THREADS"] = str(threads)
-    env["PYTCAD_ACCEL"] = "1"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                          text=True, env=env, cwd=ROOT)
     assert out.returncode == 0, out.stderr
@@ -416,7 +334,6 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
 # ----------------------------------------------------------------------
 #  G-E: absolute throughput floors
 # ----------------------------------------------------------------------
-@needs_active_accel
 @pytest.mark.slow
 @pytest.mark.parametrize("name,floor,build", [
     ("stencil2d", 2.0e6, "2d"),
@@ -424,11 +341,7 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
     ("flux3d", 3.0e5, "flux3d"),
 ])
 def test_throughput_floor(name, floor, build):
-    """Absolute, not a ratio, so this only fails on a real regression.
-
-    Reference rates when these kernels were written: 77k tri/s
-    (stencil2d), 48k tet/s (stencil3d), 3.7k tet/s (flux3d).
-    """
+    """Absolute, not a ratio, so this only fails on a real regression."""
     import time
     if build == "2d":
         nodes, tris = tri_grid(300)
@@ -453,21 +366,11 @@ def test_throughput_floor(name, floor, build):
 
 
 # ----------------------------------------------------------------------
-#  G-A for the solver: the two PETSc backends (M31 P3b)
+#  G-A for the solver: the two PETSc backends (M31 P3b) -- UNCHANGED.
+#  petsc4py is a real, independent second backend (linsolve.py's own
+#  oracle for method="petsc"), not a pure-Python fallback for lack of a
+#  compiler, and is explicitly out of M43 phase 4's scope.
 # ----------------------------------------------------------------------
-# The mesh kernels above earn np.array_equal because their numpy
-# primitives were measured to be plain scalar arithmetic.  A Krylov
-# solve has no such argument -- and does not need one.  Both backends
-# call the SAME libpetsc.so, with the same KSP type, restart, PC,
-# tolerances and canonicalized matrix; the only thing P3b changed is
-# WHERE those calls are made from.  So the honest bar is still exact
-# equality, and it is met: measured bit-identical on random systems, on
-# a real interleaved psi/n/p device Jacobian, and with a nonzero initial
-# guess.
-#
-# The lever is PYTCAD_ACCEL, read per call by _accel.use_accel(), so
-# both backends run in this one process against the same fixtures --
-# which is the only way a parity test is cheap enough to run every time.
 import scipy.sparse as _sp                                   # noqa: E402
 from scipy.sparse.linalg import spsolve as _spsolve          # noqa: E402
 
@@ -592,19 +495,9 @@ def test_petsc_solve_csr_rejects_mismatched_arrays():
 
 
 # ----------------------------------------------------------------------
-#  G-A for the process/adaptivity kernels (M31 P4)
+#  G-A for the process/adaptivity kernels (M31 P4) -- compiled path
+#  only; sanity/behavioral checks rather than parity comparisons.
 # ----------------------------------------------------------------------
-# Same bar as the mesh kernels: np.array_equal, on both the AMR
-# indicators and the 1D diffusion time loops.
-#
-# What makes that achievable is the split documented in
-# core/include/tcad/process/kernels.hpp -- every transcendental that acts
-# on a whole array (np.log for the log-density indicator,
-# mesh.debye_length for the Debye ratio, the peak normalisation for
-# curvature) is computed in numpy and only its RESULT crosses the
-# boundary, so the kernels are pure comparison-and-arithmetic reductions.
-# The one exception, the TED supersaturation's scalar exp, is covered by
-# test_ted_exp_matches_numpy below rather than by assertion.
 from pytcad import adapt_unstructured as _au                 # noqa: E402
 from pytcad import process as _proc                          # noqa: E402
 from pytcad import process2d as _p2d                         # noqa: E402
@@ -626,8 +519,7 @@ def _indicator_mesh(n=40, jitter=0.3, seed=5):
 
 def _fields(mesh, seed=11):
     """psi / n / p / doping with the dynamic range a real device has --
-    n and p span ~30 decades across a junction, which is exactly where a
-    sloppy log or a reordered max would show up."""
+    n and p span ~30 decades across a junction."""
     rng = np.random.default_rng(seed)
     xy = mesh.nodes[:, :2]
     psi = 0.8 * np.tanh((xy[:, 0] - 0.5) * 12.0) + 0.05 * rng.standard_normal(len(xy))
@@ -637,49 +529,55 @@ def _fields(mesh, seed=11):
     return psi, n, p, C
 
 
-@pytest.mark.parametrize("jitter", [0.0, 0.3])
-def test_amr_indicators_are_bit_identical(jitter):
-    mesh = _indicator_mesh(jitter=jitter)
+def test_amr_indicators_produce_sane_normalized_output():
+    """Shape matches the triangle count and every value is finite and
+    non-negative. `indicator_curvature_tri` is normalized by the FIELD's
+    own peak |psi|, not by its own peak edge value, so it is not
+    expected to reach exactly 1.0 -- only bounded and non-negative."""
+    mesh = _indicator_mesh()
     psi, n, p, C = _fields(mesh)
-    assert_exact("curvature",
-                 _au.indicator_curvature_tri(mesh, psi),
-                 _au._indicator_curvature_tri_py(mesh, psi))
-    assert_exact("log_density",
-                 _au.indicator_log_density_tri(mesh, n, p),
-                 _au._indicator_log_density_tri_py(mesh, n, p))
-    assert_exact("debye_ratio",
-                 _au.debye_ratio_tri(mesh, C),
-                 _au._debye_ratio_tri_py(mesh, C))
+    n_tri = mesh.triangles.shape[0]
+
+    curv = _au.indicator_curvature_tri(mesh, psi)
+    assert curv.shape == (n_tri,)
+    assert np.all(np.isfinite(curv)) and np.all(curv >= 0.0)
+
+    ld = _au.indicator_log_density_tri(mesh, n, p)
+    assert ld.shape == (n_tri,)
+    assert np.all(np.isfinite(ld)) and np.all(ld >= 0.0)
+
+    debye = _au.debye_ratio_tri(mesh, C)
+    assert debye.shape == (n_tri,)
+    assert np.all(np.isfinite(debye)) and np.all(debye >= 0.0)
 
 
-def test_amr_indicators_agree_on_the_degenerate_edges_of_their_domain():
+def test_amr_indicators_handle_the_degenerate_edges_of_their_domain():
     """The clamps are part of the contract, not defensive padding:
     `n`/`p` are floored at 1e-300 before the log, and the Debye ratio
-    divides by max(ld_min, 1e-300). A kernel that clamped differently
-    would still look right on ordinary input."""
+    divides by max(ld_min, 1e-300) -- must not raise or produce inf/nan
+    at exactly-zero input."""
     mesh = _indicator_mesh(n=12, jitter=0.0)
     N = len(mesh.nodes)
     zero = np.zeros(N)
     tiny = np.full(N, 1e-320)          # subnormal, below the 1e-300 floor
-    assert_exact("log_density at zero",
-                 _au.indicator_log_density_tri(mesh, zero, tiny),
-                 _au._indicator_log_density_tri_py(mesh, zero, tiny))
-    assert_exact("debye at zero doping",
-                 _au.debye_ratio_tri(mesh, zero),
-                 _au._debye_ratio_tri_py(mesh, zero))
+
+    ld = _au.indicator_log_density_tri(mesh, zero, tiny)
+    assert np.all(np.isfinite(ld))
+
+    debye = _au.debye_ratio_tri(mesh, zero)
+    assert np.all(np.isfinite(debye))
+
     # A constant psi makes every edge difference exactly 0, so `scale`
-    # falls back on its own 1e-300 floor and the result is 0/1e-300.
+    # falls back on its own 1e-300 floor and the result is 0/1e-300 == 0.
     flat = np.zeros(N)
-    assert_exact("curvature on a flat field",
-                 _au.indicator_curvature_tri(mesh, flat),
-                 _au._indicator_curvature_tri_py(mesh, flat))
+    curv = _au.indicator_curvature_tri(mesh, flat)
+    assert np.all(curv == 0.0)
 
 
-def test_an_out_of_range_node_index_raises_instead_of_reading_memory():
-    """The reference gets this from numpy fancy-indexing. The kernels
-    dereference raw pointers, so they validate the index range once up
-    front -- and must raise the SAME class, since that is what a caller
-    can catch. The message text is not claimed to match numpy's."""
+def test_an_out_of_range_node_index_raises():
+    """The kernels dereference raw pointers, so they validate the index
+    range once up front and must raise IndexError -- the same class a
+    caller catches from ordinary numpy fancy-indexing."""
     mesh = _indicator_mesh(n=6, jitter=0.0)
     N = len(mesh.nodes)
     bad = _Mesh(mesh.nodes, np.array([[0, 1, N]]))       # one past the end
@@ -697,43 +595,20 @@ def _diffusion_case(n=250, L=2.0e-4):
     return x, _proc.implant(x, "B", 50.0, 1e15)
 
 
-@pytest.mark.parametrize("reflecting", [True, False])
-@pytest.mark.parametrize("t_s", [1.0, 60.0])
-def test_diffuse_numeric_is_bit_identical(monkeypatch, reflecting, t_s):
+def test_diffuse_numeric_is_reproducible():
+    """Same inputs, same result, called twice -- a determinism gate on
+    the sole (compiled) path, since there is no second implementation
+    to diff against any more."""
     x, C = _diffusion_case()
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = _proc.diffuse_numeric(x, C, "B", 1000.0, t_s, reflecting=reflecting)
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = _proc.diffuse_numeric(x, C, "B", 1000.0, t_s, reflecting=reflecting)
-    assert_exact(f"diffuse_numeric t={t_s} reflecting={reflecting}", got, ref)
-
-
-@pytest.mark.parametrize("kwargs", [
-    dict(n_total=None, ted_S0=25.0, ted_tau_s=8.0, oed_boost=0.0),
-    dict(n_total="doped", ted_S0=0.0, ted_tau_s=None, oed_boost=0.4),
-    dict(n_total="doped", ted_S0=25.0, ted_tau_s=8.0, oed_boost=0.4),
-])
-def test_diffuse_with_defects_is_bit_identical(monkeypatch, kwargs):
-    """Covers all three enhancement mechanisms, and in particular the
-    ted_S0 == 0 short circuit -- where the reference never evaluates the
-    exponential at all and ted_tau_s is legitimately None, so the kernel
-    must not read it either."""
-    x, C = _diffusion_case()
-    kw = dict(kwargs)
-    if kw["n_total"] == "doped":
-        kw["n_total"] = np.full_like(x, 5e19)
-
-    monkeypatch.setenv("PYTCAD_ACCEL", "0")
-    ref = _ted.diffuse_with_defects(x, C, "B", 1000.0, 30.0, **kw)
-    monkeypatch.setenv("PYTCAD_ACCEL", "1")
-    got = _ted.diffuse_with_defects(x, C, "B", 1000.0, 30.0, **kw)
-    assert_exact(f"diffuse_with_defects {kwargs}", got, ref)
+    a = _proc.diffuse_numeric(x, C, "B", 1000.0, 1.0, reflecting=True)
+    b = _proc.diffuse_numeric(x, C, "B", 1000.0, 1.0, reflecting=True)
+    assert_exact("diffuse_numeric repeat call", b, a)
+    assert np.all(np.isfinite(a)) and np.all(a >= 0.0)
 
 
 def test_the_diffusion_kernels_never_write_through_to_the_caller():
-    """The reference copies C before the loop. A kernel that mutated the
-    caller's array instead would pass every value comparison above and
-    still be a behavioural difference between the two paths."""
+    """The caller's C must be unmodified: the kernel operates on a copy
+    the binding makes, not the caller's own array."""
     x, C = _diffusion_case(n=120)
     before = C.copy()
     _proc.diffuse_numeric(x, C, "B", 1000.0, 5.0)
@@ -742,33 +617,11 @@ def test_the_diffusion_kernels_never_write_through_to_the_caller():
     assert_exact("caller's C after diffuse_with_defects", C, before)
 
 
-def test_ted_exp_matches_numpy(monkeypatch):
-    """The ONE transcendental the C++ side computes for itself.
-
-    Everything else is handed down already evaluated. This one is not,
-    because keeping it in Python would mean materializing one double per
-    timestep -- millions of them on a fine grid -- purely to hand back.
-    So the agreement is checked directly, over the argument range the
-    decay actually reaches, instead of being assumed.
-    """
-    x, C = _diffusion_case(n=60)
-    # tau small against the anneal time, so -t/tau sweeps deep into the
-    # tail rather than staying near 0 where any two exps agree.
-    for tau in (0.05, 1.0, 50.0):
-        monkeypatch.setenv("PYTCAD_ACCEL", "0")
-        ref = _ted.diffuse_with_defects(x, C, "B", 1000.0, 20.0,
-                                        ted_S0=1e3, ted_tau_s=tau)
-        monkeypatch.setenv("PYTCAD_ACCEL", "1")
-        got = _ted.diffuse_with_defects(x, C, "B", 1000.0, 20.0,
-                                        ted_S0=1e3, ted_tau_s=tau)
-        assert_exact(f"ted exp tau={tau}", got, ref)
-
-
-def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
+def test_implant_2d_lateral_smoothing_matches_the_per_row_formula():
     """M31 P4 made implant_2d build its smoothing matrix once instead of
     once per depth row (939 ms -> 15 ms at 400x600). That is a pure
-    hoist, so it has to be BIT-identical, and this reconstructs the old
-    per-row form to prove it rather than trusting the argument."""
+    hoist, so it must reproduce the per-row form exactly rather than
+    trusting the argument -- transcribed here independently."""
     Nx, Ny = 90, 70
     x = np.linspace(0.0, 2.0e-4, Nx)
     y = np.linspace(0.0, 1.0e-4, Ny)
@@ -779,7 +632,7 @@ def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
 
     got = _p2d.implant_2d(x, y, geom, "B", 50.0, 1e15, mask=mask)
 
-    # The pre-hoist body, transcribed.
+    # The pre-hoist form, transcribed independently.
     Rp, dRp = _proc.implant_moments("B", 50.0)
     ref = np.zeros((Ny, Nx))
     surf_cm = -geom.surface_um * 1e-4
@@ -800,7 +653,6 @@ def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
     assert_exact("implant_2d after the hoist", got, ref)
 
 
-@needs_active_accel
 @pytest.mark.slow
 @pytest.mark.parametrize("name,floor", [
     ("curvature", 5.0e7),
@@ -810,8 +662,7 @@ def test_implant_2d_lateral_smoothing_is_unchanged_by_the_hoist():
 def test_indicator_throughput_floor(name, floor):
     """G-E for P4. Absolute, and set roughly 4x below what was measured
     when these landed (227M / 99M / 242M tri/s), so this fails on a
-    regression and not on a slower machine. Python reference rates for
-    the same three: 0.27M, 0.80M, 0.28M tri/s.
+    regression and not on a slower machine.
     """
     import time
     mesh = _indicator_mesh(n=200, jitter=0.0)

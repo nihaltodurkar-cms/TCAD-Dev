@@ -179,38 +179,13 @@ def diffuse_numeric(x, C, species, T_C, t_s, n_steps=2000,
     dV[0] = xm[0] - x[0]
     dV[-1] = x[-1] - xm[-1]
 
-    # M31 P4: only the TIME LOOP is dispatched. Everything above -- the
-    # diffusivity, the stability bound that resolves n_steps, the dual-
-    # cell widths -- stays here, so the two paths cannot enter the loop
-    # disagreeing about the problem.
-    if _accel.use_accel() and C.size >= 2:
-        return _accel.core.diffuse1d_const(
-            _accel.as_field(C), _accel.as_field(h), _accel.as_field(dV),
-            float(D), float(dt), int(n_steps), bool(reflecting))
-    return _diffuse_loop_py(C, h, dV, D, dt, n_steps, reflecting)
-
-
-def _diffuse_loop_py(C, h, dV, D, dt, n_steps, reflecting):
-    """The explicit time loop, constant D -- the ORACLE for
-    `_core.diffuse1d_const` (M31 P4 gate G-A).
-
-    Split out of diffuse_numeric so the C++ kernel has a Python
-    counterpart with the SAME arguments to be diffed against, rather
-    than only being reachable through a function that also decides the
-    step count. The set-up above it is deliberately not duplicated: both
-    paths get their `h`, `dV`, `D` and `dt` from the one place that
-    computes them.
-    """
-    for _ in range(n_steps):
-        flux = -D * np.diff(C) / h          # flux on interfaces
-        dC = np.zeros_like(C)
-        dC[1:-1] = -(flux[1:] - flux[:-1]) / dV[1:-1]
-        dC[0] = -flux[0] / dV[0] if reflecting else 0.0
-        dC[-1] = flux[-1] / dV[-1]
-        C = C + dt * dC
-        if not reflecting:
-            C[0] = 0.0
-    return C
+    # M43 phase 4 (2026-09-16): the pure-Python time loop was removed
+    # at the user's explicit request -- this now requires the compiled
+    # kernel. n>=2 is validated on the C++ side (InvalidArgument).
+    _accel.require_accel()
+    return _accel.core.diffuse1d_const(
+        _accel.as_field(C), _accel.as_field(h), _accel.as_field(dV),
+        float(D), float(dt), int(n_steps), bool(reflecting))
 
 
 def junction_depth(x, net_doping):

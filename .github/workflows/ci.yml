@@ -4,17 +4,25 @@
 # CLAUDE.md was enforced by whoever remembered to run the suite.  This
 # makes it automatic.
 #
-# Two properties are non-negotiable and each has its own job:
+# M43 phase 4 (2026-09-16): the pure-Python fallback for most compiled
+# kernels was REMOVED at the user's explicit request (see CLAUDE.md's
+# "The C++ engine (M31)" section) -- `pytcad._core` is now REQUIRED for
+# the mesh-geometry kernels (P2), the process/adaptivity kernels (P4),
+# the M34-S4 nonlocal path tracer, and the M43 thermal-grid assembly.
+# The `python-only` job this file used to run (prove the suite passes
+# with NO compiler and NO extension -- gate G-F) is RETIRED along with
+# that fallback: it can no longer pass, by design, not by regression.
+# `import pytcad` itself still never requires the extension (see
+# `pytcad/_accel.py`), so there is nothing left for a "no extension"
+# job to usefully prove about the bulk of the suite.
 #
-#   * The pure-Python path must work with NO compiler and NO extension.
-#     That is the migration's undo button (gate G-F) -- `python-only`
-#     builds nothing and must be fully green on its own.
+# `tests` (below) always builds the extension first and is the ONLY
+# general-purpose suite job now. `petsc` and `wheel` are unchanged --
+# petsc4py remains a real, independent second backend for
+# `method="petsc"` (untouched by the fallback removal), and the wheel
+# build was never a fallback-vs-compiled comparison to begin with.
 #
-#   * The compiled path must produce identical results, not merely
-#     working ones -- `accelerated` builds the extension and reruns the
-#     same suite with PYTCAD_ACCEL=1.
-#
-# Both run from pytcad/, which is the project root for this repo (see
+# Runs from pytcad/, which is the project root for this repo (see
 # CLAUDE.md "Commands").  OPENBLAS_NUM_THREADS=1 is set for the same
 # reason CLAUDE.md documents it: without it numpy's BLAS spawns a thread
 # pool per xdist worker and oversubscribes the runner.
@@ -35,44 +43,8 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  python-only:
-    name: pure Python (no extension)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      # PySide6 needs these even for QT_QPA_PLATFORM=offscreen, which
-      # gui/tests/conftest.py sets for itself. A bare runner has none of
-      # them and the GUI suite fails at import with a bare "could not
-      # load the Qt platform plugin".
-      - name: Qt runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
-      - name: Install
-        working-directory: pytcad
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Assert the extension really is absent
-        working-directory: pytcad
-        run: |
-          python -c "from pytcad import _accel; assert not _accel.HAVE_ACCEL, _accel.status(); print(_accel.status())"
-      - name: Fast suite
-        working-directory: pytcad
-        run: python -m pytest tests/ gui/tests/ -n 4 -m "not slow" -q
-      - name: Slow gate battery
-        working-directory: pytcad
-        run: python -m pytest tests/ gui/tests/ -n 4 -m "slow" -q
-
-  accelerated:
-    name: compiled kernels (PYTCAD_ACCEL=1)
+  tests:
+    name: full suite (compiled extension required)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -82,6 +54,10 @@ jobs:
           python-version: "3.11"
           cache: pip
       - uses: lukka/get-cmake@latest
+      # PySide6 needs these even for QT_QPA_PLATFORM=offscreen, which
+      # gui/tests/conftest.py sets for itself. A bare runner has none of
+      # them and the GUI suite fails at import with a bare "could not
+      # load the Qt platform plugin".
       - name: Qt runtime libraries
         run: |
           sudo apt-get update -qq
@@ -103,35 +79,20 @@ jobs:
                 -DPython_EXECUTABLE="$(which python)"
           cmake --build build/dev
           python -c "from pytcad import _accel; assert _accel.HAVE_ACCEL; print(_accel.status())"
-      # Same suite, compiled path. Results must be identical, not merely
-      # passing -- the parity tests assert np.array_equal against the
-      # Python reference, which is why both jobs run the whole thing.
-      - name: Fast suite, accelerated
+      - name: Fast suite
         working-directory: pytcad
-        env:
-          PYTCAD_ACCEL: "1"
         run: python -m pytest tests/ gui/tests/ -n 4 -m "not slow" -q
+      - name: Slow gate battery
+        working-directory: pytcad
+        run: python -m pytest tests/ gui/tests/ -n 4 -m "slow" -q
       - name: Boundary and parity gates
         working-directory: pytcad
-        env:
-          PYTCAD_ACCEL: "1"
         run: python -m pytest tests/test_accel_boundary.py tests/test_architecture_boundaries.py -q
-      # The G-E throughput floors are marked slow, and the `python-only`
-      # job's slow battery skips this whole file (there is no extension
-      # there to measure). So without this step they run nowhere and
-      # would rot silently. The floors are absolute and set ~4x under the
-      # measured rates, so a slower CI runner does not trip them.
-      - name: Throughput floors (G-E)
-        working-directory: pytcad
-        env:
-          PYTCAD_ACCEL: "1"
-        run: python -m pytest tests/test_accel_parity.py -q -m slow
       # M32. Not a timing gate -- a CI runner's absolute speed is not
       # reproducible enough to assert on, and a threshold that fails on a
       # noisy runner teaches everyone to ignore it. What this proves is
       # that every case still BUILDS AND RUNS and that the dashboard is
-      # still produced, which is what stops the suite rotting the way the
-      # G-E floors above silently did.
+      # still produced, which is what stops the suite rotting silently.
       - name: Benchmark suite runs (M32)
         working-directory: pytcad
         run: |
@@ -144,14 +105,14 @@ jobs:
             pytcad/benchmark-report.md
             pytcad/benchmark-report.json
 
-  # The two jobs above both build WITHOUT PETSc -- pip has no practical
+  # The `tests` job above builds WITHOUT PETSc -- pip has no practical
   # PETSc wheel, which is exactly why M31-CPP-ARCHITECTURE-PLAN.md sec 2
   # names conda-forge as the supported channel for the C++ build. That
-  # makes `accelerated` above the standing proof that the PETSc-less
-  # configuration works, and this job the only place the compiled solver
-  # backend (P3b) is exercised at all. Without it, tests/
-  # test_accel_parity.py's petsc gates would skip in CI forever and
-  # nobody would notice they had stopped running.
+  # makes `tests` the standing proof that the PETSc-less configuration
+  # works, and this job the only place the compiled solver backend
+  # (P3b) is exercised at all. Without it, tests/test_accel_parity.py's
+  # petsc gates would skip in CI forever and nobody would notice they
+  # had stopped running.
   petsc:
     name: compiled PETSc backend (conda-forge)
     runs-on: ubuntu-latest

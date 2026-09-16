@@ -159,6 +159,46 @@ Rectangle {
                   ? "overlay: " + appController.comparisonLabelForQml : ""
         }
 
+        // Numeric complement to the dashed visual overlay above: how
+        // much do the two swept results actually disagree, per
+        // channel -- not just a plotted line to eyeball. Only appears
+        // for a SWEPT comparison (comparisonDiffMetrics is null
+        // otherwise -- a static-bias comparison has nothing to diff
+        // here, same honest limit the dashed overlay itself has).
+        ListView {
+            id: comparisonDiffTable
+            objectName: "comparisonDiffTable"
+            Layout.fillWidth: true
+            Layout.preferredHeight: model && model.length ? Math.min(90, model.length * 18 + 10) : 0
+            clip: true
+            visible: !!model && model.length > 0
+            model: appController.hasComparison ? appController.comparisonDiffMetrics : null
+            delegate: RowLayout {
+                width: comparisonDiffTable.width
+                spacing: 4
+                Label {
+                    text: modelData.channel
+                    color: Theme.text
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                    Layout.preferredWidth: 60
+                    elide: Text.ElideRight
+                }
+                Label {
+                    text: "max|d|=" + modelData.maxAbs.toExponential(3) + " " + modelData.unit
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                }
+                Label {
+                    text: "rel=" + (modelData.maxRel * 100).toFixed(2) + "%"
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    font.family: Theme.mono
+                }
+            }
+        }
+
         Item { Layout.fillHeight: true }
 
         Button {

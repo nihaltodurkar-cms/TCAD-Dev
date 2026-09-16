@@ -27,8 +27,6 @@ devices re-locate paths until none is truncated).
 Units: psi in units of VT (the devices' scaled potential), lengths in
 m, energies in J, rates in m^-3 s^-1.
 """
-import bisect
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -360,13 +358,13 @@ def build_structured(coords_cm, psi, VT, Eg_eV, contact_mask,
             np.ascontiguousarray(contact_mask.ravel()), shape, float(VT),
             float(Eg_eV), float(screen_Vcm), float(margin), int(max_steps),
             hmin_all)
-    core = _accel.core if _accel.use_accel() else None
-    if core is not None and hasattr(core, "trace_paths"):
-        out = core.trace_paths(np.ascontiguousarray(np.concatenate(coords)),
-                               np.asarray(shape, dtype=np.int64), *args[1:5],
-                               *args[6:])
-    else:
-        out = _trace_paths_py(*args)
+    # M43 phase 4 (2026-09-16): the pure-Python per-path stepping loop
+    # was removed at the user's explicit request -- this now requires
+    # the compiled extension.
+    _accel.require_accel()
+    out = _accel.core.trace_paths(
+        np.ascontiguousarray(np.concatenate(coords)),
+        np.asarray(shape, dtype=np.int64), *args[1:5], *args[6:])
     starts, offset, sidx, swts, seg_len, gidx, gwts = out
     K = 2 ** d
     if len(starts) == 0:
@@ -379,177 +377,3 @@ def build_structured(coords_cm, psi, VT, Eg_eV, contact_mask,
                        np.asarray(gidx, dtype=int).reshape(-1, K + 1),
                        np.asarray(gwts, dtype=float).reshape(-1, K + 1))
 
-
-NO_PROGRESS_STEPS = 64
-
-
-def _trace_paths_py(coords, psi_flat, gflat, cand, contact_flat, shape, VT,
-                    Eg_eV, screen_Vcm, margin, max_steps, hmin_all):
-    """Reference per-path stepping loop of build_structured.
-
-    Pure-Python scalar arithmetic in a FIXED operation order -- sequential
-    sums rather than np.dot (whose BLAS summation order is not
-    guaranteed), bisect for searchsorted, explicit products for the
-    multilinear weights -- so the compiled trace_paths can reproduce it
-    bit for bit.  Returns flat lists: starts, offset, sidx, swts,
-    seg_len, gidx, gwts.
-    """
-    d = len(shape)
-    K = 2 ** d
-    cl = [list(map(float, c)) for c in coords]
-    n_ax = [len(c) for c in cl]
-    strides = [1] * d
-    for a in range(d - 2, -1, -1):
-        strides[a] = strides[a + 1] * shape[a + 1]
-    corners = [[(c >> (d - 1 - a)) & 1 for a in range(d)] for c in range(K)]
-    psi_l = psi_flat.tolist()
-    g_l = [row.tolist() for row in gflat]
-    contact = contact_flat.tolist()
-
-    def cell(P, dirv):
-        idx = [0] * d
-        t = [0.0] * d
-        for a in range(d):
-            c = cl[a]
-            k = bisect.bisect_right(c, P[a]) - 1
-            if dirv is not None and k > 0 and P[a] == c[k] and dirv[a] < 0.0:
-                k -= 1
-            k = min(max(k, 0), n_ax[a] - 2)
-            idx[a] = k
-            v = (P[a] - c[k]) / (c[k + 1] - c[k])
-            t[a] = min(max(v, 0.0), 1.0)
-        return idx, t
-
-    def stencil(idx, t):
-        nodes = [0] * K
-        w = [0.0] * K
-        for ci in range(K):
-            bits = corners[ci]
-            flat = 0
-            wi = 1.0
-            for a in range(d):
-                flat += (idx[a] + bits[a]) * strides[a]
-                wi *= t[a] if bits[a] else 1.0 - t[a]
-            nodes[ci] = flat
-            w[ci] = wi
-        return nodes, w
-
-    def interp(nodes, w, vals):
-        acc = 0.0
-        for ci in range(K):
-            acc += w[ci] * vals[nodes[ci]]
-        return acc
-
-    starts, offset, sidx, swts, seg_len, gidx, gwts = [], [0], [], [], [], [], []
-    for s in cand.tolist():
-        m = []
-        rem = s
-        for a in range(d):
-            m.append(rem // strides[a])
-            rem -= m[a] * strides[a]
-        P = [cl[a][m[a]] for a in range(d)]
-        psi_s = psi_l[s]
-        pn = [[s] * K]
-        pw = [[1.0] + [0.0] * (K - 1)]
-        pl = []
-        reached = False
-        best = psi_s
-        stall = 0
-        length = 0.0
-        len_cap = margin * Eg_eV / screen_Vcm          # cm
-        for _step in range(max_steps):
-            idx, t = cell(P, None)
-            nodes, w = stencil(idx, t)
-            g = [interp(nodes, w, g_l[a]) for a in range(d)]
-            acc = 0.0
-            for a in range(d):
-                acc += g[a] * g[a]
-            gn = math.sqrt(acc)
-            if gn == 0.0:
-                break
-            dirv = [g[a] / gn for a in range(d)]
-            for a in range(d):
-                if ((P[a] <= cl[a][0] and dirv[a] < 0.0)
-                        or (P[a] >= cl[a][-1] and dirv[a] > 0.0)):
-                    dirv[a] = 0.0
-            acc = 0.0
-            for a in range(d):
-                acc += dirv[a] * dirv[a]
-            nrm = math.sqrt(acc)
-            if nrm == 0.0:
-                break
-            dirv = [dirv[a] / nrm for a in range(d)]
-            idx, t = cell(P, dirv)
-            ds = cl[0][idx[0] + 1] - cl[0][idx[0]]
-            for a in range(1, d):
-                ds = min(ds, cl[a][idx[a] + 1] - cl[a][idx[a]])
-            ds = 0.5 * ds
-            lim_axis, lim_face = -1, 0.0
-            for a in range(d):
-                if dirv[a] > 0.0:
-                    face = cl[a][idx[a] + 1]
-                elif dirv[a] < 0.0:
-                    face = cl[a][idx[a]]
-                else:
-                    continue
-                da = (face - P[a]) / dirv[a]
-                if da < ds:
-                    ds, lim_axis, lim_face = da, a, face
-            if not ds > 1e-12 * hmin_all:
-                break
-            Pn = [P[a] + ds * dirv[a] for a in range(d)]
-            if lim_axis >= 0:
-                Pn[lim_axis] = lim_face
-            for a in range(d):
-                if dirv[a] > 0.0:
-                    face = cl[a][idx[a] + 1]
-                elif dirv[a] < 0.0:
-                    face = cl[a][idx[a]]
-                else:
-                    continue
-                w_cell = cl[a][idx[a] + 1] - cl[a][idx[a]]
-                if abs(Pn[a] - face) <= 1e-9 * w_cell:
-                    Pn[a] = face
-            if any(Pn[a] < cl[a][0] or Pn[a] > cl[a][-1] for a in range(d)):
-                break
-            idx_n, t_n = cell(Pn, dirv)
-            nodes, w = stencil(idx_n, t_n)
-            if any(w[ci] > 0.0 and contact[nodes[ci]] for ci in range(K)):
-                break
-            pn.append(nodes)
-            pw.append(w)
-            pl.append(ds * 1e-2)                      # cm -> m
-            length += ds
-            psi_here = interp(nodes, w, psi_l)
-            if len(pn) == 2 and VT * (psi_here - psi_s) / ds < screen_Vcm:
-                break                                 # first-segment screen
-            raw = VT * (psi_here - psi_s) / Eg_eV
-            if raw >= 1.0:
-                reached = True
-            if raw >= margin:
-                break
-            if psi_here > best:
-                best = psi_here
-                stall = 0
-            else:
-                stall += 1
-                if stall >= NO_PROGRESS_STEPS:
-                    break
-            if length > len_cap:
-                break
-            P = Pn
-        if not reached or len(pn) < 2:
-            continue
-        L0 = pl[0]
-        starts.append(s)
-        for nodes, w in zip(pn, pw):
-            sidx.extend(nodes)
-            swts.extend(w)
-        seg_len.extend(pl)
-        seg_len.append(0.0)
-        offset.append(offset[-1] + len(pn))
-        gidx.append(s)
-        gidx.extend(pn[1])
-        gwts.append(-1.0 / L0)
-        gwts.extend(wi / L0 for wi in pw[1])
-    return starts, offset, sidx, swts, seg_len, gidx, gwts

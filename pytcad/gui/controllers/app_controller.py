@@ -1850,6 +1850,52 @@ class AppController(QObject):
         curve's legend label."""
         return self._comparison_label
 
+    @Property("QVariant", notify=comparisonChanged)
+    def comparisonDiffMetrics(self):
+        """Numeric summary of a swept comparison: per-channel max/RMS
+        absolute and relative error between the primary store and
+        self._comparison_store, at every voltage point BOTH converged.
+        Complements the dashed visual overlay _draw_series already
+        draws (mpl_canvas_item.py) -- a user can see HOW MUCH the two
+        results disagree, not just eyeball a plotted line. Works for
+        either comparison kind (M9 models-off or v0.6 Phase 2d
+        backend), since both populate the same _comparison_store shape.
+
+        None whenever there is nothing to compare, either store lacks
+        a sweep, or the two swept the same contact at different
+        voltage points (refuses rather than silently misaligning)."""
+        if self._comparison_store is None or self._store is None:
+            return None
+        try:
+            primary = (self._store.sweep_result()
+                       if self._store.has_sweep() else None)
+            comp = (self._comparison_store.sweep_result()
+                    if self._comparison_store.has_sweep() else None)
+        except Exception:
+            return None
+        if primary is None or comp is None:
+            return None
+        if not np.array_equal(primary.voltages, comp.voltages):
+            return None
+        mask = primary.converged & comp.converged
+        if not mask.any():
+            return None
+        rows = []
+        for name in sorted(set(primary.channels) & set(comp.channels)):
+            a = np.asarray(primary.channels[name], dtype=float)[mask]
+            b = np.asarray(comp.channels[name], dtype=float)[mask]
+            diff = np.abs(a - b)
+            rel = diff / np.maximum(np.abs(a), 1e-300)
+            rows.append({
+                "channel": name,
+                "maxAbs": float(diff.max()),
+                "rmsAbs": float(np.sqrt(np.mean(diff ** 2))),
+                "maxRel": float(rel.max()),
+                "nCompared": int(mask.sum()),
+                "unit": primary.unit,
+            })
+        return rows
+
     @Slot()
     def runModelComparison(self):
         """Re-solve the last-run device with EVERY catalog model

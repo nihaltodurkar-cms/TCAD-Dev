@@ -1,35 +1,27 @@
-"""Optional compiled-kernel dispatch.
+"""Compiled-kernel dispatch. The C++ engine (`pytcad._core`) is
+REQUIRED as of 2026-09-16 -- there is no pure-Python fallback path.
+Every kernel that used to carry a `_<name>_py` oracle body now calls
+straight into `_core`; `require_accel()` below is the single place that
+raises a clear, actionable error if the extension is not built.
 
-The C++ engine (`pytcad._core`) is ALWAYS optional.  Every accelerated
-function keeps its pure-Python body -- renamed `_<name>_py` -- and this
-module decides which one runs.  Two things depend on that being true:
+Build it with:
+  cmake -S core -B build/dev -G Ninja -DTCAD_INPLACE_OUTPUT=ON \\
+        -DPython_EXECUTABLE=<path to this interpreter>
+  cmake --build build/dev
+See core/CMakeLists.txt's header comment if the machine has no C++
+compiler in the SAME env Python runs in (put the compiler in a
+separate conda env and point CMAKE_CXX_COMPILER/CMAKE_AR/CMAKE_RANLIB
+at it -- installing a compiler directly into the Python env has
+broken PySide6 here once, via a transitive dependency channel switch).
 
-  * A checkout with no compiler, no CMake and no `_core.so` must pass the
-    full test suite.  That is the migration's undo button: at every
-    commit, deleting the extension returns the project to a state whose
-    behavior is already gated by ~30k lines of existing tests.
-
-  * The Python body is the ORACLE.  `tests/test_accel_parity.py` runs
-    both paths over the same fixtures and asserts `np.array_equal`, so
-    the reference has to still be there, and still be reachable, to
-    compare against.  A "port" that deletes what it replaced cannot be
-    checked.
-
-Control with the PYTCAD_ACCEL environment variable:
-
-    auto  (default)  use _core when importable, else Python
-    0                force the Python path even if _core is present
-    1                require _core; raise at first use if unavailable
-
-This module must never raise at import time.  `pytcad/__init__.py`
-imports its submodules eagerly, so anything that can fail here fails
-`import pytcad` itself -- which is precisely the failure mode the
-soft-import exists to prevent.  No library probing, no version checks,
-no module-scope warnings.
+This module must never raise at import time -- only inside
+`require_accel()`, called lazily by each kernel wrapper.
+`pytcad/__init__.py` imports its submodules eagerly, so anything that
+can fail at IMPORT time here fails `import pytcad` itself.
 """
 import os
 
-__all__ = ["HAVE_ACCEL", "use_accel", "core", "status", "have_petsc",
+__all__ = ["HAVE_ACCEL", "require_accel", "core", "status", "have_petsc",
            "as_csr_index", "as_field"]
 
 try:
@@ -41,61 +33,52 @@ HAVE_ACCEL = _core_mod is not None
 
 core = _core_mod
 
+_BUILD_HELP = (
+    "pytcad requires the compiled extension pytcad._core, which is not "
+    "importable. Build it with:\n"
+    "  cmake -S core -B build/dev -G Ninja -DTCAD_INPLACE_OUTPUT=ON\n"
+    "  cmake --build build/dev\n"
+    "(point CMAKE_CXX_COMPILER/CMAKE_AR/CMAKE_RANLIB at a separate "
+    "conda env's compiler if this one has none -- see "
+    "core/CMakeLists.txt).")
 
-def _mode():
-    raw = os.environ.get("PYTCAD_ACCEL", "auto").strip().lower()
-    return raw if raw in ("auto", "0", "1") else "auto"
 
-
-def use_accel():
-    """True if compiled kernels should be used for this call.
-
-    Read per call, not cached, so a test can flip PYTCAD_ACCEL with
-    monkeypatch.setenv and exercise both paths in one process -- which is
-    what makes the parity tests cheap enough to run every time.
-    """
-    mode = _mode()
-    if mode == "0":
-        return False
-    if mode == "1":
-        if not HAVE_ACCEL:
-            raise ImportError(
-                "PYTCAD_ACCEL=1 requires the compiled extension "
-                "pytcad._core, which is not importable.  Build it with:\n"
-                "  cmake -S core -B build/dev -G Ninja "
-                "-DTCAD_INPLACE_OUTPUT=ON\n"
-                "  cmake --build build/dev\n"
-                "or unset PYTCAD_ACCEL to fall back to the Python path.")
-        return True
-    return HAVE_ACCEL
+def require_accel():
+    """Raise ImportError with actionable build instructions if `_core`
+    is not importable; no-op otherwise. Every accelerated kernel
+    wrapper calls this before `_accel.core.<kernel>(...)`."""
+    if not HAVE_ACCEL:
+        raise ImportError(_BUILD_HELP)
 
 
 def have_petsc():
-    """True if the COMPILED PETSc solver backend is available and enabled.
-
-    Three independent things have to hold, and each fails softly (M31
-    P3b): the extension exists, it was compiled against PETSc (CMake's
-    TCAD_WITH_PETSC found it -- the existing pip-only CI job builds
-    without), and PYTCAD_ACCEL has not forced the Python path.  A False
-    here is never an error: linsolve.solve_linear(method="petsc") then
-    runs the petsc4py backend instead, which is the P3a reference and
-    stays the oracle the compiled path is diffed against.
+    """True if the COMPILED PETSc solver backend is available AND
+    selected. Two independent things have to hold: the extension was
+    compiled against PETSc (CMake's TCAD_WITH_PETSC found it -- the
+    pip-only CI job builds without), and PYTCAD_ACCEL has not forced
+    the petsc4py path. A False here is never a hard error by itself:
+    linsolve.solve_linear(method="petsc") then runs the petsc4py
+    backend instead -- a real, independent second implementation
+    (M43 phase 4 left this selector alone: unlike the kernels that
+    used to fall back to a pure-Python reference for lack of a
+    compiler, petsc4py is never a stand-in, and stays selectable this
+    way on purpose).
 
     getattr, not a bare attribute: an extension built before P3b has no
     petsc_available, and a stale .so must degrade rather than crash.
     """
     if not HAVE_ACCEL:
         return False
-    probe = getattr(_core_mod, "petsc_available", None)
-    if probe is None or not probe():
+    if os.environ.get("PYTCAD_ACCEL", "").strip() == "0":
         return False
-    return use_accel()
+    probe = getattr(_core_mod, "petsc_available", None)
+    return bool(probe is not None and probe())
 
 
 def status():
     """A one-line human-readable summary, for test output and bug reports."""
     if not HAVE_ACCEL:
-        return "pytcad._core: not built (pure-Python reference path)"
+        return "pytcad._core: not built (accelerated kernels unavailable)"
     petsc = getattr(_core_mod, "petsc_available", None)
     if petsc is not None and petsc():
         # The index width is worth printing: conda-forge's default PETSc
@@ -106,8 +89,7 @@ def status():
     else:
         where = "petsc=no"
     return (f"pytcad._core: {_core_mod.__version__}, "
-            f"threads={_core_mod.thread_count()}, {where}, "
-            f"PYTCAD_ACCEL={_mode()}")
+            f"threads={_core_mod.thread_count()}, {where}")
 
 
 # ----------------------------------------------------------------------

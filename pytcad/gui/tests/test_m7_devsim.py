@@ -587,6 +587,46 @@ def test_backend_comparison_produces_a_distinct_backend_overlay():
     assert ctl.currentStore().run_record().backend == "pytcad"
 
 
+def test_backend_comparison_diff_metrics_report_real_numbers():
+    """ARCHITECTURE.md sec 7 audit (2026-09-16): the dashed overlay
+    alone never told a user HOW MUCH the two backends disagreed, only
+    "here is a second dashed line, eyeball it". comparisonDiffMetrics
+    is the numeric complement -- per-channel max/RMS absolute and
+    relative error, computed only at voltage points BOTH backends
+    converged. Cross-engine current agrees only to a constant ~2x
+    factor (CLAUDE.md's own devsim gotcha), so this asserts the metric
+    pipeline produces real, finite, correctly-shaped numbers -- not a
+    tight physical tolerance between the two engines' own values."""
+    from gui.controllers.app_controller import AppController
+    gapp = _gapp()
+    ctl = AppController()
+    ctl.spec = _diode_1d_spec_2c()
+    ctl.setSweepConfig("left", 0.0, 0.2, 0.1)
+    _run_and_wait(ctl, gapp)
+    assert ctl.hasResult, ctl.status
+
+    # no comparison yet -> None, not an empty list or a crash
+    assert ctl.comparisonDiffMetrics is None
+
+    done = []
+    ctl.comparisonChanged.connect(lambda: done.append(1))
+    ctl.runBackendComparison()
+    t0 = __import__("time").time()
+    while not done and __import__("time").time() - t0 < 120:
+        gapp.processEvents(); __import__("time").sleep(0.02)
+
+    metrics = ctl.comparisonDiffMetrics
+    assert metrics, "expected at least one channel's diff metrics"
+    row = metrics[0]
+    assert set(row) == {"channel", "maxAbs", "rmsAbs", "maxRel", "nCompared", "unit"}
+    assert row["nCompared"] >= 1
+    assert row["maxAbs"] >= 0.0 and np.isfinite(row["maxAbs"])
+    assert row["rmsAbs"] >= 0.0 and np.isfinite(row["rmsAbs"])
+    assert row["maxAbs"] >= row["rmsAbs"] - 1e-30, \
+        "max absolute error must be >= RMS absolute error"
+    assert row["unit"] == ctl.currentStore().sweep_result().unit
+
+
 def test_backend_comparison_refuses_without_a_prior_run():
     from gui.controllers.app_controller import AppController
     _gapp()
