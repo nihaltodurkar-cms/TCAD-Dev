@@ -467,7 +467,7 @@ NotImplementedError sites, not inferred from filenames):
   Impact ionization, nonlocal       Y     Y     Y    --
   BTBT, local Kane / nonlocal       Y     Y     Y    --
   Trap-assisted tunneling           Y     Y     Y    --
-  Density gradient / quantum        Y     -     -    M42
+  Density gradient / quantum        Y     S1    -    M42
   Self-heating (lattice T)          Y     -     -    M43
   Hydrodynamic / energy balance     Y*    -     -    M44
   Transient / small-signal AC       Y     Y     -    M45
@@ -503,9 +503,26 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        M16-S2 (local Kane BTBT -> structured 2D/3D, pytcad/
        btbt_grid.py) landed the same week, closing 4d.1's other
        remaining local/nonlocal-BTBT inversion (see M16 above).
-  M42  Density gradient / quantum -> 2D/3D    [L]   NOT STARTED
-       Prerequisite for any credible FinFET/GAA confinement claim.
-       Depends: M31 P5 (stopped -- re-scope).
+  M42  Density gradient / quantum -> 2D/3D    [L]   S1 LANDED 2026-09-17,
+       S2/S3/S4 NOT STARTED. Prerequisite for any credible FinFET/GAA
+       confinement claim -- S1 alone does NOT satisfy that: it is
+       Device2D, OHMIC CONTACTS ONLY, any GateBC refused loudly (the
+       plan's own S2, the Lambda boundary condition at a gate/oxide
+       interface, is an open physics question S1 deliberately does not
+       answer -- M42-DENSITY-GRADIENT-2D3D-PLAN.md section 0.2). Ported
+       Device1D's coupled-Newton (psi, Lambda_n, Lambda_p) equilibrium
+       formulation one dimension up, reusing Device2D's own box-
+       integration flux-divergence pattern (harmonic-mean edges, per-
+       node control volumes) for the Lambda Laplacian instead of a bare
+       finite-difference stencil -- reduces EXACTLY to Device1D's own
+       formula in the 1D limit (a transversely-uniform 2D device
+       matches Device1D to floating-point noise: max|dpsi|=1.8e-15).
+       10 gates in tests/test_m42_s1_density_gradient_2d.py, all green;
+       all six m13 golden md5s unchanged (dg=False path untouched).
+       Depends: M31 P5 (stopped -- re-scope) turned out NOT to be
+       load-bearing, same correction the plan's own section 0.1 already
+       made -- this landed as a pure-Python/numpy assembly job with no
+       C++ involvement.
   M43  Self-heating -> 2D/3D                  [L]   PHASES 1+2+3 (2D, 3D,
        C++ ACCEL) LANDED 2026-09-16.
        thermal.py's structured assembly has the one non-vectorized
@@ -586,7 +603,16 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        and 3D, mixing all 3 BC kinds at one corner) plus two full
        end-to-end solve_electrothermal_{2,3}d runs (ACCEL=0 vs 1,
        comparing the converged T after the whole outer Gummel loop),
-       tests/test_m43_thermal_grid_accel_parity.py, 4/4 green. Only the
+       tests/test_m43_thermal_grid_accel_parity.py, 4/4 green. **Stale
+       as a description of the test file's CURRENT form, corrected
+       2026-09-17**: M43 phase 4 (same day, later in this same entry
+       below) removed the pure-Python oracle this ACCEL=0-vs-1 parity
+       check compared against -- the test file's own docstring now
+       says it checks reproducibility (same input twice, bit-identical
+       output) on the sole remaining compiled path, not cross-path
+       parity. Left in place as the historical record of what phase 3
+       itself verified at landing time, not edited to pretend it always
+       read this way. Only the
        per-iteration assembly is compiled -- both Newton loops and the
        outer Gummel loop stay in Python, matching diffuse_numeric's own
        precedent of dispatching the repeated inner operation only. No
@@ -632,10 +658,10 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        suite's slowest part. Depends on/overlaps M31 P4 (landed) and
        M35 (its own track). Needs a proper plan doc before any code.
 
-ORDERING: M41[S](done) -> M43[L](done) -> M42[L](next) -> M46[L] -> M45[XL]
--> M44[XL], with M35 (3D process) and M47 (engine completion, last
-deliberately -- more to learn by landing a few of M41-M46 first) as
-separate tracks.
+ORDERING: M41[S](done) -> M43[L](done) -> M42[L](S1 done, S2 next) ->
+M46[L] -> M45[XL] -> M44[XL], with M35 (3D process) and M47 (engine
+completion, last deliberately -- more to learn by landing a few of
+M41-M46 first) as separate tracks.
 
 ------------------------------------------------------------------------
 6. COMPETITIVE STRATEGY -- BEATING SENTAURUS/ATLAS, NOT JUST MATCHING
@@ -891,12 +917,21 @@ no Sentaurus licence needed):
 ------------------------------------------------------------------------
 8. NEXT SESSION QUEUE
 ------------------------------------------------------------------------
-Live front of the queue: M43 (self-heating -> 2D/3D) is next on the
-dimensional-lift track (5.3); M51 (interactive 1D/2D geometry/mesh
-viewer, see section 7) is a newly identified, independent GUI item
-that can proceed in parallel. M35 (3D process) and M47 (3D engine
-completion) remain the two largest unscoped items. See `history.md`
-for session-by-session detail and open handoff notes.
+Live front of the queue, updated 2026-09-17: M43 (self-heating -> 2D/3D,
+all 3 phases) and M51/M52/the ParaView export item (section 7) have
+since LANDED -- this paragraph is left dated so a reader can see what
+changed rather than silently rewriting history. M42-S1 (density-gradient
+-> Device2D, ohmic contacts only) LANDED 2026-09-17; the front of the
+dimensional-lift track (5.3) is now **M42-S2** (the GateBC Lambda
+boundary condition -- an open physics question, not an implementation
+task; M42-DENSITY-GRADIENT-2D3D-PLAN.md section 0.2/8 says to decide
+whether it is answerable before starting it). M35 (3D process) and M47
+(3D engine completion) remain the two largest unscoped items. See
+`history.md` for session-by-session detail and open handoff notes --
+note `history.md` itself has NOT been updated with entries for M43,
+M51, M52, or the ParaView export item as of this writing (verified by
+grep 2026-09-17); those milestones' only in-tree record is this file
+and their own plan docs.
 
 Standing rules: every slice ships suite-green with pre-existing tests
 unchanged; adversarial probe pass before each commit; optional deps

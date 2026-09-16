@@ -130,31 +130,49 @@ tests/           analytic-limit validation + published-value physics
 
 ---
 
-## 0. The optional C++ engine (M31)
+## 0. The C++ engine (M31) -- REQUIRED as of M43 phase 4 (2026-09-16)
 
-As of 2026-09-09 the numerically intensive layer is being extracted into
-a C++ engine under `pytcad/core/`, exposed as the single extension module
-`pytcad._core`. **It is optional at every step.** `pytcad/_accel.py`
-soft-imports it and falls back to the pure-Python path, which stays the
-*reference implementation* -- every ported function keeps its Python body
-as `_<name>_py`, and the compiled path is gated against it with
-`np.array_equal`, not a tolerance. Deleting the built `.so` must leave
-the whole test suite green.
+The numerically intensive layer was extracted into a C++ engine under
+`pytcad/core/`, exposed as the single extension module `pytcad._core`.
+Through M43 phase 3 this was *optional* -- `pytcad/_accel.py` soft-imported
+it and fell back to a pure-Python reference body per kernel. **As of M43
+phase 4, that fallback was removed at the user's explicit request**: the
+pure-Python bodies for the mesh-geometry kernels (P2), the process/
+adaptivity kernels (P4), the M34-S4 nonlocal path tracer, and the M43
+thermal-grid assembly no longer exist -- `pytcad._accel.require_accel()`
+raises a clear `ImportError` naming the build command below if `_core` is
+not importable when one of those functions is called. `import pytcad`
+itself still never fails without the extension, but calling
+`process.diffuse_numeric`, `ted.diffuse_with_defects`,
+`adapt_unstructured.indicator_*_tri`/`debye_ratio_tri`,
+`unstructured_assembly{,3d}.build_*`, `nonlocal_path.build_structured`, or
+`thermal_grid._residual_jacobian_grid` now requires it. The ONE exception:
+`linsolve.py`'s petsc4py backend (`method="petsc"` when `_core` was built
+without PETSc, or is absent) is a real, independent second implementation,
+not a pure-Python stand-in, and was left untouched.
 
 ```bash
-# optional: build it (nothing is installed; the .so lands in pytcad/)
+# in-place dev build (nothing installed; the .so lands in pytcad/)
 cmake -S core -B build/dev -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DTCAD_INPLACE_OUTPUT=ON
 cmake --build build/dev
 python -c "from pytcad import _accel; print(_accel.status())"
 ```
 
-`PYTCAD_ACCEL=auto|0|1` selects the path (`auto` = use it if present).
+**`PYTCAD_ACCEL` is now read ONLY by `linsolve.py`'s PETSc backend
+selection** (`0` forces the petsc4py path, `1`/unset selects the compiled
+PETSc path when `_core` was built with it) -- it no longer affects any
+other kernel, and there is no pure-Python mode left to select for the
+kernels named above; `1` (or leaving it unset) is the default. The
+"run both ways, `PYTCAD_ACCEL=0` and `=1`" test-suite convention this
+section used to prescribe is retired: a no-extension run can no longer
+pass the suite.
 `PYTCAD_NUM_THREADS` defaults to **1**, deliberately: parallel
 floating-point reductions are not reproducible, and this project gates
 on bit-identity.
 
-What it buys so far, measured rather than asserted. First the
+What it bought before the fallback was removed, measured rather than
+asserted (kept here as the historical record of the migration). First the
 unstructured mesh geometry precompute (M31 P2), which was the hard
 blocker for large 3D:
 

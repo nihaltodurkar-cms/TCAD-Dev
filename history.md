@@ -2101,3 +2101,99 @@ Space") to the real app.
   radius actually render. DESIGN.md carries the same record as its own
   "v3.1 Deep Space pass" note. Nothing committed; scratch launcher/test
   files cleaned up, none left in the tree.
+
+## 2026-09-17 -- M42-S1 LANDED (density-gradient quantum correction,
+Device2D, ohmic contacts only) -- uncommitted
+
+Full record: `M42-DENSITY-GRADIENT-2D3D-PLAN.md` section 9. User
+instruction "Implement M42" was the sign-off, scoped to S1 per the
+plan's own "ask for sign-off on S1 only" recommendation -- S2 (the
+GateBC Lambda boundary condition) is a genuine open physics question,
+not an implementation task, and stays unscoped.
+
+Ported Device1D's coupled-Newton (psi, Lambda_n, Lambda_p) equilibrium
+DG formulation to Device2D, reusing the SAME box-integration flux-
+divergence pattern `_residual_jacobian_poisson` already uses for psi
+(harmonic-mean edges, physical-not-LD-scaled control volumes for the
+Lambda Laplacian, since Lambda is a physical-volts quantity). Reduces
+EXACTLY to Device1D in the 1D limit -- a transversely-uniform 2D device
+matches Device1D to floating-point noise (max|dpsi|=1.8e-15), which is
+what makes the reduction gate a real one rather than a tolerance. Λ=0
+is pinned only at actual DirichletBC (ohmic contact) nodes; every other
+boundary gets the natural zero-flux Neumann condition for free, the
+same "missing face" convention the Poisson row already relies on.
+GateBC devices refuse loudly (`NotImplementedError` naming S2).
+
+A real bug found before any gate ran: at gamma=0 (continuation's first
+stage) the DG prefactor is exactly zero everywhere, and a plain
+harmonic mean of two zeros is `0/0` -> NaN, not the physically correct
+"no coupling" answer -- fixed with a guarded harmonic mean.
+
+10 gates, all green (`tests/test_m42_s1_density_gradient_2d.py`):
+FD-Jacobian (worst 1.07e-6 vs the house 5e-5 tolerance), dg=False
+bit-identity, the reduction identity above, GateBC refusal, the three
+refused compositions (dg+fd/incomplete_ion/affinity, matching Device1D
+exactly), convergence+determinism, and two extra sanity checks (DG
+measurably moves the solution and grows with gamma; solve_bias refuses
+dg=True). All six `tests/goldens/m13/*.npz` md5s unchanged (this
+checkout had no goldens at all -- gitignored, never tracked, per
+CLAUDE.md's documented state -- regenerated first and confirmed
+byte-identical to every prior session's recorded md5, which is strong
+evidence this checkout's solver state genuinely matches the documented
+baseline).
+
+**One real regression found and fixed by the full-suite run, not by
+S1's own gates**: `Device2D(unstructured=True)` never set `self.dg`
+(its `__init__` returns early, before the new attribute assignment),
+and `solve_bias` now reads `self.dg` unconditionally at its top --
+`AttributeError` on every unstructured-path `solve_bias` call. Fixed by
+adding `dg` to `_init_unstructured`'s existing unsupported-flags dict
+(S1 is structured-only) and setting `self.dg = False` there. A second,
+pre-existing test (`test_m20_dg.py`'s refusal test) asserted Device2D
+refuses `dg=True` at construction -- rewritten to assert it now SOLVES,
+matching the M34-S6/M41 precedent for updating a refusal test a port
+intentionally removes.
+
+**A pre-existing, unrelated environment gap found while verifying the
+full suite, NOT caused by this change** (confirmed via `git stash`: all
+10 fail identically with or without M42's edit): `test_m43_thermal2d.py`/
+`test_m43_thermal3d.py`/`test_m43_thermal_grid_accel_parity.py` (10
+tests) fail with `AttributeError: module 'pytcad._core' has no
+attribute 'thermal_grid_residual_jacobian'`. Verified directly (not
+assumed): `strings`/`nm` on this checkout's compiled
+`pytcad/_core*.so` show M34's nonlocal-tracer symbols but NO thermal
+symbols at all -- `core/src/thermal/grid.cpp` (added by M43 phase 3,
+CLAUDE.md's own "What is compiled so far" list) was never actually
+compiled into this checkout's `.so`, and there is no `build/` directory
+here to rebuild from. Per CLAUDE.md's M43-phase-4 change (pure-Python
+fallback removed for this exact function), there is nothing left to
+fall back to. This is a stale build artifact on this machine, not a
+code defect -- out of scope for M42, left unfixed, recorded here so it
+is not re-discovered as a fresh mystery.
+
+Suite: `PYTCAD_ACCEL=1` fast suite (`tests/ gui/tests/ -n 6 -m "not
+slow"`), both before and after the two fixes above: only the 10
+pre-existing M43 failures, everything else green -- 1809 passed / 5
+skipped / 1 xfailed / 39 warnings (+2 over the pre-M42 baseline: the
+rewritten M20 test, the newly-passing M21 unstructured-wrapper test).
+Per explicit user instruction, a second full `PYTCAD_ACCEL=0` pass was
+NOT run; a targeted subset (the M42/M20/M21-phase3/M13-goldens/
+M13-solver/model-benchmark files) was run instead.
+
+**Also this session, unrelated to M42 itself but done at the user's
+explicit request**: `README.md` and `pytcad/README.md`'s "optional C++
+engine (M31)" sections were stale -- they still described the
+pre-M43-phase-4 "optional at every step, PYTCAD_ACCEL=auto|0|1" state
+CLAUDE.md itself had already been updated away from. Both rewritten to
+match CLAUDE.md's current description (extension REQUIRED for the
+named kernel set; `PYTCAD_ACCEL` now read only by `linsolve.py`'s PETSc
+backend selection; the historical Python-vs-C++ throughput tables kept
+as a labeled historical record, not current guidance). `ARCHITECTURE.md`'s
+NEXT SESSION QUEUE paragraph was also stale (still named M43 as "next"
+and never mentioned M51/M52/the ParaView export item, all landed
+2026-09-16 per that file's own section 7/5.3) -- updated to point at
+M42-S2 as the actual front of the dimensional-lift queue, and flagged
+explicitly that `history.md` itself carries NO entries for M43/M51/M52/
+ParaView (confirmed by grep) -- those milestones' only in-tree record
+remains `ARCHITECTURE.md` and their own plan docs. Working tree is
+UNCOMMITTED; nothing pushed.

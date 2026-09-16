@@ -1,6 +1,10 @@
 # M42 — Density-gradient quantum correction in structured Device2D/Device3D
 
-Written 2026-09-12. **Plan only — not implemented, not signed off.**
+Written 2026-09-12. **S1 (Device2D, ohmic contacts only) LANDED
+2026-09-17 -- see section 9 for results.** S2 (the GateBC Lambda
+boundary condition), S3 (Device3D) and S4 (FinFET demonstration) remain
+NOT STARTED -- see section 9's own honest-limits note before assuming
+otherwise.
 
 `ARCHITECTURE.md` 4d.3 sizes M42 [L] and justifies it as *"the
 prerequisite for any credible FinFET/GAA claim, where confinement is
@@ -260,3 +264,159 @@ before starting it** → S2 with G-CONF → S3 → S4.
 The decision point after S1 is real, not ceremonial: §0.2 is a genuine
 open physics question, and the honest thing is to look at it with S1's
 machinery in hand rather than commit to an answer now.
+
+## 9. S1 results (landed 2026-09-17)
+
+Landed as scoped in §2: **Device2D, ohmic (DirichletBC) contacts only,
+any GateBC refused loudly.** No frozen-core edit to Device3D,
+`unstructured_dd.py`/`unstructured_dd3d.py`, or `device.py`. Sign-off:
+the user's explicit instruction ("Implement M42"), scoped to S1 per
+this plan's own §2 recommendation ("S1 is the sign-off gate for the
+whole milestone... ask for sign-off on S1 only").
+
+### Golden baseline (reconstruct-and-compare, step 1 of 4)
+
+`tests/goldens/m13/` did not exist in this checkout (gitignored, never
+tracked -- CLAUDE.md's own documented state). Regenerated via
+`PYTCAD_REGEN_M13_GOLDENS=1`, with `frozen_meshes.npz` reconstructed
+from the documented `graded_mesh()`/`np.linspace()` recipe recorded in
+`M31-P5-1-SOLVER-SELECTION-PLAN.md`'s own Phase B record. All six
+regenerated files came back **byte-identical** to every prior session's
+recorded md5s (the strongest evidence this checkout's solver state
+genuinely matches the documented baseline, not just a fresh guess):
+
+```
+f78dd28dbd24b39f6995e423d59e24cc  diode1d_eq.npz
+36662794eb2f849ac6263f23921ebb86  diode1d_fwd.npz
+f31b42c7b4cded7d10ff0831d92f8174  diode2d_eq.npz
+ce5850ecaf56ee0db5e05be4d9b17a80  frozen_meshes.npz
+a2791e63f070ae749ae5bc11fde99ed1  hetero1d_eq.npz
+7b2e8ad51672c9fd66ec26b30d88446e  resistor3d_eq.npz
+```
+
+**Unchanged after the S1 edit** -- re-checked at every stage; the
+change touches only the `dg=True` path, so every default-`dg=False`
+golden moving would have been a defect, not a re-baseline.
+
+### The design decision this slice actually had to make
+
+§1's own table said the Λ Laplacian "becomes the box-integration
+Laplacian, same stencil the Poisson row already assembles" without
+fully deriving what that means. Worked out during implementation: the
+1D form (`device.py`'s `_dg_residual_jacobian_eq`, `c0 = 2/(hm+hp)`) is
+**already** exactly a box-integrated flux divergence divided by the
+node's own physical control-volume width -- not a separate discretization
+choice, the SAME finite-volume identity the Poisson row uses one line
+away. Generalizing to 2D is therefore mechanical: box-integrate the
+Λ-flux divergence with the SAME `Fx`/`Fy`/`div_x`/`div_y` scatter
+pattern `_residual_jacobian_poisson` already uses (harmonic-mean `pref`
+on edges in place of `et_x`/`et_y`), divide by the node's own physical
+control-volume area (`dVx_phys[i]*dVy_phys[j]`, from
+`mesh2d.control_volume_widths` applied to the PHYSICAL mesh spacing,
+not the LD-scaled one Poisson uses -- Λ is a physical-volts quantity
+and the DG prefactor carries physical cm², exactly mirroring
+Device1D's own use of `h_phys` rather than the scaled `h`). This
+reduces EXACTLY to Device1D's `c0*(...)` formula when `Ny=1`, which is
+what makes S1-G3 (the reduction gate) hold to floating-point noise
+rather than to a tolerance -- see the measurement below.
+
+**Λ boundary condition, decided per §2's own open item.** Λ_n=Λ_p=0 is
+pinned only at nodes carrying an actual `DirichletBC` (an ohmic
+contact) -- never at a bare domain edge with no BC object. Every other
+boundary node gets the natural zero-flux Neumann condition for free,
+via the SAME "missing face" convention `_residual_jacobian_poisson`
+already uses for ψ (a boundary row simply has one fewer edge to
+scatter into, not a special case). This is what makes the reduction
+identity exact: a transversely-uniform 2D device has no BC on its
+y-boundary rows, so they get natural Neumann there -- matching Device1D,
+which has no y-axis at all.
+
+### A real bug found and fixed before any gate ran
+
+The first version hit `RuntimeWarning: invalid value encountered in
+divide` and returned NaN densities. Cause: at `gamma=0` (the first
+stage of the continuation ladder), `pref_n`/`pref_p` are exactly zero
+everywhere, and the harmonic mean `2*lo*hi/(lo+hi)` used to
+edge-average `pref` is `0/0` there -- an indeterminate form, not a
+physically indeterminate quantity (zero prefactor correctly means zero
+coupling). Fixed with a guarded harmonic mean returning `0.0` when
+`lo+hi <= 0` instead of `nan`; confirmed the continuation ladder then
+converges cleanly at every stage.
+
+### Gates (`tests/test_m42_s1_density_gradient_2d.py`, 10/10 green)
+
+| gate | result |
+|---|---|
+| S1-G1 FD-Jacobian, full 3N coupled system, 90 random columns | worst relative error **1.07e-6** against the house 5e-5 tolerance |
+| S1-G2 `dg=False` bit-identity | `np.array_equal` on psi/n/p vs. the plain Poisson-only path; all six m13 goldens unchanged |
+| S1-G3 reduction to Device1D | max\|dpsi\|=1.8e-15, max\|dLambda_n\|=1.1e-17, max\|dLambda_p\|=1.2e-17, max relative \|dn\|=2.8e-17, max relative \|dp\|=8.7e-18 -- floating-point noise, not a tolerance |
+| S1-G4 GateBC refuses | `NotImplementedError` naming S2, as designed |
+| S1-G5 refused compositions | `dg+fd`, `dg+incomplete_ion`, `dg+band_offset="affinity"` all refuse, matching Device1D exactly |
+| S1-G6 convergence + determinism | no warning under `warnings.simplefilter("error")`; two independent solves of the same device give `np.array_equal` psi/Lambda_n/Lambda_p |
+| (extra) DG moves the solution | 0.13% peak-density shift at gamma=1 on a modest bulk pn junction (small and physically correct -- this is not a MOS inversion layer; the effect should be much larger under a gate, which is exactly S2's open question); the shift grows monotonically with gamma (0.5 → 1.0 → 2.0: \|Lambda_n\|\_max 0.0033 → 0.0064 → 0.0124 V) |
+| (extra) `solve_bias` refuses `dg=True` | matches Device1D's M20 scope (equilibrium-only) |
+
+### A real regression found and fixed by the full-suite run, not by S1's own gates
+
+`Device2D(unstructured=True)`'s `__init__` returns early, before the
+line that now sets `self.dg`; `solve_bias` reads `self.dg`
+unconditionally at its very top. Every unstructured-path test that
+reached `solve_bias` (`tests/test_m21_phase3.py::
+test_wrapper_bias_matches_direct_call`) failed with `AttributeError:
+'Device2D' object has no attribute 'dg'`. Fixed by adding `"dg"` to
+`_init_unstructured`'s existing `unsupported` dict (S1 is
+structured-only; `unstructured_dd.py` has no Λ mechanism to extend,
+same reasoning M33-S5 used for `unstructured_dd3d.py`'s heterojunction
+gap) and setting `self.dg = False` there. A second, pre-existing test
+(`test_m20_dg.py::test_ge_device2d_and_3d_refuse_dg`) asserted that
+Device2D refuses `dg=True` outright at construction -- now false by
+design, since S1 is exactly the port that makes it not refuse. Rewritten
+(and renamed `test_ge_device2d_solves_dg_device3d_still_refuses`) to
+assert Device2D now SOLVES under `dg=True` while Device3D (out of this
+slice's scope) still refuses, matching the M34-S6/M41 precedent for
+updating a refusal test a port intentionally removes.
+
+### Suite status
+
+Full fast suite (`PYTCAD_ACCEL=1`, both before and after the two fixes
+above): the only failures are 10 PRE-EXISTING, unrelated ones in
+`test_m43_thermal2d.py`/`test_m43_thermal3d.py`/
+`test_m43_thermal_grid_accel_parity.py` -- confirmed via `git stash`
+that all 10 fail identically with or without this change. Root cause,
+verified directly (not assumed): the compiled `pytcad/_core*.so` in
+this checkout is stale -- `strings`/`nm` on the binary show M34's
+nonlocal-tracer symbols but **no** `thermal_grid_residual_jacobian`
+symbol at all, meaning `core/src/thermal/grid.cpp` (added by M43 phase
+3) was never actually compiled into it, and there is no `build/`
+directory in this checkout to rebuild from. Per CLAUDE.md's M43-phase-4
+note, that function has **no pure-Python fallback left to fall back
+to** -- this is an environment gap (a stale build artifact), not a code
+defect, and out of scope for M42 to fix. `PYTCAD_ACCEL=1` fast-suite
+totals: 1809 passed / 5 skipped / 1 xfailed / 39 warnings (+2 over the
+pre-M42 baseline: the rewritten M20 test plus the newly-passing M21
+wrapper test). A targeted `PYTCAD_ACCEL=0` subset (the M42/M20/M21-
+phase3/M13-goldens/M13-solver/model-benchmark files) was run in place
+of a second full-suite pass, per explicit user instruction to avoid
+the ~30-minute full run twice.
+
+### Honest limits, confirmed rather than merely inherited from §6
+
+- **Equilibrium only**; `solve_bias` refuses `dg=True`, matching
+  Device1D's M20 scope exactly.
+- **Structured Device2D only.** Device3D (S3) and
+  `unstructured_dd.py`/`unstructured_dd3d.py` (never in scope, no Λ
+  mechanism to extend) are untouched.
+- **GateBC is refused, not implemented.** §0.2's open question --
+  "what is the Λ boundary condition at a GateBC node?" -- is genuinely
+  still open; S1 answers nothing about it, by design. The 0.13%
+  peak-density shift measured above is the ohmic-contact case only and
+  says nothing about confinement under a gate, which is the actual
+  FinFET/GAA justification for this milestone (§0.2 again).
+- **γ = 1.0 default, uncalibrated**, unchanged from M20 -- no retuning
+  was done or needed.
+- **No performance claim.** No `benchmarks/` row was added; none is
+  claimed.
+- **S2/S3/S4 remain exactly as unscoped as §7/§8 already said.** Landing
+  S1 does not by itself answer whether S2 is worth attempting -- that
+  decision (§8's own "decide S2 is answerable before starting it") is
+  still open and belongs to a future session.
