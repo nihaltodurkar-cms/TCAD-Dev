@@ -60,6 +60,7 @@ class MplCanvasItem(QQuickPaintedItem):
         self._transient = None         # result_store.TransientResult (M17 phase 3)
         self._ac = None                # result_store.ACResult (M18 Phase 4)
         self._contours = False         # v0.6 Phase 2a: contour overlay toggle
+        self._mesh_overlay = False     # M51: mesh-grid overlay toggle
         self._cut_orientation = "horizontal"   # v0.6 Phase 2b: line-cut mode
         self._cut_position_cm = 0.0
         self._comparison_label = "all models off"   # v0.6 Phase 2d default
@@ -71,6 +72,13 @@ class MplCanvasItem(QQuickPaintedItem):
         self._series = []
         self._readout = ""
         self._readout_unit = ""
+        # M51: hover state for 2D field maps (rectilinear axis arrays +
+        # the raw, un-log-transformed values grid) and for the Mesh
+        # mode's own axis arrays -- set by the draw paths that support
+        # them (_remember_grid/_draw_mesh), cleared per-render the same
+        # way self._series/_ax already are.
+        self._field_grid = None
+        self._mesh_axes_um = None
 
         # Performance pass (2026-09-04): pan()/zoom() fast path. cProfile
         # on _build_figure() showed tight_layout() alone is ~69% of a
@@ -104,9 +112,18 @@ class MplCanvasItem(QQuickPaintedItem):
     def hoverAt(self, x_px, y_px):
         """Map widget pixels -> data coords through the live Axes
         transform and snap to the nearest plotted sample.  Purely
-        derived from what was actually rendered -- never fake."""
+        derived from what was actually rendered -- never fake.
+
+        M51: dispatches on whatever hover state the current render
+        path populated -- 1D curve series (the original v0.4 behavior),
+        a 2D field-map grid (doping/bands/recombination), Structure
+        mode's regions, or Mesh mode's own axis arrays. Exactly one of
+        these is non-empty/non-None for any given render (each draw
+        path resets all of them first -- see _build_figure's own
+        comment), so the first matching branch is always the right one,
+        never a guess between two live data sources."""
         ax = self._ax
-        if ax is None or not self._series or self._fig is None:
+        if ax is None or self._fig is None:
             return
         # Qt's pointer origin is TOP-left; matplotlib's display space is
         # BOTTOM-left. Convert before inverting the data transform.
@@ -117,6 +134,36 @@ class MplCanvasItem(QQuickPaintedItem):
                 (float(x_px), fig_h_px - float(y_px)))
         except Exception:
             return
+        if self._series:
+            self._hover_series(dx, dy)
+            return
+        if self._field_grid is not None:
+            self._hover_field_grid(dx, dy)
+            return
+        if self._mode == "structure" and self._structure is not None:
+            self._hover_structure(dx, dy)
+            return
+        if self._mode == "mesh" and self._mesh_axes_um is not None:
+            self._hover_mesh(dx, dy)
+            return
+        if self._readout:
+            self._readout = ""
+            self.update()
+
+    def _set_readout(self, text):
+        text = text.rstrip()
+        if text != self._readout:
+            self._readout = text
+            self.update()
+        elif not text and self._readout:
+            self._readout = ""
+            self.update()
+
+    def _hover_series(self, dx, dy):
+        """1D curve modes (series/cv/transient/ac/convergence, and the
+        1D field-plot branch) -- unchanged v0.4 logic, split out of the
+        old monolithic hoverAt so the 2D/structure/mesh branches below
+        have their own methods instead of one growing dispatcher body."""
         best = None
         tiny = 1e-30
         for xs, ys, label in self._series:
@@ -136,15 +183,66 @@ class MplCanvasItem(QQuickPaintedItem):
             if best is None or score < best[0]:
                 best = (score, label, float(xs[idx]), float(ys[idx]))
         if best is None or best[0] > 0.08:
-            if self._readout:
-                self._readout = ""
-                self.update()
+            self._set_readout("")
             return
         _, label, xv, yv = best
-        text = f"{label}: {yv:.3e} @ {xv:.2f} {self._readout_unit}".rstrip()
-        if text != self._readout:
-            self._readout = text
-            self.update()
+        self._set_readout(f"{label}: {yv:.3e} @ {xv:.2f} {self._readout_unit}")
+
+    def _hover_field_grid(self, dx, dy):
+        """2D field-map modes (doping/bands/recombination, incl. the
+        pre-solve doping preview) -- snap to the nearest MESH node
+        (not the nearest pixel; a non-uniform mesh's cells are not
+        uniform pixels), same "snap to what was actually computed"
+        principle _hover_series already uses. Reports the field's RAW
+        (never log-transformed) value at that node -- the log toggle
+        only changes what the colormap/contours show, never what a
+        reader is told the physical value actually is."""
+        x, y, values, label, unit = self._field_grid
+        if dx < x.min() or dx > x.max() or dy < y.min() or dy > y.max():
+            self._set_readout("")
+            return
+        ix = int(np.argmin(np.abs(x - dx)))
+        iy = int(np.argmin(np.abs(y - dy)))
+        val = float(values[iy, ix])
+        self._set_readout(
+            f"{label}: {val:.3e} {unit} @ x={float(x[ix]):.2f}, "
+            f"y={float(y[iy]):.2f} um")
+
+    def _hover_structure(self, dx, dy):
+        """Structure mode -- which region (if any) the cursor is over,
+        reporting the same net-doping sign convention _draw_structure's
+        own region coloring uses (red/n-type, blue/p-type)."""
+        for region in self._structure.regions:
+            x0, x1 = region.x_min * 1e4, region.x_max * 1e4
+            y0, y1 = region.y_min * 1e4, region.y_max * 1e4
+            if x0 <= dx <= x1 and y0 <= dy <= y1:
+                kind = "n-type" if region.net_doping_cm3 > 0 else "p-type"
+                self._set_readout(
+                    f"{region.name}: {kind}, "
+                    f"{abs(region.net_doping_cm3):.3e} cm^-3")
+                return
+        self._set_readout("")
+
+    def _hover_mesh(self, dx, dy):
+        """Mesh mode -- the nearest mesh node's index and its LOCAL
+        spacing to its next neighbor on each axis (never a single
+        global spacing number: M21's whole point is a non-uniform
+        mesh, so a single "the spacing" would be misleading near a
+        refined region)."""
+        x, y = self._mesh_axes_um
+        if dx < x.min() or dx > x.max() or dy < y.min() or dy > y.max():
+            self._set_readout("")
+            return
+        ix = int(np.argmin(np.abs(x - dx)))
+        iy = int(np.argmin(np.abs(y - dy)))
+        dx_local = float(x[ix + 1] - x[ix]) if ix + 1 < len(x) else \
+            float(x[ix] - x[ix - 1]) if ix > 0 else 0.0
+        dy_local = float(y[iy + 1] - y[iy]) if iy + 1 < len(y) else \
+            float(y[iy] - y[iy - 1]) if iy > 0 else 0.0
+        self._set_readout(
+            f"node ({ix},{iy}) @ x={float(x[ix]):.3f}, "
+            f"y={float(y[iy]):.3f} um -- spacing dx={dx_local:.3f}, "
+            f"dy={dy_local:.3f} um")
 
     # -- data ---------------------------------------------------------
     @Slot(object, str)
@@ -479,6 +577,44 @@ class MplCanvasItem(QQuickPaintedItem):
         ax.contour(x, y, values, levels=8, colors="white",
                   linewidths=0.6, alpha=0.7)
 
+    @Property(bool, notify=viewChanged)
+    def meshOverlay(self):
+        return self._mesh_overlay
+
+    @meshOverlay.setter
+    def meshOverlay(self, value):
+        self._mesh_overlay = bool(value)
+        self.update()
+
+    def _maybe_mesh_overlay(self, ax, x, y):
+        """M51: draw the TRUE mesh grid lines (the same non-uniform axis
+        coordinates the pcolormesh call right before this was itself
+        built from -- not a synthetic uniform grid) on top of a filled
+        2D field, toggled by meshOverlay. Same purely-additive contract
+        as _maybe_contour just above: called with the exact (x, y) a
+        caller already has in hand from its own pcolormesh call, no
+        second derivation. Low-alpha white so it stays readable over
+        every colormap this module uses (viridis/plasma/RdBu_r/inferno/
+        RdBu_r doping) without hiding the field underneath."""
+        if not self._mesh_overlay:
+            return
+        for xv in x:
+            ax.axvline(float(xv), color="#ffffff", linewidth=0.3, alpha=0.35)
+        for yv in y:
+            ax.axhline(float(yv), color="#ffffff", linewidth=0.3, alpha=0.35)
+
+    def _remember_grid(self, ax, x, y, values, label, unit=""):
+        """M51: the 2D-field-map analogue of _remember_series below --
+        records what a field-map draw path actually rendered so
+        hoverAt's _hover_field_grid can snap to a real mesh node
+        instead of guessing. `values` must be the RAW (never
+        log-transformed) array -- see _hover_field_grid's own note on
+        why the log toggle must never change the reported value."""
+        self._ax = ax
+        self._field_grid = (np.asarray(x, dtype=float),
+                            np.asarray(y, dtype=float),
+                            np.asarray(values, dtype=float), label, unit)
+
     # -- line cut (v0.6 Phase 2b) -----------------------------------------
     @Slot(str)
     def setCutOrientation(self, orientation):
@@ -672,6 +808,8 @@ class MplCanvasItem(QQuickPaintedItem):
         # draw paths that support it
         self._ax = None
         self._series = []
+        self._field_grid = None
+        self._mesh_axes_um = None
         if self._mode == "structure" and self._structure is not None:
             self._draw_structure(ax)
             fig.tight_layout()
@@ -769,6 +907,8 @@ class MplCanvasItem(QQuickPaintedItem):
             plotted = self._maybe_log(values)
             mesh = ax.pcolormesh(x, y, plotted, shading="nearest")
             self._maybe_contour(ax, x, y, plotted)
+            self._maybe_mesh_overlay(ax, x, y)
+            self._remember_grid(ax, x, y, values, field.name, field.unit)
             cbar = fig.colorbar(mesh, ax=ax)
             label = f"{field.name} [{field.unit}]"
             cbar.set_label(f"log10 |{label}|" if self._log else label)
@@ -819,6 +959,12 @@ class MplCanvasItem(QQuickPaintedItem):
         return np.log10(np.maximum(np.abs(values), _MIN_POSITIVE))
 
     def _draw_structure(self, ax):
+        # M51: enables _hover_structure -- region lookup reads
+        # self._structure directly (already an attribute), so the only
+        # new state needed here is the live Axes for the pixel->data
+        # transform, same role _remember_series/_remember_grid play for
+        # their own modes.
+        self._ax = ax
         s = self._structure
         for region in s.regions:
             colour = "#c0392b" if region.net_doping_cm3 > 0 else "#2980b9"
@@ -870,6 +1016,12 @@ class MplCanvasItem(QQuickPaintedItem):
             ax.plot([x[0], x[-1]], [yv, yv], color="#555555", linewidth=0.5)
         ax.set_xlim(x[0], x[-1]); ax.set_ylim(y[-1], y[0])
         ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
+        # M51: enables _hover_mesh -- the exact axis arrays just plotted
+        # above, so hovering reports a node the user can actually see a
+        # grid line for, not a re-derived approximation.
+        self._ax = ax
+        self._mesh_axes_um = (np.asarray(x, dtype=float),
+                              np.asarray(y, dtype=float))
 
     def _draw_doping_preview(self, ax):
         """Pre-solve doping heatmap straight from the structure's regions,
@@ -883,6 +1035,8 @@ class MplCanvasItem(QQuickPaintedItem):
         plotted = self._maybe_log(doping)
         mesh = ax.pcolormesh(x, y, plotted, shading="nearest", cmap="RdBu_r")
         self._maybe_contour(ax, x, y, plotted)
+        self._maybe_mesh_overlay(ax, x, y)
+        self._remember_grid(ax, x, y, doping, "doping", "cm^-3")
         cbar = ax.figure.colorbar(mesh, ax=ax)
         label = "Net doping [cm^-3]"
         cbar.set_label(f"log10 |{label}|" if self._log else label)
@@ -991,6 +1145,8 @@ class MplCanvasItem(QQuickPaintedItem):
             mesh = ax.pcolormesh(x, y, Ec, shading="nearest",
                                  cmap="viridis")
             self._maybe_contour(ax, x, y, Ec)
+            self._maybe_mesh_overlay(ax, x, y)
+            self._remember_grid(ax, x, y, Ec, "Ec", "eV")
             fig_cbar = ax.figure.colorbar(mesh, ax=ax)
             fig_cbar.set_label("Ec [eV]")
             ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")
@@ -1040,6 +1196,8 @@ class MplCanvasItem(QQuickPaintedItem):
             logR = np.log10(np.maximum(np.abs(R), 1e-30))
             mesh = ax.pcolormesh(x, y, logR, shading="nearest", cmap="inferno")
             self._maybe_contour(ax, x, y, logR)
+            self._maybe_mesh_overlay(ax, x, y)
+            self._remember_grid(ax, x, y, R, "R", "cm^-3 s^-1")
             cbar = ax.figure.colorbar(mesh, ax=ax)
             cbar.set_label("log10 |R| [cm^-3 s^-1]")
             ax.set_xlabel("x [um]"); ax.set_ylabel("y [um]")

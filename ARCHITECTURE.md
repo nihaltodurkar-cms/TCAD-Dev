@@ -647,25 +647,32 @@ no Sentaurus licence needed):
   themselves. Which engine actually ran is surfaced via
   AppController.solverEngineLabel. SYCL was not pursued (no native
   Python binding).
-- NO INTERACTIVE 1D/2D GEOMETRY/MESH VIEWER (identified 2026-09-14).
-  `MplCanvasItem` (gui/services/mpl_canvas_item.py) already renders
-  1D result CURVES (I-V/C-V/transient/AC/convergence) and 2D FIELD
-  MAPS (doping/bands/recombination, with a contour-overlay toggle and
-  a Line-Cut mode) -- that surface is NOT missing. What IS missing:
-  the "Structure"/"Mesh" viewport modes are static Matplotlib
-  diagrams, not an interactive pan/zoom/inspect geometry viewer --
-  1D/2D has nothing analogous to the real PyVista/VTK
-  `gui/services/viewer3d.py` window 3D got in 3D-VISUALIZATION-PLAN.md
-  (isosurface controls, hover, live camera manipulation). Proposed as
-  M51 GEOMETRY/MESH INTERACTIVE VIEWER [M]: an interactive 1D/2D
-  companion (pan/zoom a device cross-section, hover a mesh node/edge
-  to read its doping/field/mesh-density value, toggle mesh overlay vs
-  filled field) -- likely a Matplotlib interactive backend upgrade
-  (mplcursors/blitting) rather than a new heavyweight dependency,
-  since 1D/2D geometry has none of 3D's need for a true GPU renderer.
-  NOT YET SCOPED IN DETAIL, NOT SIGNED OFF, NOT STARTED -- needs its
-  own plan doc (scope, gates, honest limits) before implementation,
-  same as every other milestone in this file.
+- M51 GEOMETRY/MESH HOVER + OVERLAY -- LANDED 2026-09-16 (identified
+  2026-09-14, scoped and implemented same session). Investigating the
+  "NO INTERACTIVE 1D/2D GEOMETRY/MESH VIEWER" gap before implementing
+  found it narrower than first flagged: `ViewportPanel.qml` already had
+  real pan/zoom (`MouseArea` + `canvas.pan()`/`zoom()`/`fit()`/
+  `resetView()`), and `MplCanvasItem.hoverAt()` already drove a live
+  readout for 1D curve modes -- what was actually missing was hover for
+  2D field maps (doping/bands/recombination)/Structure/Mesh modes (all
+  silent no-ops, `hoverAt` bailed whenever `self._series` was empty,
+  which it always was there) and a mesh-overlay toggle for 2D field
+  maps. `hoverAt()` is now a dispatcher over four hover sources
+  (`_hover_series` unchanged, plus new `_hover_field_grid`/
+  `_hover_structure`/`_hover_mesh`), and a `meshOverlay` property mirrors
+  the existing `contours` property exactly, drawing the field map's own
+  true (non-uniform) mesh axis coordinates as an overlay. See
+  `M51-GEOMETRY-MESH-HOVER-PLAN.md` for the full writeup and honest
+  limits (no 3D hover here -- viewer3d.py already covers 3D; no
+  edge-level Structure inspection, only regions). Gated in
+  `gui/tests/test_mpl_canvas_hover_m51.py` (8/8); the pre-existing
+  `test_mpl_canvas_item.py`/`test_mpl_canvas_series.py`/
+  `test_viewport_pan_zoom_fast_path.py` suites re-run green, unchanged.
+  Verified against the real running app: a real solve, the actual
+  `mplCanvas` QML object in the live tree, a real hover producing
+  `"doping: 1.000e+17 cm^-3 @ x=2.03, y=0.53 um"`, and the real
+  mesh-overlay toggle adding/removing 100 grid lines on the actual
+  rendered figure.
 - 3D VIEWER PHASE 6 -- VECTOR FIELD VISUALIZATION -- LANDED 2026-09-14.
   `gui/services/viewer3d.py`'s isosurface/volume/exploded-view viewer
   had no vector-field rendering despite `ResultStore.vector_field()`/
@@ -738,6 +745,29 @@ no Sentaurus licence needed):
   seed plane (uses the grid center by default), E-field as a second
   vector quantity (only current_density is exported today), and the
   same feature for 2D (M51 above is the 1D/2D analogue, unscoped).
+- PARAVIEW EXPORT -- LANDED 2026-09-16. `gui/services/paraview_export.py`
+  (pure) writes a genuine ParaView-native `.vtu` for the current result
+  and, once sweep-snapshot playback data exists, a real `.pvd` time series
+  keyed by each step's bias voltage -- reusing `viewer3d.py`'s own
+  grid-building functions rather than a from-source ParaView build (both
+  `pq*` widgets and `paraview.simple` need one; investigated and rejected
+  as out of proportion given PyVista/VTK already covers the in-app
+  viewer). `Viewer3DWindow` gained a "ParaView Export" dock: export
+  actions plus "Open in ParaView" (`QProcess.startDetached` against a
+  `QSettings`-persisted executable path). See
+  `PARAVIEW-EXPORT-PLAN.md` for the full writeup and honest limits
+  (scalar-only `.pvd`, no real-ParaView visual verification available on
+  this machine). A real bug shipped past the first green test run and was
+  caught only by opening the actual app and clicking the real button: the
+  export handlers referenced `paraview_export` with no import of it in
+  scope (a claimed "lazy import" that was never actually written) --
+  every existing test called the underlying pure functions directly or a
+  different handler, none of them the two that were actually broken.
+  Fixed (the lazy import, inside each handler, to dodge the real
+  circular-import risk with `viewer3d.py`); closed the test gap with two
+  new handler-level tests. Gated in `gui/tests/test_paraview_export.py`
+  (10/10); `test_viewer3d.py`'s pre-existing 48 tests re-run green,
+  unchanged.
 
 ------------------------------------------------------------------------
 8. NEXT SESSION QUEUE

@@ -156,33 +156,30 @@ ApplicationWindow {
         color: Qt.rgba(1, 1, 1, 0.72)
     }
 
-    // Theme.ambientGlow1/ambientGlow2: two soft, low-alpha colour blobs
-    // (violet accent + blue "running" hue) painted ON TOP of the
-    // wallpaper/veil above but still BEHIND every dock, so panels in
-    // different screen regions catch a different tint -- the "colour
-    // glow behind frosted glass" cue the tokens' own doc comment in
-    // Theme.qml describes. Plain solid-colour circular Rectangles
-    // (radius = width/2), not a real blur/gradient effect, for the same
-    // reason the wallpaper itself is a pre-blurred static image rather
-    // than a live MultiEffect: layer effects here previously made an
-    // entire dock's content invisible on a real (non-offscreen) display
-    // -- see the workbenchDock comment below.
-    // v3.1 "Deep Space": bigger blobs than v3.0 (0.7/0.55 -> 0.85/0.68 of
-    // window width) to match the token alpha increase in Theme.qml --
-    // a bigger, more saturated wash reads as more dramatic, not just
-    // brighter in place.
-    Rectangle {
+    // Theme.ambientGlow1/ambientGlow2: two soft colour blobs (violet
+    // accent + blue "running" hue) painted ON TOP of the wallpaper/veil
+    // above but still BEHIND every dock, so panels in different screen
+    // regions catch a different tint -- the "colour glow behind frosted
+    // glass" cue the tokens' own doc comment in Theme.qml describes.
+    // v3.2: GlowBlob.qml (concentric same-hue rings, brightest at
+    // center) replaces v3.1's single flat-color circle -- a solid disc
+    // with a visible hard edge read as a colored sticker, not an
+    // ambient wash, confirmed by looking at the real running app. Still
+    // no live blur/gradient effect, for the same reason the wallpaper
+    // itself is a pre-blurred static image rather than a live
+    // MultiEffect: layer effects here previously made an entire dock's
+    // content invisible on a real (non-offscreen) display -- see the
+    // workbenchDock comment below.
+    GlowBlob {
         width: parent.width * 0.85
         height: width
-        radius: width / 2
         x: -width * 0.28
         y: -height * 0.32
         color: Theme.ambientGlow1
     }
-    Rectangle {
+    GlowBlob {
         width: parent.width * 0.68
         height: width
-        radius: width / 2
         x: parent.width - width * 0.52
         y: parent.height - height * 0.48
         color: Theme.ambientGlow2

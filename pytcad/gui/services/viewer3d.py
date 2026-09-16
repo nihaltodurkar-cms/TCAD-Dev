@@ -26,12 +26,18 @@ before scrubbing a sweep, or accept a stale vector overlay.
 """
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QProcess, QSettings, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QWidget,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPushButton, QSlider, QWidget,
 )
 from pyvistaqt import QtInteractor
+
+# paraview_export imports FROM this module (its pure grid-building
+# functions) -- importing it back at module level here would be
+# circular, so the export dock's handlers import it lazily instead
+# (see _on_export_vtu_clicked etc.).
 
 # A small curated set, not every matplotlib colormap -- perceptually
 # uniform sequential (viridis/plasma) plus one diverging colormap for
@@ -313,6 +319,13 @@ class Viewer3DWindow:
         self._glyph_enabled = False
         self._streamline_actor = None
         self._streamline_enabled = False
+        # PARAVIEW-EXPORT-PLAN.md: persisted path to the user's own
+        # ParaView executable, so "Open in ParaView" doesn't have to
+        # re-ask every time this window opens. QSettings, not a new
+        # bespoke settings file -- no other app setting is persisted
+        # anywhere in this codebase yet, so this is a new, minimal use
+        # of Qt's own mechanism rather than an existing pattern to match.
+        self._pv_settings = QSettings("PyTCAD", "Viewer3D")
         self._build_sidebar(field_names)
         if field_names:
             # "doping" first if present (the example every Phase-1/2
@@ -401,6 +414,10 @@ class Viewer3DWindow:
         # a separate physical quantity from the scalar isosurface/volume
         # above, not another row on the same form.
         self._build_vector_dock()
+        # PARAVIEW-EXPORT-PLAN.md: export to a genuine ParaView-native
+        # .vtu/.pvd file, own dock -- an output action, not a display
+        # control, so it doesn't belong on the isosurface/vector forms.
+        self._build_export_dock()
 
     def _build_vector_dock(self):
         """Build the vector-field (glyph arrows / streamlines) sidebar
@@ -454,6 +471,109 @@ class Viewer3DWindow:
             self._glyph_toggle.setEnabled(False)
             self._streamline_toggle.setEnabled(False)
 
+    def _build_export_dock(self):
+        """PARAVIEW-EXPORT-PLAN.md: export the current result as a
+        genuine ParaView-native file, and optionally hand it straight
+        to the user's own ParaView install. Two export actions, not
+        one: a single .vtu (whatever's on screen right now) and, only
+        when sweep-snapshot playback data exists, a real .pvd time
+        series keyed by bias voltage -- see paraview_export.py's own
+        docstring for why the .pvd path is worth having at all versus
+        just exporting one frame at a time by hand."""
+        dock = QDockWidget("ParaView Export", self._window)
+        panel = QWidget()
+        form = QFormLayout(panel)
+
+        self._export_vtu_btn = QPushButton("Export .vtu…")
+        self._export_vtu_btn.clicked.connect(self._on_export_vtu_clicked)
+        form.addRow(self._export_vtu_btn)
+
+        self._export_pvd_btn = QPushButton("Export animation (.pvd)…")
+        self._export_pvd_btn.clicked.connect(self._on_export_pvd_clicked)
+        self._export_pvd_btn.setEnabled(False)
+        form.addRow(self._export_pvd_btn)
+
+        self._paraview_path_edit = QLineEdit(
+            self._pv_settings.value("paraview_path", "paraview", type=str))
+        form.addRow("ParaView executable", self._paraview_path_edit)
+
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._on_browse_paraview_path)
+        form.addRow(browse_btn)
+
+        self._open_in_paraview_btn = QPushButton("Open in ParaView")
+        self._open_in_paraview_btn.clicked.connect(
+            self._on_open_in_paraview_clicked)
+        self._open_in_paraview_btn.setEnabled(False)
+        form.addRow(self._open_in_paraview_btn)
+
+        dock.setWidget(panel)
+        self._window.addDockWidget(Qt.RightDockWidgetArea, dock)
+        # The last file exported this session -- "Open in ParaView"
+        # acts on it directly rather than re-prompting for a path,
+        # same "export, then act on what you just wrote" flow a save
+        # dialog followed by a launch button implies.
+        self._last_export_path = None
+
+    def _on_browse_paraview_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Locate ParaView executable")
+        if path:
+            self._paraview_path_edit.setText(path)
+            self._pv_settings.setValue("paraview_path", path)
+
+    def _on_export_vtu_clicked(self):
+        from . import paraview_export
+        out_path, _ = QFileDialog.getSaveFileName(
+            self._window, "Export .vtu", "result.vtu",
+            "ParaView unstructured grid (*.vtu)")
+        if not out_path:
+            return
+        try:
+            paraview_export.export_vtu(self._store, out_path)
+        except Exception as exc:
+            QMessageBox.warning(
+                self._window, "Export failed",
+                f"Could not export to {out_path}:\n{exc}")
+            return
+        self._last_export_path = out_path
+        self._open_in_paraview_btn.setEnabled(True)
+
+    def _on_export_pvd_clicked(self):
+        from . import paraview_export
+        if self._snapshots is None or self._snapshots.n_snapshots() == 0:
+            return
+        out_dir = QFileDialog.getExistingDirectory(
+            self._window, "Export animation (.pvd) — choose a folder")
+        if not out_dir:
+            return
+        try:
+            pvd_path = paraview_export.export_pvd_series(
+                self._store, self._snapshots, out_dir, "sweep")
+        except Exception as exc:
+            QMessageBox.warning(
+                self._window, "Export failed",
+                f"Could not export animation to {out_dir}:\n{exc}")
+            return
+        self._last_export_path = pvd_path
+        self._open_in_paraview_btn.setEnabled(True)
+
+    def _on_open_in_paraview_clicked(self):
+        if self._last_export_path is None:
+            return
+        paraview_path = self._paraview_path_edit.text().strip()
+        self._pv_settings.setValue("paraview_path", paraview_path)
+        # startDetached: ParaView keeps running independently of this
+        # app, exactly like the user double-clicking it themselves --
+        # this process has no business waiting on or reaping it.
+        started = QProcess.startDetached(
+            paraview_path, [str(self._last_export_path)])
+        if not started:
+            QMessageBox.warning(
+                self._window, "Could not launch ParaView",
+                f"Failed to start '{paraview_path}'. Check the path "
+                "above (Browse…) and that ParaView is installed.")
+
     def _build_playback_dock(self):
         """Build the sweep playback dock widget with play/pause, step,
         and timeline scrubber controls."""
@@ -506,6 +626,7 @@ class Viewer3DWindow:
             self._playback_slider.setRange(0, 0)
             self._voltage_label.setText("0.000 V")
             self._stop_playback()
+            self._export_pvd_btn.setEnabled(False)
             return
         n = snapshots.n_snapshots()
         self._playback_slider.setRange(0, n - 1)
@@ -515,6 +636,7 @@ class Viewer3DWindow:
         self._play_btn.setEnabled(True)
         self._step_fwd_btn.setEnabled(True)
         self._playback_slider.setEnabled(True)
+        self._export_pvd_btn.setEnabled(True)
         self._update_playback_label()
         # Apply the first snapshot's field data to the grid.
         self._apply_snapshot(0)

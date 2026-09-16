@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import PyTCAD 1.0
+import "../components"
 import ".."
 
 Rectangle {
@@ -93,14 +94,25 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.pad
+        // v3.2: QtQuick's `radius` only shapes a Rectangle's OWN fill --
+        // it never rounds a child's clipping, with or without clip:true
+        // (confirmed directly: adding clip:true here changed nothing).
+        // The toolbar row below used to sit only Theme.pad (8px) from
+        // root's corner, well inside root's Theme.radiusGlass (26px)
+        // rounded-corner cutout, so its own square corner (a
+        // default-styled, light-colored ComboBox) visibly poked through
+        // the dark rounded frame as a notch. Margin >= radius/sqrt(2)
+        // (~18.4px here) is the geometric condition for a flush
+        // rectangular child's nearest corner to clear a corner radius
+        // this size; 20 adds a small safety buffer.
+        anchors.margins: Math.max(Theme.pad, Theme.radiusGlass / 1.4)
         spacing: Theme.pad
 
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
 
-            ComboBox {
+            ThemedComboBox {
                 id: fieldBox
                 Layout.preferredWidth: 200
                 model: controller ? controller.fieldNames : []
@@ -127,7 +139,19 @@ Rectangle {
                 ToolTip.text: "Overlay contour lines on 2D field/doping/" +
                               "bands/recombination maps"
             }
-            ComboBox {
+            CheckBox {
+                objectName: "meshOverlayCheckBox"
+                text: "mesh"
+                // M51: draws the TRUE mesh grid on top of a 2D field
+                // map (same 'purely additive overlay' contract as the
+                // contours checkbox right above).
+                onToggled: canvas.meshOverlay = checked
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: "Overlay the mesh grid on 2D field/doping/" +
+                              "bands/recombination maps"
+            }
+            ThemedComboBox {
                 id: sweepChannelBox
                 objectName: "sweepChannelSelector"
                 visible: root.currentMode === "series"
@@ -135,7 +159,7 @@ Rectangle {
                 model: []
                 onActivated: canvas.setSweepChannel(currentText)
             }
-            ComboBox {
+            ThemedComboBox {
                 id: cutOrientationBox
                 objectName: "cutOrientationSelector"
                 visible: root.currentMode === "cut"
