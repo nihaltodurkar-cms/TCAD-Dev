@@ -363,6 +363,81 @@ def sic_power_mosfet_3d_example_spec():
         ])
 
 
+def umos_3d_example_spec():
+    """"UMOS trench MOSFET" -- a vertical trench-gate silicon power
+    MOSFET half-cell (N+ source / P+ body-tie notch / P-body / N-
+    drift / N+ substrate-drain), gated on the trench SIDEWALL rather
+    than a top-surface patch -- the channel runs vertically along the
+    device's own x=0 face, restricted to y <= Dtrench.
+
+    Reuses pytcad.umos3d's own doping/geometry construction (the SAME
+    function examples/08_3d_umos_amr.py exercises) -- this GUI entry
+    does not reimplement the physics, only re-expresses it as a
+    DeviceSpec, same relationship every other example in this module
+    has to its own pytcad-core builder. See pytcad/umos3d.py's own
+    docstring for the full geometry and why a sidewall GateBC (not a
+    surface patch) is what makes this a trench device.
+
+    Fixed (non-adaptive), deliberately coarse mesh -- a UI quick-load
+    example must construct instantly on the UI thread, like every
+    other EXAMPLES entry. examples/08_3d_umos_amr.py's own adaptive
+    mesh refinement (pytcad.adapt.adapt_solve_3d) grows this same
+    device from ~35k to 800k+ elements over several full 3D solves;
+    that does not belong behind a menu click, so this entry loads the
+    small starting mesh only, unrefined.
+
+    Loads unbiased (Vg=0, all bias=0); use the Sweeps panel for a gate
+    or drain sweep, same as the other 3D MOSFET examples.
+    """
+    from pytcad.mesh import graded_mesh, uniform_mesh
+    from pytcad.mesh3d import Mesh3D
+    from pytcad.umos3d import UMOSParams, umos_doping
+    from pytcad.moscap import flatband_voltage
+
+    p = UMOSParams()
+    NX, NY, NZ = 16, 12, 6
+    x = graded_mesh(p.Lcell, [p.Ln, p.Lch], h_min=p.Lcell / (NX * 8),
+                    h_max=p.Lcell / NX, ratio=1.2)
+    y = graded_mesh(p.depth, [0.0, p.Dtrench], h_min=p.depth / (NY * 8),
+                    h_max=p.depth / NY, ratio=1.2)
+    z = uniform_mesh(p.W, NZ)
+    mesh = Mesh3D(x, y, z)
+    nz = z.size
+
+    doping, ntotal = umos_doping(mesh, p)
+
+    i_src = np.where(x <= p.Ln)[0].tolist()
+    j_trench = np.where(y <= p.Dtrench)[0].tolist()
+    Vfb = flatband_voltage(-p.Na_body, p.tox_cm, p.gate, 0.0, p.T, p.material)
+
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                     axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array", values=doping.tolist(),
+                          ntotal=ntotal.tolist()),
+        contacts=[
+            ContactSpec(name="source", kind="ohmic",
+                       nodes=_top_face_node_indices(i_src, nz), V=0.0),
+            ContactSpec(name="gate", kind="gate",
+                       nodes=_x_face_node_indices_jrange(0, j_trench, nz),
+                       V=0.0, tox_cm=p.tox_cm, Vfb=Vfb, normal_axis="x"),
+            ContactSpec(name="drain", kind="ohmic",
+                       nodes=_bottom_face_node_indices(x.size, y.size, nz),
+                       V=0.0),
+        ],
+        bias={"source": 0.0, "drain": 0.0, "gate": 0.0},
+        # Homojunction device (silicon throughout) -- no
+        # region_materials needed. structure_regions splits by x into
+        # source/body-tie vs. the rest, same convention as the other
+        # 3D MOSFET examples' own exploded-view split.
+        structure_regions=[
+            {"name": "source_and_bodytie",
+            "box": [0.0, p.Ln, 0.0, p.depth, 0.0, p.W]},
+            {"name": "body_and_drift",
+            "box": [p.Ln, p.Lcell, 0.0, p.depth, 0.0, p.W]},
+        ])
+
+
 def finfet_3d_example_spec():
     """3D tri-gate FinFET: gate wraps around top and two sides of a narrow fin.
 
@@ -836,6 +911,7 @@ EXAMPLES = {"mosfet_2d": mosfet_example_spec,
            "bjt_3d": bjt_3d_example_spec,
            "moscap_3d": moscap_3d_example_spec,
            "jfet_3d": jfet_3d_example_spec,
+           "umos_3d": umos_3d_example_spec,
            "trial": sic_power_mosfet_3d_example_spec}
 
 

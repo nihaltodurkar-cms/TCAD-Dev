@@ -1,12 +1,14 @@
-"""Checks the v2.1-corrected dock sizing and surface toning in
+"""Checks the v3.0-glassmorphism dock sizing and surface toning in
 Main.qml: the workbench dock is wider than the pre-reskin 310/240
-default, and the workbench/properties/console docks are flat panel
-surfaces (Theme.panel) while the viewport is the app's darkest,
-flush-against-chrome canvas (Theme.background) -- not floating
-cardBg/cardBorder cards (DESIGN.md section 2/7/10 -- the v2 reskin's
-card treatment on docked surfaces is reversed; cardBg/cardBorder
-remain defined in Theme.qml but are now reserved for the transient
-overlay layer only, see test_theme_tokens.py).
+default, and the workbench/properties/console docks are TRANSLUCENT
+glass panel surfaces (Theme.panel, alpha < 1) while the viewport
+stays the app's darkest, fully OPAQUE canvas (Theme.background,
+alpha == 1 -- it's a rendering surface, not something content should
+show through). v3.0 supersedes the earlier v2.1 correction, which had
+made docked panels flat and fully opaque; RGB channels are unchanged
+across that reversal (only alpha moved), which is why the hex-name
+assertions below still hold -- see Theme.qml's own header comment and
+test_theme_tokens.py.
 
 Loads the real Main.qml through gui.app.create_engine(), like
 test_shell_icons.py's predecessor did.
@@ -49,7 +51,7 @@ def test_workbench_dock_is_wider_than_the_pre_reskin_default():
         close_engine(engine)
 
 
-def test_docks_are_flat_panels_and_viewport_is_the_darkest_surface():
+def test_docks_are_translucent_glass_panels_and_viewport_is_the_darkest_surface():
     app = QApplication.instance() or QApplication([])
     engine, controller = create_engine(app)
     try:
@@ -57,12 +59,18 @@ def test_docks_are_flat_panels_and_viewport_is_the_darkest_surface():
         for name in ("workbenchDock", "propertiesDock", "consoleDock"):
             dock = root.findChild(QObject, name)
             assert dock is not None, name
-            color = QColor(dock.property("color")).name()
-            assert color == PANEL_BG, f"{name}: expected {PANEL_BG}, got {color}"
+            color = QColor(dock.property("color"))
+            assert color.name() == PANEL_BG, f"{name}: expected {PANEL_BG}, got {color.name()}"
+            assert color.alphaF() < 1.0, (
+                f"{name}: expected a translucent glass panel (alpha < 1), "
+                f"got alpha={color.alphaF()}")
 
         viewport = root.findChild(QObject, "viewportPanel")
         assert viewport is not None
-        v_color = QColor(viewport.property("color")).name()
-        assert v_color == VIEWPORT_BG, f"viewportPanel: expected {VIEWPORT_BG}, got {v_color}"
+        v_color = QColor(viewport.property("color"))
+        assert v_color.name() == VIEWPORT_BG, f"viewportPanel: expected {VIEWPORT_BG}, got {v_color.name()}"
+        assert v_color.alphaF() == 1.0, (
+            "viewportPanel: expected a fully opaque rendering surface, "
+            f"got alpha={v_color.alphaF()}")
     finally:
         close_engine(engine)

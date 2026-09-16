@@ -38,6 +38,11 @@ env/
 *.png
 *.npz
 
+# Exception: a real shipped GUI asset, not a generated result plot --
+# without this the app's QML Image source fails to load on any other
+# checkout (see gui/qml/Main.qml's wallpaper Image, v3.0 glassmorphism).
+!pytcad/gui/qml/assets/glass_wallpaper.png
+
 # Superpowers brainstorming visual-companion scratch (mockups, session state)
 .superpowers/
 

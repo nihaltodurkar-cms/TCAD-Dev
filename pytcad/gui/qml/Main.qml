@@ -45,6 +45,13 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+D"; onActivated: { Theme.toggle(); viewport.syncTheme() } }
 
     menuBar: MenuBar {
+        // v3.0 glassmorphism: same reasoning as MainToolBar.qml's
+        // background override -- MenuBar's default platform style is a
+        // fixed light colour that never read Theme, clashing with the
+        // glass docks below it.
+        background: Rectangle {
+            color: Theme.chromeBg
+        }
         Menu {
             title: "&File"
             MenuItem { text: "Load 2D MOSFET example"
@@ -69,6 +76,8 @@ ApplicationWindow {
                        onTriggered: appController.loadExample("moscap_3d") }
             MenuItem { text: "Load 3D JFET"
                        onTriggered: appController.loadExample("jfet_3d") }
+            MenuItem { text: "Load 3D UMOS (trench MOSFET)"
+                       onTriggered: appController.loadExample("umos_3d") }
             MenuItem { text: "Trial"
                        onTriggered: appController.loadExample("trial") }
             MenuSeparator {}
@@ -116,6 +125,37 @@ ApplicationWindow {
         viewport: viewport
     }
 
+    // v3.0 glassmorphism: the ambient colour wash every translucent
+    // dock below reveals. Painted once, behind everything, instead of
+    // per-panel -- a flat Theme.background alone under a translucent
+    // panel just looks "faded", not "glass". A static pre-blurred
+    // wallpaper image (gui/qml/assets/glass_wallpaper.png, generated
+    // offline with PIL's GaussianBlur) stands in for a live backdrop
+    // blur: QtQuick has no cheap way to blur arbitrary sibling content
+    // in real time (that's what MultiEffect's layer.enabled would do,
+    // and that already caused a real regression -- see the
+    // workbenchDock comment below), so a rich, already-blurred bitmap
+    // is what the translucent panels above actually reveal. Purely
+    // decorative -- z-order (declared before mainSplit) puts it behind
+    // every dock without needing z: values. PreserveAspectCrop fills
+    // the window at any size/aspect without distortion.
+    Image {
+        anchors.fill: parent
+        source: "assets/glass_wallpaper.png"
+        fillMode: Image.PreserveAspectCrop
+        smooth: true
+        asynchronous: true
+    }
+    Rectangle {
+        // Light theme still needs the wallpaper visible but much
+        // dimmer (the reference look is dark-mode; light mode gets a
+        // soft near-white veil over the same image instead of a
+        // second, different background).
+        anchors.fill: parent
+        visible: !Theme.dark
+        color: Qt.rgba(1, 1, 1, 0.72)
+    }
+
     SplitView {
         id: mainSplit
         anchors.fill: parent
@@ -128,14 +168,42 @@ ApplicationWindow {
             orientation: Qt.Horizontal
 
             // ---- LEFT: tabbed workbench dock ---------------------------
-            // v2.1 correction (DESIGN.md section 2/7): docked panels are
-            // not cards -- flat panel surface + border, no shadow.
+            // v3.0 glassmorphism (supersedes the v2.1 flat-panel
+            // correction): a translucent frosted surface -- glass
+            // border rim, bigger radius, and a top sheen highlight.
+            // NOTE: an earlier version of this pass also added a
+            // layer.enabled/MultiEffect drop shadow here -- pulled
+            // after it made every dock's CONTENT (tabs, panels,
+            // viewport) invisible on a real display, confirmed via a
+            // real screenshot, despite passing headlessly (offscreen
+            // QPA doesn't exercise the same GPU layer-compositing
+            // path). Do not re-add layer.effect to these docks without
+            // testing on a real, non-offscreen display first. See
+            // Theme.qml's header comment for why RGB channels are
+            // unchanged (test_theme_tokens.py's pins) even though
+            // alpha is new.
             Rectangle {
                 objectName: "workbenchDock"
                 color: Theme.panel
-                border.color: Theme.border
+                border.color: Theme.glassBorder
+                border.width: 1
+                radius: Theme.radiusGlass
+                clip: true
                 SplitView.preferredWidth: 360
                 SplitView.minimumWidth: 280
+
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: parent.border.width
+                    height: Math.min(28, parent.height * 0.3)
+                    radius: parent.radius
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Theme.glassHighlight }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -332,18 +400,23 @@ ApplicationWindow {
             }
 
             // ---- CENTER: viewport -----------------------------------------
-            // v2.1 correction (DESIGN.md section 2/10): the viewport is
-            // elevation 0, the darkest, highest-contrast surface in the
-            // app ("content beats chrome, always") -- it is flush
-            // against the surrounding chrome, not inset as a floating
-            // card with a margin/border/radius. The SplitView.*
-            // attached properties stay on this wrapper since a
-            // SplitView's direct children carry them.
+            // v3.0: the viewport stays the app's darkest, most opaque
+            // surface -- it's a rendering canvas (2D plots / the
+            // PyVista 3D view), not something content should show
+            // through, so unlike the other three docks its OWN fill
+            // stays solid Theme.background (no alpha). It still picks
+            // up the glass rim/radius treatment so it reads as part of
+            // the same glass shell as everything around it (no drop
+            // shadow -- see the workbenchDock comment above for why).
             Rectangle {
                 id: viewportFrame
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 320
                 color: Theme.background
+                border.color: Theme.glassBorder
+                border.width: 1
+                radius: Theme.radiusGlass
+                clip: true
 
                 ViewportPanel {
                     id: viewport
@@ -363,11 +436,27 @@ ApplicationWindow {
             Rectangle {
                 objectName: "propertiesDock"
                 color: Theme.panel
-                border.color: Theme.border
+                border.color: Theme.glassBorder
+                border.width: 1
+                radius: Theme.radiusGlass
+                clip: true
                 SplitView.preferredWidth: window.propsCollapsed ? 26 : 280
                 SplitView.minimumWidth: 26
                 Behavior on SplitView.preferredWidth {
                     NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+                }
+
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: parent.border.width
+                    height: Math.min(28, parent.height * 0.3)
+                    radius: parent.radius
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Theme.glassHighlight }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
                 }
 
                 ColumnLayout {
@@ -375,11 +464,25 @@ ApplicationWindow {
                     spacing: 0
 
                     ToolButton {
+                        // v3.0 glassmorphism: was a bold centered pill
+                        // floating above the "PROPERTIES" header,
+                        // reading as a stray/disconnected control once
+                        // every dock got its own rounded glass corner
+                        // (confirmed via a real Xvfb screenshot). Now a
+                        // small flat chevron, right-aligned, sitting in
+                        // the same row space the header title occupies
+                        // -- closer to the reference design's inline
+                        // "PROPERTIES ›" treatment.
                         objectName: "propertiesCollapseButton"
-                        Layout.alignment: Qt.AlignHCenter
+                        Layout.alignment: Qt.AlignRight
                         Layout.topMargin: Theme.padXs
+                        Layout.rightMargin: Theme.padSm
                         text: window.propsCollapsed ? "◀" : "▶"
                         font.pixelSize: Theme.fsSmall
+                        flat: true
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        background: Rectangle { color: "transparent" }
                         ToolTip.visible: hovered
                         ToolTip.delay: 500
                         ToolTip.text: window.propsCollapsed ? "Show properties"
@@ -402,11 +505,27 @@ ApplicationWindow {
         Rectangle {
             objectName: "consoleDock"
             color: Theme.panel
-            border.color: Theme.border
+            border.color: Theme.glassBorder
+            border.width: 1
+            radius: Theme.radiusGlass
+            clip: true
             SplitView.preferredHeight: window.consoleCollapsed ? 26 : 190
             SplitView.minimumHeight: 26
             Behavior on SplitView.preferredHeight {
                 NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+            }
+
+            Rectangle {
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: parent.border.width
+                height: Math.min(20, parent.height * 0.3)
+                radius: parent.radius
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: Theme.glassHighlight }
+                    GradientStop { position: 1.0; color: "transparent" }
+                }
             }
 
             ColumnLayout {
@@ -466,6 +585,15 @@ ApplicationWindow {
     }
 
     footer: ToolBar {
+        // v3.0 glassmorphism: same background override as MainToolBar/
+        // MenuBar above -- ToolBar's default style is Theme-blind.
+        // implicitHeight is required -- see MainToolBar.qml's comment
+        // on the identical fix (a plain Rectangle background has no
+        // implicit size of its own and collapsed this bar to ~1px).
+        background: Rectangle {
+            implicitHeight: 28
+            color: Theme.chromeBg
+        }
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: Theme.padLg

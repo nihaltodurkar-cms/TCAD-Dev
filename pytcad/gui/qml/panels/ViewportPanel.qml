@@ -241,35 +241,94 @@ Rectangle {
                 // than letting both render on top of each other.
                 color: Theme.background
 
-                Column {
+                // v3.0 glassmorphism: a floating glass card instead of
+                // bare centred text -- the reference design's empty
+                // state is its own translucent rounded panel, not text
+                // sitting directly on the viewport background.
+                Rectangle {
+                    id: emptyCard
                     anchors.centerIn: parent
-                    spacing: Theme.padLg
+                    width: Math.min(parent.width - 80, 560)
+                    height: emptyColumn.implicitHeight + Theme.padXl * 2
+                    radius: Theme.radiusGlass
+                    color: Theme.cardBg
+                    border.color: Theme.glassBorder
+                    border.width: 1
 
-                    Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "No device loaded"
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fsHeader
-                        font.bold: true
-                    }
-                    Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "Load a built-in example to get started, or build one in Structure."
-                        color: Theme.textFaint
-                        font.pixelSize: Theme.fsSmall
-                    }
-                    Row {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        spacing: Theme.padSm
-                        Button {
-                            objectName: "emptyStateLoadDiodeButton"
-                            text: "Load 1D Diode Example"
-                            onClicked: if (controller) controller.loadExample("diode_1d")
+                    Column {
+                        id: emptyColumn
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.padXl * 2
+                        spacing: Theme.padLg
+
+                        Image {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            source: Icons.svg("structure", Theme.textFaint)
+                            sourceSize.width: 40
+                            sourceSize.height: 40
+                            width: 40
+                            height: 40
                         }
-                        Button {
-                            objectName: "emptyStateLoadMosfetButton"
-                            text: "Load 2D MOSFET Example"
-                            onClicked: if (controller) controller.loadStructureExample("mosfet_2d_structure")
+                        Label {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "No device loaded"
+                            color: Theme.text
+                            font.pixelSize: Theme.fsHeader
+                            font.bold: true
+                        }
+                        Label {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            text: "Load a built-in example to get started, or build one in Structure."
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fsSmall
+                        }
+                        Row {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: Theme.padSm
+
+                            Button {
+                                objectName: "emptyStateLoadDiodeButton"
+                                text: "Load 1D Diode Example"
+                                onClicked: if (controller) controller.loadExample("diode_1d")
+                                background: Rectangle {
+                                    radius: Theme.radiusLg
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0.0; color: Theme.accentGradientEnd }
+                                        GradientStop { position: 1.0; color: Theme.accentGradientStart }
+                                    }
+                                }
+                                contentItem: Label {
+                                    text: parent.text
+                                    color: "#ffffff"
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                            Button {
+                                objectName: "emptyStateLoadMosfetButton"
+                                text: "Load 2D MOSFET Example"
+                                onClicked: if (controller) controller.loadStructureExample("mosfet_2d_structure")
+                                background: Rectangle {
+                                    radius: Theme.radiusLg
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0.0; color: Theme.accentGradientStart }
+                                        GradientStop { position: 1.0; color: "#c026d3" }
+                                    }
+                                }
+                                contentItem: Label {
+                                    text: parent.text
+                                    color: "#ffffff"
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
                         }
                     }
                 }

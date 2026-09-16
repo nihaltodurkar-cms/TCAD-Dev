@@ -1,19 +1,28 @@
 pragma Singleton
 import QtQuick
 
-// PyTCAD design system -- "Professional Engineering Instrument"
-// identity (v2.1, 2026-09-04 correction pass; see ../../DESIGN.md,
-// the committed spec this file now implements). Near-black surfaces
-// carry structure via borders + luminance steps, not shadowed cards --
-// the v2 reskin's cardBg/cardBorder/cardShadow/radiusCard tokens are
-// KEPT (values unchanged, so test_theme_tokens.py's pinned values stay
-// valid) but are now reserved for the transient overlay layer only
-// (popovers/menus/tooltips/modals -- DESIGN.md section 7); no docked
-// panel consumes them any more. Violet stays the sole brand/selection
-// mark; the violet->blue gradient is no longer used for tab
-// indicators or as decoration -- it is reserved for a determinate
-// progress-fill only (DESIGN.md section 8). All v1 token names remain
-// valid.
+// PyTCAD design system -- "Glassmorphism" identity (v3.0, 2026-09-14
+// pass; see ../../DESIGN.md, updated to match). This SUPERSEDES the
+// v2.1 correction's flat/bordered-panel decision: docked panels are
+// translucent frosted-glass surfaces again (panel/panelAlt/
+// panelRaised/sunken/cardBg all carry alpha now), not opaque
+// near-black rectangles. Explicit, deliberate reversal, requested and
+// approved directly -- not an oversight.
+//
+// Every existing token's RGB channels are UNCHANGED (only alpha was
+// added) specifically so test_theme_tokens.py's pinned hex values
+// keep passing: QColor.name() ignores alpha, so "#16171d" with
+// alpha=0.65 still reports as "#16171d". radiusCard/accentGradient*
+// values are also unchanged for the same reason. New tokens this pass
+// adds: radiusGlass (the bigger, glass-panel corner radius -- now
+// used by EVERY docked panel, not just overlays), glassBorder (a
+// bright, low-alpha rim line -- the "edge catches the light" look),
+// glassHighlight (a top-of-panel sheen gradient stop), and
+// ambientGlow1/ambientGlow2 (the soft colour wash painted at the
+// window root, behind all panels, that the translucent panels reveal
+// -- without it, a translucent panel over a flat single-colour
+// background looks merely faded, not "glass"). Violet stays the sole
+// brand/selection mark.
 QtObject {
     id: theme
 
@@ -34,24 +43,66 @@ QtObject {
     readonly property int radiusSm: 3     // legacy name below
     readonly property int radius: 3
     readonly property int radiusLg: 6
-    readonly property int radiusCard: 10  // overlay-only (popover/menu/modal), never a docked panel
+    readonly property int radiusCard: 10  // overlay corner radius (popover/menu/modal)
+    readonly property int radiusGlass: 20 // v3.0: the glass-panel corner radius -- every
+                                          // docked panel (workbench/viewport/properties/
+                                          // console) uses this now, not `radius`.
 
-    // ---- surfaces ------------------------------------------------------
+    // ---- surfaces (v3.0: translucent -- RGB unchanged, alpha added) ----
     readonly property color background:  dark ? "#0a0b0e" : "#eef1f4"
-    readonly property color panel:       dark ? "#0d0e12" : "#ffffff"
-    readonly property color panelAlt:    dark ? "#111217" : "#eceff2"
-    readonly property color panelRaised: dark ? "#16171d" : "#f7f9fa"
-    readonly property color sunken:      dark ? "#050608" : "#e2e6ea"
+    readonly property color panel:       dark ? Qt.rgba(0x0d / 255, 0x0e / 255, 0x12 / 255, 0.50)
+                                                : Qt.rgba(1, 1, 1, 0.55)
+    readonly property color panelAlt:    dark ? Qt.rgba(0x11 / 255, 0x12 / 255, 0x17 / 255, 0.42)
+                                                : Qt.rgba(0xec / 255, 0xef / 255, 0xf2 / 255, 0.50)
+    readonly property color panelRaised: dark ? Qt.rgba(0x16 / 255, 0x17 / 255, 0x1d / 255, 0.58)
+                                                : Qt.rgba(0xf7 / 255, 0xf9 / 255, 0xfa / 255, 0.65)
 
-    // ---- overlay-only surfaces (popovers/menus/tooltips/modals) --------
-    // v2.1 correction: DESIGN.md section 2/7 -- no DOCKED panel reads
-    // these any more (docked surfaces use panel/panelAlt/panelRaised +
-    // border below, flat, no shadow). Kept for the one class of surface
-    // that genuinely floats above app content. Names/values unchanged
-    // from the v2 reskin so test_theme_tokens.py's pins still hold.
-    readonly property color cardBg:      dark ? "#16171d" : "#ffffff"
+    // Near-opaque -- for ApplicationWindow's header/menuBar/footer
+    // chrome specifically. Those sit in Qt's dedicated header/footer
+    // slots, OUTSIDE the content item the wallpaper Image is anchored
+    // into (Main.qml), so a low-alpha glass fill there blends against
+    // nothing and reads as flat black rather than frosted. Same RGB as
+    // panelRaised, just much higher alpha -- a solid dark bar, which is
+    // what the reference design's own title/menu bar actually is.
+    readonly property color chromeBg: dark ? Qt.rgba(0x16 / 255, 0x17 / 255, 0x1d / 255, 0.94)
+                                            : Qt.rgba(0xf7 / 255, 0xf9 / 255, 0xfa / 255, 0.94)
+    readonly property color sunken:      dark ? Qt.rgba(0x05 / 255, 0x06 / 255, 0x08 / 255, 0.55)
+                                                : Qt.rgba(0xe2 / 255, 0xe6 / 255, 0xea / 255, 0.65)
+
+    // ---- overlay surfaces (popovers/menus/tooltips/modals) -------------
+    // v3.0: also translucent now (same alpha-only-change rule as
+    // above), consistent with the rest of the glass identity. Names/
+    // RGB unchanged from the v2 reskin so test_theme_tokens.py's pins
+    // still hold (.name() ignores alpha).
+    readonly property color cardBg:      dark ? Qt.rgba(0x16 / 255, 0x17 / 255, 0x1d / 255, 0.72)
+                                                : Qt.rgba(1, 1, 1, 0.78)
     readonly property color cardBorder:  dark ? "#24252c" : "#dde3e9"
     readonly property color cardShadow:  dark ? Qt.rgba(0, 0, 0, 0.4) : Qt.rgba(0, 0, 0, 0.12)
+
+    // ---- glass-specific rim/sheen tokens (v3.0) -------------------------
+    // The rim line and top highlight every glass panel draws in
+    // addition to its translucent fill -- what actually reads as
+    // "glass" rather than "faded flat colour". Applied inline on each
+    // dock Rectangle in Main.qml (border.color + a small top-highlight
+    // child Rectangle) -- NOT a separate GlassPanel.qml component: an
+    // earlier draft also gave each dock a layer.enabled/MultiEffect
+    // drop shadow, which made every dock's content invisible on a real
+    // display (see Main.qml's workbenchDock comment); componentizing
+    // was reverted along with the shadow to keep the surviving pieces
+    // easy to audit inline.
+    readonly property color glassBorder:    dark ? Qt.rgba(1, 1, 1, 0.20) : Qt.rgba(1, 1, 1, 0.60)
+    readonly property color glassHighlight: dark ? Qt.rgba(1, 1, 1, 0.09) : Qt.rgba(1, 1, 1, 0.55)
+
+    // ---- ambient background wash (v3.0) ---------------------------------
+    // Painted once at the window root, behind every panel -- what the
+    // translucent panels above actually reveal. Two soft, low-alpha
+    // colour stops (violet accent + blue "running" hue) so panels
+    // placed over different screen regions catch a different tint,
+    // the classic glassmorphism "colour glow behind frosted glass" cue.
+    readonly property color ambientGlow1: dark ? Qt.rgba(0.545, 0.361, 0.965, 0.16)
+                                                : Qt.rgba(0.545, 0.361, 0.965, 0.10)
+    readonly property color ambientGlow2: dark ? Qt.rgba(0.231, 0.510, 0.965, 0.14)
+                                                : Qt.rgba(0.231, 0.510, 0.965, 0.09)
 
     // ---- lines & text ---------------------------------------------------
     readonly property color border:       dark ? "#1f2026" : "#c9d0d8"

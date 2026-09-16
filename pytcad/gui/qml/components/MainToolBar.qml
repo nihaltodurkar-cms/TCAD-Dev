@@ -19,6 +19,31 @@ ToolBar {
     id: root
     property var viewport
 
+    // v3.0 glassmorphism: QtQuick.Controls' default ToolBar background
+    // is a fixed light-grey platform style colour -- it never read
+    // Theme at all (a pre-existing gap this glass pass exposed: the
+    // toolbar stayed bright white even in dark mode/behind translucent
+    // docks, clashing badly with everything below it). Give it the
+    // same translucent glass fill as the docks so the wallpaper shows
+    // through the whole window uniformly, chrome included.
+    background: Rectangle {
+        // implicitHeight is REQUIRED here, not decorative: a Rectangle
+        // has no implicit size of its own, and ToolBar's own
+        // implicitHeight comes from this background's implicitHeight
+        // (the RowLayout below is a plain child, not `contentItem:`,
+        // so it does not contribute to sizing). Without this the
+        // toolbar collapsed to ~1px tall while its RowLayout content
+        // still painted at full size, overflowing onto the row below
+        // it -- confirmed directly via a real (non-offscreen, Xvfb)
+        // screenshot showing the toolbar and workbench tab row
+        // overlapping illegibly. 44 matches the effective height the
+        // platform style's default background gave before this
+        // override existed.
+        implicitHeight: 44
+        color: Theme.chromeBg
+        border.width: 0
+    }
+
     // Faint drop shadow to lift the toolbar above the workbench --
     // a small depth cue that makes the chrome read as "above" the
     // content instead of flush with it.
