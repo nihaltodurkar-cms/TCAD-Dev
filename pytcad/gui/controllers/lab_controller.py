@@ -219,25 +219,42 @@ class PhysicsLabController(QObject):
             rows.append(("Mesh nodes", str(stats["node_count"])))
         rows += [(f"model: {k}", "on" if v else "off")
                  for k, v in sorted(record.models.items())]
+        # M52: mesh-axis extents -- AppController.meshStats already
+        # computes per-axis {min, max, size}; the node-count row above
+        # only used the total, leaving the axis breakdown computed and
+        # discarded. Reuse the same dict, no new computation.
+        if stats is not None:
+            for axis_name, axis in (stats.get("axes") or {}).items():
+                # meshStats' min/max are raw cm (store.mesh_axes() units,
+                # same as AppController.meshStats) -- convert to um for
+                # display, matching every other mesh-coordinate readout
+                # in the GUI (e.g. MplCanvasItem's hover reports, *1e4).
+                rows.append((f"Mesh {axis_name}",
+                             f"N={axis['size']} [{axis['min'] * 1e4:.3g}, "
+                             f"{axis['max'] * 1e4:.3g}] um"))
         return [list(map(str, r)) for r in rows]
 
     @Slot(result="QVariant")
     def convergenceData(self):
         """Per-stage Newton history for plotting: [{stage, iterations,
-        residuals}].  residuals is the first recorded metric series with
-        non-finite entries as NaN (matplotlib gaps)."""
+        residuals, metrics}].  `residuals` is the first recorded metric
+        series (kept for backward compatibility); `metrics` (M52) is
+        every tracked series (e.g. |F|/|dpsi|/|dn/n| for a bias solve --
+        see device.py's verbose print), all with non-finite entries as
+        NaN (matplotlib gaps)."""
         record = self._record()
         if record is None or not record.trace:
             return None
         out = []
         for step in record.trace:
-            series = next(iter(step.metrics.values()), []) \
-                if step.metrics else []
-            residuals = [float(v) if v is not None else float("nan")
-                         for v in series]
+            metrics = {name: [float(v) if v is not None else float("nan")
+                               for v in series]
+                       for name, series in step.metrics.items()}
+            residuals = next(iter(metrics.values()), [])
             out.append({"stage": step.stage,
                         "iterations": list(step.iterations),
-                        "residuals": residuals})
+                        "residuals": residuals,
+                        "metrics": metrics})
         return out
 
     @Slot(result="QVariant")

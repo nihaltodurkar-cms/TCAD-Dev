@@ -506,9 +506,102 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
   M42  Density gradient / quantum -> 2D/3D    [L]   NOT STARTED
        Prerequisite for any credible FinFET/GAA confinement claim.
        Depends: M31 P5 (stopped -- re-scope).
-  M43  Self-heating -> 2D/3D                  [L]   NEXT ON THE QUEUE
+  M43  Self-heating -> 2D/3D                  [L]   PHASES 1+2+3 (2D, 3D,
+       C++ ACCEL) LANDED 2026-09-16.
        thermal.py's structured assembly has the one non-vectorized
        scalar Python loop in the tree -- pairs naturally with M31 P4.
+       Phase 1 (2D): new sibling module pytcad/thermal2d.py (device2d.py
+       untouched, zero frozen-core edits there), same outer-Gummel-loop
+       architecture M19 chose in 1D (Device2D shares Device1D's exact
+       scalar-T-at-__init__ scaling, so the "monolithic coupling is a
+       disproportionate rewrite" reasoning transfers unchanged). One
+       small additive amendment to thermal.py itself: ThermalBC.
+       adiabatic() (zero-flux BC), needed for the reduction-identity
+       gate; all 6 pre-existing M19 gates re-verified green afterward.
+       New vectorized (no Python loop, unlike the 1D module) 2D FV
+       heat-equation Newton solve + a 2D Joule-heating formula (same
+       Wachutka 1990 term as 1D, box-integrated with device2d.py's own
+       dVy/dVx flux-divergence convention). 4 gates in
+       tests/test_m43_thermal2d.py: FD-Jacobian (caught a real sign-
+       convention bug in the edge-to-node Jacobian scatter before any
+       other gate ran -- relative error 2.0, i.e. exactly backwards),
+       a Robin-vs-Dirichlet BC peak-ordering check, an off-bit-identity
+       check, and the load-bearing one per 4d.4's rule ("no dimensional
+       lift lands without its reduction identity as a gate"): a
+       y-uniform 2D diode with adiabatic transverse boundaries
+       reproduces thermal.py's own 1D solve_electrothermal end to end
+       (temperature profile and current roll-off ratio both match).
+       Phase 2 (3D, same session, on request to "generalize it to 3D"):
+       rather than hand-duplicating phase 1's per-axis stencil a third
+       time, the residual/Jacobian assembly was factored into a
+       genuinely dimension-generic core, pytcad/thermal_grid.py's
+       _residual_jacobian_grid(coords, T, H, material, T_ambient, bcs)
+       (D=2 or 3, one axis loop) -- mirrors ii_grid.py/btbt_grid.py's
+       "one kernel for Device2D and Device3D" pattern (M34-S6).
+       thermal2d.py's own assembly functions became thin wrappers over
+       this core (phase 1's 4 gates re-run green, unchanged, immediately
+       after that refactor -- before any 3D code was written); new
+       pytcad/thermal3d.py wraps the same core for Device3D, with only
+       joule_heating_density_3d genuinely new (reads Jn_x/Jn_y/Jn_z,
+       device3d.py's own dVy*dVz/dVx*dVz/dVx*dVy cross-section
+       convention, device3d.py:993-998). 4 more gates in
+       tests/test_m43_thermal3d.py, mirroring phase 1's set at D=3 --
+       G-FD-3D passed on the FIRST run (no repeat of phase 1's sign
+       bug; parameterizing one axis loop instead of hand-writing a
+       third block is what avoided it), and G-REDUCTION-3D is a genuine
+       two-level chain (a z-uniform 3D diode with adiabatic front/back
+       reproduces thermal2d.py's own 2D solve, which itself already
+       reduces to 1D). Phase 3 (same session, on request to "use cpp
+       not python"): no C++ compiler existed on this machine (only
+       cmake/ninja were present) -- confirmed directly (a trivial
+       <optional> compile failed), not assumed, and surfaced to the
+       user before writing anything, per the house rule against
+       claiming a compiled-kernel gate without running it. User chose
+       to install one; a conda-forge GCC 16.2 toolchain (gxx) was
+       installed into the tcad-dev env (a durable environment change --
+       a `cxx-compiler` meta-package was tried first but activates
+       MSVC via a Visual Studio install with no C++ workload, so it was
+       removed in favor of plain gxx as a real MinGW-w64 compiler).
+       The PRE-EXISTING C++ engine was rebuilt and its own accel-parity
+       suite re-confirmed green FIRST (69 passed/8 skipped), before
+       trusting the new toolchain with anything new. Ported: thermal_
+       grid.py's _residual_jacobian_grid (the D=2-or-3-generic assembly
+       phase 2 built) -> core/src/thermal/grid.cpp, following M31 P4's
+       exact pattern (Python body kept as the oracle, renamed _py; the
+       one transcendental -- kappa_th's power law -- evaluated once in
+       Python and its result crosses as plain arrays, so the kernel
+       itself is pure arithmetic). The genuinely hard part was NOT the
+       arithmetic but floating-point ASSOCIATION ORDER: the reference
+       builds each axis's contribution in two separate passes (lo
+       scatter, then hi scatter, then add to F once) and appends the
+       Jacobian's 4 COO groups per axis as 4 SEPARATE full passes (not
+       interleaved per-edge), because scipy.sparse.csr_matrix sums
+       duplicate (row,col) entries in insertion order and an interior
+       diagonal is touched by two different edges of the same axis --
+       an interleaved single-pass version would have been mathematically
+       equivalent but NOT bit-identical ((a-b)+c != a+(c-b) in IEEE
+       754), caught by reasoning before ever compiling, not by a
+       failing gate. Result: bit-identical on the first successful
+       build+test cycle -- direct kernel-level F/Jacobian parity (2D
+       and 3D, mixing all 3 BC kinds at one corner) plus two full
+       end-to-end solve_electrothermal_{2,3}d runs (ACCEL=0 vs 1,
+       comparing the converged T after the whole outer Gummel loop),
+       tests/test_m43_thermal_grid_accel_parity.py, 4/4 green. Only the
+       per-iteration assembly is compiled -- both Newton loops and the
+       outer Gummel loop stay in Python, matching diffuse_numeric's own
+       precedent of dispatching the repeated inner operation only. No
+       performance number is claimed (correctness, not speed, is this
+       phase's claim; no benchmarks/ run was done). See
+       M43-SELFHEATING-2D3D-PLAN.md for the full record. Deferred,
+       all three phases: GUI wiring (library-only, matching M18 AC
+       phase 1's scope note), monolithic coupling, recombination/
+       generation heat, Seebeck/Peltier, and any 3D performance claim
+       at scale -- a larger-grid (~8600 node) sanity run was attempted
+       but did not finish within the session (Device3D's own
+       unmodified electrical solve, not this milestone's code, is
+       simply slow there via a direct sparse solve); the small-grid
+       gates are the confirmed 3D evidence, no larger-scale number is
+       claimed.
   M44  Hydrodynamic -> coupled, then 2D/3D    [XL]  NOT STARTED
        Two steps: hydrodynamic.py must first become a coupled 1D
        model (it is pure post-processing today) before any
@@ -539,7 +632,7 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        suite's slowest part. Depends on/overlaps M31 P4 (landed) and
        M35 (its own track). Needs a proper plan doc before any code.
 
-ORDERING: M41[S](done) -> M43[L](next) -> M42[L] -> M46[L] -> M45[XL]
+ORDERING: M41[S](done) -> M43[L](done) -> M42[L](next) -> M46[L] -> M45[XL]
 -> M44[XL], with M35 (3D process) and M47 (engine completion, last
 deliberately -- more to learn by landing a few of M41-M46 first) as
 separate tracks.
@@ -631,10 +724,36 @@ no Sentaurus licence needed):
 - No dedicated provenance-trace UI (click through mesh -> physics ->
   material -> backend); result files carry the data, no single view
   walks the chain.
-- No full numerical-diagnostics panel (Newton iteration/residual
-  history, rejected bias points, per-stage continuation record, mesh
-  statistics) as a first-class GUI surface; a "convergence" viewport
-  mode and RunRecord plumbing exist, not the dedicated panel.
+- M52 MULTI-METRIC CONVERGENCE + MESH STATS -- LANDED 2026-09-16.
+  This item used to read "No full numerical-diagnostics panel ... a
+  'convergence' viewport mode and RunRecord plumbing exist, not the
+  dedicated panel" -- investigating before building a new panel found
+  that claim stale: the GUI already has THREE diagnostics surfaces
+  reading the M2 RunRecord/ConvergenceStep substrate (SolverTelemetryPanel,
+  live/scrape-fed; the "convergence" viewport mode, post-hoc; and
+  PhysicsLabPanel's provenance/continuation tables) -- a fourth panel
+  would have duplicated them. The real, shared defect: both
+  `_draw_convergence` (mpl_canvas_item.py) and `PhysicsLabController.
+  convergenceData()` independently only ever read the FIRST tracked
+  Newton metric (`next(iter(step.metrics.values()))`), silently
+  dropping the rest -- confirmed a real bias-solve verbose line prints
+  3 (`|F|`/`|dpsi|`/`|dn/n|`, device.py:2451-2453). Fixed in place: the
+  convergence plot now draws every tracked metric per stage (distinct
+  linestyle, shared stage color), `convergenceData()` gained a
+  `"metrics"` dict alongside the unchanged `"residuals"` key, and
+  `provenanceRows()` gained per-axis mesh-extent rows (`AppController.
+  meshStats`' axis breakdown was already computed and thrown away).
+  A real bug was caught by real-app verification and fixed before
+  landing: the new mesh rows initially mislabeled raw cm values "um"
+  with no conversion (`[0, 0.00012] um` for a 1.2 um channel) --
+  fixed with the same *1e4 conversion every other mesh-coordinate
+  readout in the GUI uses. See `M52-DIAGNOSTICS-MULTIMETRIC-PLAN.md`.
+  Deliberately out of scope: a new panel/tab, unifying
+  SolverTelemetryPanel's live scrape pipeline with the post-hoc
+  RunRecord path (two independent pipelines for the same conceptual
+  chart), and rejected-bias-POINT-level data (continuation.py's
+  drivers still never persist individual backoff attempts, only the
+  coarse per-stage converged=False flag).
 - Additional device templates the original vision named: BJT, solar
   cell, PIN diode explicitly (Schottky now has a standalone physics
   module, M28, but no template). Only diode/MOSCAP/NMOS/HBT/HEMT/

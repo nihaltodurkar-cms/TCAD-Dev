@@ -93,6 +93,27 @@ def test_convergence_view_no_marker_when_all_converged(gapp):
     assert len(colours) > 3
 
 
+def _multi_metric_step(stage, n=4):
+    return {"stage": stage, "iterations": list(range(n)),
+            "metrics": {"|F|": [1.0, 1e-2, 1e-4, 1e-6][:n],
+                        "|dpsi|": [5e-1, 5e-3, 5e-5, 5e-7][:n],
+                        "|dn/n|": [2e-1, 2e-3, 2e-5, 2e-7][:n]},
+            "converged": True}
+
+
+def test_convergence_view_plots_every_tracked_metric_not_just_the_first(gapp):
+    """M52: a stage carrying 3 metrics (|F|/|dpsi|/|dn/n|, as a real
+    bias-solve verbose line does -- device.py:2451-2453) must draw 3
+    distinct lines, not silently drop 2 of them."""
+    item = _canvas_with_record(gapp, _make_record([_multi_metric_step("bias", 4)]))
+    fig = item._build_figure(480, 320)
+    ax = fig.axes[0]
+    # 3 metric lines; no rejected marker since converged=True.
+    assert len(ax.lines) == 3
+    legend_labels = {t.get_text() for t in ax.legend_.get_texts()}
+    assert legend_labels == {"bias:|F|", "bias:|dpsi|", "bias:|dn/n|"}
+
+
 def test_convergence_view_rejected_has_more_colours(gapp):
     """Rejected case has more distinct colours than all-converged case."""
     record_rejected = _make_record([

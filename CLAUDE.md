@@ -175,11 +175,29 @@ configure if absent) or `=OFF` (reproduce the pip-only CI job locally).
 `method="petsc"` solve says which one actually ran.
 
 **What is compiled so far.** Mesh geometry (`unstructured_assembly{,3d}`
--- M31 P2), the PETSc KSP/PC configuration (`linsolve`, P3b), and the
+-- M31 P2), the PETSc KSP/PC configuration (`linsolve`, P3b), the
 process/adaptivity kernels (P4): the three per-triangle AMR indicators in
 `adapt_unstructured.py` and the 1D explicit diffusion time loops in
-`process.diffuse_numeric` / `ted.diffuse_with_defects`. Everything else
-is still pure Python and none of it is on a deprecation path.
+`process.diffuse_numeric` / `ted.diffuse_with_defects`; the M34-S4
+nonlocal-BTBT path tracer (`nonlocal_path._trace_paths_py`'s C++ mirror);
+and, as of M43 phase 3 (2026-09-16), the structured-grid (D=2-or-3)
+self-heating assembly, `thermal_grid._residual_jacobian_grid_py` ->
+`core/src/thermal/grid.cpp` (`_core.thermal_grid_residual_jacobian`).
+Everything else is still pure Python and none of it is on a
+deprecation path.
+
+**No C++ compiler was installed on this machine until M43 phase 3.**
+`cmake`/`ninja` were already in the `tcad-dev` conda env, but no
+`cl.exe`/`g++`/`clang++` existed anywhere, confirmed by trying to
+compile a trivial `<optional>` translation unit rather than assumed.
+Fixed by `conda install -n tcad-dev -c conda-forge gxx` (plain GCC
+16.2, a real MinGW-w64 toolchain) -- NOT the `cxx-compiler` meta-package,
+which on win-64 activates MSVC via a Visual Studio install and silently
+does nothing useful if that install has no C++ workload (which this
+machine's did not). This is a durable environment change: the
+toolchain and `pytcad/_core*.pyd` both persist. If a fresh checkout
+reports `_accel.status()` as "not built" again, this is the fix, not a
+new investigation.
 
 **Where an accelerated function's transcendentals live matters.** The
 P4 kernels take `np.log(n)`, not `n`, and the nodal Debye lengths, not

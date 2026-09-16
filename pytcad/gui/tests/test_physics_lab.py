@@ -159,6 +159,15 @@ def test_convergence_data_from_real_run(gapp):
     eq = next(d for d in data if d["stage"] == "equilibrium")
     assert len(eq["residuals"]) >= 1 and min(eq["residuals"]) > 0
 
+    # M52: a bias stage's verbose print carries 3 metrics (|F|, |dpsi|,
+    # |dn/n| -- device.py:2451-2453), all of which must now survive into
+    # convergenceData()'s "metrics" dict, not just the first ("residuals").
+    bias = next((d for d in data if d["stage"].startswith("bias")), None)
+    assert bias is not None, "expected a bias stage in a real mosfet_2d run"
+    assert len(bias["metrics"]) >= 2, \
+        f"expected >=2 tracked metrics, got {list(bias['metrics'])}"
+    assert bias["residuals"] == next(iter(bias["metrics"].values()))
+
     # the viewport's convergence mode renders it
     vp = root.findChild(object, "viewportPanel")
     from PySide6.QtCore import QMetaObject
@@ -192,6 +201,11 @@ def test_provenance_rows_after_real_run(gapp):
     rows = dict(lab.provenanceRows())
     assert rows["Backend"] == "pytcad"
     assert any(k.startswith("model:") for k in rows)
+    # M52: mesh-axis extent rows (AppController.meshStats' axes dict was
+    # already computed for node_count but the per-axis breakdown was
+    # discarded before this).
+    assert "Mesh x" in rows and "Mesh y" in rows
+    assert rows["Mesh x"].startswith("N=")
 
 
 # ----------------------------------------------------------------------

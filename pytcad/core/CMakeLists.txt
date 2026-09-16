@@ -89,13 +89,15 @@ add_library(tcad_core OBJECT
   src/process/indicators.cpp
   src/process/diffuse.cpp
   src/nonlocal/paths.cpp
+  src/thermal/grid.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-# M34-S4: the path tracer is gated bit-for-bit against a pure-Python
-# oracle, so no multiply-add may be fused in it -- stated explicitly
-# rather than relied on as a default of the target architecture.
+# M34-S4 / M43: the path tracer and the thermal-grid assembly are both
+# gated bit-for-bit against a pure-Python oracle, so no multiply-add may
+# be fused in either -- stated explicitly rather than relied on as a
+# default of the target architecture.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  set_source_files_properties(src/nonlocal/paths.cpp PROPERTIES
+  set_source_files_properties(src/nonlocal/paths.cpp src/thermal/grid.cpp PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 if(OpenMP_CXX_FOUND)
@@ -126,6 +128,7 @@ nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/solver_bindings.cpp
   bindings/process_bindings.cpp
   bindings/nonlocal_bindings.cpp
+  bindings/thermal_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
 

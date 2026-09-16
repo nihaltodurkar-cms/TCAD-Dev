@@ -34,10 +34,17 @@ class ThermalBC:
     ThermalBC.resistance(R_th_area) -- Robin: heat flux out of the rod
     at this boundary equals (T_boundary - T_ambient) / R_th_area
     [W/cm^2], R_th_area in K*cm^2/W.
+    ThermalBC.adiabatic() -- Neumann, zero heat flux (perfectly
+    insulated) -- M43: the "resistance" Robin formula with its
+    (T-T_ambient)/R_th_area term dropped (R_th_area -> infinity), not a
+    new equation. Added for M43's reduction-identity gate: a
+    transversely-uniform 2D device with adiabatic transverse boundaries
+    has, by symmetry, zero transverse heat flow everywhere, so it must
+    reduce exactly to the 1D problem this module already solves.
     """
 
     def __init__(self, kind, R_th_area=None):
-        if kind not in ("isothermal", "resistance"):
+        if kind not in ("isothermal", "resistance", "adiabatic"):
             raise ValueError(f"unknown ThermalBC kind {kind!r}")
         if kind == "resistance" and (R_th_area is None or R_th_area <= 0.0):
             raise ValueError("resistance BC needs R_th_area > 0")
@@ -51,6 +58,10 @@ class ThermalBC:
     @classmethod
     def resistance(cls, R_th_area):
         return cls("resistance", R_th_area)
+
+    @classmethod
+    def adiabatic(cls):
+        return cls("adiabatic")
 
 
 class ThermalOptions:
@@ -92,9 +103,9 @@ def _thermal_residual_jacobian(x, T, H, material, T_ambient, bc_left, bc_right):
         F[0] = T[0] - T_ambient
         add(0, 0, 1.0)
     else:
-        Rth = bc_left.R_th_area
-        F[0] = ke[0] * (T[1] - T[0]) / h[0] - (T[0] - T_ambient) / Rth + H[0] * dV[0]
-        add(0, 0, dke_dT_each[0] * (T[1] - T[0]) / h[0] - ke[0] / h[0] - 1.0 / Rth)
+        inv_Rth = 0.0 if bc_left.kind == "adiabatic" else 1.0 / bc_left.R_th_area
+        F[0] = ke[0] * (T[1] - T[0]) / h[0] - (T[0] - T_ambient) * inv_Rth + H[0] * dV[0]
+        add(0, 0, dke_dT_each[0] * (T[1] - T[0]) / h[0] - ke[0] / h[0] - inv_Rth)
         add(0, 1, dke_dT_each[0] * (T[1] - T[0]) / h[0] + ke[0] / h[0])
 
     # ---- right boundary ----
@@ -102,11 +113,11 @@ def _thermal_residual_jacobian(x, T, H, material, T_ambient, bc_left, bc_right):
         F[N - 1] = T[N - 1] - T_ambient
         add(N - 1, N - 1, 1.0)
     else:
-        Rth = bc_right.R_th_area
+        inv_Rth = 0.0 if bc_right.kind == "adiabatic" else 1.0 / bc_right.R_th_area
         F[N - 1] = (-ke[-1] * (T[N - 1] - T[N - 2]) / h[-1]
-                    - (T[N - 1] - T_ambient) / Rth + H[N - 1] * dV[N - 1])
+                    - (T[N - 1] - T_ambient) * inv_Rth + H[N - 1] * dV[N - 1])
         add(N - 1, N - 1,
-            -dke_dT_each[-1] * (T[N - 1] - T[N - 2]) / h[-1] - ke[-1] / h[-1] - 1.0 / Rth)
+            -dke_dT_each[-1] * (T[N - 1] - T[N - 2]) / h[-1] - ke[-1] / h[-1] - inv_Rth)
         add(N - 1, N - 2,
             -dke_dT_each[-1] * (T[N - 1] - T[N - 2]) / h[-1] + ke[-1] / h[-1])
 

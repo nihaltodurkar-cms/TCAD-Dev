@@ -520,30 +520,39 @@ class MplCanvasItem(QQuickPaintedItem):
             ax.set_axis_off()
             return
         stage_colours = {"equilibrium": "#61bd6d", "bias": "#d9a441"}
-        seen = {}
+        line_styles = ["-", "--", ":", "-."]
+        seen = set()
         offset = 0
         has_rejected = any(not step.converged for step in steps)
         for step in steps:
-            residuals = [np.nan if v is None else float(v)
-                         for v in next(iter(step.metrics.values()), [])]
             base = step.stage.split(":")[0]
             colour = stage_colours.get(base, "#4a90d9")
-            legend_label = base if base not in seen else None
-            seen[base] = True
-            xs = list(range(offset, offset + len(residuals)))
-            ax.semilogy(xs, residuals, marker=".", color=colour,
-                        label=legend_label, linewidth=1.0, markersize=3)
-            if not step.converged and residuals:
+            metric_names = list(step.metrics.keys()) or [""]
+            n = len(next(iter(step.metrics.values()), []))
+            xs = list(range(offset, offset + n))
+            first_series = None
+            for i, name in enumerate(metric_names):
+                series = [np.nan if v is None else float(v)
+                          for v in step.metrics.get(name, [])]
+                if first_series is None:
+                    first_series = series
+                label_key = f"{base}:{name}" if name else base
+                legend_label = label_key if label_key not in seen else None
+                seen.add(label_key)
+                ax.semilogy(xs, series, marker=".", color=colour,
+                            linestyle=line_styles[i % len(line_styles)],
+                            label=legend_label, linewidth=1.0, markersize=3)
+            if not step.converged and first_series:
                 last_x = xs[-1]
-                last_y = residuals[-1]
+                last_y = first_series[-1]
                 ax.plot(last_x, last_y, marker="x", color="#e74c3c",
                         markersize=8, markeredgewidth=2,
                         label="rejected" if has_rejected else None)
                 has_rejected = False  # only label once
-            offset += len(residuals)
+            offset += n
         ax.set_xlabel("cumulative Newton iteration")
-        ax.set_ylabel("residual (first metric)")
-        ax.legend(fontsize=8, frameon=False)
+        ax.set_ylabel("residual (all tracked metrics)")
+        ax.legend(fontsize=7, frameon=False)
         ax.grid(True, alpha=0.3)
 
     @Property(bool, notify=viewChanged)
