@@ -394,7 +394,7 @@ def test_ge_moscap_refuses_dg_fd_and_bad_gamma():
         MOSCapacitor(**PARAMS_CL, dg=True, dg_gamma=-1.0)
 
 
-def test_ge_device2d_and_3d_refuse_dg():
+def test_ge_device2d_solves_dg_device3d_still_refuses():
     from pytcad.mesh2d import Mesh2D
     from pytcad.device2d import Device2D
     from pytcad.mesh3d import Mesh3D
@@ -405,14 +405,18 @@ def test_ge_device2d_and_3d_refuse_dg():
     dop1d = np.where(x < 1e-4, -1e17, 1e17)
     dop2d = np.tile(dop1d, (y.size, 1))
 
-    # Device2D/Device3D refuse dg=True EAGERLY, at construction -- the
-    # same pattern already used for btbt=True in both classes (M16),
-    # not deferred to solve_equilibrium like Device1D.solve_bias's dg
-    # guard.  The test previously expected the solve_bias-style
-    # deferred raise, which never fires because construction itself
-    # already raises first.
-    with pytest.raises(NotImplementedError, match="M20 scope"):
-        Device2D(Mesh2D(x, y), dop2d, models=Models(bgn=False, dg=True))
+    # M42-S1 (2026-09-17): Device2D no longer refuses dg=True outright --
+    # the density-gradient equilibrium correction is now implemented
+    # there (ohmic contacts only; see test_m42_s1_density_gradient_2d.py
+    # for the full gate suite and M42-DENSITY-GRADIENT-2D3D-PLAN.md).
+    # This test now checks that it actually solves, rather than that it
+    # refuses -- Device3D (S1's own stated scope: Device2D only, S3 is
+    # the follow-up) still refuses unchanged.
+    dev2 = Device2D(Mesh2D(x, y), dop2d, models=Models(bgn=False, dg=True))
+    dev2.add_contact("left", i=[0], j=list(range(dev2.Ny)), V=0.0)
+    dev2.add_contact("right", i=[dev2.Nx - 1], j=list(range(dev2.Ny)), V=0.0)
+    dev2.solve_equilibrium()
+    assert np.all(np.isfinite(dev2.psi))
 
     z = graded_mesh(3e-5, [0.0], 2e-6, 8e-6, 1.2)
     dop3d = np.tile(dop2d, (z.size, 1, 1))
