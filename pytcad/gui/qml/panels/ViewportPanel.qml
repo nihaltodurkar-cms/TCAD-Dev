@@ -8,8 +8,16 @@ Rectangle {
     id: root
     // v2.1 correction (DESIGN.md section 2/10): the viewport is the
     // app's darkest, highest-contrast surface -- flush against the
-    // surrounding chrome, not a floating card. No border, no radius.
+    // surrounding chrome, not a floating card. No border of its own.
+    // v3.0 glassmorphism: `radius` DOES need to match the parent
+    // viewportFrame's `Theme.radiusGlass` + `clip: true` (Main.qml) --
+    // without it this Rectangle is square-cornered while the frame's
+    // rounded clip mask still crops it, chopping the corner pixels off
+    // the real rendered plot/3D canvas rather than just rounding a
+    // background. Kept as its own property (not hardcoded) so it stays
+    // in sync if Theme.radiusGlass ever changes.
     color: Theme.background
+    radius: Theme.radiusGlass
     property var controller
     property string currentMode: "doping"   // mirrors MplCanvasItem's own default
     // Which process step's checkpoint the "process" mode plot shows.

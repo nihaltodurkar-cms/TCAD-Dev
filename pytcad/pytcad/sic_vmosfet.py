@@ -56,12 +56,12 @@ convention every other fixture in this repo relies on):
 """
 
 import numpy as np
-from scipy.special import erf, erfc
 
 from .mesh3d import Mesh3D
 from .device3d import Device3D
 from .materials import SIC_4H, Semiconductor
 from .moscap import flatband_voltage
+from ._dmos_doping import vertical_dmos_doping
 
 
 class SiCVMOSFETParams:
@@ -101,64 +101,16 @@ class SiCVMOSFETParams:
 DEFAULT_PARAMS = SiCVMOSFETParams()
 
 
-def _erfc_rolloff(coord, edge, sigma_lat, high_side):
-    """0.5*erfc rolloff, 1D. high_side='left' -> ~1 for coord<<edge, 0
-    for coord>>edge (mirrors mosfet.py's `_sd_profile` convention)."""
-    s = (edge - coord) if high_side == "left" else (coord - edge)
-    return 0.5 * erfc(-s / (np.sqrt(2.0) * sigma_lat))
-
-
 def sic_vmosfet_doping(mesh: Mesh3D, p: SiCVMOSFETParams = DEFAULT_PARAMS):
     """Net doping and total ionized-impurity concentration [cm^-3],
     both shape (Nz, Ny, Nx) -- Device3D's expected doping array layout.
 
-    Additive-region construction (mosfet.py's own convention,
-    generalized to a vertical stack + a genuinely 3D lateral notch):
-    each physical region contributes a signed Gaussian/erf-rolloff
-    doping blob; net doping is their sum, Ntotal is the sum of their
-    magnitudes (the total-ionized-impurity convention every mobility/
-    BGN call in this repo already expects -- using |Nnet| instead is a
-    known bug class in compensated regions, see materials.py's own
-    `mobility_caughey_thomas` docstring)."""
-    x, y, z = mesh.x, mesh.y, mesh.z
-    X = x[None, None, :]      # (1,1,Nx)
-    Y = y[None, :, None]      # (1,Ny,1)
-    Z = z[:, None, None]      # (Nz,1,1)
-
-    lat_sigma = 3e-6   # lateral junction grading -- same order as
-                       # mosfet.py's own sigma_lat default (Lg/4-ish)
-
-    # --- vertical background: drift everywhere, smoothly boosted to
-    # substrate concentration near the bottom (erf step, not a hard
-    # cutoff -- avoids an unnecessary sharp Newton-unfriendly interface
-    # at a depth with no lateral structure to justify one).
-    y_drift_end = p.y_body + p.t_drift
-    sigma_sub = 3e-6
-    substrate_boost = (p.Nd_sub - p.Nd_drift) * 0.5 * (
-        1.0 + erf((Y - y_drift_end) / (np.sqrt(2.0) * sigma_sub)))
-    background = p.Nd_drift + substrate_boost              # n-type, >0 everywhere
-
-    # --- P-body: Gaussian-in-depth (peaked at the surface, same shape
-    # convention as mosfet.py's `_sd_profile`), present for x < Lch.
-    vert_body = np.exp(-(Y ** 2) / (2.0 * (p.y_body / 2.0) ** 2))
-    lat_body = _erfc_rolloff(X, p.Lch, lat_sigma, "left")
-    body = p.Na_body * vert_body * lat_body                 # p-type magnitude
-
-    # --- N+ source: shallow Gaussian, present for x < Ln, EXCEPT the
-    # body-tie notch (x < Lbt AND z < Wbt) is carved out below.
-    vert_src = np.exp(-(Y ** 2) / (2.0 * p.sigma_src ** 2))
-    lat_src = _erfc_rolloff(X, p.Ln, lat_sigma, "left")
-    notch = (_erfc_rolloff(X, p.Lbt, lat_sigma, "left")
-             * _erfc_rolloff(Z, p.Wbt, lat_sigma, "left"))
-    source = p.Nd_source * vert_src * lat_src * (1.0 - notch)
-
-    # --- P+ body-tie: shallow Gaussian, confined to the notch region.
-    vert_bt = np.exp(-(Y ** 2) / (2.0 * p.sigma_bt ** 2))
-    bodytie = p.Na_bodytie * vert_bt * notch
-
-    doping = background - body + source - bodytie
-    Ntotal = np.abs(background) + body + source + bodytie
-    return doping, Ntotal
+    Delegates to `pytcad._dmos_doping.vertical_dmos_doping`, the shared
+    additive-region construction umos3d.py's `umos_doping` also calls
+    (mosfet.py's own convention, generalized to a vertical stack + a
+    genuinely 3D lateral notch) -- see that module's docstring for the
+    full derivation."""
+    return vertical_dmos_doping(mesh, p)
 
 
 def build_sic_vmosfet(mesh: Mesh3D, p: SiCVMOSFETParams = DEFAULT_PARAMS,

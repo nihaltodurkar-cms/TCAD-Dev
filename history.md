@@ -1989,3 +1989,115 @@ Full record: `pytcad/M41-INCOMPLETE-ION-2D3D-PLAN.md` (section 6).
   to the baseline recorded in the plan doc before the first edit, so
   the default-off path is provably untouched and nothing needed
   reconstructing. Nothing committed.
+
+## 2026-09-16 -- code-review fixes + GUI "Deep Space" glassmorphism pass -- uncommitted
+
+Session did two things: fixed 8 findings from a `/code-review` pass, then
+drafted 3 glassmorphism direction mockups (dark+light, published as a
+Claude Design canvas artifact) and applied the user-picked one ("Deep
+Space") to the real app.
+
+- **code-review fixes** (`pytcad/pytcad/umos3d.py`,
+  `gui/services/examples.py`, `gui/qml/Main.qml`,
+  `gui/qml/panels/ViewportPanel.qml`, `gui/qml/panels/
+  ProjectTreePanel.qml`, `gui/qml/Theme.qml`, `.gitignore`): (1) the
+  UMOS trench-top corner (x=0,y=0) was in both the source Dirichlet
+  contact and the gate GateBC's node sets -- Device3D's assembly lets
+  Dirichlet silently win there, neutering the gate at exactly the
+  field-crowding corner the module's own docstring describes; fixed by
+  excluding x=0 from the source strip in both `umos3d.build_umos` and
+  `examples.umos_3d_example_spec` (verified: overlap eliminated,
+  reproduced with a standalone check before/after). (2) `umos3d.py`'s
+  and `sic_vmosfet.py`'s doping-construction bodies were a byte-for-byte
+  retyped copy; factored into shared `pytcad/_dmos_doping.py`
+  (`vertical_dmos_doping`), verified bit-identical (`np.array_equal`)
+  against the pre-refactor inline formula for both devices' defaults on
+  a real Mesh3D. (3) `Main.qml`'s `viewportFrame` rounds+clips but its
+  child `ViewportPanel` was square -- gave `ViewportPanel` the matching
+  `Theme.radiusGlass` (cosmetic consistency; the actual pixel-level clip
+  shape is controlled by the PARENT's `clip:true`+radius regardless of
+  the child's own radius, so this doesn't change what gets clipped --
+  worth revisiting if corner-cropping of real plot content is ever
+  reported). (4) `Theme.ambientGlow1/2` were declared+documented but
+  never painted; wired in as two glow blobs at the `Main.qml` window
+  root. (5) 5 solved-device `.vtu` AMR-pass files were committed against
+  the repo's own `.gitignore` policy comment; untracked (`git rm
+  --cached`) and added `*.vtu` to `.gitignore`. (6)
+  `ProjectTreePanel.qml`'s root was `color: "transparent"` while every
+  other sibling panel in the same dock uses `Theme.panel`/`Theme.border`
+  (confirmed by checking all of them) -- fixed to match. (7)/(8)
+  `examples.py`'s two 3D power-MOSFET example builders duplicated their
+  x/z mesh-construction boilerplate; factored into
+  `_graded_x_and_uniform_z_mesh`; `umos_3d_example_spec`'s "instant on
+  the UI thread" claim was unverified -- measured directly (isolated
+  module load, bypassing this machine's broken pytcad env -- see
+  below): 7,371 actual nodes (vs. 1,152 nominal NX*NY*NZ, a 6.4x
+  breakpoint inflation matching the pattern `finfet_3d_example_spec`'s
+  own docstring already warns about), <1ms construction time.
+- **Environment fix (`tcad-dev` conda env, not this repo): FIXED, not
+  just worked around.** This machine's `tcad-dev` env had `pytcad`
+  editable-installed against a DIFFERENT, separate checkout
+  (`C:\Users\disha\tcad\TCAD-Dev`, one commit behind this repo) via a
+  scikit-build-core meta path finder that hardcoded absolute paths into
+  that other tree and ignored `sys.path` entirely; its rebuild-on-import
+  hook also failed outright (`cmake` not on PATH anywhere on this
+  machine -> `FileNotFoundError: [WinError 2]`). First tried a
+  per-script workaround (stripping the `_editable_skbc_pytcad` finder
+  out of `sys.meta_path` before import) -- that fixed the MAIN process
+  only; `gui/services/solver_runner.py` runs as a genuinely separate
+  `QProcess` subprocess that doesn't inherit a patched `sys.meta_path`,
+  so a real Run/solve in the live app still failed with the same cmake
+  error. User said to fix it properly. Root cause: this repo's own
+  `pyproject.toml` states plainly that pip-installing `pytcad` at all is
+  NOT the intended dev workflow -- "the project ... ran entirely
+  in-place, with each test doing sys.path.insert() ... That convention
+  still works and is still the default development mode" -- and nothing
+  (`gui/app.py`, the test suite, `gui/services/job_runner.py`'s
+  subprocess launch) needs a pip install; they all resolve `pytcad`/
+  `gui` via `sys.path`/cwd already. `pip show pytcad` confirmed
+  `Required-by:` was empty (nothing in the env actually depended on the
+  package being installed), so `pip uninstall -y pytcad` in the
+  `tcad-dev` env was the correct, minimal fix -- not a rebuild, not
+  repointing the editable install at this checkout (which would still
+  need cmake, still not present). Verified after: `import pytcad` from
+  a plain `tcad-dev\python.exe` (no bypass script, no `conda run`) now
+  resolves straight to this checkout; a real end-to-end drive of the
+  live app (`AppController.loadStructureExample("mosfet_2d_structure")`
+  then `.run()`, pumping the real Qt event loop the same way
+  `gui/tests/test_smoke_e2e.py`'s `_run_device_and_wait` does -- not
+  simulated OS mouse clicks, which proved unreliable on this machine:
+  `SetForegroundWindow` doesn't reliably win focus across separate
+  PowerShell process invocations, and one stray click/keystroke landed
+  on the user's own Chrome window mid-session, caught and stopped
+  immediately, nothing destructive) completed a real subprocess solve
+  in 1.11s with zero errors. This is a change to the conda environment
+  on this machine, not to the repo -- nothing here needed a code change.
+- **"Deep Space" glassmorphism pass** (`gui/qml/Theme.qml`,
+  `gui/qml/Main.qml`): three directions ("Frosted Violet", "Deep Space",
+  "Minimal Glass") were drafted as full-window mockups, dark+light each,
+  published as a Claude Design canvas
+  (https://claude.ai/artifact/CAXghkcLhTuoowmCxfcZXL) for the user to
+  compare; "Deep Space" was picked. Applied to the real tokens:
+  `radiusGlass` 20->26px; new `glassBorderWidth` token (1.5px, replacing
+  an implicit hardcoded `border.width: 1` at all 4 dock sites in
+  `Main.qml`); `glassBorder` retinted from neutral white-based to
+  accent-violet at higher alpha (built from the SAME RGB
+  `Theme.accent`/`accentGlow` already use -- not a new hue, since the
+  accent color itself is pinned by `test_theme_tokens.py` and is meant
+  to be shared across every direction, not a per-direction variable);
+  `ambientGlow1/2` alpha roughly doubled and their blob size in
+  `Main.qml` grown; `panel`/`panelAlt`/`panelRaised` alpha LOWERED for a
+  more genuinely see-through glass (leaning on the now-stronger
+  border/glow to still read as "glass"). `background`/`cardBg`/
+  `accent`/`accentGradientStart`/`accentGradientEnd`/`radiusCard`
+  deliberately untouched (test-pinned). `qmllint` clean on every edited
+  file; `test_theme_tokens.py`/`test_shell_layout.py`/
+  `test_viewport_modes.py` green (19 tests, via the sys.meta_path
+  workaround above -- NOT the full suite, per explicit user instruction
+  mid-session to skip that). Verified live in the real app, both
+  dark and light, via real window screenshots (not just headless) --
+  loaded the 2D MOSFET structure example, toggled Ctrl+D light/dark,
+  zoomed into panel corners to confirm the accent-tinted rim and bigger
+  radius actually render. DESIGN.md carries the same record as its own
+  "v3.1 Deep Space pass" note. Nothing committed; scratch launcher/test
+  files cleaned up, none left in the tree.

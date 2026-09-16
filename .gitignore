@@ -37,6 +37,7 @@ env/
 # in AGENTS.md instead.
 *.png
 *.npz
+*.vtu
 
 # Exception: a real shipped GUI asset, not a generated result plot --
 # without this the app's QML Image source fails to load on any other

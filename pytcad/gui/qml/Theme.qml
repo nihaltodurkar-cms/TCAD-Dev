@@ -44,18 +44,27 @@ QtObject {
     readonly property int radius: 3
     readonly property int radiusLg: 6
     readonly property int radiusCard: 10  // overlay corner radius (popover/menu/modal)
-    readonly property int radiusGlass: 20 // v3.0: the glass-panel corner radius -- every
-                                          // docked panel (workbench/viewport/properties/
-                                          // console) uses this now, not `radius`.
+    readonly property int radiusGlass: 26 // v3.1 "Deep Space": bigger than v3.0's 20px --
+                                          // every docked panel (workbench/viewport/
+                                          // properties/console) uses this, not `radius`.
+    readonly property real glassBorderWidth: 1.5 // v3.1: thicker glass rim than v3.0's
+                                                  // implicit 1px -- Main.qml's dock
+                                                  // Rectangles read this instead of a
+                                                  // literal border.width: 1.
 
     // ---- surfaces (v3.0: translucent -- RGB unchanged, alpha added) ----
     readonly property color background:  dark ? "#0a0b0e" : "#eef1f4"
-    readonly property color panel:       dark ? Qt.rgba(0x0d / 255, 0x0e / 255, 0x12 / 255, 0.50)
-                                                : Qt.rgba(1, 1, 1, 0.55)
-    readonly property color panelAlt:    dark ? Qt.rgba(0x11 / 255, 0x12 / 255, 0x17 / 255, 0.42)
-                                                : Qt.rgba(0xec / 255, 0xef / 255, 0xf2 / 255, 0.50)
-    readonly property color panelRaised: dark ? Qt.rgba(0x16 / 255, 0x17 / 255, 0x1d / 255, 0.58)
-                                                : Qt.rgba(0xf7 / 255, 0xf9 / 255, 0xfa / 255, 0.65)
+    // v3.1 "Deep Space": lower alpha than v3.0 (panel 0.50->0.42, etc.)
+    // -- more genuinely see-through, leaning on the now-stronger
+    // ambientGlow/glassBorder to still read as "glass" rather than
+    // just dim. RGB unchanged (test_theme_tokens.py only pins .name(),
+    // which ignores alpha).
+    readonly property color panel:       dark ? Qt.rgba(0x0d / 255, 0x0e / 255, 0x12 / 255, 0.42)
+                                                : Qt.rgba(1, 1, 1, 0.48)
+    readonly property color panelAlt:    dark ? Qt.rgba(0x11 / 255, 0x12 / 255, 0x17 / 255, 0.36)
+                                                : Qt.rgba(0xec / 255, 0xef / 255, 0xf2 / 255, 0.44)
+    readonly property color panelRaised: dark ? Qt.rgba(0x16 / 255, 0x17 / 255, 0x1d / 255, 0.50)
+                                                : Qt.rgba(0xf7 / 255, 0xf9 / 255, 0xfa / 255, 0.58)
 
     // Near-opaque -- for ApplicationWindow's header/menuBar/footer
     // chrome specifically. Those sit in Qt's dedicated header/footer
@@ -90,8 +99,15 @@ QtObject {
     // display (see Main.qml's workbenchDock comment); componentizing
     // was reverted along with the shadow to keep the surviving pieces
     // easy to audit inline.
-    readonly property color glassBorder:    dark ? Qt.rgba(1, 1, 1, 0.20) : Qt.rgba(1, 1, 1, 0.60)
-    readonly property color glassHighlight: dark ? Qt.rgba(1, 1, 1, 0.09) : Qt.rgba(1, 1, 1, 0.55)
+    // v3.1 "Deep Space": the rim is now ACCENT-TINTED (violet) rather
+    // than plain white, and more visible -- a colored glass edge reads
+    // as more dramatic/saturated than a neutral one. Built from the
+    // same RGB Theme.accent/accentGlow already use (0.545/0.361/0.965
+    // dark, 0.486/0.227/0.929 light) so it stays visually consistent
+    // with the rest of the accent system rather than inventing a new hue.
+    readonly property color glassBorder:    dark ? Qt.rgba(0.545, 0.361, 0.965, 0.38)
+                                                : Qt.rgba(0.486, 0.227, 0.929, 0.30)
+    readonly property color glassHighlight: dark ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(1, 1, 1, 0.60)
 
     // ---- ambient background wash (v3.0) ---------------------------------
     // Painted once at the window root, behind every panel -- what the
@@ -99,10 +115,13 @@ QtObject {
     // colour stops (violet accent + blue "running" hue) so panels
     // placed over different screen regions catch a different tint,
     // the classic glassmorphism "colour glow behind frosted glass" cue.
-    readonly property color ambientGlow1: dark ? Qt.rgba(0.545, 0.361, 0.965, 0.16)
-                                                : Qt.rgba(0.545, 0.361, 0.965, 0.10)
-    readonly property color ambientGlow2: dark ? Qt.rgba(0.231, 0.510, 0.965, 0.14)
-                                                : Qt.rgba(0.231, 0.510, 0.965, 0.09)
+    // v3.1 "Deep Space": more saturated/dramatic than v3.0's 0.16/0.14 --
+    // the glow is meant to read immediately, not just barely tint the
+    // wallpaper.
+    readonly property color ambientGlow1: dark ? Qt.rgba(0.545, 0.361, 0.965, 0.30)
+                                                : Qt.rgba(0.545, 0.361, 0.965, 0.18)
+    readonly property color ambientGlow2: dark ? Qt.rgba(0.231, 0.510, 0.965, 0.24)
+                                                : Qt.rgba(0.231, 0.510, 0.965, 0.15)
 
     // ---- lines & text ---------------------------------------------------
     readonly property color border:       dark ? "#1f2026" : "#c9d0d8"
@@ -164,8 +183,8 @@ QtObject {
     readonly property color hoverOverlay: dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.045)
     readonly property color pressOverlay: dark ? Qt.rgba(1, 1, 1, 0.11) : Qt.rgba(0, 0, 0, 0.08)
     readonly property color shadow:       dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(0, 0, 0, 0.18)
-    readonly property color accentGlow:   dark ? Qt.rgba(0.545, 0.361, 0.965, 0.35)
-                                                : Qt.rgba(0.486, 0.227, 0.929, 0.22)
+    readonly property color accentGlow:   dark ? Qt.rgba(0.545, 0.361, 0.965, 0.42)
+                                                : Qt.rgba(0.486, 0.227, 0.929, 0.28)
 
     function toggle() { theme.dark = !theme.dark }
 }

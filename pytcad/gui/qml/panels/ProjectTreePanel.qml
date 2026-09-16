@@ -5,8 +5,16 @@ import ".."
 
 Rectangle {
     id: root
-    color: "transparent"
-    border.color: "transparent"
+    // Real translucent glass fill (same Theme.panel/glassBorder tokens
+    // workbenchDock's own Rectangle already uses in Main.qml), not a
+    // literal "transparent" -- this panel is normally hosted inside
+    // that already-tinted dock, but it is still a standalone component
+    // and must carry its own surface: instantiated on its own (a future
+    // test harness, or reparented outside workbenchDock's StackLayout)
+    // "transparent" would leave it with no panel background at all,
+    // just floating icons/text over whatever happens to sit behind it.
+    color: Theme.panel
+    border.color: Theme.border
     property var controller
 
     // v3.0 glassmorphism: icon + label rows with a solid gradient pill

@@ -9,6 +9,25 @@
 > before hand-editing tokens. The "v2.1 correction" changes described in section 2
 > have been applied to `Theme.qml` and the panels/components it identifies; anything
 > not yet applied is called out explicitly rather than implied as done.
+>
+> **v3.1 "Deep Space" pass** (chosen from three glassmorphism directions drafted as
+> comparison mockups -- "Frosted Violet", "Deep Space", "Minimal Glass" -- each in
+> dark and light; "Deep Space" was picked): bigger/more dramatic than v3.0.
+> `radiusGlass` 20px -> 26px; new `glassBorderWidth` token (1.5px, was an implicit
+> hardcoded `1` in every dock's `border.width:` in `Main.qml`); `glassBorder` is now
+> accent-tinted violet (was neutral white-based) at higher alpha (dark 0.20->0.38,
+> light 0.60->0.30 -- built from the same RGB `Theme.accent`/`accentGlow` already
+> use, not a new hue); `ambientGlow1`/`ambientGlow2` alpha roughly doubled (dark
+> 0.16/0.14 -> 0.30/0.24) and their blob size in `Main.qml` grown (0.7/0.55 ->
+> 0.85/0.68 of window width); `panel`/`panelAlt`/`panelRaised` alpha LOWERED (dark
+> panel 0.50->0.42, etc.) for a more genuinely see-through glass, leaning on the
+> now-stronger border/glow to keep it reading as "glass" rather than just dim.
+> `background`/`cardBg`/`accent`/`accentGradientStart`/`accentGradientEnd`/
+> `radiusCard` are UNCHANGED -- `test_theme_tokens.py` pins their exact `.name()`
+> hex, and the accent hue is the one thing shared across every direction, not a
+> per-direction variable. Verified in the real running app (both dark and light,
+> `gui/tests/test_theme_tokens.py` + `test_shell_layout.py` + `test_viewport_modes.py`
+> green) -- not just mocked up.
 
 ## 0. Overview
 

@@ -63,12 +63,12 @@ symmetry for y>Dtrench):
 """
 
 import numpy as np
-from scipy.special import erf, erfc
 
 from .mesh3d import Mesh3D
 from .device3d import Device3D
 from .materials import SILICON, Semiconductor
 from .moscap import flatband_voltage
+from ._dmos_doping import vertical_dmos_doping
 
 
 class UMOSParams:
@@ -108,48 +108,15 @@ class UMOSParams:
 DEFAULT_PARAMS = UMOSParams()
 
 
-def _erfc_rolloff(coord, edge, sigma_lat, high_side):
-    """0.5*erfc rolloff, 1D (same convention as sic_vmosfet.py's own
-    helper). high_side='left' -> ~1 for coord<<edge, 0 for coord>>edge."""
-    s = (edge - coord) if high_side == "left" else (coord - edge)
-    return 0.5 * erfc(-s / (np.sqrt(2.0) * sigma_lat))
-
-
 def umos_doping(mesh: Mesh3D, p: UMOSParams = DEFAULT_PARAMS):
     """Net doping and total ionized-impurity concentration [cm^-3],
-    both shape (Nz, Ny, Nx). Identical additive-region construction to
-    sic_vmosfet.sic_vmosfet_doping (the doping profile does not care
-    where the gate BC is placed) -- only the caller's geometry
-    parameters and the gate placement in build_umos differ."""
-    x, y, z = mesh.x, mesh.y, mesh.z
-    X = x[None, None, :]
-    Y = y[None, :, None]
-    Z = z[:, None, None]
-
-    lat_sigma = 3e-6
-
-    y_drift_end = p.y_body + p.t_drift
-    sigma_sub = 3e-6
-    substrate_boost = (p.Nd_sub - p.Nd_drift) * 0.5 * (
-        1.0 + erf((Y - y_drift_end) / (np.sqrt(2.0) * sigma_sub)))
-    background = p.Nd_drift + substrate_boost
-
-    vert_body = np.exp(-(Y ** 2) / (2.0 * (p.y_body / 2.0) ** 2))
-    lat_body = _erfc_rolloff(X, p.Lch, lat_sigma, "left")
-    body = p.Na_body * vert_body * lat_body
-
-    vert_src = np.exp(-(Y ** 2) / (2.0 * p.sigma_src ** 2))
-    lat_src = _erfc_rolloff(X, p.Ln, lat_sigma, "left")
-    notch = (_erfc_rolloff(X, p.Lbt, lat_sigma, "left")
-             * _erfc_rolloff(Z, p.Wbt, lat_sigma, "left"))
-    source = p.Nd_source * vert_src * lat_src * (1.0 - notch)
-
-    vert_bt = np.exp(-(Y ** 2) / (2.0 * p.sigma_bt ** 2))
-    bodytie = p.Na_bodytie * vert_bt * notch
-
-    doping = background - body + source - bodytie
-    Ntotal = np.abs(background) + body + source + bodytie
-    return doping, Ntotal
+    both shape (Nz, Ny, Nx). Delegates to
+    `pytcad._dmos_doping.vertical_dmos_doping`, the SAME shared
+    implementation sic_vmosfet.py's `sic_vmosfet_doping` calls -- the
+    doping profile does not care where the gate BC is placed, so only
+    the caller's geometry parameters and the gate placement in
+    build_umos differ."""
+    return vertical_dmos_doping(mesh, p)
 
 
 def build_umos(mesh: Mesh3D, p: UMOSParams = DEFAULT_PARAMS, models=None):
@@ -166,9 +133,17 @@ def build_umos(mesh: Mesh3D, p: UMOSParams = DEFAULT_PARAMS, models=None):
 
     kk_all = np.arange(mesh.Nz)
 
-    # Source: the entire x=0..Ln surface strip (source + body-tie,
-    # shorted -- physically the same metal).
-    i_src = np.where(mesh.x <= p.Ln)[0]
+    # Source: the x=0..Ln surface strip (source + body-tie, shorted --
+    # physically the same metal), EXCLUDING x=0 itself: that column is
+    # the trench sidewall, which belongs exclusively to the gate BC
+    # below (same "corner nodes belong exclusively to one BC" rule
+    # finfet3d.py's own tri-gate corners already follow). Without this,
+    # (x=0, y=0) sits in both bcs['source'] and bcs['gate'], and
+    # Device3D's Dirichlet-after-Robin assembly order would silently
+    # let the grounded source override the gate at the trench top
+    # corner -- exactly the field-crowding corner this module's own
+    # docstring says the BC placement is meant to produce.
+    i_src = np.where((mesh.x > 0.0) & (mesh.x <= p.Ln))[0]
     ii, kk = np.meshgrid(i_src, kk_all, indexing="ij")
     dev.add_contact("source", i=ii.ravel(), j=np.zeros(ii.size, dtype=int),
                     k=kk.ravel(), V=0.0)
