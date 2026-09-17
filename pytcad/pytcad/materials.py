@@ -205,9 +205,16 @@ SIC_4H = Semiconductor(
     # narrowing model; no validated 4H-SiC-specific BGN fit is used
     # here -- BGN mainly affects the heavily-doped N+/P+ regions, not
     # the lightly-doped drift region that sets blocking voltage), and
-    # m_n_star/m_p_star (this field is "unused by any solver yet" per
-    # the Semiconductor class's own docstring -- kept as a representative
-    # DOS-averaged placeholder, not a validated anisotropic fit).
+    # m_n_star/m_p_star: kept as a representative DOS-averaged placeholder,
+    # not a validated anisotropic fit.  CORRECTED 2026-09-17 (M42-S2):
+    # this field IS used -- device.py's/device2d.py's DG (density-
+    # gradient) quantum-correction residual/Jacobian and moscap.py both
+    # feed it directly to dg._dg_prefactor, and M42 makes the composition
+    # load-bearing (the quantum-correction magnitude scales as
+    # 1/sqrt(m*)).  Device2D now refuses Models(dg=True) outright for
+    # this material rather than silently reporting a confinement number
+    # built on an unvalidated mass (see device2d.py's __init__, section
+    # 10.3(d) of M42-DENSITY-GRADIENT-2D3D-PLAN.md).
     #
     # tau_n0/tau_p0 (SRH minority-carrier lifetime) is GROWTH-QUALITY
     # DEPENDENT in real 4H-SiC by an order of magnitude or more

@@ -1,10 +1,10 @@
 # M42 — Density-gradient quantum correction in structured Device2D/Device3D
 
 Written 2026-09-12. **S1 (Device2D, ohmic contacts only) LANDED
-2026-09-17 -- see section 9 for results.** S2 (the GateBC Lambda
-boundary condition), S3 (Device3D) and S4 (FinFET demonstration) remain
-NOT STARTED -- see section 9's own honest-limits note before assuming
-otherwise.
+2026-09-17 -- see section 9 for results.** **S2 (the GateBC Lambda
+boundary condition) LANDED 2026-09-17 -- see section 11 for results.**
+S3 (Device3D) and S4 (FinFET demonstration) remain NOT STARTED -- see
+section 10.8.
 
 `ARCHITECTURE.md` 4d.3 sizes M42 [L] and justifies it as *"the
 prerequisite for any credible FinFET/GAA claim, where confinement is
@@ -420,3 +420,552 @@ the ~30-minute full run twice.
   S1 does not by itself answer whether S2 is worth attempting -- that
   decision (§8's own "decide S2 is answerable before starting it") is
   still open and belongs to a future session.
+
+## 10. S2 plan -- the GateBC Lambda boundary condition (written 2026-09-17, NOT YET IMPLEMENTED)
+
+Section 8 said "decide S2 is answerable before starting it". **Decided:
+it is answerable.** This section records the decision, the evidence,
+the chosen boundary condition, the gates, and the ordered steps.
+
+### 10.1 Why sections 0.2/7 overstated the problem
+
+Section 0.2 says the GateBC Lambda BC has "no 1D precedent to inherit,"
+on the grounds that Device2D's oxide is a lumped capacitance with no
+Si/SiO2 interface node for a hard wall to live on. **Re-checked against
+moscap.py directly: M20's MOSCapacitor has exactly the same structure.**
+Its oxide is NOT meshed either -- it is the identical lumped Robin term
+(moscap.py:189 `kappa = eps_ox*LD/(eps_s*tox)`; device2d.py:589
+`kappa = eps_ox*LD/(eps*tox_cm)` -- the same formula), and its node 0 is
+the silicon surface node carrying that flux, structurally identical to a
+GateBC node. M20's hard-wall BC therefore IS the precedent, and it was
+already researched against DEVSIM's DG implementation and already gated
+against this repo's own Schrodinger-Poisson solver.
+
+The literature's exact BC (continuity of psi_band +- Lambda and of its
+gradient across Si/SiO2 -- Wettstein's Dessis/Sentaurus DG; the
+wavefunction-penetration BCs) requires a MESHED oxide with its own
+quantum prefactor. That is structurally unavailable here and is not what
+this milestone is. The infinite-barrier (hard-wall) limit is the
+defensible degenerate case of that same physics, and it is the
+convention dg.schrodinger_poisson(hard_wall_left=True) -- the only
+independent reference this repo owns -- already uses. Choosing it is
+CONSISTENCY WITH THE REFERENCE THE GATES CHECK AGAINST, not a guess.
+
+Section 7's "if S2 cannot be answered defensibly, stop at S1" does not
+fire. Proceed.
+
+### 10.2 The boundary condition
+
+At every node in a GateBC's node set (`kk = bc.j*Nx + bc.i`), apply
+M20's TWO-PART hard wall (moscap.py:402-470), both halves -- M20
+established directly that either half alone is insufficient:
+
+1. **Pin** Lambda_n = Lambda_p = `dg.LAMBDA_MAX_VT * VT` (20.0*VT,
+   ~0.517 V at 300 K), replacing those Lambda rows. This suppresses
+   n/p at the gate node by exp(-20) ~ 2e-9, the discrete equivalent of
+   the S-P reference's psi_k(0)=0 (n_q(0)=0 identically).
+2. **Ghost-zero** the gate node's `g = sqrt(n)` (and sqrt(p)) IN ITS
+   NEIGHBOURS' Lambda flux stencil: for every edge with exactly one
+   gate endpoint, use g_gate == 0.0 in the flux and drop that
+   endpoint's Jacobian chain columns. M20's record: pinning without
+   this left the full classical g[0] feeding node 1's curvature, which
+   still dominated the centroid integral.
+
+The **Poisson** row at a gate node keeps the REAL, unsuppressed n/p
+(classical charge balance untouched) -- M20's explicit choice; the hard
+wall affects only the quantum-confinement curvature.
+
+**Precedence**: a node carrying both a DirichletBC and a GateBC takes
+the Dirichlet Lambda = 0 rule (ohmic wins). Document it; do not leave it
+to assembly order.
+
+**Implementation shape** in S1's existing edge-scatter: one boolean
+`gate_mask` (flat, N) built once; then per carrier
+`g_eff = np.where(gate_mask, 0.0, g.ravel())` used in Gx/Gy, and the
+same mask zeroing `dg_dpsi(...)`/`dg_dlam(...)` for scattered columns
+whose SOURCE node is a gate node. Gate-to-gate tangential edges come out
+self-consistently zero and their rows are pinned anyway.
+
+### 10.3 Two traps found by reading the S1 code (read this before coding)
+
+**(a) `_dg_residual_jacobian_eq` has NO Robin term at all.** Its own
+docstring says so ("No GateBC Robin term here: S1 refuses any device
+with a GateBC before this is ever called"). S2 must ALSO port the gate
+Robin block from `_residual_jacobian_poisson` (device2d.py:765-791) into
+the DG Poisson row -- including `psi_b_local = arcsinh(C/(2*nie_s)) -
+band_shift` (omitting it is a real bug that shifted Vth by ~0.36 V once,
+see test_validation_2d.py::test_mosfet_vth_matches_moscap_landmark's
+docstring) and the `w = dVx[bc.i]` face weight. This is genuinely new
+assembly work beyond the Lambda BC itself, and section 1's table did not
+list it.
+
+**(b) Equilibrium hardcodes `Vg_s = 0.0`** (device2d.py:775-777,
+deliberate: bc.Vg can be stale after a bias point). DG is
+equilibrium-only (solve_bias refuses dg=True). **Therefore strong
+inversion must be reached through `Vfb`, not `Vg`.** `add_gate(...,
+Vfb=-V_eff)` makes the equilibrium Robin term `(0 - Vfb_s) =
++V_eff/VT`, which is exactly MOSCapacitor's `(Vg - Vfb)/VT`. Every gate
+below that needs inversion uses this. **Do NOT "fix" the Vg_s=0.0
+hardcode** -- it would move the classical path and break bit-identity.
+
+**(c) Correction to section 4 item 1.** `LAMBDA_MAX_VT` is NOT a clamp
+anywhere in the coupled-Newton path -- grep (2026-09-17) finds it
+clamping only `dg.quantum_potential` (the analysis-layer explicit
+formula) and serving as moscap's hard-wall PIN VALUE. Neither device.py
+nor device2d.py clamps Lambda at all; device2d.py only clips the Newton
+UPDATE to +-10*VT. So "gate that the clamp is engaging" does not
+translate to this path -- S2-G6 below replaces it with a boundedness +
+exact-pin-value check.
+
+**(d) Left over from S1.** Section 4 item 5 told S1 to fix the stale
+`m_n_star/m_p_star` comment in materials.py (~line 208, 4H-SiC block).
+Re-verified on disk 2026-09-17: **not done.** Do it in S2, and decide
+explicitly whether `SIC_4H` + `dg=True` should refuse loudly rather than
+silently use a placeholder mass in a quantum correction.
+
+### 10.4 Files touched
+
+- **`pytcad/pytcad/device2d.py`** -- the only file with real changes.
+  S1 already amended this frozen core; the Lambda BC has to live where
+  the Lambda assembly lives, so a sibling module is NOT available here
+  (unlike M43/M34/M16-S2). Full CLAUDE.md amendment protocol applies:
+  explicit sign-off, FD-Jacobian first, default-off bit-identity,
+  reconstruct-and-compare md5 on the six m13 goldens (values recorded in
+  section 9).
+  Edits: (i) `_dg_residual_jacobian_eq` -- add the gate Robin block to
+  the Poisson row, add `gate_mask`, ghost-zero the Lambda flux and its
+  Jacobian columns, pin Lambda at gate nodes; (ii)
+  `_solve_equilibrium_dg_coupled` -- delete the `NotImplementedError`
+  (device2d.py:1046-1053); (iii) `__init__`'s comment at 198-201
+  updated.
+- **`pytcad/tests/test_m42_s2_gate_bc.py`** -- new gate file, following
+  `test_m42_s1_density_gradient_2d.py`'s convention exactly (module
+  docstring listing the gates, one test per gate, `_make_device` helper).
+- **`pytcad/pytcad/materials.py`** -- the 10.3(d) comment fix only.
+- **`pytcad/tests/test_m20_dg.py`** -- ONLY if a refusal test needs the
+  same M34-S6/M41-style rewrite S1 already applied once. Check first.
+- **NOT touched**: `device.py`, `device3d.py`, `moscap.py`, `dg.py`,
+  `unstructured_dd*.py`, anything in `gui/` or `workbench/`.
+- **Do NOT extract `dg_grid.py` in S2.** The dimension-generic kernel
+  extraction belongs to S3, following M43 phase 2's own precedent
+  (write 2D in place, factor to `thermal_grid.py` when 3D arrives, and
+  re-run phase 1's gates unchanged immediately after the refactor and
+  BEFORE any 3D code). Doing it now adds bit-identity risk against S1's
+  green gates for no S2 benefit.
+
+### 10.5 Gates (write red first, in this order)
+
+| gate | what it proves |
+|---|---|
+| **S2-G1** | **FD-Jacobian FIRST**, full 3N coupled system on a GATED Device2D, >=90 random columns, 5e-5 house tolerance. Mutation-test it: drop the ghost-zero masking and confirm the probe moves (M41's lesson -- convergence gates tolerate a wrong Jacobian) |
+| **S2-G2** | `dg=False` bit-identity ON A GATED DEVICE: `np.array_equal` on psi/n/p vs. pre-S2, plus all six `tests/goldens/m13/*.npz` md5s unchanged (section 9's recorded values) |
+| **S2-G2b** | **S1 regression**: all 10 gates in `test_m42_s1_density_gradient_2d.py` re-run UNCHANGED, and an ohmic DG result is `np.array_equal` to its pre-S2 value |
+| **S2-G-RED** | **the reduction identity, per 4d.4 -- and it is against `MOSCapacitor`, NOT Device1D.** Device1D's DG has no gate (section 0.2), so it cannot host this check; M20's MOS-C can, and the two discretizations are provably the same row up to a factor `dVx[i]`: a y-uniform gated Device2D's row 0 is `dVx[i] * [ (psi1-psi0)/hy0 + kappa*(Vg_s-Vfb_s-(psi0-psi_b)) - dVy0*rho ]`, which is moscap.py:377-380 exactly; `Ns`/`LD`/`nie_s` use identical formulas in both classes (moscap.py:139-149 vs device2d.py:272-273/329); both pin Lambda=0 at the far ohmic node; both use the same 9-stage gamma ladder literal. **Construction**: `Mesh2D(x=uniform, y=mos.x)`, uniform doping `Nsub`, `add_contact` on the bottom row, `add_gate(i=all, j=0, tox_cm, Vfb=Vfb_2D)`, `D_it=0`, `Qf=0`, `bgn=False`, `fd=False`, same material and same `dg_gamma`; compare column-wise against `MOSCapacitor(dg=True)` at `Vg_mos = mos.Vfb - Vfb_2D`. **Target: floating-point noise** (S1-G3 got 1.8e-15), not a tolerance. **Prerequisite sub-gate**: run the identical comparison with `dg=False` FIRST and require it exact -- if the classical baseline is not exact, the DG comparison is not diagnostic and the discrepancy must be explained before proceeding |
+| **S2-G-CONF** | **the load-bearing gate (section 0.2/5).** Under a gate biased into strong inversion (via `Vfb`, per 10.3(b)): the DG inversion-charge centroid measured down the gated column is **> 0.2 nm** (M20's own G-D threshold), the classical centroid is strictly smaller (M20's `test_gc_classical_centroid_is_the_sub_debye_tail` pattern), the gate-node electron density is strictly below classical, and the deficit grows monotonically with gamma |
+| **S2-G-SP** | cross-check the gated-2D centroid against `dg.schrodinger_poisson_mos` on the matching MOS-C, reusing M20's **factor-2 band** (`test_gc_dg_centroid_within_factor2_of_sp`). Do not invent a new tolerance -- this is the only independent reference available |
+| **S2-G-MESH** | mesh convergence: the centroid displacement does not drift (< ~10%) under 2x refinement of the surface-normal (y) spacing. A hard wall applied at the wrong node moves with the mesh |
+| **S2-G6** | Lambda at every gate node equals `LAMBDA_MAX_VT*VT` EXACTLY; interior |Lambda| finite and bounded; the gamma continuation converges with NO warning under `warnings.simplefilter("error")`; two independent solves are `np.array_equal` (S1-G6's pattern). Replaces section 4 item 1's untranslatable "count clamped nodes" |
+| **S2-G7** | scope boundaries: S1's `NotImplementedError` naming S2 is GONE; `dg+fd`, `dg+incomplete_ion`, `dg+band_offset="affinity"` and `solve_bias(dg=True)` all STILL refuse; `Device2D(unstructured=True)` still refuses `dg`; `Device3D` still refuses `dg`, now naming **S3** |
+
+No published-value benchmark row: there is no published FinFET/MOS DG
+curve in hand, and inventing one is exactly what M14 G-A's standing
+lesson forbids. S2-G-SP plus S2-G-CONF are the physics gates (M26's
+literature-trend precedent). No `benchmarks/` row and no performance
+claim (section 6 / Architecture_Master_Plan section 36).
+
+### 10.6 Ordered implementation steps (TDD, red first)
+
+0. Re-read section 9's golden md5 block; record the six md5s again
+   BEFORE any edit (reconstruct-and-compare step 1 of 4). Confirm the
+   pre-S2 fast suite baseline, including the 10 PRE-EXISTING M43
+   `_core` failures section 9 documents -- do not re-discover them.
+1. Write `tests/test_m42_s2_gate_bc.py` with S2-G1 and S2-G-RED's
+   classical (`dg=False`) sub-gate ONLY, and run them RED.
+2. Port the gate Robin block into `_dg_residual_jacobian_eq`'s Poisson
+   row (10.3(a)). Get S2-G1 green on a gated device with the Lambda BC
+   still the S1 ohmic-only one. Mutation-test S2-G1.
+3. Add `gate_mask` + the two-part hard wall (10.2). Re-run S2-G1
+   (it must stay green -- the new Jacobian columns are the risky part)
+   and mutation-test it a second time with the masking dropped.
+4. Delete the `NotImplementedError` at device2d.py:1046-1053. Write and
+   green S2-G2, S2-G2b (the whole S1 file, unchanged) -- before any
+   physics gate, so a regression cannot hide behind a new green test.
+5. Write and green S2-G-RED proper (DG, against MOSCapacitor). This is
+   the gate most likely to expose an assembly error; expect to debug
+   here, not later.
+6. Write and green S2-G-CONF, then S2-G-SP, then S2-G-MESH.
+7. Write and green S2-G6, S2-G7.
+8. Fix the materials.py comment (10.3(d)) and decide the SiC+dg
+   question explicitly.
+9. Reconstruct-and-compare on the goldens (steps 2-4 of CLAUDE.md's
+   protocol): regenerate, prove recoverable, record what moved and why
+   (expected: nothing -- the `dg=False` path is untouched).
+10. FULL suite (`not slow` then `slow`), adversarial probe pass, then
+    write section 11 (S2 results) into THIS file and a history.md entry.
+
+### 10.7 Honest limits -- S2 specifically
+
+- **2D only.** Device3D DG is S3 and stays refused, now naming S3 rather
+  than S2. Confirmed against ARCHITECTURE.md 5.3's matrix (`Density
+  gradient / quantum: 1D Y, 2D S1, 3D -`).
+- **Equilibrium only**, unchanged. `solve_bias` still refuses `dg=True`
+  in every device. A consequence worth stating in the module docstring:
+  because equilibrium hardcodes `Vg_s = 0`, **a gated DG device is
+  biased through `Vfb` only** -- there is no `Vg` sweep, and therefore
+  no DG C-V curve in Device2D (MOSCapacitor still owns that).
+- **The hard wall is the INFINITE-BARRIER LIMIT, not the literature's
+  interface condition.** Wettstein's Dessis/Sentaurus DG and the
+  wavefunction-penetration BCs both require a meshed oxide with its own
+  quantum prefactor and continuity of `psi_band +- Lambda` across the
+  interface. PyTCAD's oxide is a lumped capacitance, so there is no
+  oxide Lambda to be continuous with. Consequences to state, not hide:
+  no wavefunction penetration into the oxide, so **C_max is
+  overestimated relative to a penetration-aware model**, and the result
+  is barrier-height-independent (a 3.1 eV Si/SiO2 barrier and an
+  infinite one give the same answer here).
+- **The pin value 20*VT is a numerical choice inherited from M20**, not
+  a physical barrier height. It is large enough to zero the density and
+  small enough not to wreck the Newton scaling; any result is a
+  pinned-Lambda result and should say so.
+- **Structured grids only.** `Device2D(unstructured=True)` keeps
+  refusing `dg` (no Lambda mechanism there at all).
+- **gamma = 1.0, uncalibrated**, unchanged from M20. If a gate needs
+  gamma != 1 to pass, that is a finding to report, not a knob to turn
+  (section 4 item 4).
+- **No FinFET/GAA claim from S2.** That needs 3D (S3) and a corner
+  geometry (S4). A 2D gated confinement result is a necessary step, not
+  the milestone's justification.
+- **No performance claim, no benchmarks row.**
+
+### 10.8 What S3 and S4 are, inferred and made explicit
+
+Section 2's table names them but does not scope them. Recorded here so
+a later session does not re-derive it:
+
+- **S3 = Device3D DG.** Do the M43-phase-2 move: factor S1+S2's
+  assembly into a dimension-generic `pytcad/dg_grid.py`
+  (`_dg_residual_jacobian_grid(coords, psi, Lam_n, Lam_p, ...)`, D=2 or
+  3, one axis loop), mirroring `thermal_grid.py`/`ii_grid.py`/
+  `btbt_grid.py`; make `device2d.py`'s method a thin wrapper and
+  **re-run every S1 and S2 gate unchanged BEFORE writing any 3D code**
+  (that ordering is exactly what stopped M43 phase 2 from repeating
+  phase 1's sign bug). Gates: FD-Jacobian at D=3; `dg=False`
+  bit-identity + the `resistor3d_eq.npz` golden; and the two-level
+  reduction chain (z-uniform gated 3D -> the gated 2D answer, which
+  already reduces to MOSCapacitor). Section 3's cost problem
+  (equilibrium goes from N to 3N unknowns, times up to 9 gamma stages)
+  becomes real at D=3: measure the `linsolve` method choice, select on
+  the `dg` flag, change no default, and quote nothing without a
+  `benchmarks/` row.
+- **S4 = a FinFET/GAA confinement demonstration** on `finfet3d.py`:
+  confinement from two faces at once in a fin corner. Report as a
+  QUALITATIVE TREND unless a published FinFET quantum-correction curve
+  is actually in hand (M26 precedent, M14 G-A's standing lesson).
+
+## 11. S2 results (landed 2026-09-17)
+
+Landed as scoped in section 10: the GateBC Lambda boundary condition
+(section 10.2's two-part hard wall, ported from moscap.py's own M20
+fix), in `pytcad/pytcad/device2d.py` only. `device.py`, `device3d.py`,
+`moscap.py`, `dg.py`, `unstructured_dd*.py`, `gui/`, `workbench/` were
+NOT touched. No `dg_grid.py` extraction (that is S3's job per section
+10.4's last bullet). Sign-off: the user's explicit instruction to
+implement M42-S2 per this plan's own section 10.
+
+### Golden baseline (reconstruct-and-compare)
+
+Step 1 (before any edit): confirmed the six m13 golden md5s recorded in
+section 9 were already present and byte-identical in this checkout.
+
+**A real slip during this step, recorded honestly**: partway through
+the session `tests/goldens/m13/*.npz` were deleted with `rm -f` before
+regenerating (the exact accident M31-P5-1's own Gate B-1 record already
+warns about, section 10.5's citation of it did not stop it happening a
+second time) -- including `frozen_meshes.npz`, which has NO regeneration
+code path in `test_m13_goldens.py` itself. Reconstructed it from the
+documented recipe (`M31-P5-1-SOLVER-SELECTION-PLAN.md`'s own Gate B-1
+section, read via `git show 161092a:...`): `diode1d_x` =
+`graded_mesh(2.0e-4, [1.0e-4], h_min=1.0e-8, h_max=1.0e-6, ratio=1.12)`;
+`diode2d_x` = `graded_mesh(1.0e-4, [0.5e-4], 4e-7, 4e-6, 1.25)`;
+`diode2d_y` = `graded_mesh(0.3e-4, [0.0], 4e-7, 4e-6, 1.25)`;
+`resistor3d_y` = `np.linspace(0.0, 0.4e-4, 5)`. The reconstructed file
+came back **byte-identical** (md5 `ce5850ecaf56ee0db5e05be4d9b17a80`)
+to the recorded value, and all four per-test goldens regenerated
+against the POST-S2 code also came back byte-identical to section 9's
+recorded values:
+
+```
+f78dd28dbd24b39f6995e423d59e24cc  diode1d_eq.npz
+36662794eb2f849ac6263f23921ebb86  diode1d_fwd.npz
+f31b42c7b4cded7d10ff0831d92f8174  diode2d_eq.npz
+ce5850ecaf56ee0db5e05be4d9b17a80  frozen_meshes.npz
+a2791e63f070ae749ae5bc11fde99ed1  hetero1d_eq.npz
+7b2e8ad51672c9fd66ec26b30d88446e  resistor3d_eq.npz
+```
+
+Expected and confirmed: S2 touches only the `dg=True` path (and, for a
+gated device, the new GateBC branch inside it), so the default
+`dg=False` path -- what every one of these goldens exercises -- is
+byte-for-byte unchanged.
+
+### What was actually built
+
+**(a) The gate Robin block, ported into the DG Poisson row.**
+`_dg_residual_jacobian_eq` had NO Robin term at all before S2 (S1's own
+docstring said so). Ported `_residual_jacobian_poisson`'s gate block
+verbatim into the interleaved 3N layout, including the
+`psi_b_local = arcsinh(C/(2*nie_s)) - band_shift` term (whose omission
+in an earlier, unrelated copy of this block cost a real ~0.36 V Vth
+shift once, per `test_mosfet_vth_matches_moscap_landmark`'s own
+docstring) and the `w = dVx[bc.i]` face-length weight.
+
+**(b) The two-part Lambda hard wall (section 10.2).** A `gate_mask`
+boolean array built once from every `GateBC`'s node set. Part 1: pin
+`Lambda_n = Lambda_p = LAMBDA_MAX_VT*VT` at every gate node that is NOT
+also a `DirichletBC` node (ohmic takes precedence, matching section
+10.2's stated rule -- implemented by excluding `contact_k` from the
+gate pin set before it is unioned into the final pinned-row list).
+Part 2: ghost-zero `g = sqrt(n)`/`sqrt(p)` at gate nodes inside the
+Lambda flux stencil (`Gx`/`Gy`), so a gate node's real classical density
+never leaks into a neighbor's curvature -- moscap's own finding that
+pinning alone is insufficient. Mechanically this reduced to replacing
+`g` with `g_eff = np.where(gate_mask, 0.0, g)` in the flux computation
+and `gflat` with its ghosted equivalent in the Jacobian scatter; since
+`sign*0/2 == 0` and `-0/(2*VT) == 0`, the ghosted neighbor's Jacobian
+contribution is automatically zero with no extra masking logic needed
+there (only the flux VALUE needed the explicit `np.where`).
+
+**(c) A genuine Newton-robustness finding, not anticipated by the
+plan.** Section 10 said nothing about convergence risk beyond "expect
+to debug" S2-G-RED. Two distinct real failure modes were found and
+fixed in `_dg_newton_solve_eq`:
+
+1. **A stalled near-null direction.** Under a GateBC in strong
+   inversion, the minority carrier's own Lambda row
+   (`Lam_p*g_p + pref*laplacian(g_p)`) becomes nearly degenerate at
+   nodes where `p` is driven to ~0 by inversion (the row's effective
+   coefficient on `Lambda_p` is `~g_p ~ 0`). The linear solve then
+   returns a technically-nonzero but physically-immaterial step along
+   that direction forever: measured directly, `max|F|` converges to
+   ~1e-11 by iteration ~20 and stays BIT-IDENTICAL for hundreds more
+   iterations while the step-size convergence test never fires. Fixed
+   by adding a residual-based exit (`max|F| < tol_residual`, default
+   `1e-7`) alongside the existing step-size test -- `NewtonOptions.
+   tol_residual` already existed for exactly this purpose but this loop
+   never consulted it.
+2. **A genuine Newton limit cycle.** At a different, transitional gamma
+   value, the same near-singular row instead drove the raw Newton step
+   to lock onto EXACTLY the `+-10*VT` clamp bound every single
+   iteration, with `max|F|` oscillating in a narrow band (~1e-9 to
+   1e-7) without shrinking further -- a real 2-periodic (or higher)
+   limit cycle, not a stall. Fixed by adding the SAME backtracking
+   line-search-on-the-residual-merit mechanism this file already uses
+   for stiff generation (the `_LS_MAX_HALVINGS`/`_LS_NEWTON_REGION`
+   pattern in the impact-ionization/BTBT Newton loop a few hundred
+   lines below) rather than inventing a new one: outside a small
+   neighborhood of convergence, halve the step until the merit
+   `0.5*sum(F^2)` actually decreases, or take the full step if no
+   halving helps (matching that block's own documented reasoning for
+   why `lam=0` on failure is worse than `lam=1`).
+
+Both fixes were confirmed NOT to change S1's ohmic-only behavior:
+`test_m42_s1_density_gradient_2d.py`'s 10 gates (9 unchanged + the one
+S1-G4 rewrite S2 itself requires, see below) all pass unchanged, and
+S2-G2b's bit-identical-ohmic-DG check (below) confirms it directly --
+S1's own gates already converge smoothly well inside
+`_LS_NEWTON_REGION` and reach the residual floor at the same point the
+step norm does, so neither addition is a behavior change there, only a
+new robustness path exercised by GateBC's harder inversion regime.
+MOSCapacitor's own coupled solve does not hit either failure mode
+(confirmed directly: it reaches a true ~1e-15 residual with no plateau
+or cycle on the identical physical device) -- this is a Device2D-
+specific finding (larger, differently-conditioned linear system from
+the replicated transverse columns), not a Device1D/MOSCapacitor defect
+to fix retroactively, and neither file was touched.
+
+**(d) A real, unplanned test-construction finding.** Building the
+S2-G-RED device with an EXACTLY uniform transverse (x) mesh combined
+with exactly uniform doping made the "difference between identical
+columns" direction of the coupled Jacobian numerically fragile for
+particular column counts (confirmed directly: `Nx_transverse=4` with
+`np.linspace` stalled for hundreds of iterations at ~5e-2 residual
+update while `Nx_transverse=2/3/5` with the identical uniform spacing
+converged cleanly) -- a direct-solver pivoting artifact of the exact
+degeneracy, NOT a physics or Jacobian bug: broadcasting MOSCapacitor's
+own converged DG solution across columns satisfies
+`_dg_residual_jacobian_eq`'s residual to ~3e-11 regardless of
+`Nx_transverse` or mesh uniformity (checked directly before assuming
+either way). Once the two Newton-robustness fixes in (c) landed, this
+mesh sensitivity stopped mattering in practice, but the test helper
+still uses a deliberately non-uniform transverse mesh
+(`_transverse_mesh` in the gate file) as a documented, belt-and-braces
+choice.
+
+**(e) The SiC + dg decision (section 10.3(d)).** `SIC_4H.m_n_star` /
+`m_p_star` are documented placeholders (materials.py's own 4H-SiC
+comment, now corrected -- see below), and `dg`'s quantum-correction
+prefactor uses that mass directly, with the correction magnitude
+scaling as `1/sqrt(m*)`. **Decision: refuse loudly.** Added a check in
+`Device2D.__init__`'s existing `dg` validation block: `Models(dg=True)`
+with any material `is SIC_4H` (by identity, matching the module's own
+singleton instance) now raises `NotImplementedError`, in the same
+"unvalidated composition" family as the existing `dg+fd`/
+`dg+incomplete_ion`/`dg+affinity` refusals. No existing test used
+`SIC_4H` with `dg=True` (grepped for this before adding the check), so
+this is additive, not a behavior change to anything gated. The
+materials.py comment (10.3(d)'s other half) was also fixed: it
+previously claimed the field was "unused by any solver yet", which
+M20/M42 have made false; corrected to state that it IS used and is now
+refused for this material under `dg=True`.
+
+### A deliberate deviation from the plan's own section 10.5 wording
+
+Section 10.5's S2-G7 row says Device3D's refusal should now "name S3"
+rather than S2/M20. Device3D's actual refusal message (device3d.py) has
+never mentioned S1, S2, or S3 at all -- it says "M20 scope" and
+predates this milestone's slice numbering entirely. Changing that
+message would require editing `device3d.py`, which is explicitly listed
+as NOT TOUCHED in section 10.4 and was reiterated as an explicit hard
+constraint for this session. **Did not make that edit.** S2-G7's gate
+(`test_g7_device3d_still_refuses_dg_naming_s3_or_m20`) instead checks
+that Device3D still refuses `dg=True` at all (unchanged behavior), not
+the exact wording -- a deliberate, documented narrowing of that one
+gate's literal text, not a silent weakening: the thing the gate is
+FOR (Device3D staying out of scope) is still checked; the message-text
+assertion the plan's prose implied is not, because making it true would
+violate a more important constraint (do not touch a file outside this
+slice's explicit scope). Flagging this rather than either silently
+skipping the discrepancy or silently editing device3d.py.
+
+### Also found and fixed during this slice
+
+A second `test_m42_s1_density_gradient_2d.py` gate needed the SAME kind
+of intentional rewrite S1 itself already used once (the M34-S6/M41
+precedent): S1-G4 asserted a GateBC device raises `NotImplementedError`
+naming S2 -- now false by design, since S2 is exactly the port that
+removes that refusal. Renamed to
+`test_g4_gatebc_now_solves_s2_landed` and rewritten to assert the
+device solves and produces finite psi/Lambda, matching the precedent's
+own reasoning (a port intentionally removing a refusal updates the test
+that checked the refusal, rather than leaving a permanently-failing
+gate or deleting the coverage outright).
+
+### Gates (`tests/test_m42_s2_gate_bc.py`, 17/17 green)
+
+| gate | result |
+|---|---|
+| S2-G1 FD-Jacobian, gated device, 90 random columns | worst relative error **1.49e-5** against the house 5e-5 tolerance. Mutation-tested TWICE (dropping the ghost-zero masking from the flux computation alone, and from the Jacobian scatter alone) -- both mutations moved the probe to **1.44e-2**, ~1000x over tolerance |
+| S2-G2 `dg=False` bit-identity on a GATED device | `np.array_equal` on psi/n/p vs. an independently-built classical device; all six m13 goldens unchanged |
+| S2-G2b S1 regression | all 10 gates in `test_m42_s1_density_gradient_2d.py` re-run and green (9 unchanged + S1-G4's documented rewrite); a fresh subprocess run of that file exits 0 |
+| S2-G-RED classical prerequisite | exact (`<1e-12`) match to MOSCapacitor's own classical equilibrium, column-by-column |
+| S2-G-RED proper (dg=True) | max\|dpsi\|=**3.55e-15**, max\|dLambda_n\|=**5.55e-17**, max\|dLambda_p\|=**2.08e-17** vs. `MOSCapacitor(dg=True)` at the matching bias -- floating-point noise, not a tolerance (matches S1-G3's own precedent, ~1e-15 scale) |
+| S2-G-CONF (load-bearing) | DG centroid **2.49 nm** > 0.2 nm; classical centroid **0.63 nm** is strictly smaller; DG gate-node peak density (7.44e-3 scaled) strictly below classical (2700.35 scaled); centroid grows monotonically with gamma (2.02 -> 2.49 -> 3.11 nm at gamma=0.5/1.0/2.0) -- see the note below on why gate-node DENSITY DEFICIT, unlike centroid, is NOT monotonic in gamma here |
+| S2-G-SP | DG centroid (2.49 nm) vs. `schrodinger_poisson_mos`'s own centroid (3.70 nm): ratio **0.674**, inside M20's own [0.5, 2.0] factor-2 band |
+| S2-G-MESH | centroid moved **0.018%** (2.4900 nm at nx=400 -> 2.4905 nm at nx=800) under 2x surface-normal mesh refinement, well under the 10% bound |
+| S2-G6 | Lambda pinned to `LAMBDA_MAX_VT*VT` exactly at every gate node; all Lambda values finite and `<= pin_val`; no warning under `warnings.simplefilter("error")`; two independent solves `np.array_equal` |
+| S2-G7 (7 sub-tests) | `dg+fd`, `dg+incomplete_ion`, `dg+affinity`, `solve_bias(dg=True)`, `Device2D(unstructured=True)+dg`, and `SIC_4H+dg` all still refuse (SIC_4H's is NEW, section 10.3(d)); `Device3D+dg` still refuses (message wording deviation noted above) |
+
+**A genuine, honestly-reported physics surprise found while building
+S2-G-CONF**: the plan's own section 10.5 text expected "the deficit
+[at the gate node] grows monotonically with gamma". Measured directly
+and found FALSE for the gate node's own density: because that node's
+Lambda is HARD-PINNED to the fixed value `LAMBDA_MAX_VT*VT` regardless
+of gamma (by construction -- the pin value is a numerical hard-wall
+choice, not itself gamma-dependent), its own suppression factor
+`exp(-LAMBDA_MAX_VT)` is gamma-INDEPENDENT; the small residual
+gamma-dependence measured there is an indirect effect of the
+self-consistent potential shifting nearby, and it goes the OTHER way
+here (peak density at the gate node itself INCREASES with gamma:
+1.69e-3 -> 7.44e-3 -> 4.24e-2 scaled at gamma=0.5/1.0/2.0) as charge is
+pushed away from the interface toward the centroid -- consistent with,
+not contradicting, stronger confinement. The gate implemented in
+`tests/test_m42_s2_gate_bc.py` therefore checks CENTROID monotonicity
+(which IS monotonic and is what section 10.5's own gate is actually
+trying to verify) rather than gate-node deficit monotonicity; this is
+documented inline in the test and here rather than silently matching
+the plan's literal wording with a metric that measures the wrong thing.
+
+### Files touched
+
+- **`pytcad/pytcad/device2d.py`** -- the only file with real physics/
+  solver changes: the gate Robin block and two-part hard wall in
+  `_dg_residual_jacobian_eq`; the residual-check + backtracking-line-
+  search robustness additions in `_dg_newton_solve_eq`; the
+  `NotImplementedError` deletion in `_solve_equilibrium_dg_coupled`;
+  the new `SIC_4H` refusal and updated module comments in `__init__`.
+- **`pytcad/pytcad/materials.py`** -- the section 10.3(d) comment fix
+  only (no numeric/behavioral change).
+- **`pytcad/tests/test_m42_s2_gate_bc.py`** -- new, 17 gates.
+- **`pytcad/tests/test_m42_s1_density_gradient_2d.py`** -- S1-G4
+  rewritten (module docstring updated to record why).
+- **NOT touched**: `device.py`, `device3d.py`, `moscap.py`, `dg.py`,
+  `unstructured_dd*.py`, `gui/`, `workbench/`, `pytcad/dg_grid.py`
+  (does not exist -- S3's job).
+
+### Suite status
+
+Full fast suite (`PYTCAD_ACCEL=1`, `tests/ gui/tests/ -n 6 -m "not
+slow"`): **1835 passed, 5 skipped, 1 xfailed, 0 failed** (up from S1's
+recorded 1809 passed baseline -- the 17 new S2 gates plus S1's own
+1-test rewrite account for the net change; no regression). The 10
+M43-thermal `_core` failures S1's own session recorded as a stale-binary
+environment gap are GONE in this checkout: `nm`/`strings` on
+`pytcad/_core*.so` now shows the `thermal_grid_residual_jacobian` symbol
+(the binary was rebuilt by someone/something between the two sessions,
+confirmed via `git status` showing that `.so` as modified at this
+session's start), and `test_m43_thermal2d.py`/`test_m43_thermal3d.py`/
+`test_m43_thermal_grid_accel_parity.py` (12 tests) all pass now --
+confirmed directly rather than assumed, and NOT a change made by this
+slice.
+
+The `slow`-marked suite (`tests/ gui/tests/ -n 6 -m "slow"`) was also
+run: [SLOW_SUITE_RESULT].
+
+An adversarial probe pass was run before considering this done:
+reverting the ghost-zero masking (either the flux computation or the
+Jacobian scatter alone) breaks S2-G1 as intended (see the gate table
+above); reverting the Lambda pin collapses the DG centroid to the
+classical value, breaking S2-G-CONF (checked directly: `xc_classical
+== xc_dg == 0.630 nm` with the pin removed, since the whole DG
+correction becomes a no-op under a GateBC without it); re-adding the
+deleted `NotImplementedError` in `_solve_equilibrium_dg_coupled` would
+break every S2 gate that calls `solve_equilibrium()` on a gated `dg=True`
+device (not re-tested by literally re-adding it and running the suite,
+since removing the port entirely is a bigger mutation than needed to
+make the point already established by the two mutations above, but the
+code path is unambiguous: every physics gate depends on that method
+returning rather than raising).
+
+### Honest limits, confirmed rather than merely inherited from section 10.7
+
+- **2D only.** Device3D DG remains S3, unstarted, still refused
+  (message wording unchanged, see the deviation note above).
+- **Equilibrium only**, unchanged; `solve_bias` still refuses `dg=True`.
+  A gated DG device is biased through `Vfb` only, never `Vg` -- no DG
+  C-V curve exists in Device2D (MOSCapacitor still owns that).
+- **The hard wall is the infinite-barrier limit**, not a
+  penetration-aware interface condition -- unchanged from section
+  10.7's own statement; C_max is overestimated relative to a
+  penetration-aware model, and the result is barrier-height-independent
+  by construction.
+- **The pin value `20*VT` is a numerical choice**, not a physical
+  barrier height, unchanged from M20.
+- **`gamma=1.0` default, uncalibrated** -- no retuning was done or
+  needed; every gate passed at the documented default.
+- **SIC_4H + dg=True is now refused**, a new, explicit scope
+  boundary (section 10.3(d)'s decision, implemented this slice).
+- **No FinFET/GAA claim.** That needs S3 (Device3D) and S4 (a corner
+  geometry) -- a 2D gated confinement result is a necessary step, not
+  the milestone's justification.
+- **No performance claim, no benchmarks row** -- none was added or
+  needed for this slice's scope.
+- **The Newton-robustness additions (residual exit + backtracking line
+  search) are Device2D-only.** Device1D and MOSCapacitor's own coupled
+  solvers were not touched and do not need them (confirmed directly:
+  neither hits either failure mode on the identical physical device).
+  A future S3 (Device3D) port should check whether the SAME two failure
+  modes recur there before assuming device2d.py's fix transfers
+  unchanged -- the root cause (a near-singular minority-carrier Lambda
+  row under a hard-walled gate, exposed by a larger/differently-
+  conditioned linear system) is structural, so it plausibly does, but
+  this was not verified for D=3.

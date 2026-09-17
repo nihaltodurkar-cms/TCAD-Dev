@@ -4,6 +4,7 @@ Gate reference: M22-LINSOLVE-PLAN.md section 3.
 """
 import os
 import sys
+import warnings
 
 import numpy as np
 import pytest
@@ -106,10 +107,16 @@ def test_non_convergence_raises_not_silent():
                  data_rvs=lambda k: rng.standard_normal(k)).tocsr()
     A = A + sp.eye(n) * 1e-3          # keep it merely singular-ish, not exactly
     b = rng.standard_normal(n)
-    for method in ("gmres", "bicgstab"):
-        with pytest.raises(linsolve.LinearSolveError):
-            linsolve.solve_linear(A, b, method=method, rtol=1e-14,
-                                  maxiter=1)
+    # scipy's own gmres/bicgstab internals emit RuntimeWarning (overflow/
+    # invalid-value) while failing to converge on this deliberately
+    # pathological system -- exactly the failure path this test exists
+    # to exercise, not a bug to chase.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for method in ("gmres", "bicgstab"):
+            with pytest.raises(linsolve.LinearSolveError):
+                linsolve.solve_linear(A, b, method=method, rtol=1e-14,
+                                      maxiter=1)
 
 
 # ---------------------------------------------------------------- G5
@@ -119,15 +126,21 @@ def test_singular_and_non_finite_input_raise():
     n = 10
     A = sp.csr_matrix((n, n))          # all-zero: singular
     b = np.ones(n)
-    for method in ("direct", "gmres", "bicgstab"):
-        with pytest.raises(linsolve.LinearSolveError):
-            linsolve.solve_linear(A, b, method=method)
+    # Same reasoning as test_non_convergence_raises_not_silent above:
+    # scipy's iterative methods emit RuntimeWarning internally (divide-
+    # by-zero / invalid-value) while failing on a singular or NaN-
+    # carrying system on purpose.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for method in ("direct", "gmres", "bicgstab"):
+            with pytest.raises(linsolve.LinearSolveError):
+                linsolve.solve_linear(A, b, method=method)
 
-    A2, b2 = _random_spd_system(10, 1)
-    b2 = b2.copy(); b2[3] = np.nan
-    for method in ("direct", "gmres", "bicgstab"):
-        with pytest.raises(linsolve.LinearSolveError):
-            linsolve.solve_linear(A2, b2, method=method)
+        A2, b2 = _random_spd_system(10, 1)
+        b2 = b2.copy(); b2[3] = np.nan
+        for method in ("direct", "gmres", "bicgstab"):
+            with pytest.raises(linsolve.LinearSolveError):
+                linsolve.solve_linear(A2, b2, method=method)
 
 
 def test_unknown_method_raises():

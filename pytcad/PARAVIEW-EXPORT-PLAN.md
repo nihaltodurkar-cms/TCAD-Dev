@@ -90,12 +90,46 @@ against the pre-fix code.
   already-documented Phase 4 limit (`SweepSnapshots` carries no vector
   data) — a sweep `.pvd` export never carries current-density vectors, only
   whichever single-snapshot `.vtu` a user exports carries them.
-- No actual ParaView install/build was available to open the exported files
-  in a real ParaView session and eyeball the render — verification here is
-  a genuine round-trip through `pyvista.read()`/PyVista's own `.vtu`/`.pvd`
-  parsing, not a real-ParaView visual check. If ParaView becomes available
-  on this machine, that manual check is still worth doing once.
 - No settings UI beyond the one path field in the 3D viewer's own dock —
   no app-wide Preferences panel exists yet to move it into.
 - "Open in ParaView" always launches a NEW ParaView process; it does not
   attempt to detect or reuse an already-running instance.
+
+## Real ParaView visual verification -- DONE 2026-09-17
+
+ParaView 6.2.0-RC1 was found installed on this machine
+(`/usr/local/bin/paraview` -> `/home/nihal/Desktop/Paraview/bin/paraview`,
+with `pvpython`/`pvbatch` alongside it), closing the one item the section
+above used to leave open ("no actual ParaView install/build was
+available"). Verified through `pvpython`/`paraview.simple` (ParaView's own
+Python API, off-screen -- `QT_QPA_PLATFORM=offscreen`), not through
+PyVista, against two REAL solved results (not synthetic fixtures):
+
+1. **Single `.vtu`** — `resistor_3d_example_spec()` (bias `{"left": 0.0,
+   "right": 0.1}`) run through the real `solver_runner.run_job`, exported
+   via `paraview_export.export_vtu`, then loaded with ParaView's
+   `XMLUnstructuredGridReader`. All 5 expected point arrays present
+   (`doping`, `potential`, `electron_density`, `hole_density`,
+   `current_density`) with physically sane ranges — a real 0.0999999… V
+   potential drop end to end, uniform ~1e17 doping/electron density as
+   expected for this uniform n-type bar. A genuine ParaView filter
+   (`Glyph`, oriented/scaled by `current_density`) ran successfully on the
+   loaded data. An off-screen render, colored by `potential`, shows a
+   clean linear blue-to-red gradient across the bar — the expected linear
+   IR drop for a uniform resistor.
+2. **`.pvd` time series** — a real 3-point voltage sweep (`right`:
+   0.05/0.10/0.15 V) through the same `run_job` path, exported via
+   `export_pvd_series`. ParaView's `PVDReader` read back
+   `TimestepValues == [0.05, 0.1, 0.15000000000000002]` (the exact bias
+   values, not frame indices), and stepping `view.ViewTime` through all
+   three drove ParaView's own pipeline to genuinely different data at each
+   step: `potential` range `(0.415, 0.465)` at 0.05 V, widening to
+   `(0.415, 0.515)` at 0.10 V and `(0.415, 0.565)` at 0.15 V — the min
+   (left contact) pinned and the max (right contact) tracking the bias
+   exactly, confirmed via `reader.GetPointDataInformation()` at each
+   timestep, not just by trusting the XML.
+
+Both checks are reproducible non-interactively (no GUI session, no manual
+eyeballing needed to re-verify): `pvpython <script>.py <path>` against a
+freshly exported `.vtu`/`.pvd`. This is the manual check the section above
+said was "still worth doing once" — done, and it holds.

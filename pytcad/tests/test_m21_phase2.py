@@ -273,9 +273,15 @@ def test_adapted_3d_matches_resolved_reference():
     z0 = uniform_mesh(D, 6)
     mesh0 = Mesh3D(x0, y0, z0)
 
-    dev, mesh, hist = adapt.adapt_solve_3d(
-        build, mesh0, solve=_solve_eq, qoi=_qoi_3d,
-        tol=1e-2, max_passes=6, max_nodes=200000)
+    # This budget (max_nodes=200000) deliberately does not always reach
+    # tol=1e-2 for a 3D QoI -- the docstring above explains why the
+    # reference itself is DOF-limited rather than maximally fine, and
+    # this test checks Vbi agreement (1e-1, loose) rather than requiring
+    # `hist[-1]["cause"] == "converged"` the way the 2D sibling does.
+    with pytest.warns(UserWarning, match="node budget"):
+        dev, mesh, hist = adapt.adapt_solve_3d(
+            build, mesh0, solve=_solve_eq, qoi=_qoi_3d,
+            tol=1e-2, max_passes=6, max_nodes=200000)
 
     vbi_ref = float(ref.psi.max() - ref.psi.min()) * ref.VT
     vbi_ad = float(dev.psi.max() - dev.psi.min()) * dev.VT
@@ -382,9 +388,13 @@ def test_3d_separable_refinement_adds_nodes():
     z0 = uniform_mesh(D, 6)
     mesh0 = Mesh3D(x0, y0, z0)
 
-    dev, mesh, hist = adapt.adapt_solve_3d(
-        _build_3d(na=1e18, nd=1e15), mesh0, solve=_solve_eq,
-        qoi=_qoi_3d, tol=1e-2, max_passes=6, max_nodes=100000)
+    # This test only checks that refinement GREW the mesh, not that it
+    # fully converged -- max_nodes=100000 deliberately does not always
+    # reach tol=1e-2 for this scale-separated 3D case.
+    with pytest.warns(UserWarning, match="node budget"):
+        dev, mesh, hist = adapt.adapt_solve_3d(
+            _build_3d(na=1e18, nd=1e15), mesh0, solve=_solve_eq,
+            qoi=_qoi_3d, tol=1e-2, max_passes=6, max_nodes=100000)
 
     assert mesh.N > mesh0.N, \
         f"G5 FAIL (3D): mesh did not grow ({mesh0.N} -> {mesh.N})"
@@ -423,9 +433,13 @@ def test_3d_refinement_invariants():
     z0 = uniform_mesh(D, 6)
     mesh0 = Mesh3D(x0, y0, z0)
 
-    dev, mesh, hist = adapt.adapt_solve_3d(
-        _build_3d(), mesh0, solve=_solve_eq, qoi=_qoi_3d,
-        tol=1e-2, max_passes=4, max_nodes=50000)
+    # Structural invariants only (ordering/endpoints) -- this test does
+    # not require the QoI to actually converge, and max_nodes=50000
+    # deliberately does not always reach tol=1e-2 in 3D.
+    with pytest.warns(UserWarning, match="node budget"):
+        dev, mesh, hist = adapt.adapt_solve_3d(
+            _build_3d(), mesh0, solve=_solve_eq, qoi=_qoi_3d,
+            tol=1e-2, max_passes=4, max_nodes=50000)
 
     assert np.all(np.diff(mesh.x) > 0), "3D: x nodes not increasing"
     assert np.all(np.diff(mesh.y) > 0), "3D: y nodes not increasing"
@@ -449,9 +463,12 @@ def test_2d_grading_never_worsens():
     g0_y = np.maximum(h0_y[1:] / h0_y[:-1], h0_y[:-1] / h0_y[1:]).max() \
         if h0_y.size > 1 else 1.0
 
-    dev, mesh, hist = adapt.adapt_solve_2d(
-        _build_2d(), mesh0, solve=_solve_eq, qoi=_qoi_2d,
-        tol=1e-2, max_passes=6, max_nodes=100000)
+    # Grading-quality invariant only -- max_nodes=100000 deliberately
+    # does not always reach tol=1e-2 here either.
+    with pytest.warns(UserWarning, match="node budget"):
+        dev, mesh, hist = adapt.adapt_solve_2d(
+            _build_2d(), mesh0, solve=_solve_eq, qoi=_qoi_2d,
+            tol=1e-2, max_passes=6, max_nodes=100000)
 
     hx = np.diff(mesh.x)
     hy = np.diff(mesh.y)

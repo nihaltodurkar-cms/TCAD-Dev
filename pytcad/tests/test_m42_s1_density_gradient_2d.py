@@ -1,6 +1,10 @@
 """M42-S1 -- density-gradient quantum correction in Device2D equilibrium
-(ohmic contacts only; GateBC is refused, see M42-DENSITY-GRADIENT-2D3D-
-PLAN.md section 0.2/S2, a follow-up slice).
+(originally: ohmic contacts only, GateBC refused -- see M42-DENSITY-
+GRADIENT-2D3D-PLAN.md section 0.2). M42-S2 (2026-09-17) landed the
+GateBC Lambda boundary condition (test_m42_s2_gate_bc.py); S1-G4 below
+is REWRITTEN accordingly (S2 intentionally removes the refusal it used
+to check -- same M34-S6/M41-precedent rewrite section 9's own record
+already used once for test_m20_dg.py::test_ge_device2d_...).
 
 Gates, mirroring the plan's own section 5 table:
   S1-G1  FD-Jacobian of the full 3N coupled (psi, Lambda_n, Lambda_p)
@@ -12,7 +16,9 @@ Gates, mirroring the plan's own section 5 table:
   S1-G3  reduction identity: a transversely-uniform 2D device with two
          ohmic contacts reproduces Device1D's own DG equilibrium
          (psi, n, p, Lambda_n, Lambda_p) to floating-point noise.
-  S1-G4  a device with a GateBC raises NotImplementedError naming S2.
+  S1-G4  (M42-S2 rewrite) a device with a GateBC now SOLVES (S2 landed
+         the Lambda boundary condition) rather than refusing -- see
+         test_m42_s2_gate_bc.py for the full S2 gate suite.
   S1-G5  dg+fd, dg+incomplete_ion, dg+band_offset="affinity" all refuse.
   S1-G6  gamma continuation converges without warning, and the result is
          deterministic across repeat runs.
@@ -133,15 +139,21 @@ def test_g3_reduction_to_device1d():
 
 
 # ---------------------------------------------------------------- S1-G4
-def test_g4_gatebc_refused():
+def test_g4_gatebc_now_solves_s2_landed():
+    """M42-S2 (2026-09-17) landed the GateBC Lambda boundary condition --
+    a device with a GateBC now solves rather than refusing. See
+    test_m42_s2_gate_bc.py for the gates that actually validate the
+    physics of this boundary condition (S2-G-CONF/-SP/-MESH etc.)."""
     x, y = _pn_junction_mesh()
     mesh = Mesh2D(x, y)
     dop = np.tile(np.where(x < 1e-5, -1e17, 1e17), (y.size, 1))
     dev = Device2D(mesh, dop, models=Models(bgn=False, dg=True))
     dev.add_contact("left", i=[0], j=list(range(mesh.Ny)), V=0.0)
     dev.add_gate("g", i=[mesh.Nx // 2], j=[0], tox_cm=5e-7, Vfb=0.0)
-    with pytest.raises(NotImplementedError, match="S2"):
-        dev.solve_equilibrium()
+    dev.solve_equilibrium()
+    assert np.all(np.isfinite(dev.psi))
+    assert np.all(np.isfinite(dev._dg_Lam_n))
+    assert np.all(np.isfinite(dev._dg_Lam_p))
 
 
 # ---------------------------------------------------------------- S1-G5

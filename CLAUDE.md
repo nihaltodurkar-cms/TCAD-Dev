@@ -435,6 +435,32 @@ precedent).
   `gui/tests/test_viewer3d.py`'s `FakeInteractor`) -- this still
   exercises the REAL `QMainWindow`/`QComboBox`/`QDoubleSpinBox` widget
   tree and signal wiring, just not the actual GL surface.
+- **On this machine (NVIDIA RTX 5060 Ti, proprietary driver 610.57.04,
+  Wayland session with XWayland), a genuinely real `Viewer3DWindow` --
+  not the `FakeInteractor`-mocked one every test uses -- SEGFAULTS THE
+  WHOLE PROCESS**, not just under `QT_QPA_PLATFORM=offscreen` (the
+  already-documented `BadWindow` case above) but also against the
+  REAL display (`DISPLAY=:0`, no offscreen platform at all). Confirmed
+  directly 2026-09-17: `AppController.loadExample("resistor_3d")` ->
+  `.run()` -> `hasResult=True` with correct mesh stats and zero errors
+  all complete cleanly; the crash is isolated to
+  `AppController.openViewer3d()`'s `Viewer3DWindow(store)` construction
+  specifically, which fails with `X Error ... BadAccess ... GLX ...
+  X_GLXMakeCurrent` and a segfault (exit 139) -- reproduced identically
+  with the real NVIDIA GL, with `LIBGL_ALWAYS_SOFTWARE=1`, and with
+  `QT_QUICK_BACKEND=software`, so it is not a simple
+  hardware-vs-software-rasterizer switch. `glxinfo` itself reports
+  direct rendering fine; the conflict is specifically VTK's OWN GLX
+  context creation racing/colliding with something in the NVIDIA
+  driver's Wayland+XWayland GLX resource handling once Qt Quick's own
+  RHI context already holds one. Not investigated further (a
+  driver/windowing-stack issue, not app code -- no PyTCAD source change
+  is implicated) and not fixed. Consequence: on THIS machine, the 3D
+  viewer's actual VTK render surface has never been verified working
+  end-to-end outside of `FakeInteractor` -- if a future session needs a
+  real rendered screenshot of `Viewer3DWindow`, expect this crash and
+  do not spend time retrying GL environment variables that were already
+  ruled out above.
 
 **Python/testing**
 - pytest warning filters are REGEX: `cm^-3` never matches (caret =

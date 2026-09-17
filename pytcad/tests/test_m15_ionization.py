@@ -48,7 +48,15 @@ from workbench.physics.impact_ionization import (
 
 def _one_sided(nd_low=1e16, nd_high=1e19):
     """One-sided abrupt junction: light side sets the depletion field."""
-    x = graded_mesh(6.0e-4, [3.0e-4], h_min=1e-8, h_max=1e-6)
+    # h_min=1e-8 on this 6e-4 domain exceeds graded_mesh's dense-sampling
+    # cap (L/h_min=6e4); this h_min is deliberately the finest end of the
+    # resolution study _one_sided_h sweeps below (5e-8, 2e-8, 1e-8), so
+    # the ~2-2.4x near-junction coarsening the cap warns about is
+    # expected here, not a defect -- suppressed the same way
+    # _one_sided_h's own sweep already does a few lines down.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        x = graded_mesh(6.0e-4, [3.0e-4], h_min=1e-8, h_max=1e-6)
     dop = np.where(x < 3.0e-4, -nd_low, nd_high)
     return x, dop
 

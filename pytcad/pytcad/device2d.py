@@ -44,7 +44,7 @@ from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .materials import (
-    SILICON, Semiconductor, mobility_caughey_thomas, mobility_cvt,
+    SILICON, SIC_4H, Semiconductor, mobility_caughey_thomas, mobility_cvt,
     nie_effective, lifetime_scharfetter, recombination,
 )
 from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
@@ -189,16 +189,16 @@ class Device2D:
         # already-gated Device1D model, no new constant.  No lambda-style
         # precondition and no heterojunction restriction (Device1D's own
         # local btbt has neither either; see M16-S2-PLAN.md section 3.2).
-        # M42-S1: density-gradient quantum correction, equilibrium-only,
-        # ported to Device2D on top of Device1D's coupled-Newton (psi,
-        # Lambda_n, Lambda_p) formulation (M20-DENSITY-GRADIENT-PLAN.md
-        # section 1 / M42-DENSITY-GRADIENT-2D3D-PLAN.md). Same refusal
-        # shape as Device1D: dg+fd, dg+incomplete_ion, and
+        # M42-S1/S2: density-gradient quantum correction.  S1 (2026-09-17)
+        # ported the ohmic-contact-only equilibrium coupled-Newton (psi,
+        # Lambda_n, Lambda_p) solve from Device1D (M20-DENSITY-GRADIENT-
+        # PLAN.md section 1 / M42-DENSITY-GRADIENT-2D3D-PLAN.md).  S2
+        # (2026-09-17) added the GateBC Lambda boundary condition (the
+        # two-part hard wall ported from moscap.py's own M20 fix -- see
+        # plan section 10) and removed the GateBC refusal that used to
+        # live in _solve_equilibrium_dg_coupled.  Same refusal shape as
+        # Device1D otherwise: dg+fd, dg+incomplete_ion, and
         # dg+band_offset="affinity" are all unvalidated compositions.
-        # dg+GateBC is ALSO refused (S1 scope; the GateBC Lambda boundary
-        # condition is an open physics question, M42's own S2) -- but a
-        # GateBC is added via add_gate() AFTER __init__, so that check
-        # happens in solve_equilibrium, not here.
         if getattr(self.models, "dg", False):
             if getattr(self.models, "fd", False):
                 raise NotImplementedError(
@@ -214,6 +214,27 @@ class Device2D:
                 raise NotImplementedError(
                     "Models(band_offset='affinity', dg=True) is refused "
                     "(unvalidated composition, matching Device1D).")
+            # M42-S2 (section 10.3(d)): SIC_4H's m_n_star/m_p_star are
+            # explicitly documented placeholders (materials.py's own
+            # comment on the 4H-SiC block), not a validated anisotropic
+            # DOS-averaged fit.  The density-gradient prefactor
+            # (dg._dg_prefactor) uses this mass DIRECTLY and the quantum
+            # correction's magnitude scales as 1/sqrt(m*) -- an unvalidated
+            # mass is therefore load-bearing for the numeric answer, not a
+            # cosmetic input.  Refusing loudly (rather than silently
+            # producing a quantum-correction number from a placeholder
+            # mass) is the same "unvalidated composition" judgment this
+            # block already applies to dg+fd/dg+incomplete_ion/dg+affinity.
+            if any(m is SIC_4H for m in self.mats):
+                raise NotImplementedError(
+                    "Models(dg=True) with SIC_4H is refused: "
+                    "SIC_4H.m_n_star/m_p_star are documented placeholders "
+                    "(materials.py's 4H-SiC block), not a validated "
+                    "effective-mass fit, and the DG quantum correction "
+                    "uses that mass directly -- refusing rather than "
+                    "silently reporting a confinement number built on an "
+                    "unvalidated input (M42-DENSITY-GRADIENT-2D3D-PLAN.md "
+                    "section 10.3(d)).")
         # M41: Models(incomplete_ion=True) is implemented here as well
         # now -- the M13 shallow-dopant model on the same grid
         # (device.py's ionized_doping, shared with Device1D), entering
@@ -828,9 +849,13 @@ class Device2D:
         replaced by the DG-corrected ones (n = nie*exp(psi_c)*
         exp(-Lam_n/VT), p = nie*exp(-psi_c)*exp(-Lam_p/VT)) and two new
         Jacobian columns per node (dV*n/VT for Lambda_n, -dV*p/VT for
-        Lambda_p) -- exactly Device1D's own extra columns.  No GateBC
-        Robin term here: S1 refuses any device with a GateBC before this
-        is ever called (see solve_equilibrium).
+        Lambda_p) -- exactly Device1D's own extra columns.  M42-S2: the
+        gate (Robin) BC IS ported here now (a direct copy of
+        _residual_jacobian_poisson's own gate block, generalized to the
+        interleaved 3N layout) -- S1 refused any device with a GateBC
+        before this was ever called; S2 answers M42-DENSITY-GRADIENT-
+        2D3D-PLAN.md section 0.2's open question (see section 10) and
+        implements it.
 
         Lambda_n/Lambda_p rows: Lam*g + pref*Laplacian(g) = 0 with
         g = sqrt(n) (or sqrt(p)), evaluated with the SAME box-integration
@@ -843,18 +868,27 @@ class Device2D:
         second-derivative formula in the 1D limit (Ny=1), which is the
         reduction identity this port's S1-G3 gate checks.
 
-        Boundary treatment: Lambda_n=Lambda_p=0 is pinned ONLY at nodes
+        Boundary treatment: Lambda_n=Lambda_p=0 is pinned at nodes
         carrying a DirichletBC (an actual ohmic contact) -- matching
-        Device1D's "Lambda=0 at both [ohmic] contacts" rule.  Every other
-        domain-edge node (no BC object) gets the NATURAL zero-flux
-        Neumann condition for free, the same "missing face" convention
-        _residual_jacobian_poisson already uses for psi -- not a special
-        case, just the absence of a term to scatter.
+        Device1D's "Lambda=0 at both [ohmic] contacts" rule.  M42-S2:
+        Lambda_n=Lambda_p is instead pinned to LAMBDA_MAX_VT*VT (the
+        infinite-barrier hard wall, ported from moscap.py's own M20
+        two-part fix -- see section 10.2) at any GateBC node that is NOT
+        also a DirichletBC (ohmic takes precedence at a node carrying
+        both).  The Lambda flux stencil ALSO ghost-zeroes g=sqrt(n)/
+        sqrt(p) at every gate node (both loops above), so a gate node's
+        real (large, classical) density never leaks into a neighbor's
+        curvature via the missing-face convention -- moscap.py's own
+        finding that pinning alone is insufficient (M20-DENSITY-
+        GRADIENT-PLAN.md section 6).  Every other domain-edge node (no BC
+        object at all) still gets the NATURAL zero-flux Neumann condition
+        for free, the same "missing face" convention
+        _residual_jacobian_poisson already uses for psi.
 
         Returns (F [3N], J [3N x 3N] csr_matrix); sets
         self._dg_dirichlet_rows_eq.
         """
-        from .dg import _dg_prefactor
+        from .dg import _dg_prefactor, LAMBDA_MAX_VT
         Ny, Nx, N = self.Ny, self.Nx, self.N
         VT = self.VT
         gamma = getattr(self.models, "dg_gamma", 1.0) if gamma is None else gamma
@@ -894,6 +928,40 @@ class Device2D:
         rows.append(ip(kdiag)); cols.append(iln(kdiag)); vals.append((dV * n / VT).ravel())
         rows.append(ip(kdiag)); cols.append(ilp(kdiag)); vals.append((-dV * p / VT).ravel())
 
+        # ---- M42-S2: gate (Robin) BC on the Poisson row -- a direct
+        # port of _residual_jacobian_poisson's own gate block (device2d.py
+        # ~765-791), generalized to the interleaved 3N layout.  Equilibrium
+        # is always solved at the device's own Vg_s=0.0 (never bc.Vg, which
+        # can be stale after a bias point -- see that method's docstring
+        # and M42-DENSITY-GRADIENT-2D3D-PLAN.md section 10.3(b): DG is
+        # equilibrium-only, so a gated DG device is biased through Vfb,
+        # never Vg).  psi_b_local's arcsinh term is REQUIRED here (its
+        # omission in an earlier, classical-only copy of this block cost
+        # a ~0.36 V Vth shift once -- see
+        # test_validation_2d.py::test_mosfet_vth_matches_moscap_landmark's
+        # docstring). Gate nodes also carry the density-gradient hard-wall
+        # BC (below); a node with BOTH a DirichletBC and a GateBC takes
+        # the Dirichlet Lambda=0 rule (ohmic wins -- enforced later by the
+        # Dirichlet pin, which runs after and overwrites unconditionally).
+        gate_k_list = [bc.j * Nx + bc.i for bc in self.bcs.values()
+                       if isinstance(bc, GateBC)]
+        gate_k = (np.unique(np.concatenate(gate_k_list)) if gate_k_list
+                  else np.zeros(0, dtype=int))
+        gate_mask = np.zeros(N, dtype=bool)
+        gate_mask[gate_k] = True
+        for bc in self.bcs.values():
+            if isinstance(bc, GateBC):
+                kk = bc.j * Nx + bc.i
+                Vg_s, Vfb_s = 0.0, bc.Vfb / VT
+                w = dVx[bc.i]
+                psi_b_local = (np.arcsinh(self.C[bc.j, bc.i]
+                                          / (2.0 * self.nie_s[bc.j, bc.i]))
+                               - self.band_shift[bc.j, bc.i])
+                F_psi.ravel()[kk] += bc.kappa * w * (
+                    Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
+                rows.append(ip(kk)); cols.append(ip(kk))
+                vals.append(-bc.kappa * w * np.ones_like(kk, dtype=float))
+
         # ---- Lambda_n / Lambda_p rows ---------------------------------
         h_phys_x = np.diff(self.mesh.x)
         h_phys_y = np.diff(self.mesh.y)
@@ -916,15 +984,39 @@ class Device2D:
             s = lo + hi
             return np.where(s > 0.0, 2.0 * lo * hi / np.where(s > 0.0, s, 1.0), 0.0)
 
+        # M42-S2: GateBC hard wall, part 2 of 2 (part 1 is the Lambda pin
+        # below).  Ghost-zero g=sqrt(n)/sqrt(p) at every gate node in the
+        # Lambda-row flux stencil (both when a gate node is the "near" and
+        # the "far" end of an edge) -- the infinite-barrier limit that
+        # matches this repo's OWN Schrodinger-Poisson reference solver's
+        # hard_wall_left=True convention (dg.schrodinger_poisson), and a
+        # direct port of moscap.py's `g_im1 = 0.0 if hard_wall_left`
+        # convention one dimension up (moscap.py:471, ~402-470's own
+        # docstring for the physics rationale: a plain Lambda=0 Neumann
+        # choice there left the full classical g feeding the neighbor's
+        # curvature stencil, which still dominated the centroid integral).
+        # The gate node's OWN Lambda row is pinned below regardless of
+        # what this ghosting computes for it, so ghosting is applied
+        # unconditionally (not just "when the OTHER endpoint is a gate
+        # node") -- simpler, and harmless since that row is discarded.
+        # The Poisson row's "Lam*g" term (F_lam's diagonal piece) keeps
+        # the REAL, unsuppressed g -- only the curvature (lap_term) is
+        # ghosted, matching moscap's explicit choice that the hard wall
+        # affects only the quantum-confinement curvature, not the
+        # classical charge balance already handled by the Robin block
+        # above.
+        gate_mask_2d = gate_mask.reshape(Ny, Nx)
+
         F_lam = {}
         for tag, g, Lam, pref, dg_dpsi_sign, idx in (
             ("n", gn, Lam_n, pref_n, +1.0, iln),
             ("p", gp, Lam_p, pref_p, -1.0, ilp),
         ):
+            g_eff = np.where(gate_mask_2d, 0.0, g)
             pref_ex = hmean2d(pref[:, :-1], pref[:, 1:])
             pref_ey = hmean2d(pref[:-1, :], pref[1:, :])
-            Gx = pref_ex * (g[:, 1:] - g[:, :-1]) / h_phys_x[None, :]
-            Gy = pref_ey * (g[1:, :] - g[:-1, :]) / h_phys_y[:, None]
+            Gx = pref_ex * (g_eff[:, 1:] - g_eff[:, :-1]) / h_phys_x[None, :]
+            Gy = pref_ey * (g_eff[1:, :] - g_eff[:-1, :]) / h_phys_y[:, None]
             divx = np.zeros((Ny, Nx)); divx[:, :-1] += Gx; divx[:, 1:] -= Gx
             divy = np.zeros((Ny, Nx)); divy[:-1, :] += Gy; divy[1:, :] -= Gy
             lap_term = divx / dVx_phys[None, :] + divy / dVy_phys[:, None]
@@ -954,7 +1046,16 @@ class Device2D:
             def dg_dpsi(gv): return sign * gv / 2.0
             def dg_dlam(gv): return -gv / (2.0 * VT)
 
-            gflat = g.ravel()
+            # M42-S2: the curvature stencil's Jacobian uses the SAME
+            # ghosted g the flux (Gx/Gy, above) used -- a gate node's
+            # ghost value is the fixed constant 0.0, so its Jacobian
+            # contribution through dg_dpsi/dg_dlam is correctly zero
+            # (sign*0/2 == 0, -0/(2VT) == 0) with no extra masking
+            # needed here.  The diagonal "Lam*g" Jacobian entries below
+            # (kdiag) also pick up the ghosted value at a gate node's OWN
+            # row, but that row is entirely overwritten by the Lambda pin
+            # (see below), so it is discarded, not wrong.
+            gflat = np.where(gate_mask, 0.0, g.ravel())
             # kL row: d(lap)/dg[kR] = +wx_recv_L, d(lap)/dg[kL] += -wx_recv_L
             rows.append(idx(kL)); cols.append(ip(kR)); vals.append(wx_recv_L * dg_dpsi(gflat[kR]))
             rows.append(idx(kL)); cols.append(idx(kR)); vals.append(wx_recv_L * dg_dlam(gflat[kR]))
@@ -996,12 +1097,35 @@ class Device2D:
                 F[iln(kk)] = Lam_n.ravel()[kk]
                 F[ilp(kk)] = Lam_p.ravel()[kk]
                 contact_k.append(kk)
+        contact_k = (np.unique(np.concatenate(contact_k)) if contact_k
+                     else np.zeros(0, dtype=int))
+
+        # ---- M42-S2: GateBC hard wall, part 1 of 2 -- pin Lambda_n/
+        # Lambda_p to LAMBDA_MAX_VT*VT (moscap.py's own pin value,
+        # dg.LAMBDA_MAX_VT) at every gate node.  This suppresses n/p at
+        # the gate node by exp(-20) ~ 2e-9, the discrete equivalent of
+        # the S-P reference's exact psi_k(0)=0 hard-wall wavefunction
+        # condition.  Precedence (section 10.2): a node carrying BOTH a
+        # DirichletBC and a GateBC takes the Dirichlet Lambda=0 rule --
+        # excluded here rather than left to assembly order.
+        gate_k_only = (gate_k[~np.isin(gate_k, contact_k)]
+                       if gate_k.size else gate_k)
+        if gate_k_only.size:
+            pin_val = LAMBDA_MAX_VT * VT
+            F[iln(gate_k_only)] = Lam_n.ravel()[gate_k_only] - pin_val
+            F[ilp(gate_k_only)] = Lam_p.ravel()[gate_k_only] - pin_val
+
         rows = np.concatenate(rows); cols = np.concatenate(cols); vals = np.concatenate(vals)
         pin_rows = []
-        if contact_k:
-            contact_k = np.unique(np.concatenate(contact_k))
-            pin_rows = np.concatenate(
-                [ip(contact_k), iln(contact_k), ilp(contact_k)])
+        pin_list = []
+        if contact_k.size:
+            pin_list.append(np.concatenate(
+                [ip(contact_k), iln(contact_k), ilp(contact_k)]))
+        if gate_k_only.size:
+            pin_list.append(np.concatenate(
+                [iln(gate_k_only), ilp(gate_k_only)]))
+        if pin_list:
+            pin_rows = np.unique(np.concatenate(pin_list))
             keep = ~np.isin(rows, pin_rows)
             rows, cols, vals = rows[keep], cols[keep], vals[keep]
             rows = np.concatenate([rows, pin_rows])
@@ -1014,10 +1138,45 @@ class Device2D:
             else np.zeros(0, dtype=int))
         return F, J
 
-    def _dg_newton_solve_eq(self, psi, Lam_n, Lam_p, gamma, max_iter, tol):
+    def _dg_newton_solve_eq(self, psi, Lam_n, Lam_p, gamma, max_iter, tol,
+                            tol_residual=1e-7):
         """One coupled-Newton solve at FIXED gamma from a warm start.
-        Mirrors Device1D's _dg_newton_solve_eq exactly -- never raises
-        on non-convergence/a singular step, reports via `converged`."""
+        Mirrors Device1D's _dg_newton_solve_eq, with ONE addition found
+        necessary during M42-S2: a RESIDUAL-based convergence check
+        alongside the step-based one.
+
+        M42-S2 finding: under a GateBC in strong inversion, the minority
+        carrier's OWN Lambda row (Lam_p*g_p + pref*laplacian(g_p), g_p =
+        sqrt(p)) becomes nearly degenerate at nodes where p is driven to
+        ~0 by inversion -- the row's effective coefficient on Lambda_p is
+        ~g_p ~ 0.  The residual-based exit above catches the case where
+        this simply STALLS (F already tiny, step wandering along a near-
+        null direction forever). A SECOND, harder case was also found:
+        the same near-singular row can drive a genuine Newton LIMIT
+        CYCLE (confirmed directly: the step norm locks onto EXACTLY the
+        clamp bound every single iteration, F oscillates in a narrow
+        band around 1e-8-1e-7 without shrinking further, hundreds of
+        iterations). Undamped Newton has no convergence guarantee for a
+        near-singular Jacobian direction, so this loop adds the SAME
+        backtracking-line-search-on-the-residual-merit mechanism this
+        file already uses for stiff generation (M15/M34-S6's `backtrack`
+        block a few hundred lines below, device.py's _LS_MAX_HALVINGS/
+        _LS_NEWTON_REGION) rather than inventing a new one: outside a
+        small neighborhood of convergence, halve the step until the
+        merit 0.5*sum(F^2) actually decreases (or give up and take the
+        full step, matching that block's own documented reasoning for
+        why lam=0 on failure is worse than lam=1).  MOSCapacitor's own
+        coupled solve does not hit either failure mode in practice
+        (checked directly: it reaches a true ~1e-15 residual with no
+        plateau or cycle) -- exposed here by GateBC's harder inversion
+        regime combined with Device2D's larger, differently-conditioned
+        linear system, not a Device1D/MOSCapacitor problem to fix
+        retroactively. Neither addition changes S1's ohmic-only
+        behavior: those gates already converge smoothly well inside
+        _LS_NEWTON_REGION and reach the residual floor at the same
+        point the step norm does (reconfirmed by S2-G2b: bit-identical
+        ohmic DG result). Never raises on non-convergence/a singular
+        step, reports via `converged`."""
         for _ in range(max_iter):
             F, J = self._dg_residual_jacobian_eq(psi, Lam_n, Lam_p, gamma=gamma)
             Jd, rhs = eliminate_csr(J, -F, self._dg_dirichlet_rows_eq)
@@ -1030,26 +1189,50 @@ class Device2D:
             d_psi = np.clip(d[0::3], -5.0, 5.0).reshape(self.Ny, self.Nx)
             d_ln = np.clip(d[1::3], -10.0 * self.VT, 10.0 * self.VT).reshape(self.Ny, self.Nx)
             d_lp = np.clip(d[2::3], -10.0 * self.VT, 10.0 * self.VT).reshape(self.Ny, self.Nx)
-            psi = psi + d_psi
-            Lam_n = Lam_n + d_ln
-            Lam_p = Lam_p + d_lp
+            # Convergence is judged on the FULL Newton correction (before
+            # any damping) -- matching the stiff-generation block's own
+            # rule (a small lam would otherwise pass the tol check early
+            # while the state has barely moved).
             err = max(np.abs(d_psi).max(), np.abs(d_ln).max(), np.abs(d_lp).max())
-            if err < tol:
+            residual_ok = np.abs(F).max() < tol_residual
+            lam = 1.0
+            if err >= _LS_NEWTON_REGION and not residual_ok:
+                base = 0.5 * float(np.dot(F, F))
+                for _ in range(_LS_MAX_HALVINGS + 1):
+                    Ft, _ = self._dg_residual_jacobian_eq(
+                        psi + lam * d_psi, Lam_n + lam * d_ln,
+                        Lam_p + lam * d_lp, gamma=gamma)
+                    ft = 0.5 * float(np.dot(Ft, Ft))
+                    if np.isfinite(ft) and ft <= base * (1.0 - 1e-4 * lam):
+                        break
+                    lam *= 0.5
+                else:
+                    # No trial reduced the merit -- take the full step
+                    # rather than lam=0 (which repeats an identical
+                    # iterate forever, a certain failure; same reasoning
+                    # as the stiff-generation block below).
+                    lam = 1.0
+            psi = psi + lam * d_psi
+            Lam_n = Lam_n + lam * d_ln
+            Lam_p = Lam_p + lam * d_lp
+            if err < tol or residual_ok:
                 return psi, Lam_n, Lam_p, True
         return psi, Lam_n, Lam_p, False
 
     def _solve_equilibrium_dg_coupled(self, opts: NewtonOptions):
-        """M42-S1: gamma-continuation coupled-Newton DG equilibrium,
+        """M42-S1/S2: gamma-continuation coupled-Newton DG equilibrium,
         mirroring Device1D's _solve_equilibrium_dg_coupled exactly (same
         stage list, same warm-restart/retry-with-bisection logic) -- see
-        that method's docstring for the rationale."""
-        if any(isinstance(bc, GateBC) for bc in self.bcs.values()):
-            raise NotImplementedError(
-                "Models(dg=True) with a GateBC is refused: the Lambda "
-                "boundary condition at a gate/oxide interface is an open "
-                "question this slice (M42-S1) deliberately does not "
-                "answer -- see M42-DENSITY-GRADIENT-2D3D-PLAN.md section "
-                "0.2/S2. Ohmic-contact-only devices are supported.")
+        that method's docstring for the rationale.
+
+        M42-S2 (2026-09-17): a GateBC is no longer refused here --
+        _dg_residual_jacobian_eq now implements the gate Robin BC on the
+        Poisson row plus the two-part Lambda hard wall (pin + ghost-zero
+        masking) at gate nodes, ported from moscap.py's own M20 fix (see
+        M42-DENSITY-GRADIENT-2D3D-PLAN.md section 10). Equilibrium is
+        still solved at the device's own Vg_s=0.0, so a gated DG device
+        is biased through Vfb only -- there is no Vg sweep and therefore
+        no DG C-V curve here (MOSCapacitor still owns that)."""
         psi = self._bulk_psi_guess()
         Lam_n = np.zeros((self.Ny, self.Nx))
         Lam_p = np.zeros((self.Ny, self.Nx))

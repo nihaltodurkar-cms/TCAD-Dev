@@ -39,10 +39,15 @@ def _flow(steps, tmp_path):
 
 
 def _substrate():
+    # h_min_cm=4e-8 (not 2e-8): this file tests process-flow/domain
+    # round-tripping, not mesh precision, and 2e-8 on this 1e-3 domain
+    # pushed graded_mesh's L/h_min past its dense-sampling cap (5e4 vs
+    # ~4e4) purely as an incidental side effect -- 4e-8 halves that
+    # ratio to 2.5e4 with no test here depending on the exact h_min.
     return ProcessStep(id="sub", name="Substrate", operation="substrate",
                        parameters={"length_cm": 1e-3,
                                    "background_doping_cm3": -1e16,
-                                   "mesh": {"h_min_cm": 2e-8,
+                                   "mesh": {"h_min_cm": 4e-8,
                                             "h_max_cm": 2e-6,
                                             "ratio": 1.15}})
 

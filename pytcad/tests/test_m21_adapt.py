@@ -222,7 +222,15 @@ def test_refinement_beats_uniform_under_scale_separation():
     def build(x):
         return Device1D(x, dop(x), T=300.0, models=Models())
 
-    ref = build(graded_mesh(L, [XJ], h_min=2e-9, h_max=2e-7))
+    # h_min=2e-9 on a 1e-3 domain deliberately pushes past graded_mesh's
+    # dense-sampling cap (L/h_min=5e5 vs the ~4e4 threshold) -- this
+    # reference is meant to be as fine as practical, and the ~2-2.4x
+    # coarsening the cap warns about is immaterial next to this test's
+    # own tolerance (checked against err_adapt below, not against this
+    # reference's own absolute precision).
+    with pytest.warns(UserWarning, match="dense-sampling cap"):
+        x_ref = graded_mesh(L, [XJ], h_min=2e-9, h_max=2e-7)
+    ref = build(x_ref)
     ref.solve_equilibrium()
     q_ref = _qoi_depletion_charge(ref)
 
@@ -295,7 +303,15 @@ def test_adapted_diode_matches_resolved_reference():
     """G3 (standing rule 3): a new mesh path ships with a golden parity
     test against the validated tensor-product path before use."""
     build = _build()
-    ref = build(graded_mesh(6.0e-4, [3.0e-4], h_min=5e-9, h_max=5e-8))
+    # h_min=5e-9 on a 6e-4 domain deliberately exceeds the dense-sampling
+    # cap (L/h_min=1.2e5), same reasoning as
+    # test_refinement_beats_uniform_under_scale_separation above: this
+    # reference wants maximum practical fineness, and the resulting
+    # ~2-2.4x near-focus coarsening is well inside the 5e-2/1e-3
+    # tolerances asserted below.
+    with pytest.warns(UserWarning, match="dense-sampling cap"):
+        x_ref = graded_mesh(6.0e-4, [3.0e-4], h_min=5e-9, h_max=5e-8)
+    ref = build(x_ref)
     ref.solve_equilibrium()
 
     dev, mesh, hist = adapt.adapt_solve_1d(

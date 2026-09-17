@@ -346,9 +346,34 @@ def test_fd_jacobian_of_the_generation_genuinely_2d():
     _fd_gate(off, _corner(True), 12.0)
 
 
+@pytest.mark.slow
 def test_fd_jacobian_of_the_generation_genuinely_3d():
     """The same gate on Device3D at a cube corner of the junction, where
-    both transverse axes carry current (asserted)."""
+    both transverse axes carry current (asserted).
+
+    Measured 2026-09-17 (fast-suite `--durations` profiling, in the
+    course of investigating why the fast suite -- documented at ~70s in
+    CLAUDE.md -- was actually taking ~31 minutes wall time under
+    `-n 6`): this single test costs 1724.64s (28.7 minutes) by itself,
+    ~92% of the entire fast-suite run at the time. Isolated with
+    per-step timing (bypassing `_fd_gate`'s FD-column loop, which turned
+    out NOT to be the cost) to `_ramp(off, 12.0)`'s bias solves on
+    `_corner3(False)`: the FIRST bias step alone (-2V, plain SRH
+    physics, impact=False) had not converged after 60+ CPU-seconds on a
+    3038-node device that solves in well under a second in every sibling
+    test in this file. This is the same class of issue CLAUDE.md's
+    gotchas already document for Device2D's coarse corner junctions
+    (plain Newton failing/oscillating just above the density floor) --
+    apparently present, and much worse, in this 3D cube-corner fixture
+    too. Not root-caused or fixed here (that would mean touching
+    Device3D's frozen numerical core under the M11-S3 amendment
+    mechanism, out of scope for a suite-speed pass); marked `slow` to
+    match its neighbor `test_curved_junction_multiplies_more_than_planar`
+    below, which already carries this mark for a lesser version of the
+    same reason. The 2D sibling
+    (`test_fd_jacobian_of_the_generation_genuinely_2d`, ~34s) stays
+    unmarked -- it is not fast by fast-suite standards either, but it is
+    not the ~50x outlier this one is."""
     off = _corner3(False)
     assert not _ramp(off, 12.0)
     _fd_gate(off, _corner3(True), 12.0)

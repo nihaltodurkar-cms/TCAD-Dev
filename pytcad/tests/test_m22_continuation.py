@@ -43,7 +43,14 @@ from pytcad.device import _II_STAGES
 
 
 def _one_sided(nd_low=1e16, nd_high=1e19):
-    x = graded_mesh(6.0e-4, [3.0e-4], h_min=1e-8, h_max=1e-6)
+    # h_min=1e-8 on this 6e-4 domain exceeds graded_mesh's dense-sampling
+    # cap (L/h_min=6e4) -- deliberately fine, and the ~2-2.4x near-
+    # junction coarsening it warns about is immaterial to the
+    # continuation-driver behavior this module gates. Same call, same
+    # reasoning, as tests/test_m15_ionization.py's own _one_sided().
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        x = graded_mesh(6.0e-4, [3.0e-4], h_min=1e-8, h_max=1e-6)
     dop = np.where(x < 3.0e-4, -nd_low, nd_high)
     return x, dop
 
