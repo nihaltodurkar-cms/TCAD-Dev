@@ -77,6 +77,30 @@ pytcad/ (this package)
   process2d.py   M23: mask-driven 2D deposit/etch, thermal oxidation
                  with bird's-beak encroachment, mask-driven 2D
                  implants -- structured-mesh "string model" slice
+  levelset2d.py  M35 S1/S2/S4: signed-distance multi-material level
+                 set on its own uniform background grid (independent
+                 of process2d's fixed-lateral-grid mesh) -- real
+                 deposit/etch topology (conformal coverage, trench
+                 pinch-off, genuine isotropic/directional undercut),
+                 patterned masks (deposit_conformal's x_windows),
+                 facet-dependent epitaxy, CMP planarization
+  oxidize_levelset.py
+                 M35 S3/S3b: oxidation as a real embedded 2D oxidant-
+                 diffusion moving-boundary solve on levelset2d.py's
+                 grid (replacing process2d.oxidize_2d's column-
+                 independent Deal-Grove + ad hoc lateral-suppression
+                 kernel for this path), plus dopant transport across
+                 that moving boundary (reuses ted.segregation_partition
+                 incrementally per swept cell)
+  silicide_levelset.py
+                 M35 S4: silicidation (metal+Si->silicide) as a
+                 per-column linear-parabolic moving-boundary solve, a
+                 structural port of oxidize_levelset.py's architecture
+                 with NO built-in named silicide -- (B,A) rate
+                 constants and the Si/metal consumption split are
+                 required caller arguments (a literature search for a
+                 verifiable NiSi/CoSi2/TiSi2 table hit the same class
+                 of blocker as M14's G-A: paywalled/disagreeing sources)
   ted.py         M24: pair diffusion/segregation/clustering -- Fair
                  extrinsic enhancement, "+1" TED supersaturation, OED
                  boost, segregation partition, solubility-limited
@@ -393,7 +417,7 @@ There is now a true 3D extension (`mesh3d.py`'s `Mesh3D`, `device3d.py`'s `Devic
 
 **Validation.** The primary correctness gate is dimensional reduction: a z-invariant 3D structure must reproduce the already-validated 2D solver exactly. `tests/test_validation_3d.py` checks this at equilibrium and forward bias, and `examples/05_3d_reduces_to_2d.py` makes it visual — extruding a p-n junction in z, solving both 2D and 3D, and plotting the difference. Measured on this repo: max $|\psi_{3D}-\psi_{2D}|$ = 1.11e-16 V, max $|J_{3D}-J_{2D}|$ = 3.98e-10 A/cm² — both at floating-point noise level, not just within the tests' (looser) 1e-6 V / 1e-3 relative tolerances. The analytic Newton Jacobian is independently checked against finite differences (worst relative error < 1e-3 across 30 random sampled columns via sparse column-slice extraction — never `J.toarray()` on the full matrix), and terminal-current extraction (residual-based, not edge-walking) conserves charge to <1e-6 relative error on a two-terminal 3D resistor.
 
-**Current limitations, stated honestly.** A structured tri-gate FinFET template now exists (`finfet3d.py`'s `build_finfet3d`, on this same tensor-product `Device3D`/`Mesh3D` core) with literature-trend DIBL/subthreshold-swing gates (see the "3D tri-gate FinFET (M26, new)" subsection below) — GAA nanowire/nanosheet templates remain deferred to future sub-projects. 3D process simulation (implant/diffusion/oxidation) is still 1D/2D-only (`process.py`/`process2d.py`), except that `gmsh_finfet3d.py` can now extrude a `process2d`-built 2D etch profile into a 3D tet mesh (geometry only, not a full 3D process solve — see that module's own honesty clause). `scipy.sparse.linalg.spsolve` (`NewtonOptions.linsolve="direct"`, the default) is still what every pre-2026-09-02 benchmark below describes, and the superlinear LU fill-in it shows on a large 3D structured grid is real and unavoidable for a direct solve on this mesh topology. Since then, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned via the optional `pyamg` dependency) and `linsolve="gpu_direct"` (cuSOLVER via the optional `cupy` dependency) — measured 8x-44x faster for a large 3D equilibrium solve and 2.8x faster for a large 3D bias solve respectively, *but* measurably WORSE than plain `"direct"` below roughly 20,000-50,000 nodes (preconditioner/GPU setup cost that only pays for itself once direct factorization is already expensive) — neither is a universal replacement for `"direct"`, which is why it stays the default. `gui/services/solver_runner.py` picks between them automatically for GUI-driven 3D jobs based on mesh size and what's installed; called directly through the pytcad API, `"direct"` remains what you get unless you ask otherwise. MPI-parallel domain decomposition (4-rank overlapping Schwarz, `gui/services/mpi_schwarz_runner.py`) exists only at the GUI layer, not as a `Device3D` capability — it drives several ordinary `Device3D` instances, one per rank, over an already-split mesh, and now covers voltage sweeps as well as equilibrium + a single bias point (transients are still excluded, since `Device3D` has no transient module to parallelize). It also now picks whichever of x/y/z is actually safe to split along, not only x. It is NOT safe for every geometry: a device whose doping varies along the candidate axis converges far slower or not at all, and a device with a gate contact whose own `normal_axis` matches the candidate axis can converge to a silently WRONG answer even when the doping check alone would call that axis safe (a real bug found and fixed) — `run_job()` checks both the doping array and every registered gate's normal_axis, and refuses the MPI path whenever either is unsafe. See M22-LINSOLVE-PLAN.md sections 9-13 for the full measurement record on all three engines.
+**Current limitations, stated honestly.** A structured tri-gate FinFET template now exists (`finfet3d.py`'s `build_finfet3d`, on this same tensor-product `Device3D`/`Mesh3D` core) with literature-trend DIBL/subthreshold-swing gates (see the "3D tri-gate FinFET (M26, new)" subsection below) — GAA nanowire/nanosheet templates remain deferred to future sub-projects. 3D process simulation (implant/diffusion/oxidation) is still 1D/2D-only (`process.py`/`process2d.py`), except that `gmsh_finfet3d.py` can now extrude a `process2d`-built 2D etch profile into a 3D tet mesh (geometry only, not a full 3D process solve — see that module's own honesty clause). Since 2026-09-18, 2D process geometry itself got a genuinely better representation — `levelset2d.py`'s signed-distance level set (M35 S1-S4: real deposit/etch topology including trench pinch-off and true undercut, `oxidize_levelset.py`'s embedded 2D oxidant-diffusion moving-boundary oxidation replacing the old column-independent Deal-Grove kernel, dopant transport across that moving boundary, patterned masks, facet-dependent epitaxy, CMP, and `silicide_levelset.py`'s silicidation solver — see "Level-set 2D process geometry (M35 S1-S4, new)" below) — but this is still a 2D-only representation; a 3D level set (M35 S5) and a real 3D doping field sampled onto a device mesh from it (M35 S6, replacing `gmsh_finfet3d.py`'s median-height/uniform-doping extrusion) remain a deliberate, not-yet-decided next step, not landed. `scipy.sparse.linalg.spsolve` (`NewtonOptions.linsolve="direct"`, the default) is still what every pre-2026-09-02 benchmark below describes, and the superlinear LU fill-in it shows on a large 3D structured grid is real and unavoidable for a direct solve on this mesh topology. Since then, `Device3D.solve_equilibrium`/`solve_bias` also accept `linsolve="bicgstab"`/`"gmres"` (AMG-preconditioned via the optional `pyamg` dependency) and `linsolve="gpu_direct"` (cuSOLVER via the optional `cupy` dependency) — measured 8x-44x faster for a large 3D equilibrium solve and 2.8x faster for a large 3D bias solve respectively, *but* measurably WORSE than plain `"direct"` below roughly 20,000-50,000 nodes (preconditioner/GPU setup cost that only pays for itself once direct factorization is already expensive) — neither is a universal replacement for `"direct"`, which is why it stays the default. `gui/services/solver_runner.py` picks between them automatically for GUI-driven 3D jobs based on mesh size and what's installed; called directly through the pytcad API, `"direct"` remains what you get unless you ask otherwise. MPI-parallel domain decomposition (4-rank overlapping Schwarz, `gui/services/mpi_schwarz_runner.py`) exists only at the GUI layer, not as a `Device3D` capability — it drives several ordinary `Device3D` instances, one per rank, over an already-split mesh, and now covers voltage sweeps as well as equilibrium + a single bias point (transients are still excluded, since `Device3D` has no transient module to parallelize). It also now picks whichever of x/y/z is actually safe to split along, not only x. It is NOT safe for every geometry: a device whose doping varies along the candidate axis converges far slower or not at all, and a device with a gate contact whose own `normal_axis` matches the candidate axis can converge to a silently WRONG answer even when the doping check alone would call that axis safe (a real bug found and fixed) — `run_job()` checks both the doping array and every registered gate's normal_axis, and refuses the MPI path whenever either is unsafe. See M22-LINSOLVE-PLAN.md sections 9-13 for the full measurement record on all three engines.
 
 Historical benchmark (unchanged, still accurate for the `"direct"` path this whole limitations paragraph is otherwise about): a uniformly-doped cubic resistor's solve time grew from 3.0s at N=8,000 nodes to 51.8s at N=27,000 (an 18x jump for 3.4x more nodes), and N=64,000 did not complete a single solve within 30 minutes, with the unattended sweep's memory reaching ~19 GB before being killed. **In practice `"direct"` alone is only usable up to roughly N≈27,000 nodes (≈81,000 DOF) on 30 GB-class hardware; larger meshes need one of the alternatives above (or, for the GUI's own examples, its automatic gating already picks one).** No claim of parity with commercial 3D TCAD tools is made or intended. GAA nanowire/nanosheet templates remain future sub-project work; the full design rationale and explicit out-of-scope list otherwise live in this sub-project's internal design notes, not included in this repository checkout.
 
@@ -566,6 +590,60 @@ module's own honesty-clause docstring and `ARCHITECTURE.md` section
   implant-array extrusion; the extruded tet FinFET's fully coupled
   bias solve needs voltage ramping/continuation not yet implemented on
   that path (measured, not silently skipped).
+
+### Level-set 2D process geometry (M35 S1-S4, new)
+
+`process2d.py`'s fixed-lateral-grid "string model" represents the
+wafer surface as one height per column, so it cannot express a
+re-entrant profile (a keyhole trench, a mushroom-shaped mask undercut)
+at all. `levelset2d.py` replaces that with a real signed-distance level
+set per material on its own uniform background grid (independent of
+the device mesh — the process front and the device solution are
+resolved on deliberately different grids), so "which material owns
+this point" and "where is the interface" become sign tests and
+zero-crossing interpolation instead of column bookkeeping. Landed
+2026-09-17/18 in four slices, each gated in its own
+`tests/test_m35_s*.py` file — see `M35-3D-PROCESS-PLAN.md` sections
+11-15 for the full physics/numerics record, including several real
+bugs found and fixed along the way (a front-never-moves reinit-timing
+bug, a backwards deposit/etch erosion direction, a flux placed on the
+wrong side of a moving interface, a sign-inverted facet normal in
+epitaxy):
+
+- **S1** — the level-set representation itself: multi-material Voronoi
+  ownership + signed-distance re-derivation, Osher-Sethian upwind
+  advection, CFL-limited stepping. Does not conserve mass exactly
+  (measured, not claimed away — a real, disclosed regression against
+  `process2d.deposit`'s exact bookkeeping).
+- **S2** — deposit/etch as real topology: `deposit_conformal`,
+  `etch_isotropic`, `etch_directional`. Trench pinch-off and genuine
+  lateral undercut (against real mask geometry, not a raw
+  column-position mask argument, which cannot produce undercut even in
+  principle) fall directly out of the level-set advection.
+- **S3/S3b** — oxidation as a real embedded 2D oxidant-diffusion
+  moving-boundary solve (`oxidize_levelset.py`), replacing the old
+  column-independent Deal-Grove + lateral-suppression kernel for this
+  path; bird's-beak tapering is an emergent property of the diffusion
+  solve, not a hand-tuned shape. S3b transports a dopant field across
+  that moving boundary, reusing `ted.segregation_partition`
+  incrementally per swept cell (exact dose conservation, by
+  construction of that function's own equation).
+- **S4** — masks as first-class 2D objects (a patterned mask is
+  ordinary deposition with zero rate outside a lateral window, so it
+  erodes/shadows like any other real geometry with no special-cased
+  logic), silicidation (`silicide_levelset.py`, a per-column
+  linear-parabolic moving-boundary solve — no built-in named silicide;
+  see that module's own honesty clause), facet-dependent epitaxy
+  (`deposit_epitaxial`), and CMP (`planarize`, a trivial one-shot
+  ownership rewrite with no PDE).
+
+Per the plan's own section 8-9, S4 is a deliberate stopping point: it
+delivers a genuinely better 2D process capability on its own, and
+whether to build S5 (the same level set in 3D) and S6 (real 3D
+device geometry + doping sampled from it, replacing
+`gmsh_finfet3d.py`'s median-height/uniform-doping extrusion) is left
+as an explicit, not-yet-made decision rather than an assumed default —
+see the "Current limitations, stated honestly" paragraph above.
 - **M28 — `schottky.py`.** Thermionic-emission Schottky I-V (self-
   derived Richardson constant matches the published 120.173
   A/(cm²·K²) to 5 significant figures; tabulated literature effective

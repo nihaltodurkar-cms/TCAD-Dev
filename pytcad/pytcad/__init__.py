@@ -28,6 +28,7 @@ from .moscap import MOSCapacitor, flatband_voltage
 from .mosfet import mosfet_doping, build_mosfet, id_vg_sweep
 from . import process
 from . import process2d
+from . import levelset2d
 from . import ted
 from . import mc_implant
 from . import schottky
@@ -50,7 +51,7 @@ __all__ = [
     "Device1D", "Models", "NewtonOptions", "bernoulli", "dbernoulli",
     "Device2D", "DirichletBC", "GateBC",
     "Device3D", "DirichletBC3D", "GateBC3D",
-    "MOSCapacitor", "flatband_voltage", "process", "process2d", "ted", "mc_implant",
+    "MOSCapacitor", "flatband_voltage", "process", "process2d", "levelset2d", "ted", "mc_implant",
     "schottky",
     "mosfet_doping", "build_mosfet", "id_vg_sweep",
     "build_finfet3d", "id_vg_sweep_3d",

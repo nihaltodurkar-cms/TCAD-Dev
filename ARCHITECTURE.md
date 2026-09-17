@@ -402,12 +402,35 @@ should depend on P4b's fix, not on a P5 that stopped.
        this was M15's long-open G-C gap (M_sim/M_int measured 0.76,
        inside its tolerance band). Out of scope: unstructured meshes,
        heterojunctions, phonon-assisted BTBT, energy-resolved channels.
-  M35  3D process simulation                      [XL]  NOT STARTED
-       Still missing: 2D moving-boundary oxidation (LOCOS/STI bird's
-       beak proper), deposition/etch topology engine, masks,
-       silicidation, epitaxy, CMP, none of it in 3D. The single
-       biggest remaining parity gap; needs a real topology/level-set
-       engine. Depends: M31 P2 (landed).
+  M35  3D process simulation                      [XL]  S1+S2+S3+S3b+S4 LANDED 2026-09-18
+       S1 (level-set representation, replacing process2d's
+       single-valued height field), S2 (deposit/etch as real
+       topology on it -- conformal coverage, trench pinch-off, genuine
+       isotropic undercut, directional etch), S3 (oxidation as a
+       real embedded 2D oxidant-diffusion moving-boundary solve --
+       pytcad/oxidize_levelset.py, replacing the old column-independent
+       Deal-Grove + lateral-suppression kernel), S3b (dopant
+       transport across that moving boundary, reusing ted.py's own
+       segregation_partition applied incrementally per swept cell), and
+       S4 (masks as first-class 2D objects via deposit_conformal's
+       x_windows param, silicidation -- pytcad/silicide_levelset.py, a
+       structural port of S3's architecture with NO built-in named
+       silicide, since a literature search for verifiable (B,A)
+       constants hit the same class of blocker as M14's G-A --,
+       epitaxy via facet-dependent deposit_epitaxial, and CMP via
+       planarize, trivial as the plan predicted) are landed and gated;
+       see M35-3D-PROCESS-PLAN.md sections 11-15. S3, S3b, and S4's
+       full fast-suite regression runs were all skipped per explicit
+       user instruction (an honest gap vs S1/S2's own verification
+       record -- targeted regression files were run directly instead
+       each time). S4 also surfaced (did not introduce) a latent
+       numerical limitation in S2's advance_front: its masked-erosion
+       exposure test can over-propagate lateral undercut at fine grids
+       (one grid cell per CFL substep regardless of substep size) --
+       see plan section 15. Per the plan's own section 9, S4 completes
+       the "stop and re-evaluate whether S5/S6 (3D) are wanted"
+       checkpoint -- S5 should not start without the user explicitly
+       re-deciding that. Depends: M31 P2 (landed).
   M36  Stress/strain coupling                     [L]   NOT STARTED
        Depends: M31 P5 (stopped -- re-scope against Python+PETSc).
   M37  Reliability & trap dynamics (BTI/HCI/TDDB) [L]   NOT STARTED

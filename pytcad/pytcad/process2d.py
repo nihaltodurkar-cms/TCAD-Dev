@@ -81,6 +81,14 @@ class ProcessGeometry2D:
     surface_um: np.ndarray = None
     ox_thick_um: np.ndarray = None
     si_consumed_um: np.ndarray = None
+    # M35-S1: an optional pytcad.levelset2d.LevelSet2D carried alongside
+    # the height field. NOT wired into deposit/etch/oxidize_2d/implant_2d's
+    # arithmetic in S1 -- those keep their exact current bit-for-bit
+    # behavior (M23's gates require it). Wiring the level set into real
+    # deposit/etch topology is S2 (M35-3D-PROCESS-PLAN.md section 3);
+    # until then this field is None unless a caller explicitly attaches
+    # one via `attach_level_set`.
+    level_set: object = None
 
     def __post_init__(self):
         self.x = np.asarray(self.x, dtype=float)
@@ -96,9 +104,20 @@ class ProcessGeometry2D:
         self.si_consumed_um = np.asarray(self.si_consumed_um, dtype=float).copy()
 
     def copy(self):
-        return ProcessGeometry2D(self.x.copy(), self.surface_um.copy(),
-                                  self.ox_thick_um.copy(),
-                                  self.si_consumed_um.copy())
+        return ProcessGeometry2D(
+            self.x.copy(), self.surface_um.copy(), self.ox_thick_um.copy(),
+            self.si_consumed_um.copy(),
+            level_set=(self.level_set.copy() if self.level_set is not None else None))
+
+
+def attach_level_set(geom, level_set):
+    """Return a copy of `geom` with `level_set` (a
+    pytcad.levelset2d.LevelSet2D) attached. See ProcessGeometry2D's
+    `level_set` field docstring for what this does and does not do in
+    S1 (M35-3D-PROCESS-PLAN.md)."""
+    g = geom.copy()
+    g.level_set = level_set.copy()
+    return g
 
 
 # ----------------------------------------------------------------------

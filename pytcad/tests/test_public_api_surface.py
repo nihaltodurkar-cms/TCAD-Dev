@@ -37,8 +37,8 @@ FROZEN = frozenset({
     "Device2D", "DirichletBC", "GateBC",
     "Device3D", "DirichletBC3D", "GateBC3D",
     # capacitor / process / submodules
-    "MOSCapacitor", "flatband_voltage", "process", "process2d", "ted",
-    "mc_implant", "schottky",
+    "MOSCapacitor", "flatband_voltage", "process", "process2d", "levelset2d",
+    "ted", "mc_implant", "schottky",
     # device builders and characterization
     "mosfet_doping", "build_mosfet", "id_vg_sweep",
     "build_finfet3d", "id_vg_sweep_3d",
