@@ -402,7 +402,7 @@ should depend on P4b's fix, not on a P5 that stopped.
        this was M15's long-open G-C gap (M_sim/M_int measured 0.76,
        inside its tolerance band). Out of scope: unstructured meshes,
        heterojunctions, phonon-assisted BTBT, energy-resolved channels.
-  M35  3D process simulation                      [XL]  S1+S2+S3+S3b+S4 LANDED 2026-09-18
+  M35  3D process simulation                      [XL]  S1+S2+S3+S3b+S4+S5+S6 LANDED 2026-09-18
        S1 (level-set representation, replacing process2d's
        single-valued height field), S2 (deposit/etch as real
        topology on it -- conformal coverage, trench pinch-off, genuine
@@ -427,10 +427,50 @@ should depend on P4b's fix, not on a P5 that stopped.
        numerical limitation in S2's advance_front: its masked-erosion
        exposure test can over-propagate lateral undercut at fine grids
        (one grid cell per CFL substep regardless of substep size) --
-       see plan section 15. Per the plan's own section 9, S4 completes
+       see plan section 15. Per the plan's own section 9, S4 completed
        the "stop and re-evaluate whether S5/S6 (3D) are wanted"
-       checkpoint -- S5 should not start without the user explicitly
-       re-deciding that. Depends: M31 P2 (landed).
+       checkpoint; the user then asked to proceed, with reduced token/
+       agent usage. S5 (pytcad/levelset3d.py) ports the level-set CORE
+       to 3D only (representation/advection/reinit + S2's deposit/etch
+       topology), gated by the 4d.4 rule (z-invariant 3D reproduces 2D
+       to <1e-10). A follow-up same-day pass then closed both remaining
+       gaps at the user's explicit request ("no gaps"): S5 now has full
+       S1-S4 parity in 3D -- etch_directional3d/deposit_epitaxial3d/
+       planarize3d added to levelset3d.py, plus two new modules,
+       pytcad/oxidize_levelset3d.py (6-neighbor 3D finite-volume
+       oxidant-diffusion solve, same persistent-phi architecture as the
+       2D module, includes 3D dopant transport) and
+       pytcad/silicide_levelset3d.py (per-(x,z)-line linear-parabolic
+       solve, same no-built-in-silicide honesty clause as 2D). S6 is
+       now COMPLETE: gmsh_finfet3d.py's geometry was rebuilt on a real
+       per-column staircase surface (_staircase_face) from
+       geom.surface_um instead of 3-region median flattening, on top of
+       the doping-field fix (sample_doping_3d_from_process2d) already
+       landed. See plan sections 16-17 for the full record, including a
+       latent advance_front3d over-propagation finding (same known
+       class as S4's, not new) and a real downstream face-classification
+       bug the staircase geometry surfaced and fixed (gate_top/gate_side
+       tagging assumed one flat top y-value per region). A third same-
+       day pass then added a SECOND, independent geometry pipeline
+       alongside (not replacing) the staircase path: real smooth 3D
+       geometry (levelset3d.marching_cubes_surface, via the new optional
+       scikit-image dependency -- a genuine triangulated isosurface,
+       including a union-of-materials CSG option) and direct level-set
+       tet meshing (new pytcad/levelset3d_mesh.py, via the new optional
+       tetgen dependency -- gmsh's own STL-remeshing path was tried
+       first and confirmed unsuitable for smooth marching-cubes
+       surfaces, see plan section 18 for why). Region tags come from
+       per-tet-centroid lookup into the level set's own material_map()
+       (not conformal to element faces, a disclosed approximation);
+       domain-boundary caps carry a bounded sub-grid-cell placement
+       error (also disclosed, measured 0.95% on a flat slab). Both
+       pipelines' output was rendered via pyvista's offscreen path and
+       visually inspected (the real Viewer3DWindow's known segfault on
+       this machine was not re-attempted) -- correct block shape, a
+       genuinely curved/diagonal undercut cross-section distinct from
+       the staircase path's sharp right-angle steps, no defects found.
+       See plan section 18 for the full record. Depends: M31 P2
+       (landed).
   M36  Stress/strain coupling                     [L]   NOT STARTED
        Depends: M31 P5 (stopped -- re-scope against Python+PETSc).
   M37  Reliability & trap dynamics (BTI/HCI/TDDB) [L]   NOT STARTED
@@ -490,15 +530,15 @@ NotImplementedError sites, not inferred from filenames):
   Impact ionization, nonlocal       Y     Y     Y    --
   BTBT, local Kane / nonlocal       Y     Y     Y    --
   Trap-assisted tunneling           Y     Y     Y    --
-  Density gradient / quantum        Y     S1    -    M42
+  Density gradient / quantum        Y     Y     Y    -- (M42 S1-S4 done)
   Self-heating (lattice T)          Y     -     -    M43
   Hydrodynamic / energy balance     Y*    -     -    M44
-  Transient / small-signal AC       Y     Y     -    M45
+  Transient / small-signal AC       Y     Y     Y    --
   Adaptive refinement               Y     Y     Y    --
   Process: implant/diffuse/oxide    Y     Y     -    M35
   Process: TED, MC implant          Y     -     -    M35
   Mixed-mode circuit                Y     Y     Y    --
-  Schottky / tunnel contacts        Y*    -     -    M46
+  Schottky / tunnel contacts        S1+S2 S1+S2 S1   M46
 
   Y* = standalone/analysis module, NOT coupled into any device Newton
        core (hydrodynamic.py, schottky.py -- imported by __init__.py
@@ -526,13 +566,26 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        M16-S2 (local Kane BTBT -> structured 2D/3D, pytcad/
        btbt_grid.py) landed the same week, closing 4d.1's other
        remaining local/nonlocal-BTBT inversion (see M16 above).
-  M42  Density gradient / quantum -> 2D/3D    [L]   S1 LANDED 2026-09-17,
-       S2/S3/S4 NOT STARTED. Prerequisite for any credible FinFET/GAA
-       confinement claim -- S1 alone does NOT satisfy that: it is
-       Device2D, OHMIC CONTACTS ONLY, any GateBC refused loudly (the
-       plan's own S2, the Lambda boundary condition at a gate/oxide
-       interface, is an open physics question S1 deliberately does not
-       answer -- M42-DENSITY-GRADIENT-2D3D-PLAN.md section 0.2). Ported
+  M42  Density gradient / quantum -> 2D/3D    [L]   S1+S2+S3+S4 LANDED,
+       MILESTONE CLOSED (S1+S2 2026-09-17, S3+S4 2026-09-18 --
+       M42-DENSITY-GRADIENT-2D3D-PLAN.md sections 9/11/12/13; this line
+       went stale for one session between S2 and S3 landing, per
+       section 8's own standing rule that a status claim here is not
+       evidence on its own). S1 alone did NOT satisfy the FinFET/GAA confinement
+       prerequisite -- Device2D, ohmic contacts only, any GateBC
+       refused loudly. S2 closed that gap: the GateBC Lambda boundary
+       condition (a two-part hard wall at the gate/oxide interface,
+       ported from moscap.py's own M20 fix) landed in device2d.py
+       only, 17/17 gates green, all six m13 golden md5s unchanged. S3
+       ported the same coupled-Newton solve to Device3D (a direct
+       lift, no new physics): the shared Lambda-row assembly was
+       factored into pytcad/dg_grid.py (mirrors ii_grid.py/btbt_grid.py's
+       "one kernel for Device2D and Device3D" pattern) and, on request
+       mid-slice, compiled into pytcad._core (core/src/dg/grid.cpp) as
+       an OPTIONAL kernel (unlike M31's required kernels, nothing
+       retired the pure-Python fallback here) -- bit-identical between
+       both paths, 15/15 new gates green, all 27 pre-existing S1/S2
+       gates unchanged after the extraction. Ported
        Device1D's coupled-Newton (psi, Lambda_n, Lambda_p) equilibrium
        formulation one dimension up, reusing Device2D's own box-
        integration flux-divergence pattern (harmonic-mean edges, per-
@@ -546,6 +599,41 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        load-bearing, same correction the plan's own section 0.1 already
        made -- this landed as a pure-Python/numpy assembly job with no
        C++ involvement.
+       S4 (2026-09-18, LANDED, closing M42 as a track): the FinFET/GAA
+       fin-corner confinement demonstration section 10.8 called for.
+       build_finfet3d gained an additive dg/dg_gamma passthrough
+       (bit-identical when dg=False, by construction); a new
+       build_fin_corner_slab (same file) isolates the corner-
+       confinement question with uniform doping and a directly
+       parameterized Vfb, the same way S2's own _build_gated_device
+       isolates the single-gate case -- the full production
+       mosfet_doping profile was tried first and found to overdrive
+       the electrostatics at a naive bias shift (psi past 40 V,
+       corner/flat suppression both saturating to an identical value)
+       before falling back to the controlled slab. The load-bearing
+       result: the density-suppression ratio (classical n / DG n) at a
+       node one step in from BOTH a top and a side gate face at once
+       (the corner) exceeds the ratio at a node one step from the top
+       face alone (a flat face far from either sidewall) by more than
+       2x at every bias tried (9.5x/7.75x/4.06x measured across three
+       biases), and the gap survives mesh refinement. 10 gates in
+       tests/test_m42_s4_finfet_confinement.py, all green; the
+       production tri-gate template also solves dg=True cleanly
+       (a smoke gate, not the quantitative comparison). Reported as a
+       QUALITATIVE TREND per section 10.8 -- no published FinFET
+       quantum-correction curve was sought or found (M14-G-A's
+       standing lesson). See M42-DENSITY-GRADIENT-2D3D-PLAN.md section
+       13 for the full record, including why the production doping
+       profile was rejected for the quantitative gates.
+       Same day, section 14: `build_fin_corner_slab` gained `gaa=True`
+       (a fourth gate face, genuine gate-all-around), closing S4's own
+       "no GAA geometry" limit -- the corner effect holds under it
+       (671.4 vs 49.0, ~13.7x). The rest of M42's honest-limits list
+       (DG transport, a penetration-aware interface, the refused
+       compositions, corner rounding, a published curve) was reviewed
+       and deliberately left alone -- each needs its own physics
+       derivation or unstructured meshing this repo does not have, not
+       a quick follow-on.
   M43  Self-heating -> 2D/3D                  [L]   PHASES 1+2+3 (2D, 3D,
        C++ ACCEL) LANDED 2026-09-16.
        thermal.py's structured assembly has the one non-vectorized
@@ -656,15 +744,80 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        model (it is pure post-processing today) before any
        dimensional lift is meaningful -- overshoot is a 3D
        short-channel effect that a 1D-only closure cannot show.
-  M45  Transient and AC -> 3D                 [XL]  NOT STARTED
-       transient2d.py/ac2d.py exist, no 3D form of either. Device3D
-       AC's "permanently out of scope" call should be REVISITED, not
-       inherited -- it predates M31's 3D-scale fix; a 3D AC solve is a
-       factorize-once-per-frequency op on a Jacobian PETSc already
-       factorizes. Depends: M31 P3b/P7.
-  M46  Schottky/tunnel contacts -> coupled, then 2D/3D  [L]  NOT STARTED
-       Same shape as M44: couple schottky.py into a device core first,
-       then lift dimensionally.
+  M45  Transient and AC -> 3D                 [XL]  LANDED 2026-09-18
+       transient3d.py and ac3d.py, direct lifts of transient2d.py's/
+       ac2d.py's own already-gated pattern one axis further (device.py/
+       device2d.py/device3d.py untouched, same externally-driven
+       pattern). Device3D AC's old "permanently out of scope" call was
+       REVISITED as this milestone's own scope note said to -- a full
+       N-port Y-parameter solve (ohmic AND GateBC ports, any
+       normal_axis) works cleanly at the mesh sizes tested here.
+       Two findings during the slice: (1) a missing bc.kappa factor in
+       ac3d.py's gate forcing/weight, caught by inspection before any
+       gate ran; (2) G1's first reduction fixture (a lone-body MOSCap+
+       gate, no complete DC circuit through the one ohmic port) gave a
+       poorly-conditioned Y[body,body] that mismatched Device2D's
+       reduction by up to 56% -- not a code bug, confirmed by checking
+       an ohmic-only diode3d fixture (no gate) separately, which
+       matched a direct FD to 0.1% with no code change; fixed by using
+       a two-ohmic-contact ("resistor + gate") fixture instead, which
+       reduces to 1e-6 matrix-relative error. See
+       M45-TRANSIENT-AC-3D-PLAN.md for full detail. Time-varying GateBC
+       voltage remains unsupported in transient3d.py, same descope
+       transient2d.py's own docstring already carries -- not lifted
+       here, not this milestone's scope.
+  M46  Schottky/tunnel contacts -> coupled, then 2D/3D  [L]  S1+S2+S3
+       LANDED 2026-09-18, essentially complete for its own stated
+       scope. Same shape as M44: couple schottky.py into a
+       device core first, then lift dimensionally. S1 couples it into
+       Device1D via a DIRICHLET approximation -- the contact node's
+       majority-carrier density is pinned at its barrier-limited
+       equilibrium value (reusing schottky.py's own
+       schottky_barrier_height_n, not re-derived) through the SAME
+       psi0 formula the ohmic contact already used. New SchottkyContact
+       dataclass + Device1D(schottky_left=..., schottky_right=...)
+       (additive, None on both sides is bit-identical to before).
+       Confirmed directly: the resulting device RECTIFIES (forward/
+       reverse current ratio ~53,000x at phi_m=4.8 eV), depletion
+       grows monotonically with the metal work function, and forward
+       current is barrier-limited below the equivalent ohmic device's.
+       4 gates in tests/test_m46_s1_schottky_device1d.py, all green.
+       S2 (same day) replaced the Dirichlet approximation with the
+       full thermionic-emission ROBIN BC when SchottkyContact.A_star
+       is given (A_star=None keeps S1's Dirichlet path bit-identical):
+       found that device.py ALREADY had the exact equation shape
+       needed -- M14's own Models(S_n=..., S_p=...) surface-
+       recombination Robin BC is thermionic emission with a different
+       velocity/target density, so S2 needed ZERO new Jacobian
+       derivation, only per-node selection feeding the already-gated
+       formula. Confirmed directly: equilibrium is IDENTICAL between
+       Robin and Dirichlet (Jn=0 forces n=n0 regardless of v_R, the
+       same invariant M14's own gate documents); under bias, Robin
+       current is within ~10-15% of schottky.py's own analytic
+       thermionic_current_density formula (numeric always slightly
+       below, the expected direction from bulk series resistance the
+       pure analytic formula omits) and smaller than S1's Dirichlet
+       approximation's (0.536 vs 3.75 A/cm^2 at 0.3V). 6 gates in
+       tests/test_m46_s2_schottky_robin.py including an FD-Jacobian
+       check, all green. S3 (same day) lifted to Device2D (full S1+S2
+       parity, via a SchottkyBC subclassing DirichletBC so every
+       existing isinstance(bc, DirichletBC) site needs zero changes;
+       the M14 G-C S_n/S_p Robin block was generalized from a global
+       velocity to a per-node one) and Device3D (S1 Dirichlet
+       approximation only -- Device3D has no M14 S_n/S_p machinery to
+       generalize for S2 and refuses it outright already; the Robin
+       mode is refused by add_schottky_contact there, a disclosed
+       scope limit). A hard-debug finding kept in the record: the
+       first draft of Device2D's per-node row splitting dropped the
+       +1/+2 column offsets (n/p rows marked as the psi row); caught
+       immediately by the FD-Jacobian gate (worst error exactly 1.0)
+       before any physics gate was trusted, fixed, re-verified at
+       1.7e-9. Confirmed directly: a transversely-uniform Device2D/
+       Device3D reduces to Device1D's own SchottkyContact result at
+       equilibrium (a genuine 3D->2D->1D chain); both dimensions
+       rectify under bias. 10 gates in
+       tests/test_m46_s3_schottky_2d3d.py, all green. See
+       M46-SCHOTTKY-PLAN.md for the full record.
   M47  3D numerical engine completion         [XL]  PROPOSED, NOT
        SCOPED, NOT SIGNED OFF. Distinct from M41-M46: this is the
        ENGINE work underneath all of them. Two concrete gaps found by
@@ -681,9 +834,9 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        suite's slowest part. Depends on/overlaps M31 P4 (landed) and
        M35 (its own track). Needs a proper plan doc before any code.
 
-ORDERING: M41[S](done) -> M43[L](done) -> M42[L](S1 done, S2 next) ->
-M46[L] -> M45[XL] -> M44[XL], with M35 (3D process) and M47 (engine
-completion, last deliberately -- more to learn by landing a few of
+ORDERING: M41[S](done) -> M43[L](done) -> M42[L](done, S1-S4) ->
+M46[L](done) -> M45[XL](done) -> M44[XL], with M35 (3D process, LANDED separately)
+and M47 (engine completion, last deliberately -- more to learn by landing a few of
 M41-M46 first) as separate tracks.
 
 ------------------------------------------------------------------------
@@ -940,21 +1093,31 @@ no Sentaurus licence needed):
 ------------------------------------------------------------------------
 8. NEXT SESSION QUEUE
 ------------------------------------------------------------------------
-Live front of the queue, updated 2026-09-17: M43 (self-heating -> 2D/3D,
-all 3 phases) and M51/M52/the ParaView export item (section 7) have
-since LANDED -- this paragraph is left dated so a reader can see what
-changed rather than silently rewriting history. M42-S1 (density-gradient
--> Device2D, ohmic contacts only) LANDED 2026-09-17; the front of the
-dimensional-lift track (5.3) is now **M42-S2** (the GateBC Lambda
-boundary condition -- an open physics question, not an implementation
-task; M42-DENSITY-GRADIENT-2D3D-PLAN.md section 0.2/8 says to decide
-whether it is answerable before starting it). M35 (3D process) and M47
-(3D engine completion) remain the two largest unscoped items. See
-`history.md` for session-by-session detail and open handoff notes --
-note `history.md` itself has NOT been updated with entries for M43,
-M51, M52, or the ParaView export item as of this writing (verified by
-grep 2026-09-17); those milestones' only in-tree record is this file
-and their own plan docs.
+Live front of the queue, updated 2026-09-18: M43 (self-heating -> 2D/3D,
+all 3 phases), M51/M52/the ParaView export item (section 7), M35 (3D
+process, full S1-S6 scope including smooth level-set geometry and
+direct tet meshing), and M42-S1 through S4 (density-gradient ->
+Device2D ohmic + GateBC, then Device3D, then a FinFET/GAA fin-corner
+confinement demonstration) have all LANDED since this paragraph was
+first written -- left dated so a reader can see what changed rather
+than silently rewriting history. M42 is now CLOSED as a track (section
+2/10.8 scoped it as S1-S4 exactly; nothing further is defined without
+a new plan doc). **M46 (S1+S2+S3)** also LANDED 2026-09-18 (Schottky
+contacts: Device1D's Dirichlet approximation and Robin thermionic-flux
+BC, then lifted to Device2D -- full parity -- and Device3D -- Dirichlet
+approximation only, no Robin machinery there to generalize -- see
+M46-SCHOTTKY-PLAN.md) and is now essentially complete for its own
+stated scope. **M45 (transient/AC -> 3D)** also LANDED 2026-09-18:
+transient3d.py and ac3d.py, direct lifts of transient2d.py's/ac2d.py's
+already-gated pattern one axis further -- see
+M45-TRANSIENT-AC-3D-PLAN.md for the two findings from this slice (a
+missing bc.kappa factor caught by inspection, and a poorly-conditioned
+first reduction fixture caught by a failing gate and root-caused before
+being fixed). The front of the dimensional-lift track is now **M44**
+(hydrodynamic -> coupled, then 2D/3D). M47 (3D
+engine completion) remains the largest unscoped item, deliberately
+last. See `history.md` for session-by-session detail and open handoff
+notes.
 
 Standing rules: every slice ships suite-green with pre-existing tests
 unchanged; adversarial probe pass before each commit; optional deps

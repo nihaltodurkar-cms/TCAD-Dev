@@ -969,3 +969,347 @@ returning rather than raising).
   row under a hard-walled gate, exposed by a larger/differently-
   conditioned linear system) is structural, so it plausibly does, but
   this was not verified for D=3.
+
+## 12. S3 results (landed 2026-09-18)
+
+Landed as scoped in section 10.8, with one addition made on explicit
+request mid-slice (compiling the shared kernel into `_core`, not
+originally scoped for S3): Device3D now implements `dg=True`
+equilibrium, a direct lift of Device2D's S1/S2 coupled-Newton (psi,
+Lambda_n, Lambda_p) solve one axis further. Files touched:
+`pytcad/pytcad/dg_grid.py` (new, extracted FROM device2d.py, not new
+physics), `pytcad/pytcad/device2d.py` (refactored to call the shared
+kernel -- see below), `pytcad/pytcad/device3d.py` (new
+`_dg_residual_jacobian_eq`/`_dg_newton_solve_eq`/
+`_solve_equilibrium_dg_coupled` methods, `dg=True` dispatch in
+`solve_equilibrium`, a `dg=True` refusal in `solve_bias`, the
+fd/incomplete_ion/affinity/SIC_4H refusal cascade mirroring
+Device2D's own), `core/include/tcad/dg/kernels.hpp` (new),
+`core/src/dg/grid.cpp` (new), `core/bindings/dg_bindings.cpp` (new),
+`core/bindings/module.cpp` (registers it), `core/CMakeLists.txt`
+(source list). `moscap.py`, `device.py`, `unstructured_dd*.py`,
+`gui/`, `workbench/` were NOT touched.
+
+### Two things done in this slice, not one
+
+**(a) The dg_grid.py extraction (section 10.8's own scope).** Rather
+than hand-copying device2d.py's ~110-line Lambda_n/Lambda_p
+box-integration/harmonic-mean/gate-ghosting stencil a third time,
+it was factored into `pytcad/dg_grid.py`'s `dg_lambda_rows`, generic
+over an arbitrary list of mesh axes (mirrors `ii_grid.py`/
+`btbt_grid.py`'s "one kernel for Device2D and Device3D" pattern, M34-S6
+-- an edge-list abstraction, not `thermal_grid.py`'s node-shape/axis-
+loop one, since this kernel already receives explicit per-axis edge
+index arrays from each device's own `_edge_pairs_x/_y/_z` helpers).
+Verified NOT to change Device2D's behavior before writing any Device3D
+code, per section 10.8's own instruction: all 27 pre-existing S1+S2
+gates pass unchanged after the refactor (`tests/
+test_m42_s1_density_gradient_2d.py`, `test_m42_s2_gate_bc.py`).
+
+**(b) Compiling `dg_lambda_rows` into `pytcad._core`** (on request,
+mid-slice, after the pure-Python 3D correctness gates already passed).
+Unlike the P2/P4/M34-S4/M43 kernels CLAUDE.md's "C++ engine" section
+declares REQUIRED, this one is OPTIONAL -- nothing about M42 asked for
+the pure-Python fallback's removal, so `dg_grid.py`'s public
+`dg_lambda_rows` dispatches to `_accel.core.dg_grid_lambda_rows` when
+`_core` is importable and to the renamed pure-Python oracle
+(`_dg_lambda_rows_py`) otherwise, the M31-era graceful-fallback default
+CLAUDE.md's own section says still applies to anything not explicitly
+retired. The one transcendental (`sqrt(n)`/`sqrt(p)`, i.e. `gn`/`gp`)
+is computed once in Python and crosses as plain data, matching every
+other accelerated kernel's own rule.
+
+The genuinely hard part of the compiled kernel was NOT the arithmetic
+but floating-point ASSOCIATION ORDER, the same class of issue
+`core/src/thermal/grid.cpp`'s own comment already documents: the
+Python/numpy reference vectorizes each of the 8 per-edge Jacobian terms
+as ONE array op across ALL edges of an axis (`rows.append(idx(kL))`
+etc., called once per term with a full-length array), so a (row,col)
+pair touched by TWO different edges (an interior node's own diagonal,
+from being `kR` of its left edge and `kL` of its right edge) --
+scipy's duplicate-summing accumulates in "all edges' term k, for each
+k in turn" order, not edge-by-edge. A first draft that processed edges
+in an interleaved loop (all 8 terms for edge 0, then edge 1, ...) was
+caught by REASONING before compiling (tracing through which (row,col)
+pairs can receive more-than-two contributions once the diagonal
+block's own separate entries are counted) and rewritten as 8 separate
+full passes per axis, exactly mirroring `thermal_grid.cpp`'s own "four
+separate passes" precedent. Result: bit-identical on the first
+successful build+test cycle, confirmed directly for Device2D
+(ohmic and gated) and Device3D (ohmic and gated) via
+`tests/test_m42_s3_accel_parity.py`'s 4 gates, not merely asserted --
+`np.array_equal` on `psi`/`_dg_Lam_n`/`_dg_Lam_p` after a full
+gamma-continuation equilibrium solve each way.
+
+### Gates (`tests/test_m42_s3_density_gradient_3d.py`, 11 tests;
+`tests/test_m42_s3_accel_parity.py`, 4 tests -- 15/15 green)
+
+- **S3-G1** FD-Jacobian of the full 3N system on a small Device3D mesh
+  (5x4x4 nodes): worst relative error well inside the 5e-5 threshold,
+  passed on the first run (the C++/floating-point-order care above was
+  about the COMPILED path bit-identity gate, not this one -- the pure
+  assembly logic was a mechanical lift of an already-FD-Jacobian-gated
+  2D method one axis further).
+- **S3-G2** `dg=False` bit-identity: unaffected (the new `if self.dg:`
+  branch in `solve_equilibrium` is additive, not an edit to the
+  existing classical path) -- `test_m13_goldens.py`'s
+  `resistor3d_eq.npz` golden re-run unchanged as part of the regression
+  sweep, not duplicated here.
+- **S3-G-REDUCTION** (two tests): a z-uniform Device3D, ohmic-only and
+  then with a `normal_axis='y'` GateBC present, reproduces Device2D's
+  own DG equilibrium (`psi`, `n`, `p`, `Lambda_n`, `Lambda_p`) to
+  floating-point noise -- which itself already reduces to Device1D
+  (S1-G3). The two-level chain (3D -> 2D -> 1D) is the load-bearing
+  gate per 4d.4's dimensional-lift rule.
+- **S3-G5** (4 tests): `dg+fd`, `dg+incomplete_ion`,
+  `dg+band_offset="affinity"`, `dg+SIC_4H` all refuse, matching
+  Device2D's own cascade exactly (mirrored, not re-derived).
+- **S3-G6** gamma continuation converges without warning and is
+  deterministic across repeat runs.
+- extra: DG measurably changes the classical answer; `solve_bias`
+  refuses `dg=True` (equilibrium-only, matching Device1D/Device2D).
+- **accel parity** (4 tests): Device2D ohmic, Device2D gated, Device3D
+  ohmic, Device3D gated -- each solved once through
+  `_dg_lambda_rows_accel` and once through `_dg_lambda_rows_py`
+  (monkeypatched), `np.array_equal` on the converged state.
+
+### Suite status
+
+`tests/test_m42_s1_density_gradient_2d.py` + `test_m42_s2_gate_bc.py`
++ `test_m42_s3_density_gradient_3d.py` + `test_m42_s3_accel_parity.py`
++ `test_m13_goldens.py` + `test_accel_parity.py` + `test_accel_boundary.py`:
+**103 passed, 1 skipped** (an unrelated, pre-existing skip). One S2 test
+was rewritten rather than left failing:
+`test_g7_device3d_still_refuses_dg_naming_s3_or_m20` asserted a
+refusal S3 now correctly removes -- renamed
+`test_g7_device3d_now_implements_dg_see_m42_s3` and rewritten to check
+the (now-successful) construction instead, with a docstring pointing
+at this file's own gates as the real S3 validation, not a substitute
+for them. Full fast suite (`tests/ gui/tests/ -n 6 -m "not slow"`):
+**1918 passed, 5 skipped, 1 xfailed, 0 failed** (a second stale test
+found by this run and fixed the same way as the S2 one above:
+`test_m20_dg.py::test_ge_device2d_solves_dg_device3d_still_refuses`
+asserted the Device3D refusal S3 removes -- renamed
+`test_ge_device2d_and_device3d_both_solve_dg` and rewritten to solve
+both rather than expect one to raise).
+
+### Honest limits, confirmed rather than merely inherited from section 10.7/11
+
+- **Still equilibrium-only** -- `solve_bias` refuses `dg=True` in
+  Device3D exactly as in Device1D/Device2D. No DG C-V curve, no DG
+  transport.
+- **The Device2D-only Newton-robustness additions (residual exit +
+  backtracking line search) WERE carried into Device3D's
+  `_dg_newton_solve_eq`** (a direct lift, not re-derived) and were
+  exercised by S3-G6/S3-G-REDUCTION's gated case without incident --
+  section 11's own open question ("this was not verified for D=3") is
+  now answered: the same near-singular-minority-carrier-row mechanism
+  is structural and DOES carry over, confirmed by the gated reduction
+  gate converging cleanly rather than by a targeted stress test of the
+  failure mode itself.
+- **No FinFET/GAA claim yet.** S3 answers "does DG work in Device3D,"
+  not "does a real FinFET corner show a confinement effect" -- that is
+  S4, still unstarted, and needs a fin-corner geometry (two GateBC
+  faces meeting), not just a single flat gate face.
+- **No performance claim, no benchmarks row.** The compiled kernel's
+  purpose in this slice is correctness/architecture (matching M43
+  phase 3's own framing), not a measured speedup -- none was run.
+- **The compiled kernel is OPTIONAL**, not required -- a checkout
+  without `_core` built still runs the full DG solve via
+  `_dg_lambda_rows_py`, gated identically (every S1/S2/S3 physics gate
+  above passes on EITHER path; only the accel-parity file itself is
+  skipped without `_core`).
+
+## 13. S4 results (landed 2026-09-18)
+
+Landed as scoped in section 10.8: "a FinFET/GAA confinement
+demonstration on finfet3d.py: confinement from two faces at once in a
+fin corner. Report as a QUALITATIVE TREND unless a published FinFET
+quantum-correction curve is actually in hand." No such curve was
+sought or found (M14-G-A's standing lesson) -- every gate below checks
+an internally-consistent physical TREND, not a quantitative match.
+
+### What was built
+
+- **`pytcad/pytcad/finfet3d.py`**: `build_finfet3d` gained an additive
+  `dg=False, dg_gamma=1.0` passthrough into `Models(dg=dg,
+  dg_gamma=dg_gamma)` -- `Models(dg=False, dg_gamma=1.0)` is
+  field-for-field identical to the pre-S4 bare `Models()`, so every
+  existing caller (M26's own gates, the DIBL benchmark) is unaffected
+  by construction, confirmed directly (S4-G2). `Device3D.solve_bias`
+  already refuses `dg=True` (S3's own addition); `id_vg_sweep_3d` is
+  therefore incompatible with `dg=True`, same restriction M42 has had
+  everywhere since S1.
+- **New `build_fin_corner_slab`**, same file: a controlled, uniform-
+  p-type-doping fin-corner geometry -- SAME gate topology and corner-
+  avoidance convention as `build_finfet3d`'s tri-gate (the top face at
+  y=0 claims both corner columns k=0/k=Nz-1 to avoid double-counting
+  the oxide Robin term there; the two side faces at z=0/z=Wfin start
+  at y=1), but with a directly parameterized Vfb instead of
+  `mosfet_doping`'s Gaussian source/drain profile. This isolates the
+  corner-confinement question the same way S2's own
+  `_build_gated_device` isolates the single-gate one -- a full
+  production doping profile was tried first and found to overdrive
+  the electrostatics (`psi` reaching 40+ V at a modest Vfb shift,
+  saturating both the classical and DG density to the same value at
+  the corner -- a corner suppression ratio of EXACTLY 1.0000, not a
+  physical result) before falling back to the controlled slab, which
+  produces clean, monotonic, well-separated corner-vs-flat ratios at
+  every bias tried.
+- No changes to `device.py`, `device2d.py`, `device3d.py`, `dg_grid.py`,
+  `core/`, `gui/`, `workbench/` -- S4 is a template-layer demonstration
+  on top of already-landed S1-S3 machinery, not new solver physics.
+
+### The confinement metric, and why it is the right one
+
+Density SUPPRESSION RATIO (classical n / DG n) at the first REAL
+(non-gate-pinned) node adjacent to a location, compared at two
+locations under the identical bias:
+  - **corner-adjacent**: one step in from BOTH the top gate face and a
+    side gate face at once (node `(j=1, k=1)`) -- its Lambda-row
+    stencil has TWO ghosted-to-zero neighbors (the top-gate node at
+    `k=1` above it, and the side-gate node at `j=1` beside it).
+  - **flat-face-adjacent**: one step in from the top face only, at the
+    fin-width center, far from either sidewall (node `(j=1,
+    k=Nz//2)`) -- ONE ghosted neighbor.
+
+The gate node's OWN suppression is not a useful comparison point (it
+is trivially pinned to `LAMBDA_MAX_VT*VT` everywhere, gamma- and
+position-independent by construction -- S2's own G-CONF gate already
+found and documented this same trap for the single-gate case). The
+first REAL channel node is where the confinement PROPAGATES to via the
+coupled solve, which is the physically meaningful comparison --
+directly generalizing S2's own `_inversion_centroid`-based methodology
+to a metric that works cleanly in 3D without needing bulk-density
+subtraction across two carrier populations at once.
+
+### Gates (`tests/test_m42_s4_finfet_confinement.py`, 10/10 green)
+
+- **S4-G1** FD-Jacobian on the actual fin-corner topology (a genuinely
+  tiny hand-built device, not `build_fin_corner_slab` -- its own
+  `h_min = L/(N*30)` formula was measured to produce a MUCH larger
+  mesh than `NY=3, NZ=4` suggests, `Ny=13, Nz=21` -- same two-
+  orthogonal-gate corner convention at a size small enough for a fast
+  90-column sweep). One real finding: `eps=1e-6` (S1/S3's own value)
+  is roundoff-dominated for at least one column on this specific
+  device/draw -- measured directly, `fd=-2.1771e-05` vs
+  `an=-2.1782e-05` (agree to ~3 significant figures) but the column-
+  max-relative metric amplified that to 8.8e-5, just over the 5e-5
+  threshold. Swept `eps` (1e-5, 1e-4, 5e-6) and confirmed `eps=1e-5`
+  brings the SAME worst column to 6.7e-6 -- an `eps` choice made from
+  measurement, not a loosened tolerance.
+- **S4-G2** `build_finfet3d`'s new `dg`/`dg_gamma` passthrough is
+  bit-identical to the pre-S4 default when `dg=False` (`np.array_equal`
+  on doping, `psi`, and `n` after a full equilibrium solve).
+- **S4-CONF** (3 gates, `Vfb` in `{-0.6, -0.9, -1.2}`) the load-bearing
+  gate: corner suppression exceeds flat-face suppression by more than
+  2x at every bias tried (measured ratios were 9.5x, 7.75x, and 4.06x
+  as `Vfb` shifts deeper into inversion and both suppression values
+  grow together -- not just "larger," a genuine effect).
+- **S4-MONO** the corner/flat gap survives mesh refinement (`NY,NZ`
+  4->8): both the coarse and fine mesh show a corner/flat suppression
+  ratio comfortably above 1.5, ruling out a coarse-mesh node-placement
+  artifact (same spirit as S2's own `test_gmesh_centroid_convergence`).
+- **S4-SMOKE** the ACTUAL production tri-gate template
+  (`mosfet_doping`'s Gaussian source/drain profile, not the simplified
+  slab) also solves `dg=True` cleanly to a finite, deterministic state
+  -- confirms S4 is not validated solely on the simplified geometry.
+- extra (3 gates): `solve_bias` still refuses `dg=True` on the fin-
+  corner slab; `dg+fd` and `dg+incomplete_ion` still refuse when built
+  through `finfet3d.py`'s own doping/mesh construction path.
+
+### Verification
+
+`tests/test_m42_s1_density_gradient_2d.py` + `test_m42_s2_gate_bc.py`
++ `test_m42_s3_density_gradient_3d.py` + `test_m42_s3_accel_parity.py`
++ `test_m42_s4_finfet_confinement.py` + `test_m26_finfet3d.py` +
+`test_m20_dg.py` + `test_m13_goldens.py` + `test_accel_parity.py` +
+`test_accel_boundary.py`: **147 passed, 1 skipped** (the same
+pre-existing, unrelated skip S3's own suite run reported). Full fast
+suite (`tests/ gui/tests/ -n 6 -m "not slow"`):
+**1928 passed, 5 skipped, 1 xfailed, 0 failed** (up from S3's recorded
+1918-pass baseline by exactly the 10 new S4 gates; no regression).
+
+The `slow`-marked M26 DIBL/SSE benchmark
+(`test_finfet3d_dibl_and_subthreshold_swing_worsen_as_gate_length_shrinks`)
+was NOT run to completion this session -- measured directly (a 3-point
+partial sweep) at ~10s/bias-point on this machine, i.e. ~8 minutes for
+its full 48-point sweep, well past that test's own "~2 minutes"
+docstring claim (a pre-existing, machine-dependent discrepancy, not
+caused by this slice: confirmed the discrepancy is real by timing a
+partial sweep directly, and confirmed S4's own `dg` passthrough cannot
+be the cause since `dg=False` is bit-identical to the pre-S4 code by
+construction, checked in S4-G2). `test_m26_finfet3d.py` (the fast,
+non-`slow` M26 suite) was run directly and is unaffected (14/14 green).
+
+### Honest limits
+
+- **Qualitative trend only**, as section 10.8 itself anticipated -- no
+  published FinFET quantum-correction curve was sought or found to
+  compare against quantitatively (M14-G-A's standing lesson).
+- **The confinement demonstration uses a controlled, uniform-doping
+  slab, not the full production `mosfet_doping` profile** -- the
+  production profile WAS tried and found to overdrive the
+  electrostatics at a naive Vfb shift (see above); a more careful
+  bias-point search on the production geometry was not attempted
+  (S4-SMOKE only checks that it solves, not that it shows the same
+  quantitative corner effect).
+- **No GAA (gate-all-around) geometry.** "FinFET/GAA" in section
+  10.8's own title is a tri-gate FinFET here, matching `finfet3d.py`'s
+  own scope (three gate faces, not four) -- a true GAA wraparound
+  gate is a different, unbuilt geometry.
+- **No corner rounding.** Real fins are fabricated with rounded
+  corners specifically to mitigate this effect; this demonstration
+  uses the same sharp right-angle mesh corner `build_finfet3d` already
+  has, which is where the effect is expected to be LARGEST (an
+  idealized upper bound, not a manufacturable-geometry prediction).
+- **Still equilibrium-only**, inherited from S1-S3 unchanged.
+- **No performance claim, no benchmarks row** -- none needed or run
+  for this slice's scope.
+- **M42 is now closed as a track for the near term.** Sections 2/10.8
+  named S1-S4 as the full scope; nothing further is defined without a
+  new plan doc. Per section 5.3's ordering, the next dimensional-lift
+  item is M46 (Schottky/tunnel contacts) or M45 (transient/AC -> 3D).
+
+## 14. GAA geometry gap closed (2026-09-18, same day as S4)
+
+Closes one of S4's own named honest limits ("No GAA geometry"). Rest
+of the S4/S1-S3 gap list (DG transport, penetration-aware interface,
+refused compositions, corner rounding, a published curve) was reviewed
+and deliberately NOT touched -- each needs its own physics derivation/
+validation or unstructured meshing this repo does not have; see the
+handoff note below for the one-line reason per item.
+
+`build_fin_corner_slab` gained `gaa=False` (additive; default
+unchanged). `gaa=True` wraps a FOURTH gate face (`bottom`, y=Ly) --
+genuine gate-all-around, same GateBC/Robin machinery, no new physics.
+Since all four lateral faces are then gated, the ohmic reference moves
+from the y=Ny-1 face to the fin's long-axis end face (i=0) instead.
+Corner-avoidance generalizes symmetrically: top/bottom claim their own
+full k-range (both corners); left/right claim the strictly-interior
+j-range only.
+
+Gates (`tests/test_m42_s4_finfet_confinement.py`, 2 new, 12/12 total
+green): `test_gaa_corner_effect_holds_with_fourth_gate_face` (the
+corner/flat suppression trend survives under GAA, measured 671.4 vs
+49.0, ~13.7x); `test_gaa_false_default_unaffected` (gaa=False
+reproduces the pre-GAA device exactly, same BC set, bit-identical psi).
+
+Verification: full M42 S1-S4 + FinFET/M13/accel suite (149 passed, 1
+skipped); full fast suite (`not slow`): **1930 passed, 5 skipped, 1 xfailed, 0 failed** (+2 over S4's baseline).
+
+Remaining, deliberately NOT implemented (each would need its own
+plan/derivation, not a quick follow-on):
+- DG transport (`solve_bias` for `dg=True`) -- needs DG folded into
+  the Scharfetter-Gummel current discretization itself, out of scope
+  by design since M20.
+- Penetration-aware interface condition (replacing the infinite hard
+  wall) -- a real physics derivation, not a parameter change.
+- The refused compositions (`dg+fd`, `dg+incomplete_ion`,
+  `dg+band_offset="affinity"`, `dg+SIC_4H`) -- each needs its own
+  coupled chain-rule derivation to validate, not just removing a
+  guard.
+- Corner rounding -- needs an unstructured (tet) fin mesh, which
+  `finfet3d.py`'s own honesty clause already documents as not existing.
+- A published FinFET quantum-confinement curve -- a literature search
+  already exhausted (M14-G-A); not something to implement.

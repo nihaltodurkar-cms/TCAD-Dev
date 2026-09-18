@@ -35,6 +35,16 @@ pyvistaqt>=0.12
 gmsh>=4.15          # M21 phase 3 unstructured meshing
 devsim>=2.11         # optional DEVSIM solver backend
 mpmath>=1.4          # M13 Fermi-Dirac reference-value tests
+scikit-image>=0.26   # M35-S5/S6 levelset3d.marching_cubes_surface --
+                     # a real triangulated isosurface of the 3D level
+                     # set, absent devsim-style falls back to an
+                     # ImportError naming this package (no pure-Python
+                     # marching-cubes reimplementation is attempted)
+tetgen>=0.8           # M35-S5/S6 levelset3d_mesh.py -- constrained
+                     # Delaunay tetrahedralization of that isosurface,
+                     # chosen over gmsh's own STL-remeshing path (see
+                     # that module's own docstring for why); same
+                     # absent-package-raises-ImportError contract
 pyamg>=5.0           # algebraic-multigrid preconditioner for the 3D GUI's
                      # large-mesh equilibrium solve (gui/services/solver_
                      # runner.py's node-count-gated bicgstab path) --

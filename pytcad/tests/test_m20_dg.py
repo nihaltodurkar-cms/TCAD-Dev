@@ -394,7 +394,7 @@ def test_ge_moscap_refuses_dg_fd_and_bad_gamma():
         MOSCapacitor(**PARAMS_CL, dg=True, dg_gamma=-1.0)
 
 
-def test_ge_device2d_solves_dg_device3d_still_refuses():
+def test_ge_device2d_and_device3d_both_solve_dg():
     from pytcad.mesh2d import Mesh2D
     from pytcad.device2d import Device2D
     from pytcad.mesh3d import Mesh3D
@@ -409,9 +409,10 @@ def test_ge_device2d_solves_dg_device3d_still_refuses():
     # the density-gradient equilibrium correction is now implemented
     # there (ohmic contacts only; see test_m42_s1_density_gradient_2d.py
     # for the full gate suite and M42-DENSITY-GRADIENT-2D3D-PLAN.md).
-    # This test now checks that it actually solves, rather than that it
-    # refuses -- Device3D (S1's own stated scope: Device2D only, S3 is
-    # the follow-up) still refuses unchanged.
+    # M42-S3 (2026-09-18) ported the same solve to Device3D -- see
+    # test_m42_s3_density_gradient_3d.py for the full gate suite. This
+    # test just checks both actually solve now, not a substitute for
+    # either gate file.
     dev2 = Device2D(Mesh2D(x, y), dop2d, models=Models(bgn=False, dg=True))
     dev2.add_contact("left", i=[0], j=list(range(dev2.Ny)), V=0.0)
     dev2.add_contact("right", i=[dev2.Nx - 1], j=list(range(dev2.Ny)), V=0.0)
@@ -420,8 +421,13 @@ def test_ge_device2d_solves_dg_device3d_still_refuses():
 
     z = graded_mesh(3e-5, [0.0], 2e-6, 8e-6, 1.2)
     dop3d = np.tile(dop2d, (z.size, 1, 1))
-    with pytest.raises(NotImplementedError, match="M20 scope"):
-        Device3D(Mesh3D(x, y, z), dop3d, models=Models(bgn=False, dg=True))
+    dev3 = Device3D(Mesh3D(x, y, z), dop3d, models=Models(bgn=False, dg=True))
+    jj, kk = np.meshgrid(np.arange(dev3.Ny), np.arange(dev3.Nz))
+    jj, kk = jj.ravel(), kk.ravel()
+    dev3.add_contact("left", i=np.zeros_like(jj), j=jj, k=kk, V=0.0)
+    dev3.add_contact("right", i=np.full_like(jj, dev3.Nx - 1), j=jj, k=kk, V=0.0)
+    dev3.solve_equilibrium()
+    assert np.all(np.isfinite(dev3.psi))
 
 
 # ======================================================================

@@ -113,6 +113,7 @@ from .dirichlet import eliminate_csr
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
 from .fermi import (
     FERMI_ETA_MAX, FERMI_ETA_MIN, f_half, f_half_inv, f_mhalf,
 )
@@ -581,6 +582,55 @@ class NewtonOptions:
                 "a positive int or None.")
 
 
+@dataclass
+class SchottkyContact:
+    """M46-S1/S2: a metal-semiconductor (Schottky) contact spec for
+    Device1D's `schottky_left`/`schottky_right` constructor params --
+    couples pytcad.schottky's already-validated barrier-height physics
+    (Sze & Ng ch. 3) into the device Newton core, per ARCHITECTURE.md's
+    M46 scope note ("couple schottky.py into a device core first").
+
+    phi_metal_eV : metal work function [eV] (Schottky-Mott rule input).
+    A_star       : Richardson constant [A/(cm^2 K^2)]. `None` (the
+                   default) selects M46-S1's DIRICHLET approximation
+                   (below); a real value selects M46-S2's ROBIN
+                   (thermionic-emission-limited) boundary condition,
+                   both described below. Either way this is the
+                   MAJORITY carrier's own effective Richardson
+                   constant (see schottky.py's RICHARDSON_A_STAR_TABLE
+                   for published per-material/per-carrier values) --
+                   the caller's responsibility to pick the one that
+                   matches whichever carrier this node's doping sign
+                   makes majority, exactly as schottky_iv's own A_star
+                   argument already requires.
+
+    A_star=None (M46-S1, DIRICHLET approximation): the contact node's
+    majority-carrier density is pinned at its barrier-limited
+    equilibrium value (Nc or Nv times exp(-phi_B/kT)), referenced
+    through the SAME psi0 = V/VT + ln(n0/nie) formula _contact_values
+    already uses for an ohmic contact, just with a barrier-derived n0
+    instead of a doping-derived one. Reproduces the correct built-in
+    potential / depletion physics and the qualitative rectifying
+    asymmetry a real Schottky junction shows, but not a finite
+    interface recombination velocity.
+
+    A_star given (M46-S2, ROBIN boundary condition): the majority
+    carrier's Dirichlet row is REPLACED by a flux-balance equation,
+    J_majority(edge) + v_R*(n_or_p(node) - n0_or_p0) = 0, with
+    v_R = A* T^2 / (q * Nc_or_Nv) -- thermionic emission (Sze & Ng)
+    restated as a surface recombination velocity, mirroring EXACTLY
+    the equation shape M14's own Models(S_n=..., S_p=...) surface-
+    recombination Robin BC already implements and gates (device.py's
+    "Dirichlet contacts (Robin on n/p...)" block); n0/p0 is the SAME
+    barrier-limited value the Dirichlet approximation above uses. The
+    minority carrier stays Dirichlet at its mass-action value,
+    unchanged. Refused in combination with a nonzero Models.S_n/S_p
+    (both would compete for the same boundary row; S_n/S_p are global
+    to both contacts in this module's own existing design)."""
+    phi_metal_eV: float
+    A_star: float = None
+
+
 # ----------------------------------------------------------------------
 #  Device
 # ----------------------------------------------------------------------
@@ -597,7 +647,11 @@ class Device1D:
 
     def __init__(self, x, doping, Ntotal=None, T=300.0,
                  material: Semiconductor = SILICON,
-                 models: Models = None):
+                 models: Models = None,
+                 schottky_left: "SchottkyContact" = None,
+                 schottky_right: "SchottkyContact" = None):
+        self.schottky_left = schottky_left
+        self.schottky_right = schottky_right
         self.x = np.asarray(x, dtype=float)
         self.N = self.x.size
         self.doping = np.asarray(doping, dtype=float)
@@ -1026,18 +1080,42 @@ class Device1D:
         if getattr(self.models, "fd", False) or \
                 getattr(self.models, "incomplete_ion", False):
             return self._fd_contact_values(V)
-        for i in (0, self.N - 1):
+        schottky_sides = (self.schottky_left, self.schottky_right)
+        for side, i in enumerate((0, self.N - 1)):
+            sch = schottky_sides[side]
             C, nie = self.C[i], self.nie_s[i]
-            root = np.sqrt(C * C + 4.0 * nie * nie)
-            if C >= 0.0:                     # n-type: electrons are majority
-                n0 = 0.5 * (C + root)
-                p0 = nie * nie / n0
-            else:                            # p-type: holes are majority
-                p0 = 0.5 * (-C + root)
-                n0 = nie * nie / p0
+            if sch is not None:
+                # M46-S1: barrier-limited majority density instead of
+                # local-neutrality's doping-limited one -- see
+                # SchottkyContact's own docstring for the Dirichlet-
+                # approximation scope. Majority side still follows the
+                # SEMICONDUCTOR's own doping sign at this node (a
+                # Schottky contact on an n-type node barriers electrons;
+                # on a p-type node it barriers holes), matching Sze &
+                # Ng's phi_Bn/phi_Bp complementary-barrier convention.
+                phi_m = sch.phi_metal_eV
+                chi_eV = self.chi_arr[i]
+                if C >= 0.0:
+                    phi_B = _schottky_barrier_height_n(phi_m, chi_eV)
+                    n0 = self.nc_s[i] * np.exp(-phi_B / (KB_EV * self.T))
+                    p0 = nie * nie / n0
+                else:
+                    Eg_eV = self.mats[i].Eg(self.T)
+                    phi_Bn = _schottky_barrier_height_n(phi_m, chi_eV)
+                    phi_B = Eg_eV - phi_Bn
+                    p0 = self.nv_s[i] * np.exp(-phi_B / (KB_EV * self.T))
+                    n0 = nie * nie / p0
+            else:
+                root = np.sqrt(C * C + 4.0 * nie * nie)
+                if C >= 0.0:                 # n-type: electrons are majority
+                    n0 = 0.5 * (C + root)
+                    p0 = nie * nie / n0
+                else:                        # p-type: holes are majority
+                    p0 = 0.5 * (-C + root)
+                    n0 = nie * nie / p0
             # M33-S1: n0/p0 come from local neutrality + mass action and
             # are gauge-free; only psi0's reference moves, by -s[i].
-            psi0 = (V[0 if i == 0 else 1] / self.VT + np.log(n0 / nie)
+            psi0 = (V[side] / self.VT + np.log(n0 / nie)
                     - self.band_shift[i])
             out.append((psi0, n0, p0))
         return out
@@ -2166,6 +2244,28 @@ class Device1D:
         # (test_m14_surface_mobility.py).
         S_n_s = self.models.S_n * self.LD / D0_REF
         S_p_s = self.models.S_p * self.LD / D0_REF
+        # M46-S2: a SchottkyContact with A_star given reuses this SAME
+        # Robin machinery for its majority carrier -- thermionic
+        # emission (Sze & Ng) restated as a surface recombination
+        # velocity v_R = A* T^2 / (q Nc_or_Nv) toward the barrier-
+        # limited n0/p0 `bc` already carries (S1's _contact_values),
+        # is EXACTLY the same equation shape M14's S_n/S_p already
+        # solve for -- no new physics formula, no new Jacobian
+        # derivation, only a different velocity/target density
+        # sourced per node. Both mechanisms competing for the same row
+        # is refused rather than silently combined (S_n/S_p are GLOBAL
+        # to both contacts in this module's own existing design, so
+        # there is no way to keep them scoped to only the ohmic side
+        # without changing that design, which is out of M46's scope).
+        schottky_sides = (self.schottky_left, self.schottky_right)
+        _sch_robin = [s is not None and s.A_star is not None
+                      for s in schottky_sides]
+        if any(_sch_robin) and (S_n_s != 0.0 or S_p_s != 0.0):
+            raise NotImplementedError(
+                "Models(S_n!=0 or S_p!=0) combined with a Robin-mode "
+                "SchottkyContact (A_star given) is refused: both "
+                "mechanisms would compete for the same boundary row "
+                "(M46-S2 scope; unvalidated composition).")
         # Which rows are GENUINELY Dirichlet -- recorded here rather
         # than re-derived at the solve site, so the S_n/S_p branch below
         # cannot drift out of step with it. A Robin row (S != 0) has
@@ -2182,6 +2282,18 @@ class Device1D:
             left = node == 0                   # is `node` the LEFT end of `edge`?
             bsign_n = -1.0 if left else 1.0
             bsign_p = 1.0 if left else -1.0
+            S_n_s_local, S_p_s_local = S_n_s, S_p_s
+            if _sch_robin[k]:
+                sch = schottky_sides[k]
+                Nc_or_Nv = (self.mats[node].Nc(self.T) if C[node] >= 0.0
+                           else self.mats[node].Nv(self.T))
+                v_R_s = (sch.A_star * self.T * self.T / (Q * Nc_or_Nv)) \
+                    * self.LD / D0_REF
+                if C[node] >= 0.0:
+                    S_n_s_local = v_R_s
+                else:
+                    S_p_s_local = v_R_s
+            S_n_s, S_p_s = S_n_s_local, S_p_s_local
             if S_n_s == 0.0:
                 F[3 * node + 1] = n[node] - n0
                 add(3 * node + 1, 3 * node + 1, 1.0)

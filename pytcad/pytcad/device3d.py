@@ -50,8 +50,9 @@ from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
 from .materials import (
-    SILICON, Semiconductor, mobility_caughey_thomas, nie_effective,
+    SILICON, SIC_4H, Semiconductor, mobility_caughey_thomas, nie_effective,
     lifetime_scharfetter, recombination,
 )
 from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
@@ -118,6 +119,27 @@ class GateBC:
             raise ValueError(
                 f"normal_axis must be 'x', 'y', or 'z', got {normal_axis!r}")
         self.normal_axis = normal_axis
+
+
+class SchottkyBC(DirichletBC):
+    """M46-S3: a metal-semiconductor (Schottky) contact -- the Device3D
+    lift of Device1D's SchottkyContact / Device2D's SchottkyBC. A
+    DirichletBC SUBCLASS (not a new dispatch branch), for the same
+    reason as Device2D's own SchottkyBC: every existing
+    `isinstance(bc, DirichletBC)` site treats it correctly already,
+    since a Schottky contact's psi row is a Dirichlet row (barrier-
+    referenced) here too.
+
+    ONLY the S1 Dirichlet approximation is implemented in Device3D
+    (see add_schottky_contact's own docstring for why the S2 Robin
+    mode is refused): the majority-carrier density is pinned at its
+    barrier-limited equilibrium value through the SAME psi0 formula
+    an ohmic DirichletBC already uses."""
+
+    def __init__(self, i, j, k, phi_metal_eV, A_star=None, V=0.0):
+        super().__init__(i, j, k, V)
+        self.phi_metal_eV = float(phi_metal_eV)
+        self.A_star = None if A_star is None else float(A_star)
 
 
 def _ohmic_values(C, nie, V, VT):
@@ -270,14 +292,37 @@ class Device3D:
         # grid (pytcad/btbt_grid.py) -- a dimensional lift of the
         # already-gated Device1D model, no new constant.  No lambda-style
         # precondition and no heterojunction restriction.
+        # M42-S3: density-gradient quantum correction, ported to Device3D
+        # from Device2D's S1/S2 coupled-Newton (psi, Lambda_n, Lambda_p)
+        # equilibrium solve (M42-DENSITY-GRADIENT-2D3D-PLAN.md section
+        # 10.8). Same refusal shape as Device1D/Device2D: dg+fd,
+        # dg+incomplete_ion, dg+band_offset="affinity", and dg+SIC_4H
+        # are all unvalidated compositions there and stay refused here.
         if getattr(self.models, "dg", False):
-            raise NotImplementedError(
-                "Density-gradient quantum correction (Models(dg=True)) is "
-                "implemented in Device1D equilibrium and MOSCapacitor only "
-                "(M20 scope; DG transport/3D is a follow-up slice).  "
-                "Refusing rather than silently ignoring the flag -- a "
-                "silently dropped physics model is a hidden failure."
-            )
+            if getattr(self.models, "fd", False):
+                raise NotImplementedError(
+                    "Models(dg=True, fd=True) is refused: the DG "
+                    "correction was derived and gated against Boltzmann "
+                    "statistics only (M20 scope, unchanged by the 3D "
+                    "port).")
+            if getattr(self.models, "incomplete_ion", False):
+                raise NotImplementedError(
+                    "Models(dg=True, incomplete_ion=True) is refused "
+                    "(unvalidated composition, matching Device1D/2D).")
+            if self.models.band_offset == "affinity":
+                raise NotImplementedError(
+                    "Models(band_offset='affinity', dg=True) is refused "
+                    "(unvalidated composition, matching Device1D/2D).")
+            if any(m is SIC_4H for m in self.mats):
+                raise NotImplementedError(
+                    "Models(dg=True) with SIC_4H is refused: "
+                    "SIC_4H.m_n_star/m_p_star are documented placeholders "
+                    "(materials.py's 4H-SiC block), not a validated "
+                    "effective-mass fit, and the DG quantum correction "
+                    "uses that mass directly -- refusing rather than "
+                    "silently reporting a confinement number built on an "
+                    "unvalidated input (M42-DENSITY-GRADIENT-2D3D-PLAN.md "
+                    "section 10.3(d), same judgment as Device2D's S2).")
         # M41: Models(incomplete_ion=True) is implemented here as well
         # now -- the M13 shallow-dopant model on the same grid
         # (device.py's ionized_doping, shared with Device1D/Device2D),
@@ -293,6 +338,9 @@ class Device3D:
             )
 
         self.fd = bool(getattr(self.models, "fd", False))
+        self.dg = bool(getattr(self.models, "dg", False))
+        self._dg_Lam_n = None
+        self._dg_Lam_p = None
         if self.Ntot.max() > 1e19 and not self.fd:
             warnings.warn(
                 "Doping exceeds ~1e19 cm^-3: Boltzmann statistics used here "
@@ -453,6 +501,26 @@ class Device3D:
         self.bcs[name] = GateBC(i, j, k, kappa, Vfb, Vg, normal_axis)
         return self.bcs[name]
 
+    def add_schottky_contact(self, name, i, j, k, phi_metal_eV, A_star=None, V=0.0):
+        """M46-S3: add a Schottky contact -- the Device3D lift of
+        Device1D/Device2D's SchottkyContact/SchottkyBC. ONLY the S1
+        Dirichlet approximation is implemented here (A_star must be
+        None): Device3D has no M14 S_n/S_p Robin-BC machinery to reuse
+        (see the constructor's own S_n/S_p refusal a few lines above
+        this method) -- the S2 Robin thermionic-flux BC would need
+        that machinery built from scratch first, which is out of this
+        slice's scope. See SchottkyBC's own docstring."""
+        if A_star is not None:
+            raise NotImplementedError(
+                "SchottkyBC(A_star=...) (M46-S2's Robin thermionic-flux "
+                "BC) is refused in Device3D: it reuses Device1D/"
+                "Device2D's own M14 S_n/S_p Robin-BC machinery, which "
+                "Device3D does not have (see this class's own S_n/S_p "
+                "refusal). Only the Dirichlet approximation (A_star="
+                "None) is implemented here -- M46-S3's own scope.")
+        self.bcs[name] = SchottkyBC(i, j, k, phi_metal_eV, A_star, V)
+        return self.bcs[name]
+
     def _bulk_psi_guess(self):
         """Neutral-bulk potential per node (FD eta-space root or the
         classic arcsinh)."""
@@ -564,6 +632,37 @@ class Device3D:
             return cached
         k, j, i = bc.k, bc.j, bc.i
         ion = self._ion_root_args()
+        # M46-S3: a SchottkyBC replaces the local-neutrality majority
+        # density with the barrier-limited one (reusing schottky.py's
+        # own schottky_barrier_height_n, not re-derived) -- a direct
+        # lift of Device1D/Device2D's own Schottky branch. Refused
+        # under fd/incomplete_ion (unvalidated composition, matching
+        # both lower dimensions' own refusal).
+        if isinstance(bc, SchottkyBC):
+            if self.fd or ion is not None:
+                raise NotImplementedError(
+                    "SchottkyBC combined with Models(fd=True) or "
+                    "incomplete_ion=True is refused: the barrier-"
+                    "referenced majority density was only derived "
+                    "against Boltzmann statistics (M46-S3 scope, "
+                    "matching Device1D/Device2D's own refusal).")
+            C, nie = self.C[k, j, i], self.nie_s[k, j, i]
+            phi_m, chi_eV = bc.phi_metal_eV, self.chi_arr[k, j, i]
+            is_n = C >= 0.0
+            phi_Bn = _schottky_barrier_height_n(phi_m, chi_eV)
+            Eg_eV = np.array([self.mats[kk_ * self.Nx * self.Ny + jj_ * self.Nx + ii_].Eg(self.T)
+                              for kk_, jj_, ii_ in zip(np.atleast_1d(k), np.atleast_1d(j), np.atleast_1d(i))])
+            phi_B = np.where(is_n, phi_Bn, Eg_eV - phi_Bn)
+            n0 = np.where(is_n, self.nc_s[k, j, i] * np.exp(-phi_B / (KB_EV * self.T)),
+                         nie * nie / np.maximum(
+                             self.nv_s[k, j, i] * np.exp(-phi_B / (KB_EV * self.T)),
+                             1e-300))
+            p0 = np.where(is_n, nie * nie / np.maximum(n0, 1e-300),
+                         self.nv_s[k, j, i] * np.exp(-phi_B / (KB_EV * self.T)))
+            psi0 = V / self.VT + np.log(n0 / nie)
+            out = (psi0 - self.band_shift[k, j, i], n0, p0)
+            self._bc_value_cache[key] = out
+            return out
         # M41: incomplete ionization routes through the SAME eta-space
         # root even under Boltzmann statistics (it reduces exactly to
         # the closed form as F -> exp), so the flag stays independent
@@ -701,6 +800,294 @@ class Device3D:
         return F, J
 
     # ------------------------------------------------------------------
+    def _dg_residual_jacobian_eq(self, psi, Lam_n, Lam_p, gamma=None):
+        """M42-S3 coupled-Newton DG residual/Jacobian for Device3D
+        equilibrium: interleaved unknowns [psi_k, Lambda_n_k, Lambda_p_k]
+        per flat node k = kk*Nx*Ny+jj*Nx+ii, a direct lift of Device2D's
+        own _dg_residual_jacobian_eq (device2d.py) one axis further --
+        see that method's docstring for the full physics/BC rationale
+        (M42-S1/S2), unchanged here except for the extra z axis.
+
+        Poisson row: identical box-integration flux-divergence assembly
+        as _residual_jacobian_poisson, DG-corrected densities, two new
+        Jacobian columns per node. The gate (Robin) BC is a direct copy
+        of _residual_jacobian_poisson's own gate block (this device's
+        GateBC carries a normal_axis, but the Lambda hard wall below
+        does not care which face a gate sits on -- the infinite-barrier
+        limit applies to the whole node).
+
+        Lambda_n/Lambda_p rows: pytcad/dg_grid.py's dg_lambda_rows, the
+        SAME dimension-generic kernel Device2D now calls (M42-S3's own
+        extraction) -- here with 3 axes instead of 2. Reduces EXACTLY
+        to Device2D's own answer for a z-uniform device (this port's
+        S3-G-REDUCTION gate), which itself already reduces to
+        Device1D's non-uniform three-point second derivative.
+
+        Boundary treatment: DirichletBC and PinnedBC nodes both pin
+        Lambda_n=Lambda_p=0 (both are "the potential here is fixed"
+        contacts in the classical Poisson row already -- see
+        _residual_jacobian_poisson's own contact_k construction, which
+        groups them identically). GateBC nodes not also a contact pin
+        Lambda to LAMBDA_MAX_VT*VT (M42-S2's hard wall).
+
+        Returns (F [3N], J [3N x 3N] csr_matrix); sets
+        self._dg_dirichlet_rows_eq.
+        """
+        from .dg import LAMBDA_MAX_VT
+        from .dg_grid import dg_lambda_rows
+        Nx, Ny, Nz, N = self.Nx, self.Ny, self.Nz, self.N
+        VT = self.VT
+        gamma = getattr(self.models, "dg_gamma", 1.0) if gamma is None else gamma
+        hx, hy, hz = self.hx, self.hy, self.hz
+        dVx, dVy, dVz, dV = self.dVx, self.dVy, self.dVz, self.dV
+        nie = self.nie_s
+
+        psi_c = psi + self.band_shift
+        e = np.clip(psi_c, -700, 700)
+        n = nie * np.exp(e) * np.exp(-Lam_n / VT)
+        p = nie * np.exp(-e) * np.exp(-Lam_p / VT)
+        dnp = n + p
+        rho = n - p - self.C
+
+        # ---- Poisson row (identical structure to
+        # _residual_jacobian_poisson, DG-corrected densities) ----------
+        Fx = self.et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
+        Fy = self.et_y * (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
+        Fz = self.et_z * (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
+        div_x = np.zeros((Nz, Ny, Nx)); div_x[:, :, :-1] += Fx; div_x[:, :, 1:] -= Fx
+        div_y = np.zeros((Nz, Ny, Nx)); div_y[:, :-1, :] += Fy; div_y[:, 1:, :] -= Fy
+        div_z = np.zeros((Nz, Ny, Nx)); div_z[:-1, :, :] += Fz; div_z[1:, :, :] -= Fz
+        F_psi = (dVy[None, :, None] * dVz[:, None, None] * div_x
+                + dVx[None, None, :] * dVz[:, None, None] * div_y
+                + dVx[None, None, :] * dVy[None, :, None] * div_z
+                - dV * rho)
+
+        kLx, kRx = _edge_pairs_x(Nx, Ny, Nz)
+        wx = np.broadcast_to(dVy[None, :, None] * dVz[:, None, None] / hx[None, None, :],
+                              (Nz, Ny, Nx - 1)).ravel()
+        kSy, kNy = _edge_pairs_y(Nx, Ny, Nz)
+        wy = np.broadcast_to(dVx[None, None, :] * dVz[:, None, None] / hy[None, :, None],
+                              (Nz, Ny - 1, Nx)).ravel()
+        kDz, kUz = _edge_pairs_z(Nx, Ny, Nz)
+        wz = np.broadcast_to(dVx[None, None, :] * dVy[None, :, None] / hz[:, None, None],
+                              (Nz - 1, Ny, Nx)).ravel()
+
+        def ip(k): return 3 * k
+        def iln(k): return 3 * k + 1
+        def ilp(k): return 3 * k + 2
+
+        rows = [ip(kLx), ip(kRx), ip(kLx), ip(kRx),
+                ip(kSy), ip(kNy), ip(kSy), ip(kNy),
+                ip(kDz), ip(kUz), ip(kDz), ip(kUz)]
+        cols = [ip(kLx), ip(kRx), ip(kRx), ip(kLx),
+                ip(kSy), ip(kNy), ip(kNy), ip(kSy),
+                ip(kDz), ip(kUz), ip(kUz), ip(kDz)]
+        vals = [-wx, -wx, wx, wx, -wy, -wy, wy, wy, -wz, -wz, wz, wz]
+
+        kdiag = np.arange(N)
+        rows.append(ip(kdiag)); cols.append(ip(kdiag)); vals.append((-dV * dnp).ravel())
+        rows.append(ip(kdiag)); cols.append(iln(kdiag)); vals.append((dV * n / VT).ravel())
+        rows.append(ip(kdiag)); cols.append(ilp(kdiag)); vals.append((-dV * p / VT).ravel())
+
+        # ---- gate (Robin) BC on the Poisson row -- a direct port of
+        # _residual_jacobian_poisson's own gate block, generalized to
+        # the interleaved 3N layout. Equilibrium is always solved at
+        # the device's own Vg_s=0.0 (never bc.Vg -- see Device2D's own
+        # docstring for why: DG is equilibrium-only, biased through Vfb
+        # only). Gate nodes also carry the Lambda hard wall below; a
+        # node with BOTH a contact BC and a GateBC takes the contact's
+        # Lambda=0 rule (ohmic/pinned wins -- enforced by the pin logic
+        # below, which runs after and overwrites unconditionally).
+        gate_k_list = [bc.k * Nx * Ny + bc.j * Nx + bc.i
+                       for bc in self.bcs.values() if isinstance(bc, GateBC)]
+        gate_k = (np.unique(np.concatenate(gate_k_list)) if gate_k_list
+                  else np.zeros(0, dtype=int))
+        gate_mask = np.zeros(N, dtype=bool)
+        gate_mask[gate_k] = True
+        F_flat = F_psi.ravel()
+        for bc in self.bcs.values():
+            if isinstance(bc, GateBC):
+                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
+                w = self._gate_face_weight(bc)
+                Vg_s, Vfb_s = 0.0, bc.Vfb / VT
+                psi_b_local = (np.arcsinh(
+                    self.C[bc.k, bc.j, bc.i] / (2.0 * self.nie_s[bc.k, bc.j, bc.i]))
+                    - self.band_shift[bc.k, bc.j, bc.i])
+                F_flat[kk] += bc.kappa * w * (
+                    Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
+                rows.append(ip(kk)); cols.append(ip(kk))
+                vals.append(-bc.kappa * w * np.ones_like(kk, dtype=float))
+
+        # ---- Lambda_n / Lambda_p rows: pytcad/dg_grid.py's dimension-
+        # generic kernel, shared with Device2D (M42-S3 extraction) -----
+        h_phys_x = np.diff(self.mesh.x)
+        h_phys_y = np.diff(self.mesh.y)
+        h_phys_z = np.diff(self.mesh.z)
+        dVx_phys = control_volume_widths(h_phys_x)
+        dVy_phys = control_volume_widths(h_phys_y)
+        dVz_phys = control_volume_widths(h_phys_z)
+
+        m_n = np.array([m.m_n_star for m in self.mats]).reshape(Nz, Ny, Nx)
+        m_p = np.array([m.m_p_star for m in self.mats]).reshape(Nz, Ny, Nx)
+
+        axes = [
+            dict(kL=kLx, kR=kRx,
+                 h_phys=np.broadcast_to(h_phys_x[None, None, :], (Nz, Ny, Nx - 1)).ravel(),
+                 dV_phys=np.broadcast_to(dVx_phys[None, None, :], (Nz, Ny, Nx)).ravel()),
+            dict(kL=kSy, kR=kNy,
+                 h_phys=np.broadcast_to(h_phys_y[None, :, None], (Nz, Ny - 1, Nx)).ravel(),
+                 dV_phys=np.broadcast_to(dVy_phys[None, :, None], (Nz, Ny, Nx)).ravel()),
+            dict(kL=kDz, kR=kUz,
+                 h_phys=np.broadcast_to(h_phys_z[:, None, None], (Nz - 1, Ny, Nx)).ravel(),
+                 dV_phys=np.broadcast_to(dVz_phys[:, None, None], (Nz, Ny, Nx)).ravel()),
+        ]
+        Flam_n, Flam_p, lam_rows, lam_cols, lam_vals = dg_lambda_rows(
+            N, axes, n.ravel(), p.ravel(), Lam_n.ravel(), Lam_p.ravel(),
+            m_n.ravel(), m_p.ravel(), gamma, gate_mask, ip, iln, ilp, VT)
+        rows += lam_rows; cols += lam_cols; vals += lam_vals
+
+        F = np.zeros(3 * N)
+        F[ip(kdiag)] = F_flat
+        F[iln(kdiag)] = Flam_n
+        F[ilp(kdiag)] = Flam_p
+
+        # ---- Dirichlet/Pinned rows: psi + Lambda_n + Lambda_p at every
+        # contact node, equilibrium => V = 0 (or the pinned value) ------
+        contact_k = []
+        for name, bc in self.bcs.items():
+            if isinstance(bc, DirichletBC):
+                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
+                psi0 = self._bc_contact_values(bc, 0.0)[0]
+                F[ip(kk)] = psi.ravel()[kk] - psi0
+                F[iln(kk)] = Lam_n.ravel()[kk]
+                F[ilp(kk)] = Lam_p.ravel()[kk]
+                contact_k.append(kk)
+            elif isinstance(bc, PinnedBC):
+                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
+                F[ip(kk)] = psi.ravel()[kk] - bc.psi0
+                F[iln(kk)] = Lam_n.ravel()[kk]
+                F[ilp(kk)] = Lam_p.ravel()[kk]
+                contact_k.append(kk)
+        contact_k = (np.unique(np.concatenate(contact_k)) if contact_k
+                     else np.zeros(0, dtype=int))
+
+        # ---- GateBC hard wall: pin Lambda_n/Lambda_p to LAMBDA_MAX_VT*VT
+        # at every gate node that is not also a contact ------------------
+        gate_k_only = (gate_k[~np.isin(gate_k, contact_k)]
+                       if gate_k.size else gate_k)
+        if gate_k_only.size:
+            pin_val = LAMBDA_MAX_VT * VT
+            F[iln(gate_k_only)] = Lam_n.ravel()[gate_k_only] - pin_val
+            F[ilp(gate_k_only)] = Lam_p.ravel()[gate_k_only] - pin_val
+
+        rows = np.concatenate(rows); cols = np.concatenate(cols); vals = np.concatenate(vals)
+        pin_rows = []
+        pin_list = []
+        if contact_k.size:
+            pin_list.append(np.concatenate(
+                [ip(contact_k), iln(contact_k), ilp(contact_k)]))
+        if gate_k_only.size:
+            pin_list.append(np.concatenate(
+                [iln(gate_k_only), ilp(gate_k_only)]))
+        if pin_list:
+            pin_rows = np.unique(np.concatenate(pin_list))
+            keep = ~np.isin(rows, pin_rows)
+            rows, cols, vals = rows[keep], cols[keep], vals[keep]
+            rows = np.concatenate([rows, pin_rows])
+            cols = np.concatenate([cols, pin_rows])
+            vals = np.concatenate([vals, np.ones_like(pin_rows, dtype=float)])
+
+        J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        self._dg_dirichlet_rows_eq = (
+            np.asarray(pin_rows, dtype=int) if len(pin_rows)
+            else np.zeros(0, dtype=int))
+        return F, J
+
+    def _dg_newton_solve_eq(self, psi, Lam_n, Lam_p, gamma, max_iter, tol,
+                            tol_residual=1e-7):
+        """One coupled-Newton solve at FIXED gamma from a warm start.
+        A direct lift of Device2D's own _dg_newton_solve_eq (device2d.py)
+        -- same residual-based convergence check and backtracking-line-
+        search-on-the-residual-merit addition found necessary there
+        under a GateBC's inversion regime; see that method's docstring
+        for the full rationale. Never raises on non-convergence/a
+        singular step, reports via `converged`."""
+        for _ in range(max_iter):
+            F, J = self._dg_residual_jacobian_eq(psi, Lam_n, Lam_p, gamma=gamma)
+            Jd, rhs = eliminate_csr(J, -F, self._dg_dirichlet_rows_eq)
+            try:
+                d, _ = linsolve.solve_linear(Jd.tocsc(), rhs, method="direct")
+            except linsolve.LinearSolveError:
+                return psi, Lam_n, Lam_p, False
+            if not np.all(np.isfinite(d)):
+                return psi, Lam_n, Lam_p, False
+            d_psi = np.clip(d[0::3], -5.0, 5.0).reshape(self.Nz, self.Ny, self.Nx)
+            d_ln = np.clip(d[1::3], -10.0 * self.VT, 10.0 * self.VT).reshape(self.Nz, self.Ny, self.Nx)
+            d_lp = np.clip(d[2::3], -10.0 * self.VT, 10.0 * self.VT).reshape(self.Nz, self.Ny, self.Nx)
+            err = max(np.abs(d_psi).max(), np.abs(d_ln).max(), np.abs(d_lp).max())
+            residual_ok = np.abs(F).max() < tol_residual
+            lam = 1.0
+            if err >= _LS_NEWTON_REGION and not residual_ok:
+                base = 0.5 * float(np.dot(F, F))
+                for _ in range(_LS_MAX_HALVINGS + 1):
+                    Ft, _ = self._dg_residual_jacobian_eq(
+                        psi + lam * d_psi, Lam_n + lam * d_ln,
+                        Lam_p + lam * d_lp, gamma=gamma)
+                    ft = 0.5 * float(np.dot(Ft, Ft))
+                    if np.isfinite(ft) and ft <= base * (1.0 - 1e-4 * lam):
+                        break
+                    lam *= 0.5
+                else:
+                    lam = 1.0
+            psi = psi + lam * d_psi
+            Lam_n = Lam_n + lam * d_ln
+            Lam_p = Lam_p + lam * d_lp
+            if err < tol or residual_ok:
+                return psi, Lam_n, Lam_p, True
+        return psi, Lam_n, Lam_p, False
+
+    def _solve_equilibrium_dg_coupled(self, opts: NewtonOptions):
+        """M42-S3: gamma-continuation coupled-Newton DG equilibrium, a
+        direct lift of Device2D's own _solve_equilibrium_dg_coupled --
+        same stage list, same warm-restart/retry-with-bisection logic.
+        A gated DG device is biased through Vfb only (equilibrium's own
+        Vg_s=0.0), so there is no DG C-V curve here."""
+        psi = self._bulk_psi_guess()
+        Lam_n = np.zeros((self.Nz, self.Ny, self.Nx))
+        Lam_p = np.zeros((self.Nz, self.Ny, self.Nx))
+
+        target_gamma = getattr(self.models, "dg_gamma", 1.0)
+        stages = [0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0]
+        k = 0
+        retries_at_stage = 0
+        converged_final = True
+        while k < len(stages):
+            gamma_k = target_gamma * stages[k]
+            psi_new, Ln_new, Lp_new, ok = self._dg_newton_solve_eq(
+                psi, Lam_n, Lam_p, gamma_k, opts.max_iter, opts.tol_update)
+            if ok:
+                psi, Lam_n, Lam_p = psi_new, Ln_new, Lp_new
+                k += 1
+                retries_at_stage = 0
+                continue
+            retries_at_stage += 1
+            if retries_at_stage > 20:
+                converged_final = False
+                break
+            stages.insert(k, 0.5 * (stages[k - 1] if k > 0 else 0.0) + 0.5 * stages[k])
+        if not converged_final:
+            warnings.warn("M42 DG (3D) equilibrium coupled-Newton solve "
+                          "did not converge (gamma continuation stalled).")
+
+        self.psi = psi
+        self._dg_Lam_n = Lam_n
+        self._dg_Lam_p = Lam_p
+        psi_c = psi + self.band_shift
+        self.n = self.nie_s * np.exp(np.clip(psi_c, -700, 700)) * np.exp(-Lam_n / self.VT)
+        self.p = self.nie_s * np.exp(np.clip(-psi_c, -700, 700)) * np.exp(-Lam_p / self.VT)
+        return self
+
+    # ------------------------------------------------------------------
     def solve_equilibrium(self, opts: NewtonOptions = None, psi_guess=None):
         """psi_guess: optional warm-start initial iterate, shape
         (Nz,Ny,Nx).  When given, skips _bulk_psi_guess()'s bisection
@@ -716,6 +1103,14 @@ class Device3D:
         the flat bulk guess from scratch every iteration was pure
         waste."""
         opts = opts or NewtonOptions()
+        if self.dg:
+            # M42-S3: coupled-Newton DG equilibrium, mirroring Device2D's
+            # S1/S2 one dimension up (see _solve_equilibrium_dg_coupled's
+            # own docstring). psi_guess is not threaded through here --
+            # the DG path always starts from its own bulk-neutral guess,
+            # same as Device2D's S1/S2 path (no existing caller passes
+            # psi_guess together with dg=True).
+            return self._solve_equilibrium_dg_coupled(opts)
         Nz, Ny, Nx = self.Nz, self.Ny, self.Nx
 
         # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here --
@@ -1293,6 +1688,15 @@ class Device3D:
         not mentioned keep their previously set voltage.  Gate voltage is
         set the same way, using the gate's registered name."""
         opts = opts or NewtonOptions()
+        if self.dg:
+            # M42-S3: DG stays EQUILIBRIUM-ONLY, matching Device1D/
+            # Device2D (M20/M42 scope; DG transport is out of scope for
+            # this dimensional lift too -- a lift is not a scope
+            # extension).
+            raise NotImplementedError(
+                "Models(dg=True) is equilibrium-only (M20/M42 scope): "
+                "solve_bias would need DG inside the Scharfetter-Gummel "
+                "currents (DG transport), which is out of scope.")
         if self.psi is None:
             self.solve_equilibrium(opts)
 

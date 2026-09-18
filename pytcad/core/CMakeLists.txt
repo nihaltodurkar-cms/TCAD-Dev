@@ -103,14 +103,17 @@ add_library(tcad_core OBJECT
   src/process/diffuse.cpp
   src/nonlocal/paths.cpp
   src/thermal/grid.cpp
+  src/dg/grid.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-# M34-S4 / M43: the path tracer and the thermal-grid assembly are both
-# gated bit-for-bit against a pure-Python oracle, so no multiply-add may
-# be fused in either -- stated explicitly rather than relied on as a
-# default of the target architecture.
+# M34-S4 / M43 / M42-S3: the path tracer, thermal-grid, and
+# density-gradient Lambda-row assemblies are all gated bit-for-bit
+# against a pure-Python oracle, so no multiply-add may be fused in any
+# of them -- stated explicitly rather than relied on as a default of
+# the target architecture.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  set_source_files_properties(src/nonlocal/paths.cpp src/thermal/grid.cpp PROPERTIES
+  set_source_files_properties(src/nonlocal/paths.cpp src/thermal/grid.cpp
+                              src/dg/grid.cpp PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 if(OpenMP_CXX_FOUND)
@@ -142,6 +145,7 @@ nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/process_bindings.cpp
   bindings/nonlocal_bindings.cpp
   bindings/thermal_bindings.cpp
+  bindings/dg_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
 # The compiler toolchain lives in a SEPARATE, dedicated conda env

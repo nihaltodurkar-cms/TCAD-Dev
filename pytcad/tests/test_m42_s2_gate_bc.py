@@ -491,15 +491,14 @@ def test_g7_sic_4h_dg_refused():
         Device2D(mesh, dop, material=SIC_4H, models=Models(bgn=False, dg=True))
 
 
-def test_g7_device3d_still_refuses_dg_naming_s3_or_m20():
-    """Device3D (S3, not in this slice's scope) still refuses dg=True.
-    NOTE: the plan's own section 10.5 text says this refusal should now
-    name S3 rather than S2/M20 -- but device3d.py is explicitly OUT OF
-    SCOPE for S2 (M42-DENSITY-GRADIENT-2D3D-PLAN.md section 10.4's file
-    list, and this session's own hard constraint not to touch it), so
-    that message-text change was NOT made. This gate checks the refusal
-    itself (unchanged behavior), not the exact wording -- see the M42
-    S2 results section for the explicit note about this deviation."""
+def test_g7_device3d_now_implements_dg_see_m42_s3():
+    """Device3D used to refuse dg=True unconditionally (S2's own scope
+    excluded it, per M42-DENSITY-GRADIENT-2D3D-PLAN.md section 10.4's
+    file list). M42-S3 (landed the same week) implements it -- see
+    tests/test_m42_s3_density_gradient_3d.py for the actual gates.
+    This is kept as a narrow regression check that the *ohmic* ungated
+    construction no longer refuses, not a substitute for S3's own
+    gate file."""
     from pytcad.mesh3d import Mesh3D
     from pytcad.device3d import Device3D
     x = graded_mesh(2e-4, [1e-4], 1e-6, 4e-6, 1.2)
@@ -508,5 +507,4 @@ def test_g7_device3d_still_refuses_dg_naming_s3_or_m20():
     dop1d = np.where(x < 1e-4, -1e17, 1e17)
     dop2d = np.tile(dop1d, (y.size, 1))
     dop3d = np.tile(dop2d, (z.size, 1, 1))
-    with pytest.raises(NotImplementedError):
-        Device3D(Mesh3D(x, y, z), dop3d, models=Models(bgn=False, dg=True))
+    Device3D(Mesh3D(x, y, z), dop3d, models=Models(bgn=False, dg=True))

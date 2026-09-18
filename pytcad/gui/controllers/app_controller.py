@@ -251,6 +251,15 @@ class AppController(QObject):
     def currentStore(self):
         return self._store
 
+    def deviceRunner(self):
+        """The JobRunner driving the primary device solve.
+
+        Public accessor for sub-controllers that need to listen to its
+        signals (e.g. SolverTelemetryController) -- same shape as
+        currentStore() above, so a reach-through into the private
+        `_runner` attribute is never needed."""
+        return self._runner
+
     @Property("QVariant", notify=resultChanged)
     def meshStats(self):
         """Mesh statistics for the 3c panel: {dimensionality, node_count,

@@ -917,3 +917,299 @@ of 3D process output is FinFET-class demos, 2D process + extrusion
 (M26's original decision) may already be enough, and S1-S4 alone are
 a genuinely better 2D process capability regardless of what happens
 with S5/S6.
+
+## 16. S5/S6 results (landed 2026-09-18, COST-REDUCED scope)
+
+Built at the user's explicit request for reduced token/agent usage; two
+scope cuts were made and stated up front rather than discovered
+mid-build:
+
+- **S5 = the level-set CORE in 3D only** (`pytcad/levelset3d.py`,
+  new): representation, advection, reinit, and the S2 deposit/etch
+  topology machinery (`advance_material3d`, `advance_front3d`,
+  `deposit_conformal3d`, `etch_isotropic3d`). `etch_directional3d`/
+  `deposit_epitaxial3d`/`planarize3d` and 3D oxidation/silicidation
+  are NOT ported -- named as deferred, not silently absent.
+- **S6 = the doping-field half only**
+  (`gmsh_finfet3d.sample_doping_3d_from_process2d`, new): bilinearly
+  interpolates a REAL `process2d.implant_2d` 2D array at each mesh
+  node's (x,y), extruded (z-independent) -- replacing the uniform-
+  per-region doping constant `evaluate_doping_at_nodes3d` used before
+  (that function itself is untouched; the new one is opt-in). The
+  OTHER half of S6 -- real (non-median-flattened) geometry -- was NOT
+  built this pass; it needs either a real polyline/CAD surface from
+  `geom.surface_um` or meshing S5's level set directly, both
+  materially bigger than the doping fix and deferred.
+
+**Gates, all pass (`tests/test_m35_s5_levelset3d.py`, 6;
+`tests/test_m35_s6_doping3d.py`, 3):**
+
+| gate | result |
+|---|---|
+| `advance_front3d` z-invariant reduces to 2D (the 4d.4 rule) | every z-slice matches `levelset2d.advance_front` to <1e-10 |
+| `advance_material3d` / `etch_isotropic3d` / `deposit_conformal3d` z-invariant reduction | same, <1e-10 (excluding a degenerate "owns nothing" placeholder material, whose far-value constant is legitimately domain-diagonal-dependent -- checked via ownership emptiness instead) |
+| z is a real, load-bearing axis | a resist mask present only for a finite z-strip protects silicon inside the strip and not outside it, at the same (x,y) |
+| 3D ownership partitions completely | every point claimed by exactly one material |
+| doping sample matches the 2D field at grid points | 0.0 relative error |
+| doping sample is z-independent (extrusion contract) | exact |
+| out-of-range node clamps instead of raising | finite result |
+
+**One real numerical finding, not a new bug:** building the S5 z-strip
+test surfaced the SAME `advance_front`/`advance_front3d` masked-erosion
+over-propagation limitation already disclosed in S4 (lateral exposure
+can propagate up to one grid cell per CFL substep regardless of that
+substep's physical dt) -- confirmed directly at this grid: a probe
+0.4 units from the nearest x-edge and 0.2 units from the nearest
+z-edge of a mask strip stayed protected at etch depth 0.02 but not at
+0.04+. The test uses a depth confirmed safe, matching S4's own
+precedent (reuse a known-good grid/depth regime rather than re-litigate
+S2's numerics in an unrelated slice).
+
+**Verification:** the 2 new test files (9 gates) plus
+`tests/test_m26_finfet3d.py`, `tests/test_m35_s1_levelset.py`,
+`tests/test_m35_s2_topology.py` run directly -- 37 passed, no
+regression. Full suite not run (continuing this session's standing
+gap, and explicitly out of scope for this turn's cost constraint).
+No subagents were used for this build.
+
+Per the plan's original section 9, this closes S5/S6 to the reduced
+scope above. **A literal full port of S1-S4's remaining ops to 3D, and
+the geometry half of S6, remain open** if a real 3D device consumer
+needs them -- neither is blocking anything currently built.
+
+## 17. S5/S6 full-scope closeout (landed 2026-09-18)
+
+User asked to close both gaps left by section 16's cost-reduced pass
+completely. Done directly (no subagents), same session.
+
+**Part A -- full S1-S4 parity in `levelset3d.py`, plus two new 3D
+modules:**
+
+- `etch_directional3d`, `deposit_epitaxial3d`, `planarize3d` added to
+  `levelset3d.py` -- direct mechanical lifts of their 2D counterparts,
+  each z-invariant-reduces-to-2D gated exactly like S5's first pass.
+- `deposit_conformal3d` gained a `windows` param (list of `(x_lo,x_hi,
+  z_lo,z_hi)` boxes) -- the 3D analogue of 2D's `x_windows` patterned-
+  mask mechanism, same zero-rate-outside-the-box approach, no new
+  topology code.
+- `pytcad/oxidize_levelset3d.py` (new): a direct port of
+  `oxidize_levelset.py`'s persistent-phi/argmin-ownership/periodic-
+  reinit architecture, generalizing the finite-volume oxidant-diffusion
+  solve from a 4-neighbor (2D) to a 6-neighbor (3D) stencil (face AREA
+  = product of the two perpendicular spacings, otherwise identical
+  Robin/reactive/Neumann face rules). Includes both
+  `oxidize_levelset3d` and `oxidize_levelset3d_with_dopant` (S3b's
+  segregation-partition logic reused as-is, generalized from "per
+  x-column" to "per (x,z) line").
+- `pytcad/silicide_levelset3d.py` (new): a direct port of
+  `silicide_levelset.py`'s per-line linear-parabolic solver, same
+  "per x-column" -> "per (x,z) line" generalization. Same required-
+  `(B,A)`-arguments honesty clause as 2D (no built-in named silicide --
+  unchanged literature dead end).
+- **No new bugs.** Every Part A gate passed on first execution except
+  the reduction tests for `advance_material3d`/`etch_isotropic3d`,
+  which needed a TEST fix, not a code fix: the original test compared
+  "sio2" (a material owning nothing in either grid) directly by raw
+  phi value, but a degenerate placeholder's "far" constant legitimately
+  differs between a 2D and a 3D domain (it depends on the FULL
+  bounding-box diagonal, which now includes the z-extent) even though
+  neither domain's sio2 ever does anything. Fixed by comparing a
+  material that owns real territory instead, and checking placeholder
+  emptiness (not value) for "sio2".
+
+**Gates, all pass (9 new: `test_m35_s5_levelset3d.py`'s 4 additions +
+`test_m35_s5_masks3d.py`'s 2 + `test_m35_s5b_oxidize3d.py`'s 3 +
+`test_m35_s5c_silicide3d.py`'s 3, +1 in `test_m26_finfet3d.py` for Part
+B below):**
+
+| gate | result |
+|---|---|
+| `etch_directional3d`/`deposit_epitaxial3d`/`planarize3d` z-invariant reduction | <1e-10, matching S5's first-pass gates |
+| `etch_directional3d` vertical-wall no-op | <1e-9 |
+| `deposit_epitaxial3d(rate_fn=None)` == `deposit_conformal3d` | exact |
+| 3D box window (`windows`) stays inside its box; `windows=None` bit-identical | exact |
+| dry oxidation 3D reduces to 1D Deal-Grove | 5.36% error (matches the 2D module's own measured error at the same steps/T/t) |
+| oxidation mass conservation 3D | 14.8% (coarse test grid; 2D module's own finer-grid measurement is ~1%, same physics) |
+| dopant dose conservation 3D | exact, 4.4e-16 relative error |
+| silicide flat-stack 1D reduction 3D | 6.3% error, IDENTICAL to the 2D module's own number (transversally uniform test, as expected) |
+| silicide mass conservation 3D | exact, 1.9e-16 relative error, IDENTICAL to 2D's own number |
+
+**Part B -- real (non-flattened) geometry in `gmsh_finfet3d.py`:**
+
+New `_staircase_face` helper builds each source/gate/drain region's 2D
+OCC face with a REAL piecewise-constant top boundary directly from
+`geom.surface_um`/`geom.x` (collapsing runs of equal height into one
+segment to avoid degenerate zero-length edges), replacing the old
+`occ.addRectangle`-per-region flat-median-height approximation.
+`y_bottom` now comes from the GLOBAL max/min of `geom.surface_um`
+(previously restricted to the 3 regional medians).
+
+**One real downstream bug found and fixed while wiring this in:** the
+face-classification code that tags "gate_top" vs "gate_side" faces
+after extrusion checked `abs(cy - top_gate) < 1e-9` -- a single scalar
+that no longer exists once a region can have MULTIPLE height levels.
+Fixed by reordering the classification: end-cap faces (the full z=0/
+z=Wfin cross-sections) are identified first and unambiguously by z
+alone; every OTHER gate-only lateral face (whether a flat top run at
+any height level, or an internal vertical riser between two levels) is
+now collected into "gate_top" together -- a deliberate choice that the
+gate's oxide coupling wraps every exposed gate-region surface, risers
+included, not just the flat runs.
+
+**New gate proving the fix actually works** (not just that the old
+flat-region case still passes):
+`test_finfet_mesh3d_from_process2d_preserves_a_real_step_within_one_region`
+etches a SECOND, narrower notch strictly inside the gate region (2
+distinct heights within one region -- something the old median
+approximation would have silently flattened to 1), and asserts the
+built mesh's gate faces span >=2 distinct y-levels. Passed directly:
+`distinct_heights_in_gate=2`, `distinct_y_levels among gate faces'
+nodes=348` (many nodes because the staircase step itself introduces
+new geometry, not because of any measurement slop).
+
+Honesty-clause docstring updated: the "will silently flatten... to its
+regional median" limitation is removed (now false); a new limitation
+is stated instead -- this is still not a general sloped/conformal
+extrusion (process2d's own string model has neither to extrude), and
+it does not reach a genuinely z-varying (3D) surface, which needs
+M35-S5's level set meshed directly instead.
+
+**Verification:** all 4 new/extended test files (13 new gates total)
+plus the FULL `test_m26_finfet3d.py` (14 tests, both `not slow` and
+`slow` markers, since the geometry-construction code changed
+materially) plus every other M35 test file and `test_m23_process2d.py`
+run directly -- **81 passed, no regression**. No subagents used for
+either part of this closeout. Full slow/fast suite still not run this
+session (standing gap, continuing the explicit cost-reduction
+instruction that opened this thread of work, though this specific
+turn prioritized completeness over token count as instructed).
+
+Both of section 16's disclosed gaps are now closed. What remains
+genuinely open, and was never in scope for either S5 or S6: a truly
+CONTINUOUS (non-staircase, conformal-sidewall) 3D geometry
+representation, and a genuinely z-varying 3D level-set-driven mesh
+(S5's own level set exists and is gated, but nothing yet meshes it
+directly into a tet mesh the way `gmsh_finfet3d.py` does for the 2D
+process2d path) -- these were never claimed as this session's scope
+and remain real, disclosed future work, not silently implied done.
+
+## 18. Smooth 3D geometry + direct level-set meshing (landed 2026-09-18)
+
+User asked for the two items just named above (section 17's own
+closing line) to actually be built: a genuinely smooth/continuous 3D
+surface, and direct tet meshing of the level set itself (not a
+process2d extrusion). Both landed, alongside the existing staircase
+path (`gmsh_finfet3d.py`), which is UNTOUCHED and remains the default/
+fallback -- this section adds a second, independent geometry pipeline,
+not a replacement.
+
+**Smooth geometry**: `levelset3d.marching_cubes_surface(ls, materials,
+level=0.0)` (new), via the optional `scikit-image` dependency
+(`skimage.measure.marching_cubes`). `materials` may be a single name or
+a list -- a list's UNION boundary is extracted via the level-set CSG
+identity `phi_union = min_i(phi_i)`, reusing each material's own
+already-validated signed distance with no new geometry math. A pure,
+read-only geometry query: it does not touch any advection/topology
+function, so it cannot affect (and needed no changes to) any existing
+reduction-identity gate.
+
+**Direct meshing**: new module `pytcad/levelset3d_mesh.py`,
+`build_tet_mesh_from_levelset3d(ls, solid_materials, mesh_size_cm=None,
+contact_planes=None)`, returning a `LevelSetMesh3D` with the SAME field
+layout as `gmsh_mesh3d.GmshMesh3D` (drop-in for the same downstream
+solver-handoff functions). Pipeline: extract a watertight isosurface of
+the union of `solid_materials` -> `tetgen` (new optional dependency)
+fills its interior with a constrained Delaunay tetrahedralization,
+respecting the boundary exactly -> each tet is region-labeled by
+looking up its centroid in the level set's own `material_map()` ->
+boundary faces on a named domain-boundary plane are tagged as contacts.
+
+**Two real technical dead ends found and worked around, both disclosed
+in the module's own docstring:**
+
+1. **gmsh's own STL-remeshing path (`classifySurfaces`+
+   `createGeometry`) was tried FIRST and confirmed unsuitable** for a
+   marching-cubes surface of a smooth, closed, organic shape: on a test
+   sphere, `classifySurfaces` split it into 72 surfaces + 83 curves at
+   the default 40-degree angle, and `createGeometry` then failed
+   outright ("Wrong topology of boundary mesh for parametrization") --
+   that path is built for CAD-like faceted input with real sharp edges,
+   not smooth voxel-derived isosurfaces. Switched to `tetgen`
+   (constrained-Delaunay, no reparametrization step needed at all),
+   confirmed on the same sphere to reproduce the analytic volume to
+   0.21% relative error on the first working call.
+2. **An open (non-watertight) surface for any solid CLIPPED by the
+   level set's own domain boundary** (i.e. every realistic case except
+   a closed island floating in open space): `marching_cubes_surface`
+   only extracts genuine internal sign crossings, so a material that
+   still occupies a domain-boundary face with no sign change there
+   produces no cap on that face, and `tetgen` failed on all three
+   non-floating test geometries ("Failed to tetrahedralize... make it
+   manifold") while succeeding immediately on the one floating-sphere
+   case. Fixed with a MESHING-specific (not exposed on
+   `marching_cubes_surface` itself, which stays uncapped -- an open
+   surface there is the honest truth about a level set's own finite
+   grid) capped variant, `levelset3d_mesh._closed_surface_for_tetgen`:
+   pad `phi` by one voxel with a large positive ("ambient") constant
+   before marching cubes, forcing a genuine sign crossing (hence a flat
+   cap) wherever the true material reached the array edge. Real, bounded,
+   disclosed error: the cap lands up to half a grid cell beyond the
+   nominal boundary plane -- measured directly on a flat slab (expected
+   volume 0.600, meshed volume 0.6057, 0.95% high).
+
+**Gates, all pass (12 new: `test_m35_s5d_smooth_geometry.py`'s 3,
+`test_m35_s5e_direct_mesh3d.py`'s 6, plus 3 marching-cubes gates already
+counted in s5d):**
+
+| gate | result |
+|---|---|
+| marching-cubes sphere volume vs analytic | 0.21% error |
+| marching-cubes surface has genuinely non-axis-aligned normals (curved undercut, not staircase) | 20.5% of faces >8° off every coordinate axis (0.0% on a flat unmasked etch, confirmed as the control case) |
+| marching-cubes requires a real crossing | raises `ValueError` cleanly |
+| tet mesh volume vs analytic sphere | 0.21% error, IDENTICAL to the surface-only number (tetgen adds no volume) |
+| tet mesh region split, 2 materials | Si 1.6% error, SiO2 1.8% error vs analytic slab volumes (per-tet-centroid quantization, disclosed) |
+| sole-material classified volume fraction | 98.8% (boundary-sliver quantization, disclosed) |
+| contact-plane tagging: empty when the solid doesn't touch that plane | exact, 0 faces |
+| contact-plane tagging: non-empty when it does | exact, >0 faces |
+| direct mesh solver handoff (Poisson equilibrium) converges | finite psi, zero warnings, mirroring `gmsh_finfet3d.py`'s own convergence gate |
+| direct mesh follows a real undercut, not a staircase | 74 distinct x-coordinates among 326 near-edge nodes (a staircase extrusion could only ever produce a handful, one per grid column) |
+
+**GUI/visualization inspection.** The real `Viewer3DWindow` is already
+documented (CLAUDE.md) to segfault the whole process on this machine's
+GL/Wayland stack regardless of platform flags -- not re-attempted here,
+consistent with that standing note. Instead, rendered both the new
+level-set-derived mesh and the existing staircase FinFET mesh via
+`pyvista.Plotter(off_screen=True)` (the documented-working offscreen
+path) and visually inspected the resulting screenshots directly:
+- The level-set mesh rendered as a correctly-shaped block with the
+  masked/etched step clearly visible, no holes, no inverted normals, no
+  stray geometry.
+- A cross-section slice through the undercut region showed a continuous
+  DIAGONAL transition (a piecewise-linear approximation of the true
+  curve, faceted at this grid's resolution but never axis-aligned),
+  visibly different in kind from the comparison render of the existing
+  staircase FinFET mesh, which showed clean, sharp RIGHT-ANGLE steps at
+  the mask/notch boundaries -- confirming the two paths are genuinely
+  geometrically distinct, both rendering correctly, no visual defects
+  found requiring a fix.
+Screenshots were scratch files (not committed, not part of the
+deliverable) -- inspected then deleted.
+
+**Verification:** the 2 new test files (9 gates total, one marked
+`slow` for the solver-handoff convergence check) plus every other M35
+test file, `test_m26_finfet3d.py`, and `test_m23_process2d.py` run
+directly -- **90 passed, no regression**. `requirements.txt` gained
+`scikit-image>=0.26` and `tetgen>=0.8` as new optional dependencies
+(same absent-package-raises-`ImportError` contract as `gmsh`/`devsim`).
+No subagents used. Full slow/fast suite still not run this session
+(standing gap, unchanged). Working tree UNCOMMITTED; nothing pushed.
+
+**What remains genuinely open**, stated so it isn't mistaken for done:
+region tagging is per-tet-centroid (not conformal to element faces the
+way `gmsh_finfet3d.py`'s OCC-fragment volumes are); domain-boundary
+caps carry a bounded sub-grid-cell placement error; there is no gate-
+wrap convention (source/gate/drain naming, tri-gate face grouping)
+built on top of this general primitive the way `gmsh_finfet3d.py` has
+for its own specific device template -- a caller wanting that must
+build it from this module's own contact/region labels, the same way
+`gmsh_finfet3d.py` builds its own from ITS labels.

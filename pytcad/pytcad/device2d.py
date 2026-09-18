@@ -43,6 +43,7 @@ from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
 from . import linsolve
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
 from .materials import (
     SILICON, SIC_4H, Semiconductor, mobility_caughey_thomas, mobility_cvt,
     nie_effective, lifetime_scharfetter, recombination,
@@ -82,6 +83,34 @@ class GateBC:
         self.kappa = float(kappa)
         self.Vfb = float(Vfb)
         self.Vg = float(Vg)
+
+
+class SchottkyBC(DirichletBC):
+    """M46-S3: a metal-semiconductor (Schottky) contact -- the Device2D
+    lift of Device1D's SchottkyContact (pytcad/device.py). Deliberately
+    a DirichletBC SUBCLASS (not a new dispatch branch): every existing
+    `isinstance(bc, DirichletBC)` site in this file (the Poisson row,
+    solve_bias's warm start, the BTBT/impact "live node" mask,
+    terminal_current) already treats it correctly with ZERO changes,
+    since a Schottky contact's psi row IS a Dirichlet row (barrier-
+    referenced, not doping-referenced) in both of its own modes below.
+
+    Same two modes as Device1D's SchottkyContact:
+      A_star=None (default): S1's DIRICHLET approximation -- the
+        majority-carrier density is pinned at its barrier-limited
+        equilibrium value (see _bc_contact_values), through the SAME
+        psi0 formula an ohmic DirichletBC already uses.
+      A_star given: S2's ROBIN (thermionic-emission-limited) boundary
+        condition, reusing THIS FILE's own M14 G-C S_n/S_p Robin-BC
+        machinery verbatim (see _residual_jacobian's own block) with
+        v_R = A* T^2/(q Nc_or_Nv) in place of S_n/S_p and the SAME
+        barrier-limited n0/p0 as the target.
+    """
+
+    def __init__(self, i, j, phi_metal_eV, A_star=None, V=0.0):
+        super().__init__(i, j, V)
+        self.phi_metal_eV = float(phi_metal_eV)
+        self.A_star = None if A_star is None else float(A_star)
 
 
 def _edge_pairs_x(Nx, Ny):
@@ -611,15 +640,53 @@ class Device2D:
         self.bcs[name] = GateBC(i, j, kappa, Vfb, Vg)
         return self.bcs[name]
 
+    def add_schottky_contact(self, name, i, j, phi_metal_eV, A_star=None, V=0.0):
+        """M46-S3: add a Schottky contact. A_star=None selects the
+        Dirichlet approximation (S1); a real value selects the Robin
+        thermionic-flux BC (S2) -- see SchottkyBC's own docstring."""
+        self.bcs[name] = SchottkyBC(i, j, phi_metal_eV, A_star, V)
+        return self.bcs[name]
+
     def _bc_contact_values(self, bc, V):
         """Ohmic values at a contact's nodes (M11-S4 per-node materials;
         M13: FD-aware -- the FD bisection reduces exactly to the
         Boltzmann closed form). M33-S4: n0/p0 come from local
         neutrality + mass action and are gauge-free; only psi0's
         reference moves, by -band_shift[j,i] (identical reasoning to
-        Device1D's _contact_values)."""
+        Device1D's _contact_values).
+
+        M46-S3: a SchottkyBC replaces the local-neutrality majority
+        density with the barrier-limited one (reusing schottky.py's own
+        schottky_barrier_height_n, not re-derived) -- a direct lift of
+        Device1D's own _contact_values Schottky branch. Refused under
+        fd/incomplete_ion (unvalidated composition -- the FD contact
+        solver's own eta-space root would need a barrier-referenced
+        variant that was not derived here)."""
         j, i = bc.j, bc.i
         ion = self._ion_root_args()
+        if isinstance(bc, SchottkyBC):
+            if self.fd or ion is not None:
+                raise NotImplementedError(
+                    "SchottkyBC combined with Models(fd=True) or "
+                    "incomplete_ion=True is refused: the barrier-"
+                    "referenced majority density was only derived "
+                    "against Boltzmann statistics (M46-S3 scope, "
+                    "matching Device1D's own SchottkyContact refusal).")
+            C, nie = self.C[j, i], self.nie_s[j, i]
+            phi_m, chi_eV = bc.phi_metal_eV, self.chi_arr[j, i]
+            is_n = C >= 0.0
+            phi_Bn = _schottky_barrier_height_n(phi_m, chi_eV)
+            Eg_eV = np.array([self.mats[jj * self.Nx + ii].Eg(self.T)
+                              for jj, ii in zip(np.atleast_1d(j), np.atleast_1d(i))])
+            phi_B = np.where(is_n, phi_Bn, Eg_eV - phi_Bn)
+            n0 = np.where(is_n, self.nc_s[j, i] * np.exp(-phi_B / (KB_EV * self.T)),
+                         nie * nie / np.maximum(
+                             self.nv_s[j, i] * np.exp(-phi_B / (KB_EV * self.T)),
+                             1e-300))
+            p0 = np.where(is_n, nie * nie / np.maximum(n0, 1e-300),
+                         self.nv_s[j, i] * np.exp(-phi_B / (KB_EV * self.T)))
+            psi0 = V / self.VT + np.log(n0 / nie)
+            return psi0 - self.band_shift[j, i], n0, p0
         # M41: incomplete ionization routes through the SAME eta-space
         # root even under Boltzmann statistics (it reduces exactly to
         # the closed form as F -> exp), so the flag stays independent
@@ -888,7 +955,7 @@ class Device2D:
         Returns (F [3N], J [3N x 3N] csr_matrix); sets
         self._dg_dirichlet_rows_eq.
         """
-        from .dg import _dg_prefactor, LAMBDA_MAX_VT
+        from .dg import LAMBDA_MAX_VT
         Ny, Nx, N = self.Ny, self.Nx, self.N
         VT = self.VT
         gamma = getattr(self.models, "dg_gamma", 1.0) if gamma is None else gamma
@@ -962,7 +1029,17 @@ class Device2D:
                 rows.append(ip(kk)); cols.append(ip(kk))
                 vals.append(-bc.kappa * w * np.ones_like(kk, dtype=float))
 
-        # ---- Lambda_n / Lambda_p rows ---------------------------------
+        # ---- Lambda_n / Lambda_p rows -----------------------------------
+        # M42-S3: factored into pytcad/dg_grid.py's dg_lambda_rows, a
+        # dimension-generic (2D or 3D) kernel shared with Device3D --
+        # mirrors thermal_grid.py/ii_grid.py/btbt_grid.py's "one kernel
+        # for Device2D and Device3D" pattern (M34-S6/M43) rather than
+        # hand-duplicating this box-integration/harmonic-mean/gate-
+        # ghosting stencil a third time. See that module's own
+        # docstring for the full physics/BC rationale (M42-S2's GateBC
+        # hard wall, moscap.py's own M20 precedent) -- unchanged here,
+        # only relocated.
+        from .dg_grid import dg_lambda_rows
         h_phys_x = np.diff(self.mesh.x)
         h_phys_y = np.diff(self.mesh.y)
         dVx_phys = control_volume_widths(h_phys_x)
@@ -970,121 +1047,24 @@ class Device2D:
 
         m_n = np.array([m.m_n_star for m in self.mats]).reshape(Ny, Nx)
         m_p = np.array([m.m_p_star for m in self.mats]).reshape(Ny, Nx)
-        pref_n = _dg_prefactor(m_n, gamma) * 1e4
-        pref_p = _dg_prefactor(m_p, gamma) * 1e4
 
-        gn = np.sqrt(np.maximum(n, 1e-300))
-        gp = np.sqrt(np.maximum(p, 1e-300))
-
-        def hmean2d(lo, hi):
-            # gamma=0 (the first continuation stage) makes pref exactly
-            # zero everywhere; guard the 0/0 that a plain harmonic mean
-            # would hit there -- no coupling at zero prefactor is the
-            # physically correct limit, not an indeterminate form.
-            s = lo + hi
-            return np.where(s > 0.0, 2.0 * lo * hi / np.where(s > 0.0, s, 1.0), 0.0)
-
-        # M42-S2: GateBC hard wall, part 2 of 2 (part 1 is the Lambda pin
-        # below).  Ghost-zero g=sqrt(n)/sqrt(p) at every gate node in the
-        # Lambda-row flux stencil (both when a gate node is the "near" and
-        # the "far" end of an edge) -- the infinite-barrier limit that
-        # matches this repo's OWN Schrodinger-Poisson reference solver's
-        # hard_wall_left=True convention (dg.schrodinger_poisson), and a
-        # direct port of moscap.py's `g_im1 = 0.0 if hard_wall_left`
-        # convention one dimension up (moscap.py:471, ~402-470's own
-        # docstring for the physics rationale: a plain Lambda=0 Neumann
-        # choice there left the full classical g feeding the neighbor's
-        # curvature stencil, which still dominated the centroid integral).
-        # The gate node's OWN Lambda row is pinned below regardless of
-        # what this ghosting computes for it, so ghosting is applied
-        # unconditionally (not just "when the OTHER endpoint is a gate
-        # node") -- simpler, and harmless since that row is discarded.
-        # The Poisson row's "Lam*g" term (F_lam's diagonal piece) keeps
-        # the REAL, unsuppressed g -- only the curvature (lap_term) is
-        # ghosted, matching moscap's explicit choice that the hard wall
-        # affects only the quantum-confinement curvature, not the
-        # classical charge balance already handled by the Robin block
-        # above.
-        gate_mask_2d = gate_mask.reshape(Ny, Nx)
-
-        F_lam = {}
-        for tag, g, Lam, pref, dg_dpsi_sign, idx in (
-            ("n", gn, Lam_n, pref_n, +1.0, iln),
-            ("p", gp, Lam_p, pref_p, -1.0, ilp),
-        ):
-            g_eff = np.where(gate_mask_2d, 0.0, g)
-            pref_ex = hmean2d(pref[:, :-1], pref[:, 1:])
-            pref_ey = hmean2d(pref[:-1, :], pref[1:, :])
-            Gx = pref_ex * (g_eff[:, 1:] - g_eff[:, :-1]) / h_phys_x[None, :]
-            Gy = pref_ey * (g_eff[1:, :] - g_eff[:-1, :]) / h_phys_y[:, None]
-            divx = np.zeros((Ny, Nx)); divx[:, :-1] += Gx; divx[:, 1:] -= Gx
-            divy = np.zeros((Ny, Nx)); divy[:-1, :] += Gy; divy[1:, :] -= Gy
-            lap_term = divx / dVx_phys[None, :] + divy / dVy_phys[:, None]
-            F_lam[tag] = Lam * g + lap_term
-
-        # The Jacobian of the Lambda rows: dF_lam/dg at the 5-point
-        # stencil (self + up/down/left/right), chained through
-        # dg/dpsi = sign*g/2, dg/dLam = -g/(2VT) at EACH of those five
-        # nodes independently (matches Device1D's per-neighbor chain).
-        for tag, g, Lam, pref, sign, idx in (
-            ("n", gn, Lam_n, pref_n, +1.0, iln),
-            ("p", gp, Lam_p, pref_p, -1.0, ilp),
-        ):
-            pref_ex = hmean2d(pref[:, :-1], pref[:, 1:])   # (Ny, Nx-1)
-            pref_ey = hmean2d(pref[:-1, :], pref[1:, :])   # (Ny-1, Nx)
-            cx = pref_ex / h_phys_x[None, :]                # per x-edge coeff
-            cy = pref_ey / h_phys_y[:, None]                # per y-edge coeff
-
-            # x-edges: contributes +cx/dVx_phys[receiver] * (g_far-g_near)
-            # to the receiver's Lambda row, and its mirror to the other
-            # end -- same "near/far" scatter shape as the Poisson row.
-            wx_recv_L = (cx / dVx_phys[None, :-1]).ravel()   # row kL receives
-            wx_recv_R = (cx / dVx_phys[None, 1:]).ravel()    # row kR receives
-            wy_recv_S = (cy / dVy_phys[:-1, None]).ravel()
-            wy_recv_N = (cy / dVy_phys[1:, None]).ravel()
-
-            def dg_dpsi(gv): return sign * gv / 2.0
-            def dg_dlam(gv): return -gv / (2.0 * VT)
-
-            # M42-S2: the curvature stencil's Jacobian uses the SAME
-            # ghosted g the flux (Gx/Gy, above) used -- a gate node's
-            # ghost value is the fixed constant 0.0, so its Jacobian
-            # contribution through dg_dpsi/dg_dlam is correctly zero
-            # (sign*0/2 == 0, -0/(2VT) == 0) with no extra masking
-            # needed here.  The diagonal "Lam*g" Jacobian entries below
-            # (kdiag) also pick up the ghosted value at a gate node's OWN
-            # row, but that row is entirely overwritten by the Lambda pin
-            # (see below), so it is discarded, not wrong.
-            gflat = np.where(gate_mask, 0.0, g.ravel())
-            # kL row: d(lap)/dg[kR] = +wx_recv_L, d(lap)/dg[kL] += -wx_recv_L
-            rows.append(idx(kL)); cols.append(ip(kR)); vals.append(wx_recv_L * dg_dpsi(gflat[kR]))
-            rows.append(idx(kL)); cols.append(idx(kR)); vals.append(wx_recv_L * dg_dlam(gflat[kR]))
-            rows.append(idx(kL)); cols.append(ip(kL)); vals.append(-wx_recv_L * dg_dpsi(gflat[kL]))
-            rows.append(idx(kL)); cols.append(idx(kL)); vals.append(-wx_recv_L * dg_dlam(gflat[kL]))
-            # kR row: d(lap)/dg[kL] = +wx_recv_R, d(lap)/dg[kR] += -wx_recv_R
-            rows.append(idx(kR)); cols.append(ip(kL)); vals.append(wx_recv_R * dg_dpsi(gflat[kL]))
-            rows.append(idx(kR)); cols.append(idx(kL)); vals.append(wx_recv_R * dg_dlam(gflat[kL]))
-            rows.append(idx(kR)); cols.append(ip(kR)); vals.append(-wx_recv_R * dg_dpsi(gflat[kR]))
-            rows.append(idx(kR)); cols.append(idx(kR)); vals.append(-wx_recv_R * dg_dlam(gflat[kR]))
-            # kS/kN (y-edges), same shape
-            rows.append(idx(kS)); cols.append(ip(kN)); vals.append(wy_recv_S * dg_dpsi(gflat[kN]))
-            rows.append(idx(kS)); cols.append(idx(kN)); vals.append(wy_recv_S * dg_dlam(gflat[kN]))
-            rows.append(idx(kS)); cols.append(ip(kS)); vals.append(-wy_recv_S * dg_dpsi(gflat[kS]))
-            rows.append(idx(kS)); cols.append(idx(kS)); vals.append(-wy_recv_S * dg_dlam(gflat[kS]))
-            rows.append(idx(kN)); cols.append(ip(kS)); vals.append(wy_recv_N * dg_dpsi(gflat[kS]))
-            rows.append(idx(kN)); cols.append(idx(kS)); vals.append(wy_recv_N * dg_dlam(gflat[kS]))
-            rows.append(idx(kN)); cols.append(ip(kN)); vals.append(-wy_recv_N * dg_dpsi(gflat[kN]))
-            rows.append(idx(kN)); cols.append(idx(kN)); vals.append(-wy_recv_N * dg_dlam(gflat[kN]))
-            # diagonal Lam*g term: d/dpsi = Lam*dg_dpsi + g*0, d/dLam = g + Lam*dg_dlam
-            rows.append(idx(kdiag)); cols.append(ip(kdiag))
-            vals.append((Lam.ravel() * dg_dpsi(gflat))[kdiag])
-            rows.append(idx(kdiag)); cols.append(idx(kdiag))
-            vals.append((gflat + Lam.ravel() * dg_dlam(gflat))[kdiag])
+        axes = [
+            dict(kL=kL, kR=kR,
+                 h_phys=np.broadcast_to(h_phys_x[None, :], (Ny, Nx - 1)).ravel(),
+                 dV_phys=np.broadcast_to(dVx_phys[None, :], (Ny, Nx)).ravel()),
+            dict(kL=kS, kR=kN,
+                 h_phys=np.broadcast_to(h_phys_y[:, None], (Ny - 1, Nx)).ravel(),
+                 dV_phys=np.broadcast_to(dVy_phys[:, None], (Ny, Nx)).ravel()),
+        ]
+        Flam_n, Flam_p, lam_rows, lam_cols, lam_vals = dg_lambda_rows(
+            N, axes, n.ravel(), p.ravel(), Lam_n.ravel(), Lam_p.ravel(),
+            m_n.ravel(), m_p.ravel(), gamma, gate_mask, ip, iln, ilp, VT)
+        rows += lam_rows; cols += lam_cols; vals += lam_vals
 
         F = np.zeros(3 * N)
         F[ip(kdiag)] = F_psi.ravel()
-        F[iln(kdiag)] = F_lam["n"].ravel()
-        F[ilp(kdiag)] = F_lam["p"].ravel()
+        F[iln(kdiag)] = Flam_n
+        F[ilp(kdiag)] = Flam_p
 
         # ---- Dirichlet rows: psi + Lambda_n + Lambda_p at every
         # DirichletBC (ohmic contact) node, equilibrium => V = 0 -------
@@ -1713,6 +1693,23 @@ class Device2D:
         # uses, and for the same reason).
         S_n_s = self.models.S_n * self.LD / D0_REF
         S_p_s = self.models.S_p * self.LD / D0_REF
+        # M46-S3: a Robin-mode SchottkyBC (A_star given) reuses this
+        # SAME machinery per node -- v_R = A* T^2/(q Nc_or_Nv) in place
+        # of the global S_n/S_p, applied only to the node's OWN
+        # majority carrier (the minority carrier stays Dirichlet at
+        # its mass-action value, S_local=0 there). Refused in
+        # combination with a nonzero global S_n/S_p (both would
+        # compete for the same row -- matches Device1D's own M46-S2
+        # refusal, for the same reason).
+        _has_schottky_robin = any(
+            isinstance(bc, SchottkyBC) and bc.A_star is not None
+            for bc in self.bcs.values())
+        if _has_schottky_robin and (S_n_s != 0.0 or S_p_s != 0.0):
+            raise NotImplementedError(
+                "Models(S_n!=0 or S_p!=0) combined with a Robin-mode "
+                "SchottkyBC (A_star given) is refused: both mechanisms "
+                "would compete for the same boundary row (M46-S3 "
+                "scope; unvalidated composition).")
         strip_rows_list = []
         extra_rows, extra_cols, extra_vals = [], [], []
         F3 = F.reshape(N, 3)
@@ -1723,22 +1720,44 @@ class Device2D:
                 psi0, n0, p0 = self._bc_contact_values(bc, V)
                 F3[kk, 0] = psi.ravel()[kk] - psi0
                 strip_rows_list.append(3 * kk)
-                if S_n_s == 0.0:
-                    F3[kk, 1] = n.ravel()[kk] - n0
-                    strip_rows_list.append(3 * kk + 1)
-                else:
-                    F3[kk, 1] += S_n_s * (n.ravel()[kk] - n0)
-                    extra_rows.append(3 * kk + 1)
-                    extra_cols.append(3 * kk + 1)
-                    extra_vals.append(np.full(kk.shape, S_n_s))
-                if S_p_s == 0.0:
-                    F3[kk, 2] = p.ravel()[kk] - p0
-                    strip_rows_list.append(3 * kk + 2)
-                else:
-                    F3[kk, 2] += S_p_s * (p.ravel()[kk] - p0)
-                    extra_rows.append(3 * kk + 2)
-                    extra_cols.append(3 * kk + 2)
-                    extra_vals.append(np.full(kk.shape, S_p_s))
+
+                Sn_local = np.full(kk.shape, S_n_s)
+                Sp_local = np.full(kk.shape, S_p_s)
+                if isinstance(bc, SchottkyBC) and bc.A_star is not None:
+                    Cj = self.C[bc.j, bc.i]
+                    is_n = Cj >= 0.0
+                    Nc_or_Nv_phys = np.where(
+                        is_n, self.nc_s[bc.j, bc.i], self.nv_s[bc.j, bc.i]) * self.Ns
+                    v_R_s = (bc.A_star * self.T * self.T
+                            / (Q * Nc_or_Nv_phys)) * self.LD / D0_REF
+                    Sn_local = np.where(is_n, v_R_s, 0.0)
+                    Sp_local = np.where(is_n, 0.0, v_R_s)
+
+                n0 = np.broadcast_to(n0, kk.shape)
+                p0 = np.broadcast_to(p0, kk.shape)
+                n_dirichlet = Sn_local == 0.0
+                if np.any(n_dirichlet):
+                    kd = kk[n_dirichlet]
+                    F3[kd, 1] = n.ravel()[kd] - n0[n_dirichlet]
+                    strip_rows_list.append(3 * kd + 1)
+                if np.any(~n_dirichlet):
+                    kr = kk[~n_dirichlet]
+                    F3[kr, 1] += Sn_local[~n_dirichlet] * (n.ravel()[kr] - n0[~n_dirichlet])
+                    extra_rows.append(3 * kr + 1)
+                    extra_cols.append(3 * kr + 1)
+                    extra_vals.append(Sn_local[~n_dirichlet])
+
+                p_dirichlet = Sp_local == 0.0
+                if np.any(p_dirichlet):
+                    kd = kk[p_dirichlet]
+                    F3[kd, 2] = p.ravel()[kd] - p0[p_dirichlet]
+                    strip_rows_list.append(3 * kd + 2)
+                if np.any(~p_dirichlet):
+                    kr = kk[~p_dirichlet]
+                    F3[kr, 2] += Sp_local[~p_dirichlet] * (p.ravel()[kr] - p0[~p_dirichlet])
+                    extra_rows.append(3 * kr + 2)
+                    extra_cols.append(3 * kr + 2)
+                    extra_vals.append(Sp_local[~p_dirichlet])
         if strip_rows_list:
             strip_rows = np.unique(np.concatenate(strip_rows_list))
             keep = ~np.isin(rows, strip_rows)

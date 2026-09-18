@@ -13,15 +13,17 @@ HONEST SCOPE STATEMENT:
   * `pytcad.process2d`'s own convention (see that module's docstring)
     is a per-column "string model": a mask-driven etch produces a
     height profile that is PIECEWISE CONSTANT across each masked
-    region (no conformal sidewall slope, no corner rounding). This
-    function reads a caller-supplied `ProcessGeometry2D` and samples
-    the MEDIAN surface height within each of the three x-regions
-    (source / gate / drain) -- for a genuine single-mask-etched fin
-    this recovers the exact (piecewise-constant) shape process2d
-    produced; it will silently flatten a more complex profile (e.g. a
-    LOCOS bird's-beak taper) to its regional median, which is honestly
-    disclosed here rather than attempted as a general polyline
-    extrusion (out of scope for this pass).
+    region (no conformal sidewall slope, no corner rounding). As of
+    M35-S6 (2026-09-18), `_staircase_face` builds the REAL per-column
+    staircase surface within each of the three x-regions (source/gate/
+    drain) directly from `geom.surface_um`/`geom.x` -- a more complex
+    in-region profile (e.g. a second etch step within the gate region)
+    is now reproduced exactly, not flattened to a regional median. This
+    is still NOT a general polyline/conformal-slope extrusion (no
+    sloped sidewalls, no corner rounding -- process2d's string model
+    has neither to extrude in the first place), and it does not extend
+    to a genuinely 3D (z-varying) surface -- that needs M35-S5's 3D
+    level set meshed directly, which this function does not do.
   * Doping is UNIFORM per region (source/gate/drain), each a fixed
     concentration supplied by the caller -- this function does NOT
     extrude a 2D process2d IMPLANT array (a smoothly-varying 2D doping
@@ -54,8 +56,50 @@ HONEST SCOPE STATEMENT:
     the STRUCTURED path) or continuation/damping improvements to the
     tet-mesh Newton loop itself -- both are disclosed future work, not
     silently glossed over.
+  * M35-S6 (2026-09-18) added `sample_doping_3d_from_process2d`, which
+    replaces the uniform-per-region doping constant above with a REAL
+    2D `process2d.implant_2d` field, bilinearly interpolated at each
+    node's (x,y) and extruded (z-independent) -- a genuine improvement
+    over the per-region constant, but it is still an EXTRUSION of a 2D
+    field, not a simulated 3D implant, and it is opt-in (the original
+    `evaluate_doping_at_nodes3d` per-region-constant path is untouched
+    and still what `build_finfet_mesh3d_from_process2d` itself uses).
+    The MEDIAN-height geometry flattening described above was NOT
+    fixed in the same pass -- a real (non-flattened) 3D geometry needs
+    either a genuine polyline/CAD surface built from `geom.surface_um`
+    or M35-S5's 3D level set meshed directly, both deferred as a
+    separate, larger piece of work (cost-driven cut, recorded in
+    M35-3D-PROCESS-PLAN.md section 16).
 """
 import numpy as np
+
+
+def sample_doping_3d_from_process2d(nodes, mesh_x, mesh_y, C):
+    """M35-S6 (doping half only -- see module docstring's honesty
+    clause): per-node net doping [cm^-3] for a 3D tet mesh, sampled
+    from a REAL 2D `process2d.implant_2d` field instead of one uniform
+    constant per region.
+
+    nodes        : (N,3) mesh node coordinates [cm]; only (x,y) are
+                   used.
+    mesh_x, mesh_y, C : exactly `process2d.implant_2d`'s own inputs/
+                   output convention (C[j,i] at (mesh_y[j], mesh_x[i])).
+
+    This EXTRUDES the real 2D field along z (bilinear interpolation at
+    each node's own (x,y), ignoring its z) -- it does not simulate a
+    genuinely z-varying 3D implant, since no 3D implant physics is
+    built here or claimed. Nodes outside the implant grid's (x,y) span
+    are clamped to the nearest edge value rather than raising, since a
+    tet mesh's node coordinates need not land exactly inside that span.
+    """
+    from scipy.interpolate import RegularGridInterpolator
+    nodes = np.asarray(nodes, dtype=float)
+    mesh_x = np.asarray(mesh_x, dtype=float)
+    mesh_y = np.asarray(mesh_y, dtype=float)
+    interp = RegularGridInterpolator((mesh_y, mesh_x), np.asarray(C, dtype=float))
+    x_clamped = np.clip(nodes[:, 0], mesh_x.min(), mesh_x.max())
+    y_clamped = np.clip(nodes[:, 1], mesh_y.min(), mesh_y.max())
+    return interp(np.column_stack([y_clamped, x_clamped]))
 
 
 def _require_gmsh():
@@ -66,6 +110,47 @@ def _require_gmsh():
         raise ImportError(
             "this feature requires the optional 'gmsh' package "
             f"(pip install gmsh): {exc}") from exc
+
+
+def _staircase_face(occ, x_vals, top_vals, x_lo, x_hi, y_bottom):
+    """A closed 2D OCC face bounded below by y=y_bottom and above by the
+    REAL piecewise-constant staircase through (x_vals, top_vals) --
+    process2d's own string-model convention (each column has its own
+    constant height; adjacent columns can differ arbitrarily) -- rather
+    than one flat top at the region's median height. Consecutive equal-
+    height samples collapse into one run (avoids zero-length/degenerate
+    edges); the first/last sample's x is snapped to the region's exact
+    (x_lo, x_hi) boundary so adjacent regions still fragment cleanly.
+
+    M35-S6 (2026-09-18): replaces the earlier `occ.addRectangle`-per-
+    region flat-top approximation this module used through S5's first
+    pass -- see the module's own honesty-clause docstring for the
+    record of what this fixes."""
+    xs = np.asarray(x_vals, dtype=float).copy()
+    ys = np.asarray(top_vals, dtype=float)
+    xs[0] = x_lo
+    xs[-1] = x_hi
+
+    top_pts = [(xs[0], ys[0])]
+    cur_y = ys[0]
+    for i in range(1, xs.size):
+        if ys[i] != cur_y:
+            top_pts.append((xs[i], cur_y))     # end of the previous flat run
+            top_pts.append((xs[i], ys[i]))     # start of the new one
+            cur_y = ys[i]
+    top_pts.append((xs[-1], cur_y))
+
+    p_bl = occ.addPoint(x_lo, y_bottom, 0.0)
+    p_br = occ.addPoint(x_hi, y_bottom, 0.0)
+    top_tags = [occ.addPoint(px, py, 0.0) for px, py in top_pts]
+
+    lines = [occ.addLine(p_bl, p_br), occ.addLine(p_br, top_tags[-1])]
+    for k in range(len(top_tags) - 1, 0, -1):
+        lines.append(occ.addLine(top_tags[k], top_tags[k - 1]))
+    lines.append(occ.addLine(top_tags[0], p_bl))
+
+    loop = occ.addCurveLoop(lines)
+    return occ.addPlaneSurface([loop])
 
 
 def build_finfet_mesh3d_from_process2d(geom, Wfin, Lsd, Lg, body_depth_um=0.2,
@@ -89,6 +174,9 @@ def build_finfet_mesh3d_from_process2d(geom, Wfin, Lsd, Lg, body_depth_um=0.2,
     "body_contact","gate"}). Raises ImportError if gmsh is not
     installed, ValueError if `geom.x` doesn't actually span the
     requested [0, 2*Lsd+Lg] source/gate/drain split.
+
+    Geometry is now the REAL per-column staircase surface (see
+    `_staircase_face`), not a 3-region median-height flattening.
     """
     from .gmsh_mesh3d import GmshMesh3D, _extract_current_model3d
     from .process2d import _UM_TO_CM
@@ -108,25 +196,19 @@ def build_finfet_mesh3d_from_process2d(geom, Wfin, Lsd, Lg, body_depth_um=0.2,
             "geom.x does not have sample points in all three of the "
             "source/gate/drain regions -- use a finer geom.x grid")
 
-    h_src_um = float(np.median(geom.surface_um[src_mask]))
-    h_gate_um = float(np.median(geom.surface_um[gate_mask]))
-    h_drn_um = float(np.median(geom.surface_um[drn_mask]))
-    h_max_um = max(h_src_um, h_gate_um, h_drn_um)
-    h_min_um = min(h_src_um, h_gate_um, h_drn_um)
-
+    h_max_um = float(np.max(geom.surface_um))
+    h_min_um = float(np.min(geom.surface_um))
     y_bottom = (h_max_um - h_min_um) * _UM_TO_CM + body_depth_um * _UM_TO_CM
-    top_src = (h_max_um - h_src_um) * _UM_TO_CM
-    top_gate = (h_max_um - h_gate_um) * _UM_TO_CM
-    top_drn = (h_max_um - h_drn_um) * _UM_TO_CM
+    top_all = (h_max_um - geom.surface_um) * _UM_TO_CM   # per-column top y, cm
 
     gmsh = _require_gmsh()
     gmsh.initialize()
     try:
         gmsh.model.add("finfet3d_from_process2d")
         occ = gmsh.model.occ
-        src_rect = occ.addRectangle(0.0, top_src, 0.0, Lsd, y_bottom - top_src)
-        gate_rect = occ.addRectangle(Lsd, top_gate, 0.0, Lg, y_bottom - top_gate)
-        drn_rect = occ.addRectangle(Lsd + Lg, top_drn, 0.0, Lsd, y_bottom - top_drn)
+        src_rect = _staircase_face(occ, x[src_mask], top_all[src_mask], 0.0, Lsd, y_bottom)
+        gate_rect = _staircase_face(occ, x[gate_mask], top_all[gate_mask], Lsd, Lsd + Lg, y_bottom)
+        drn_rect = _staircase_face(occ, x[drn_mask], top_all[drn_mask], Lsd + Lg, L, y_bottom)
         occ.fragment([(2, src_rect)], [(2, gate_rect), (2, drn_rect)])
         occ.synchronize()
 
@@ -183,10 +265,18 @@ def build_finfet_mesh3d_from_process2d(geom, Wfin, Lsd, Lg, body_depth_um=0.2,
             elif abs(cy - y_bottom) < 1e-9:
                 body_faces.append(tag)
             elif "gate" in regions and regions == {"gate"} and Lsd < cx < Lsd + Lg:
-                if abs(cy - top_gate) < 1e-9:
-                    gate_top.append(tag)
-                elif abs(cz - 0.0) < 1e-9 or abs(cz - Wfin) < 1e-9:
+                # end-cap faces (the whole z=0 / z=Wfin cross-section) are
+                # unambiguous by z alone; every OTHER gate-only lateral
+                # face is part of the top/riser wrap -- with a real
+                # (possibly multi-level) staircase surface (M35-S6),
+                # there is no single `top_gate` y-value to check against
+                # any more, so ALL non-end-cap, non-body gate faces are
+                # collected together (flat top runs AND internal risers
+                # between height levels both get the same gate coupling).
+                if abs(cz - 0.0) < 1e-9 or abs(cz - Wfin) < 1e-9:
                     gate_side.append(tag)
+                else:
+                    gate_top.append(tag)
 
         for name, tags in (("source_contact", source_contact),
                           ("drain_contact", drain_contact),

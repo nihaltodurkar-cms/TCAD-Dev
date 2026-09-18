@@ -1,6 +1,7 @@
 """Solver Telemetry panel: a live Newton-convergence readout for the
-solve currently driven by AppController's real JobRunner (self._runner,
-gui/services/job_runner.py), NOT a second independent solver connection.
+solve currently driven by AppController's real JobRunner
+(AppController.deviceRunner(), gui/services/job_runner.py), NOT a
+second independent solver connection.
 
 Architecture note (why this is a signal listener, not a same-process
 registry): every solve runs in a genuinely separate OS process via
@@ -42,7 +43,7 @@ class SolverTelemetryController(QObject):
         self._state = "idle"        # idle | running | converged | failed | canceled
         self._demo = False
 
-        runner = getattr(app, "_runner", None)
+        runner = app.deviceRunner()
         if runner is not None:
             runner.started.connect(self._on_started)
             runner.stageChanged.connect(self._on_stage)

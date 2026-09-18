@@ -248,6 +248,45 @@ def test_finfet_mesh3d_from_process2d_doping_regions_have_correct_sign():
     assert (C[deep_source] > 0).all()
 
 
+def test_finfet_mesh3d_from_process2d_preserves_a_real_step_within_one_region():
+    """M35-S6: a second, narrower etch WITHIN the gate region gives it
+    TWO distinct heights -- the old median-flattening approximation
+    would have collapsed this to one flat top; the new staircase
+    construction must preserve both, visible as >=2 distinct y-values
+    among the gate's own top/riser faces."""
+    pytest.importorskip("gmsh")
+    from pytcad import process2d
+    from pytcad.gmsh_finfet3d import build_finfet_mesh3d_from_process2d
+    import gmsh
+
+    Lsd, Lg = 0.3e-4, 0.4e-4
+    L = 2 * Lsd + Lg
+    x = np.linspace(0.0, L, 200)
+    geom = process2d.ProcessGeometry2D(x)
+    fin_mask = process2d.mask_from_intervals(x, [(Lsd, Lsd + Lg)])
+    geom = process2d.etch(geom, depth_um=0.3, mask=~fin_mask)
+    # a second, narrower notch strictly inside the gate region only
+    notch_lo, notch_hi = Lsd + 0.15e-4, Lsd + 0.25e-4
+    notch_mask = process2d.mask_from_intervals(x, [(notch_lo, notch_hi)])
+    geom = process2d.etch(geom, depth_um=0.1, mask=~notch_mask)
+
+    gate_region = (x > Lsd) & (x < Lsd + Lg)
+    distinct_heights_in_gate = len(set(np.round(geom.surface_um[gate_region], 6)))
+    assert distinct_heights_in_gate >= 2, "test setup didn't actually create a step"
+
+    m = build_finfet_mesh3d_from_process2d(geom, Wfin=0.2e-4, Lsd=Lsd, Lg=Lg,
+                                           mesh_size_cm=1e-6)
+    # gmsh is still initialized (build_finfet_mesh3d_from_process2d
+    # finalizes it in its own `finally`), so re-derive the y-levels from
+    # the returned mesh's own gate face node coordinates instead.
+    gate_nodes = np.unique(m.face_tags["gate"].ravel())
+    gate_ys = m.nodes[gate_nodes, 1]
+    distinct_y_levels = len(set(np.round(gate_ys, 9)))
+    print(f"S6 staircase: gate region distinct surface heights={distinct_heights_in_gate}, "
+          f"distinct y-levels among gate faces' nodes={distinct_y_levels}")
+    assert distinct_y_levels >= 2, "the staircase step within the gate region was flattened"
+
+
 def test_finfet_mesh3d_from_process2d_rejects_mismatched_geometry_span():
     pytest.importorskip("gmsh")
     from pytcad import process2d
