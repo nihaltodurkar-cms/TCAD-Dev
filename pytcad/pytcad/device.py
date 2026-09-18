@@ -112,7 +112,7 @@ from .dirichlet import eliminate_csr
 
 from . import linsolve
 
-from .constants import KB_EV, Q, EPS0, thermal_voltage
+from .constants import KB, KB_EV, Q, EPS0, thermal_voltage
 from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
 from .fermi import (
     FERMI_ETA_MAX, FERMI_ETA_MIN, f_half, f_half_inv, f_mhalf,
@@ -227,6 +227,11 @@ from .materials import (
 from .kernels import (  # noqa: E402  (re-export, must follow the imports above)
     D0_REF, bernoulli, dbernoulli, fd_density, fd_ddensity_deta,
 )
+
+# M44: coupled electron energy balance reuses M29's already-gated local
+# closure inverse (effective_field_from_temperature) and TAU_W_N -- see
+# M44-HYDRODYNAMIC-PLAN.md Slice 0, Finding 3.
+from . import hydrodynamic as _hydro
 
 
 def fd_node_factors(nc_s, nv_s, n, p):
@@ -474,6 +479,32 @@ class Models:
     # feature -- see device3d.py's own guard, not this shared one).
     S_n: float = 0.0
     S_p: float = 0.0
+    # M44: coupled electron energy balance (Tn), appended as a 4th DOF
+    # block (indices 3*N..4*N-1) rather than reindexing the existing
+    # 3*N psi/n/p system -- the base block's math and indices are
+    # UNCHANGED by this flag (default False => bit-identical, verified
+    # by reconstruct-and-compare, see M44-HYDRODYNAMIC-PLAN.md).
+    # Electron-only (hole energy balance, Tp, is out of scope -- see
+    # the plan's "Scope decision"). The new Tn row's own coefficients
+    # that come from psi/n (the local field and current used in the
+    # Joule-heating source and the Tn-dependent thermal conductivity)
+    # are LAGGED one outer Newton iterate, exactly like
+    # Models.field_mobility's own already-accepted mu_n/mu_p lag --
+    # this keeps the Tn block's Jacobian an honest, FD-verified
+    # TRIDIAGONAL-IN-THETA block with no fabricated cross-derivatives
+    # into the psi/n/p columns (those columns are genuinely zero: the
+    # lagged coefficients are plain numpy snapshots, not functions of
+    # the current Newton iterate, so a full FD-Jacobian sweep over
+    # psi/n/p/theta correctly finds no dependence there).
+    energy_balance: bool = False
+    # When energy_balance is on, its OWN mobility path (Tn -> effective
+    # field via hydrodynamic.effective_field_from_temperature -> the
+    # SAME materials.mobility_field Canali model) is used instead of
+    # field_mobility's local-field mobility -- these are two different
+    # sources of the same target quantity, mixing them isn't
+    # physically meaningful. Set both flags with intent, not by
+    # accident: energy_balance always wins, field_mobility is ignored,
+    # not silently composed.
 
     def __post_init__(self):
         # driving_force is declared and documented as controlling real
@@ -503,6 +534,17 @@ class Models:
                 f"Models.driving_force={self.driving_force!r} is not "
                 "implemented -- only the default 'field' driving force "
                 "is wired into the mobility model.")
+        if self.energy_balance and (self.impact or self.btbt
+                                    or self.btbt_nonlocal):
+            raise NotImplementedError(
+                "Models(energy_balance=True) combined with impact/btbt/"
+                "btbt_nonlocal is not implemented in M44 Slice 1: those "
+                "flags drive solve_bias's stiff-generation strength-"
+                "ladder + backtracking line search, which does not yet "
+                "account for the new Tn unknown (the line search's own "
+                "merit function is evaluated on a 3*N-only residual "
+                "call). Refusing rather than silently ignoring Tn's "
+                "update inside that path.")
 
 
 @dataclass
@@ -894,6 +936,31 @@ class Device1D:
 
         # interface (harmonic-mean) diffusivities, scaled
         self._set_edge_diffusivity(self.mu_n0, self.mu_p0)
+
+        # M44: coupled electron energy balance scaling constants.
+        # theta = Tn/T (dimensionless, ==1 at lattice temperature).
+        # Steady-state energy balance (Grasser/Tang/Kosina/Selberherr,
+        # Proc. IEEE 91(2) 2003, Eqs. 58-59, div/dt terms dropped for a
+        # steady bias solve):
+        #   d(W)/dx = E.Jn - n*(3/2)*kB*(Tn-TL)/tau_w
+        #   W       = -(5/2)*(kB*Tn/q)*Jn - kappa_n(Tn)*dTn/dx
+        #   kappa_n = (5/2)*(kB/q)^2 * (q*mu_n*n) * Tn      [Wiedemann-
+        #             Franz-type closure; the "5/2" nondegenerate-gas
+        #             coefficient is the SAME one multiplying the
+        #             convective term above -- cross-checked against
+        #             the same source's Eq. (65) discussion of why
+        #             the three-moment model uses one shared 5/2
+        #             factor for both terms]
+        # Nondimensionalized by the existing J0/VT/LD/Ns scales (energy
+        # flux scale W0 = J0*VT, source scale Q0 = W0/LD):
+        #   ALPHA_RELAX * n_s * (theta-1)  <->  n*(3/2)kB(Tn-TL)/tau_w / Q0
+        #   KAPPA0 * mu_n0*n_s*theta       <->  kappa_n(Tn) * T / (LD*Q0)
+        # (see M44-HYDRODYNAMIC-PLAN.md Slice 1 for the full derivation)
+        self._ALPHA_RELAX = (1.5 * KB * self.T * self.Ns * self.LD
+                             / (_hydro.TAU_W_N * self.J0 * self.VT))
+        self._KAPPA0 = (2.5 * (KB * KB / Q) * self.Ns * self.T * self.T
+                        / (self.LD * self.J0 * self.VT))
+        self.Tn = None       # physical carrier temperature [K], None off
 
         self.psi = None
         self.n = None
@@ -1294,6 +1361,13 @@ class Device1D:
         else:
             self.n = nie * np.exp(np.clip(psi, -700, 700))
             self.p = nie * np.exp(np.clip(-psi, -700, 700))
+        if self.models.energy_balance:
+            # M44: zero current at equilibrium => zero Joule heating =>
+            # theta==1 is the EXACT steady-state solution of the energy
+            # balance equation (both the source and flux terms vanish
+            # identically), not an approximation -- no new equation is
+            # solved here.
+            self.Tn = np.full(self.N, self.T)
         return self
 
     # ------------------------------------------------------------------
@@ -1497,6 +1571,8 @@ class Device1D:
         self.psi = psi
         self.n = nie * np.exp(np.clip(psi, -700, 700)) * np.exp(-Lam_n / self.VT)
         self.p = nie * np.exp(np.clip(-psi, -700, 700)) * np.exp(-Lam_p / self.VT)
+        if self.models.energy_balance:
+            self.Tn = np.full(self.N, self.T)   # zero current => theta==1 exactly
         return self
 
     # ------------------------------------------------------------------
@@ -1670,7 +1746,8 @@ class Device1D:
         return _nl_evaluate(self._btbt_nl_paths, psi, self.VT, Eg_J,
                             mr, mc, mv)
 
-    def _residual_jacobian(self, psi, n, p, bc):
+    def _residual_jacobian(self, psi, n, p, bc, theta=None, n_lag=None,
+                           Jn_lag=None, Qheat_lag=None):
         N, h, dV, C = self.N, self.h, self.dV, self.C
         dn_e, dp_e = self.dn_edge, self.dp_edge
 
@@ -2347,9 +2424,63 @@ class Device1D:
                 add(3 * node + 2, 3 * node + 2, dp_node + bsign_p * S_p_s)
                 add(3 * node + 2, 3 * other + 2, dp_other)
 
+        # M44: coupled electron energy balance, appended as a 4th block
+        # (rows/cols 3*N..4*N-1) -- see Models.energy_balance's own
+        # docstring and M44-HYDRODYNAMIC-PLAN.md Slice 1. The psi/n/p
+        # block above is COMPLETELY UNCHANGED by this: F/rows/cols/vals
+        # for it were already finalized in the lines above, so
+        # `theta is None` (the default) returns EXACTLY the pre-M44
+        # F/J, bit-identical.
+        if theta is not None:
+            KAPPA0, ALPHA = self._KAPPA0, self._ALPHA_RELAX
+            kappa_s = KAPPA0 * self.mu_n0 * n_lag * theta   # per node
+            theta_edge = 0.5 * (theta[:-1] + theta[1:])
+            kappa_edge = 0.5 * (kappa_s[:-1] + kappa_s[1:])
+            grad_theta = (theta[1:] - theta[:-1]) / h
+            w_edge = -2.5 * theta_edge * Jn_lag - kappa_edge * grad_theta
+            # d(w_edge)/d(theta[node]) via the two additive pieces:
+            # convective (theta_edge's own linear dependence) and
+            # conductive (kappa_edge's linear dependence on theta,
+            # through kappa_s, AND grad_theta's explicit dependence).
+            dkappa_L = 0.5 * KAPPA0 * self.mu_n0[:-1] * n_lag[:-1]  # d kappa_edge/d theta[e]
+            dkappa_R = 0.5 * KAPPA0 * self.mu_n0[1:] * n_lag[1:]    # d kappa_edge/d theta[e+1]
+            dw_dthetaL = (-2.5 * 0.5 * Jn_lag
+                         - dkappa_L * grad_theta - kappa_edge * (-1.0 / h))
+            dw_dthetaR = (-2.5 * 0.5 * Jn_lag
+                         - dkappa_R * grad_theta - kappa_edge * (1.0 / h))
+
+            Q_src = Qheat_lag - ALPHA * n_lag * (theta - 1.0)
+            dQ_dtheta = -ALPHA * n_lag
+
+            F_T = np.empty(N)
+            base = 3 * N
+            F_T[0] = theta[0] - 1.0
+            add(base, base, 1.0)
+            dirichlet_rows.append(base)
+            F_T[-1] = theta[-1] - 1.0
+            add(base + N - 1, base + N - 1, 1.0)
+            dirichlet_rows.append(base + N - 1)
+            # Interior nodes i=1..N-2, vectorized (Slice 2 measurement
+            # found the earlier per-node Python loop dominated wall
+            # time and worsened with N -- see M44-HYDRODYNAMIC-PLAN.md
+            # Slice 2; no serial dependency exists here, every term is
+            # already a precomputed edge-indexed array). L=i-1, Rt=i
+            # are the edge indices left/right of node i.
+            idx = np.arange(1, N - 1)
+            L, Rt = idx - 1, idx
+            F_T[1:-1] = (w_edge[Rt] - w_edge[L]) - dV[1:-1] * Q_src[1:-1]
+            add(base + idx, base + idx - 1, -dw_dthetaL[L])
+            add(base + idx, base + idx,
+                dw_dthetaL[Rt] - dw_dthetaR[L] - dV[idx] * dQ_dtheta[idx])
+            add(base + idx, base + idx + 1, dw_dthetaR[Rt])
+            F = np.concatenate([F, F_T])
+            shape = 4 * N
+        else:
+            shape = 3 * N
+
         J = csr_matrix((np.concatenate(vals),
                         (np.concatenate(rows), np.concatenate(cols))),
-                       shape=(3 * N, 3 * N))
+                       shape=(shape, shape))
         self._dirichlet_rows = np.array(sorted(dirichlet_rows), dtype=int)
         return F, J, Jn, Jp
 
@@ -2440,14 +2571,30 @@ class Device1D:
         psi[0], n[0], p[0] = bc[0]
         psi[-1], n[-1], p[-1] = bc[1]
 
+        # M44: theta = Tn/T, warm-started from the previous solve (or
+        # TL on the very first bias point -- zero current there means
+        # zero Joule heating, so theta==1 is the EXACT solution, not an
+        # approximation). Jn_prev starts at 0 for the same reason: the
+        # Tn row's Joule-heating source is genuinely zero until the
+        # first iterate produces a nonzero current.
+        energy_balance = self.models.energy_balance
+        if energy_balance:
+            theta = (self.Tn / self.T).copy() if self.Tn is not None \
+                else np.ones(self.N)
+            theta[0], theta[-1] = 1.0, 1.0
+            Jn_prev = np.zeros(self.N - 1)
+
         # One Newton solve at the current frozen gs.  Returns
         # (converged, err).  This is the ONLY Newton implementation --
         # the staged continuation and the outer fixed-point loop below
         # both drive it, rather than carrying their own copies.
         def _newton():
             nonlocal psi, n, p
+            if energy_balance:
+                nonlocal theta, Jn_prev
             err = float("inf")
             for it in range(opts.max_iter):
+                E_node = None
                 if self.models.field_mobility:
                     # Edge-valued |E| (length N-1) averaged onto nodes
                     # symmetrically -- E_node[i] = 0.5*(|E_{i-1/2}| +
@@ -2463,11 +2610,55 @@ class Device1D:
                     E_node[0] = E_abs[0]
                     E_node[-1] = E_abs[-1]
                     E_node[1:-1] = 0.5 * (E_abs[:-1] + E_abs[1:])
+                if energy_balance:
+                    # M44 Finding 3: reuse M29's own already-gated
+                    # inverse closure to get the field consistent with
+                    # the CURRENT (lagged) Tn iterate, then feed the
+                    # SAME already-gated Canali mobility model that
+                    # field_mobility uses -- this REPLACES field_mobility
+                    # (not composed with it: Models.__post_init__-level
+                    # comment documents this precedence).
+                    Tn_lag = theta * self.T
+                    E_eff = _hydro.effective_field_from_temperature(
+                        Tn_lag, self.mu_n0, _hydro.TAU_W_N, self.T)
+                    mu_n = mobility_field(self.mu_n0, E_eff, self.mat, "n")
+                    mu_p = mobility_field(self.mu_p0, E_eff, self.mat, "p")
+                    self._set_edge_diffusivity(mu_n, mu_p)
+                elif self.models.field_mobility:
                     mu_n = mobility_field(self.mu_n0, E_node, self.mat, "n")
                     mu_p = mobility_field(self.mu_p0, E_node, self.mat, "p")
                     self._set_edge_diffusivity(mu_n, mu_p)
 
-                F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
+                if energy_balance:
+                    n_lag = n.copy()
+                    # M44 Joule-heating source: Jn.E_n, where E_n =
+                    # -grad(phi_n) is the ELECTRON QUASI-FERMI-POTENTIAL
+                    # gradient, not the raw electrostatic field -- the
+                    # SAME Wachutka (1990) fix M19 self-heating already
+                    # needed for its own H=Jn*E_n+Jp*E_p term
+                    # (thermal.joule_heating_density's docstring: plain
+                    # E=-grad(psi) gives thermodynamically-impossible
+                    # LOCAL NEGATIVE heat in a diode's diffusion-
+                    # dominated depletion region -- confirmed here too,
+                    # by direct measurement, before this fix: Tn dropped
+                    # BELOW TL near the junction, which is unphysical).
+                    # Edge product first, THEN box-averaged to nodes --
+                    # matching thermal.py's own convention (averaging
+                    # E_n and Jn separately before multiplying is NOT
+                    # the same thing and was not what was measured).
+                    phi_n_lag = psi - np.log(np.maximum(n_lag, 1e-300)
+                                             / self.nie_s)
+                    En_edge = -(phi_n_lag[1:] - phi_n_lag[:-1]) / self.h
+                    Hn_edge = Jn_prev * En_edge
+                    Qheat_lag = np.empty(self.N)
+                    Qheat_lag[0], Qheat_lag[-1] = Hn_edge[0], Hn_edge[-1]
+                    Qheat_lag[1:-1] = 0.5 * (Hn_edge[:-1] + Hn_edge[1:])
+                    F, J, Jn, Jp = self._residual_jacobian(
+                        psi, n, p, bc, theta=theta, n_lag=n_lag,
+                        Jn_lag=Jn_prev, Qheat_lag=Qheat_lag)
+                    Jn_prev = Jn.copy()
+                else:
+                    F, J, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
                 # Symmetric Dirichlet elimination. F itself is left
                 # ALONE -- the backtracking merit below and the
                 # convergence test both read it, and folding the
@@ -2496,7 +2687,12 @@ class Device1D:
                         Jd, rhs, method=resolved_linsolve,
                         rtol=opts.linsolve_rtol, block_size=opts.block_size,
                         precond=opts.precond)
-                dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
+                if energy_balance:
+                    N3 = 3 * self.N
+                    dpsi, dn, dp = du[0:N3:3], du[1:N3:3], du[2:N3:3]
+                    dtheta = du[N3:]
+                else:
+                    dpsi, dn, dp = du[0::3], du[1::3], du[2::3]
 
                 dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
                 n_old, p_old = n, p
@@ -2520,6 +2716,8 @@ class Device1D:
                     rel_p = np.abs(p_new / np.maximum(p_old, 1e-300)
                                    - 1.0).max()
                 err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                if energy_balance:
+                    err = max(err, float(np.abs(dtheta).max()))
 
                 # M15 backtracking: 2-norm merit reduction test
                 # (M16: also active for BTBT -- stiff_gen above), run only
@@ -2559,6 +2757,9 @@ class Device1D:
                 else:
                     psi = psi + dpsi
                     n, p = n_new, p_new
+                    if energy_balance:
+                        theta = np.clip(theta + dtheta, 0.05, 1000.0)
+                        theta[0], theta[-1] = 1.0, 1.0
                 if opts.verbose:
                     print(f"   it {it:2d}  |F|={np.abs(F).max():.3e}  "
                           f"|dpsi|={np.abs(dpsi).max():.3e}  "
@@ -2626,6 +2827,8 @@ class Device1D:
                           f"last update {err:.2e}")
 
         self.psi, self.n, self.p = psi, n, p
+        if energy_balance:
+            self.Tn = theta * self.T
         _, _, Jn, Jp = self._residual_jacobian(psi, n, p, bc)
         self.Jn = Jn * self.J0
         self.Jp = Jp * self.J0

@@ -62,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libegl1 libgl1 libglu1-mesa libxkbcommon-x11-0 libdbus-1-3 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
       - name: Install
         working-directory: pytcad

@@ -1,0 +1,21 @@
+{
+  "ignore": {
+    "customPatterns": [
+      "graphify-out/**",
+      ".git/**",
+      "__pycache__/**",
+      "*.pyc",
+      ".pytest_cache/**",
+      ".mypy_cache/**",
+      ".ruff_cache/**",
+      "build/**",
+      "dist/**",
+      "*.egg-info/**",
+      "*.vtk",
+      "*.png",
+      "*.jpg",
+      "*.jpeg",
+      "*.gif"
+    ]
+  }
+}
