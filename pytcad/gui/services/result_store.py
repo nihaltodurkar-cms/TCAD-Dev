@@ -127,12 +127,13 @@ class TransientResult:
 
 @dataclass(frozen=True)
 class ACResult:
-    """One executed AC/Y-parameter sweep (M18 Phase 4): a single
-    driven port's own diagonal admittance, decomposed into C(f)/G(f).
-    `port` is the driven contact/gate name; every other port was
-    AC-grounded. `unit_c`/`unit_g` are always "F/cm^2"/"S/cm^2" today
-    (solver_runner.py stamps them explicitly rather than hardcoding
-    them here, so a future 3D/unit change stays a one-line fix there)."""
+    """One executed AC/Y-parameter sweep (M18 Phase 4, lifted to 3D by
+    M45): a single driven port's own diagonal admittance, decomposed
+    into C(f)/G(f). `port` is the driven contact/gate name; every other
+    port was AC-grounded. `unit_c`/`unit_g` are "F/cm^2"/"S/cm^2" for
+    1D/2D, "F"/"S" for 3D (ac3d.py has no implicit unit-area/unit-depth
+    convention -- solver_runner.py stamps the unit strings explicitly
+    rather than hardcoding them here)."""
     port: str
     freqs: np.ndarray      # [Hz]
     C: np.ndarray          # [unit_c], same length as freqs

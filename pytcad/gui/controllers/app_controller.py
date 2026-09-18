@@ -671,10 +671,12 @@ class AppController(QObject):
 
     @Property(bool, notify=structureChanged)
     def canRunAc(self):
-        """AC analysis has no ac3d module -- hidden for a 3D spec, same
-        "must not even appear" convention canSelectBackend's own
-        DEVSIM-is-1D-only gate already uses (not merely disabled)."""
-        return self.spec is not None and self.spec.mesh.dimensionality != 3
+        """M45 landed ac3d.py (2026-09-18): AC analysis now works for
+        1D/2D/3D alike, so this no longer excludes a 3D spec (it used
+        to, back when no ac3d module existed) -- kept as a Property,
+        rather than removed, since ACPanel.qml still needs SOME gate on
+        "is there a spec to run AC against at all"."""
+        return self.spec is not None
 
     @Slot(str, float, float, int)
     def setACConfig(self, contact, f_start, f_stop, n_points):

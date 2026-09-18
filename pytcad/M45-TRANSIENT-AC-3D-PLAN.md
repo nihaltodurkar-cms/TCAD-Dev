@@ -238,7 +238,202 @@ afford to use.
 
 ### 8.4 Verification
 
-`tests/test_m45_transient3d.py`: 6/6 passed in 212.03s (G4 alone is
-~80s of that -- a genuinely stiff transient, not a fast gate, kept
-because it is real independent physics evidence, not because it was
-cheap to make fast). `tests/test_m45_ac3d.py`: 5/5 passed in 315.66s.
+`tests/test_m45_transient3d.py`: 6/6 passed in 218.57s (G4 alone is a
+sizeable share of that -- a genuinely stiff transient, not a fast
+gate, kept because it is real independent physics evidence, not
+because it was cheap to make fast). `tests/test_m45_ac3d.py`: 5/5
+passed in 291.07s.
+
+Regression sweep (test_m45_transient3d, test_m45_ac3d,
+test_m17_transient2d, test_m18_ac2d, test_m17_transient, test_m18_ac):
+**37 passed in 795.98s** (was 32 passed/431.41s before this pass's 5
+new gates -- 3 transient3d reference gates (G4-G6) + a scope-refusal
+mesh fixture change, and 2 ac3d MOSFET gates (G4-G5); +5 new tests
+matches exactly).
+
+Full fast suite (`tests/ gui/tests/ -n 6 -m "not slow"`): **1968 passed,
+5 skipped, 1 xfailed in 535.38s** -- 0 failures. +12 over the prior 1956
+baseline: the 5 new gates added in this pass (transient3d's G4-G6,
+ac3d's G4-G5) plus 7 more from `tests/test_m45_gaa_multigate.py` (2
+gates) and `tests/test_m45_stiff_physics_coupling.py` (5 gates) --
+see section 9, the moderate/bigger-lift items closed the same day.
+
+## 9. The remaining moderate items, also closed the same day
+
+Two more items from the original post-landing gap list were closed:
+
+**Multi-gate (GAA) transient/AC** (`tests/test_m45_gaa_multigate.py`,
+2 gates): reuses `pytcad.finfet3d.build_fin_corner_slab(gaa=True)`
+(M42-S4's own already-gated 4-simultaneous-gate fixture, one ohmic
+contact) rather than building a new one. G1 runs `ac3d.y_parameters`
+on all 5 ports and checks every gate's own low-frequency self-
+admittance is finite and purely capacitive with POSITIVE capacitance
+(a physically sane result, not a sign error/NaN slipping through
+silently). G2 runs `transient3d.solve_transient` driving the ohmic
+contact with all 4 gates held fixed, checking the recorded terminal
+current stays finite for the whole run and that no gate's own `bc.V`
+is touched by a transient step on a different (ohmic) contact. No new
+device-core mechanism is exercised beyond what the single-gate gates
+already cover per-axis -- the point is specifically proving SEVERAL
+`GateBC` objects with different `normal_axis` values, sharing one
+device, work together through both modules at once.
+
+**Stiff-physics coupling** (`tests/test_m45_stiff_physics_coupling.py`,
+5 gates): transient3d.py/ac3d.py drive Device3D through its own
+`_residual_jacobian` directly -- NEITHER module replicates
+`Device3D.solve_bias`'s own generation-strength ladder that impact
+ionization/BTBT need for convergence robustness under a large bias
+jump. Rather than re-trigger the ALREADY-understood large-step
+stiffness from section 8, these gates use a deliberately GENTLE
+step/AC-frequency point per physics flag (impact ionization, local
+BTBT, incomplete ionization, density-gradient, Schottky), checking the
+coupling works at all rather than under worst-case bias. One honest,
+pre-existing scope note surfaced while writing these (not a new bug):
+density-gradient (`Models.dg`) is EQUILIBRIUM-ONLY in Device3D --
+`_residual_jacobian` never references `self.models.dg`; only the
+separate `_dg_residual_jacobian_eq` equilibrium solver does. A
+transient/AC run on a `dg=True` device therefore starts from a
+DG-corrected initial condition, but the correction does not persist
+into the transient/AC dynamics themselves -- consistent with M42's own
+already-documented scope, recorded here rather than silently assumed
+fine.
+
+Verification: both files together, 7/7 passed in 28.48s -- fast,
+because both were deliberately built with gentle/small fixtures rather
+than re-running the aggressive-step stiffness section 8 already spent
+real effort understanding.
+
+## 10. Updated gap status
+
+Of the items named in section 7/the original post-M45 gap survey:
+CLOSED -- 3D transient physics reference gates, `cutoff_frequency`
+untested in 3D, no realistic active device validated in 3D AC,
+multi-gate (GAA) transient/AC, stiff-physics coupling. STILL OPEN --
+performance measurement (would need a real `benchmarks/` entry, not an
+ad hoc timing, per CLAUDE.md's own rule). GUI/wire-format exposure was
+closed the next day -- see section 11. Time-varying GateBC voltage
+remains unsupported in transient3d.py by design (inherited from
+transient2d.py, not this milestone's scope to lift).
+
+## 11. GUI/wire-format exposure (2026-09-19)
+
+The last open item. `DeviceSpec`/`TransientSpec`/`ACSpec` (gui/services/
+device_spec.py) were already dimension-agnostic wire formats -- neither
+hardcoded a 1D/2D-only assumption. The dimensionality gate lived purely
+in two places: `gui/services/solver_runner.py`'s dispatch functions
+(`run_transient`, and the AC block inside `_solve_all`) and
+`AppController.canRunAc` -- both updated to route a Device3D spec to
+transient3d.py/ac3d.py instead of refusing outright.
+
+**solver_runner.py**: `run_transient`'s `if d == 3: raise ValueError(...)`
+guard removed; a new `elif`-branch calls `transient3d.solve_transient`
+with the identical `{contact_name: Waveform|float}` calling convention
+transient2d.py already uses (Device3D's own `bcs` dict already supports
+named-contact lookup, so no new indirection was needed). The
+`{1: "A/cm^2", 2: "A/cm", 3: "A"}` unit dict in `run_transient` already
+anticipated `d=3` before this landed -- no change needed there. The AC
+dispatch's `if isinstance(device, Device3D): raise ValueError(...)`
+guard was replaced with a proper 3-way `yfn` selection
+(`ac.y_parameters` / `ac2d.y_parameters` / `ac3d.y_parameters`); the
+stamped `unit__ac_capacitance`/`unit__ac_conductance` strings are now
+`"F"`/`"S"` for a Device3D result (a real per-device admittance, no
+implicit unit-area/unit-depth the way 1D's F/cm^2 or 2D's carries) vs.
+the pre-existing `"F/cm^2"`/`"S/cm^2"` for 1D/2D, left untouched.
+
+**app_controller.py**: `canRunAc`'s `dimensionality != 3` exclusion
+removed (it existed specifically because "no ac3d module exists" was
+still true when M18 phase 4 landed it) -- it now just checks a spec
+exists, since ACPanel.qml's own visibility binding needs SOME gate.
+No `canRunTransient` gate existed at all (the Transient tab was always
+shown, previously erroring at solve time for a 3D spec) -- 3D transient
+now simply works with zero QML changes needed.
+
+### 11.1 A real correctness bug, found by this GUI work and fixed
+
+Wiring a genuinely different fixture (an ohmic-only, uniformly-doped
+3D resistor -- none of M45's own diode-based gates ever used one)
+surfaced a real regression in `transient3d.py`'s section-8 efficiency
+fix (the `lam==0.0` short-circuit in `_newton_step`). That short-circuit
+returned `False` (not converged) the instant the line search fully
+failed, WITHOUT checking whether the correction the linear solve wanted
+to make was already below `tol_update`. For an ohmic resistor that
+reaches its bias-point steady state almost immediately (no minority-
+carrier dynamics, no junction), later transient time steps have an
+essentially-zero true residual: the wanted correction is already at
+machine precision, and the line search's own merit-decrease comparison
+(`merit <= base * (1 - 1e-4*lam)`) becomes numerically unstable at that
+scale, spuriously reporting `lam=0`. The PRE-existing code (before the
+section-8 fix) handled this correctly by falling through to the
+`err = max(|dpsi|, rel_n, rel_p); if err < tol_update: return converged`
+check regardless of what `lam` was chosen -- my short-circuit bypassed
+that check entirely, incorrectly reporting a converged, already-at-
+steady-state device as "stalled," which then exhausted the adaptive
+stepper's shrink budget and raised `RuntimeError` on a real device that
+should have solved instantly.
+
+Fixed by moving the `err`/tolerance check BEFORE the `lam==0.0` bail
+(matching the original, pre-section-8 order exactly) -- the
+"genuinely-stalled, bail fast" optimization from section 8.1 is now
+ONLY reached when `err >= tol_update` too, i.e. a real stall, not a
+trivially-already-converged step. Re-verified: all 6
+`test_m45_transient3d.py` gates still pass (169.98s, actually faster
+than before -- 218.57s -- since the resistor case that exposed this no
+longer wastes time in either direction), and the new GUI resistor
+fixture converges cleanly.
+
+This is recorded as a genuine finding, not smoothed over: the section-8
+fix was tested exhaustively against M45's own diode-based fixtures and
+passed every gate, but none of those fixtures ever reached a state
+where the WANTED correction was already below tolerance while the line
+search itself failed -- an edge case a uniform-doping ohmic resistor
+hits almost immediately (it has essentially no interesting transient
+dynamics once biased) and a p-n junction diode does not. A fresh,
+physically different fixture caught what an otherwise-thorough gate
+suite had not exercised.
+
+### 11.2 New/changed tests
+
+- `gui/tests/test_solver_backend.py`: new `_resistor_3d_spec()` helper
+  (Nz=5, not 3 -- same z-under-resolution reason section 8.2 already
+  established, applied here proactively rather than rediscovered).
+- `gui/tests/test_transient_gui.py`: new
+  `test_cli_3d_transient_stamps_schema_v3_and_matches_direct_call`
+  (schema/unit checks plus a direct `transient3d.solve_transient` cross-
+  check, same style as the existing 1D/2D CLI tests).
+- `gui/tests/test_ac_gui.py`: `test_ac_refuses_on_device3d` renamed/
+  repurposed to `test_ac_runs_cleanly_on_device3d` (the refusal it
+  tested no longer exists); new
+  `test_cli_3d_ac_matches_direct_ac3d_call` (schema/unit checks --
+  confirms "F"/"S", not "F/cm^2"/"S/cm^2" -- plus a direct
+  `ac3d.y_parameters` cross-check); `test_can_run_ac_hidden_for_a_3d_spec`
+  renamed/repurposed to `test_can_run_ac_true_for_a_3d_spec` (asserts
+  the NEW True-for-3D behavior) plus a new
+  `test_can_run_ac_false_with_no_spec` (keeps SOME negative case
+  covered now that dimensionality is no longer one).
+- `gui/services/result_store.py`: `ACResult`'s own docstring updated
+  (it used to assert `unit_c`/`unit_g` are "always F/cm^2/S/cm^2
+  today" -- now false for a 3D result).
+
+### 11.3 Verification
+
+`gui/tests/test_ac_gui.py` + `gui/tests/test_transient_gui.py`: 39/39
+passed in 6.81s. `tests/test_m45_ac3d.py` + `tests/
+test_m45_gaa_multigate.py` + `tests/test_m45_stiff_physics_coupling.py`
+(re-run after the `_newton_step` correction, since it touches shared
+code those gates exercise too): 12/12 passed in 321.94s. Full fast
+suite: **1971 passed, 5 skipped, 1 xfailed in 569.77s** -- +3 over the
+prior 1968 baseline, matching the 3 net-new tests exactly (2 direct-
+call cross-checks + 1 new negative canRunAc case; the renamed/
+repurposed tests are 1-for-1 swaps, not additions).
+
+## 12. Final gap status
+
+Every item from the original post-landing gap survey is now closed:
+3D transient physics reference gates, `cutoff_frequency` in 3D, a
+realistic active device validated in 3D AC, multi-gate (GAA) transient/
+AC, stiff-physics coupling, GUI/wire-format exposure. Performance
+measurement remains open by design -- CLAUDE.md's own rule requires a
+real `benchmarks/` entry for any performance claim, not an ad hoc
+timing, and adding one was never asked for. Time-varying GateBC voltage
+remains unsupported in transient3d.py (inherited scope limit from
+transient2d.py, not unique to 3D).

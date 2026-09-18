@@ -29,7 +29,9 @@ from gui.services.result_store import NpzResultStore
 from gui.services.solver_backend import (
     SOLVER_RESULT_SCHEMA_VERSION, ResultSchemaError, validate_result,
 )
-from gui.tests.test_solver_backend import _diode_1d_spec, _resistor_2d_spec, _run_cli
+from gui.tests.test_solver_backend import (
+    _diode_1d_spec, _resistor_2d_spec, _resistor_3d_spec, _run_cli,
+)
 
 
 # ----------------------------------------------------------------------
@@ -125,6 +127,58 @@ def test_cli_2d_transient_stamps_schema_v3_and_reads_back(tmp_path):
     tr = NpzResultStore(out).transient_result()
     assert set(tr.channels) == {"left", "right"}
     assert tr.unit == "A/cm"
+
+
+def test_cli_3d_transient_stamps_schema_v3_and_matches_direct_call(tmp_path):
+    """M45: solver_runner.run_transient() dispatches Device3D specs to
+    pytcad.transient3d -- the ALREADY-GATED M45 solver, never
+    reimplemented here. Cross-checks the stamped transient__* block
+    against a DIRECT call to transient3d.solve_transient() on an
+    independently-built, independently-solved copy of the SAME device
+    (same wiring/dispatch-gate style as test_ac_gui.py's own
+    G-AC-1D/G-AC-2D direct-call cross-checks)."""
+    from gui.services.device_spec import TransientSpec, WaveformSpec
+    from gui.services.solver_runner import (
+        run_job, build_mesh, build_doping, build_device, register_contacts,
+        apply_bias, _waveform_from_dict)
+    from pytcad import NewtonOptions
+    from pytcad.transient3d import solve_transient as solve_transient_3d
+
+    spec = _resistor_3d_spec()
+    spec.transient = TransientSpec(
+        contact="left",
+        waveform=WaveformSpec(kind="step", v0=0.05, v1=0.15, t0=0.0),
+        t_end=1e-10, dt0=1e-12)
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+
+    assert validate_result(out) == 3
+    tr = NpzResultStore(out).transient_result()
+    assert tr.contact == "left"
+    assert set(tr.channels) == {"left", "right"}
+    assert tr.unit == "A"
+    for vals in tr.channels.values():
+        assert vals.shape == tr.times.shape
+    assert np.all(np.isfinite(tr.times))
+
+    # Independent reference, bypassing solver_runner's own dispatch.
+    mesh_obj = build_mesh(spec.mesh)
+    doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
+    dev = build_device(spec, mesh_obj, doping, ntotal)
+    register_contacts(dev, spec)
+    opts = NewtonOptions()
+    dev.solve_equilibrium(opts)
+    apply_bias(dev, spec, opts)
+    ref = solve_transient_3d(
+        dev, {"left": _waveform_from_dict(spec.transient.waveform)},
+        spec.transient.t_end, spec.transient.dt0, theta=spec.transient.theta,
+        opts=opts)
+    assert np.allclose(tr.times, ref.times, rtol=1e-9)
+    assert np.allclose(tr.channels["left"], ref.terminal_current["left"],
+                       rtol=1e-6)
+    assert np.allclose(tr.channels["right"], ref.terminal_current["right"],
+                       rtol=1e-6)
 
 
 def test_transient_result_absent_on_a_plain_run(tmp_path):

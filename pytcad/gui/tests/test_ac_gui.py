@@ -25,7 +25,9 @@ import pytest
 from gui.services.device_spec import (
     ACSpec, ContactSpec, DeviceSpec, DopingSpec, MeshSpec,
 )
-from gui.tests.test_solver_backend import _diode_1d_spec, _resistor_2d_spec
+from gui.tests.test_solver_backend import (
+    _diode_1d_spec, _resistor_2d_spec, _resistor_3d_spec,
+)
 
 
 # ---------------------------------------------------------------- ACSpec
@@ -288,14 +290,18 @@ def test_ac_absent_when_not_armed(tmp_path):
     assert NpzResultStore(out).has_ac() is False
 
 
-# ---------------------------------------------------------------- solver dispatch (3D refusal)
-def test_ac_refuses_on_device3d(tmp_path):
-    """G-AC-3D-REFUSAL: a clear ValueError naming AC/Device3D, not a
-    bare crash from deep inside ac2d.py (there is no ac3d module to
-    even import)."""
+# ---------------------------------------------------------------- solver dispatch (3D)
+def test_ac_runs_cleanly_on_device3d(tmp_path):
+    """G-AC-3D: M45 landed ac3d.py -- a 3D AC job now succeeds and
+    stamps a normal ac__* block, replacing this test's old name/intent
+    (`test_ac_refuses_on_device3d`, back when no ac3d module existed).
+    See test_cli_3d_ac_matches_direct_ac3d_call above for the
+    physics/dispatch cross-check against a direct ac3d.y_parameters
+    call -- this one just confirms the real CLI subprocess path (not
+    the in-process run_job() call the other test above uses) succeeds
+    end to end."""
     from gui.services.device_spec import ACSpec, ContactSpec, DeviceSpec, DopingSpec, MeshSpec
-    from gui.services.solver_runner import run_job
-    import subprocess, sys, json
+    import subprocess, sys
 
     x = np.linspace(0.0, 2e-4, 5)
     y = np.linspace(0.0, 1e-4, 4)
@@ -323,9 +329,8 @@ def test_ac_refuses_on_device3d(tmp_path):
         [sys.executable, "-m", "gui.services.solver_runner", job, out],
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         capture_output=True, text=True, timeout=120)
-    assert proc.returncode != 0
-    assert not os.path.exists(out)
-    assert "AC" in proc.stderr and "Device3D" in proc.stderr
+    assert proc.returncode == 0, proc.stderr
+    assert os.path.exists(out)
 
 
 def test_ac_refuses_bogus_contact_name(tmp_path):
@@ -444,6 +449,53 @@ def test_cli_2d_ac_driving_the_gate_matches_direct_ac2d_call(tmp_path):
     assert np.allclose(res.G, G_ref, rtol=1e-6)
 
 
+def test_cli_3d_ac_matches_direct_ac3d_call(tmp_path):
+    """M45: solver_runner's AC dispatch now reaches Device3D via
+    ac3d.y_parameters (it used to refuse outright with "no ac3d module
+    exists" -- see solver_runner.py's own AC dispatch comment). Cross-
+    checks the stamped ac__* block against a DIRECT ac3d.y_parameters
+    call on an independently-built, independently-solved copy of the
+    same device, same style as G-AC-1D/G-AC-2D above. Also confirms the
+    3D-specific unit strings ("F"/"S", real device units -- ac3d.py has
+    no implicit unit-area/unit-depth convention the way 1D/2D do)."""
+    from gui.services.device_spec import ACSpec
+    from gui.services.solver_runner import (
+        run_job, build_mesh, build_doping, build_device, register_contacts,
+        apply_bias)
+    from gui.services.result_store import NpzResultStore
+    from pytcad import NewtonOptions
+    from pytcad.ac3d import y_parameters as y_parameters_3d
+
+    spec = _resistor_3d_spec()
+    spec.ac = ACSpec(contact="left", f_start=1.0, f_stop=1e6, n_points=5)
+    job, out = str(tmp_path / "job.json"), str(tmp_path / "out.npz")
+    spec.to_json(job)
+    run_job(job, out)
+
+    store = NpzResultStore(out)
+    assert store.has_ac() is True
+    res = store.ac_result()
+    assert res.port == "left"
+    assert res.freqs.size == 5
+    assert np.allclose(res.freqs, np.logspace(0, 6, 5))
+    assert res.unit_c == "F"
+    assert res.unit_g == "S"
+
+    mesh_obj = build_mesh(spec.mesh)
+    doping, ntotal = build_doping(spec.doping, spec.mesh.shape())
+    dev = build_device(spec, mesh_obj, doping, ntotal)
+    register_contacts(dev, spec)
+    opts = NewtonOptions()
+    dev.solve_equilibrium(opts)
+    apply_bias(dev, spec, opts)
+    ref = y_parameters_3d(dev, res.freqs)
+    li = ref.port_names.index("left")
+    C_ref = ref.Y[:, li, li].imag / (2 * np.pi * res.freqs)
+    G_ref = ref.Y[:, li, li].real
+    assert np.allclose(res.C, C_ref, rtol=1e-6)
+    assert np.allclose(res.G, G_ref, rtol=1e-6)
+
+
 # ---------------------------------------------------------------- AppController wiring
 @pytest.fixture(scope="module")
 def qapp():
@@ -482,7 +534,10 @@ def test_set_ac_config_rejects_invalid_values(qapp):
     assert errors and errors[0][0] == "Invalid AC configuration"
 
 
-def test_can_run_ac_hidden_for_a_3d_spec(qapp):
+def test_can_run_ac_true_for_a_3d_spec(qapp):
+    """M45 landed ac3d.py: canRunAc no longer excludes a 3D spec (it
+    used to, back when no ac3d module existed -- see
+    app_controller.py's own canRunAc docstring)."""
     from gui.services.device_spec import ContactSpec, DeviceSpec, DopingSpec, MeshSpec
     c = _controller_with_diode(qapp)
     assert c.canRunAc is True
@@ -497,6 +552,12 @@ def test_can_run_ac_hidden_for_a_3d_spec(qapp):
         contacts=[ContactSpec(name="left", kind="ohmic",
                               nodes={"i": [0], "j": [0], "k": [0]}, V=0.0)],
         bias={"left": 0.0})
+    assert c.canRunAc is True
+
+
+def test_can_run_ac_false_with_no_spec(qapp):
+    c = _controller_with_diode(qapp)
+    c.spec = None
     assert c.canRunAc is False
 
 

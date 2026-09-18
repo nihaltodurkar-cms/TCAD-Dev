@@ -178,6 +178,35 @@ def _newton_step(device, psi0, n0, p0, voltages_new, F_old_n, F_old_p, dV,
         else:
             lam = 0.0
 
+        n_old_iter, p_old_iter = n, p
+        psi = psi + lam * dpsi
+        n = np.clip(n + lam * dn, 0.1 * n, 10.0 * n)
+        p = np.clip(p + lam * dp, 0.1 * p, 10.0 * p)
+
+        # NOTE: `err` uses the RAW (lam-independent) `dpsi` magnitude,
+        # not lam*dpsi -- this is deliberate and PRE-EXISTING (unchanged
+        # from before the lam==0 short-circuit below was added): at
+        # lam=0 the state is untouched (rel_n=rel_p=0 trivially, since
+        # n_old_iter/p_old_iter ARE n/p here), so `err` collapses to
+        # "how large was the correction the linear solve WANTED to
+        # make" -- if that itself is already below tol_update (a
+        # genuinely converged/steady point, e.g. an ohmic resistor at
+        # its bias-point steady state, F already ~0 to machine
+        # precision), THIS iteration correctly reports converged even
+        # though the line search technically "failed" (there is
+        # nothing left to improve). Checking this BEFORE the lam==0
+        # bail below is required, not optional -- an earlier version of
+        # that bail returned False unconditionally on lam==0 and
+        # regressed exactly this case (caught by a GUI-wiring test on a
+        # uniform-doping resistor fixture, not by any of M45's own
+        # diode-based gates, none of which reach a genuinely-already-
+        # converged interior time step).
+        rel_n = (np.abs(n - n_old_iter) / np.maximum(n_old_iter, 1e-10)).max()
+        rel_p = (np.abs(p - p_old_iter) / np.maximum(p_old_iter, 1e-10)).max()
+        err = max(float(np.abs(dpsi).max()), float(rel_n), float(rel_p))
+        if err < opts.tol_update:
+            return psi, n, p, True, it + 1
+
         if lam == 0.0:
             # A fully-failed line search means every damping factor down
             # to ~2^-40 made the merit function worse -- state does not
@@ -193,17 +222,6 @@ def _newton_step(device, psi0, n0, p0, voltages_new, F_old_n, F_old_p, dV,
             # state is unchanged either way -- caller shrinks dt and
             # retries), just without the wasted recomputation.
             return psi, n, p, False, it + 1
-
-        n_old_iter, p_old_iter = n, p
-        psi = psi + lam * dpsi
-        n = np.clip(n + lam * dn, 0.1 * n, 10.0 * n)
-        p = np.clip(p + lam * dp, 0.1 * p, 10.0 * p)
-
-        rel_n = (np.abs(n - n_old_iter) / np.maximum(n_old_iter, 1e-10)).max()
-        rel_p = (np.abs(p - p_old_iter) / np.maximum(p_old_iter, 1e-10)).max()
-        err = max(float(np.abs(dpsi).max()), float(rel_n), float(rel_p))
-        if err < opts.tol_update:
-            return psi, n, p, True, it + 1
     return psi, n, p, False, opts.max_iter
 
 

@@ -87,7 +87,8 @@ from pytcad.transient import (
     solve_transient as solve_transient_1d,
 )
 from pytcad.transient2d import solve_transient as solve_transient_2d
-from pytcad import ac, ac2d
+from pytcad.transient3d import solve_transient as solve_transient_3d
+from pytcad import ac, ac2d, ac3d
 
 from .device_spec import DeviceSpec
 from .solver_backend import (
@@ -516,10 +517,6 @@ def run_transient(device, spec, opts=None):
     contact_names = [c.name for c in spec.contacts]
     tr.validate(contact_names)
     d = spec.mesh.dimensionality
-    if d == 3:
-        raise ValueError(
-            "transient runs are only implemented for 1D/2D devices "
-            "(M17 phase 3 has no Device3D transient module)")
 
     # Seed every contact's DC bias, INCLUDING the stimulus contact at
     # its waveform's own v0 -- see docstring.
@@ -536,9 +533,9 @@ def run_transient(device, spec, opts=None):
     wf = _waveform_from_dict(tr.waveform)
     if d == 1:
         # pytcad.transient.solve_transient requires BOTH "left"/"right"
-        # keys explicitly (unlike transient2d, which defaults an
-        # unmentioned contact to its current bc.V) -- so the non-
-        # stimulus contact is passed as its already-established DC
+        # keys explicitly (unlike transient2d/transient3d, which
+        # default an unmentioned contact to its current bc.V) -- so the
+        # non-stimulus contact is passed as its already-established DC
         # bias value, which _as_waveform wraps in a ConstantWaveform.
         stimulus_idx = contact_names.index(tr.contact)
         other_idx = 1 - stimulus_idx
@@ -549,8 +546,16 @@ def run_transient(device, spec, opts=None):
                                     theta=tr.theta, opts=opts)
         currents = {spec.contacts[0].name: result.terminal_current["left"],
                    spec.contacts[1].name: result.terminal_current["right"]}
-    else:
+    elif d == 2:
         result = solve_transient_2d(device, {tr.contact: wf}, tr.t_end,
+                                    tr.dt0, theta=tr.theta, opts=opts)
+        currents = dict(result.terminal_current)
+    else:
+        # M45: transient3d.solve_transient, identical calling convention
+        # to transient2d's own (a {contact_name: Waveform|float} dict,
+        # every other registered DirichletBC contact defaults to its
+        # current bc.V) -- see transient3d.py's own module docstring.
+        result = solve_transient_3d(device, {tr.contact: wf}, tr.t_end,
                                     tr.dt0, theta=tr.theta, opts=opts)
         currents = dict(result.terminal_current)
 
@@ -743,13 +748,14 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
         # third top-level elif).
         if spec.ac is not None:
             print("PYTCAD_STAGE=ac", flush=True)
-            if isinstance(device, Device3D):
-                raise ValueError(
-                    "AC analysis is not implemented for Device3D "
-                    "(no ac3d module exists) -- see M18-AC-PLAN.md.")
             freqs = np.logspace(np.log10(spec.ac.f_start),
                                 np.log10(spec.ac.f_stop), spec.ac.n_points)
-            yfn = ac.y_parameters if isinstance(device, Device1D) else ac2d.y_parameters
+            if isinstance(device, Device1D):
+                yfn = ac.y_parameters
+            elif isinstance(device, Device3D):
+                yfn = ac3d.y_parameters
+            else:
+                yfn = ac2d.y_parameters
             yres = yfn(device, freqs)
             if isinstance(device, Device1D):
                 # apply_bias()'s own positional convention: contacts[0]
@@ -766,8 +772,15 @@ def _solve_all(device, spec, opts, linsolve_bias=None):
                 "ac__C": Y_kk.imag / (2 * np.pi * freqs),
                 "ac__G": Y_kk.real,
                 "ac__port": np.array(spec.ac.contact),
-                "unit__ac_capacitance": np.array("F/cm^2"),
-                "unit__ac_conductance": np.array("S/cm^2"),
+                # M45: Device3D's ac3d.y_parameters returns a true
+                # per-device admittance (real Amps/Volt, no implicit
+                # unit-area/unit-depth the way 1D/2D carry -- see
+                # ac3d.py's own YParamResult3D docstring), so C/G here
+                # are real Farads/Siemens, not per-cm^2.
+                "unit__ac_capacitance": np.array(
+                    "F" if isinstance(device, Device3D) else "F/cm^2"),
+                "unit__ac_conductance": np.array(
+                    "S" if isinstance(device, Device3D) else "S/cm^2"),
             })
     return result
 

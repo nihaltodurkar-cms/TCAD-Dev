@@ -72,6 +72,36 @@ def _resistor_2d_spec():
     )
 
 
+def _resistor_3d_spec():
+    # Nz=5, not 3: M45's own transient stall investigation
+    # (pytcad/M45-TRANSIENT-AC-3D-PLAN.md section 8.2) found that a
+    # coarse Nz=3 mesh's lone interior z-node has DOUBLE a boundary
+    # node's control-volume width, letting one aggressive step force
+    # transient3d.py's single shared line-search damping factor to 0
+    # -- a genuine z-under-resolution artifact, confirmed there to
+    # disappear at Nz=7 with no other change; Nz=5 here for the same
+    # reason, kept as small as this GUI fixture's own transient test
+    # needs to actually converge.
+    x = np.linspace(0.0, 2e-4, 8)
+    y = np.linspace(0.0, 1e-4, 4)
+    z = np.linspace(0.0, 1e-4, 5)
+    jj, kk = np.meshgrid(np.arange(y.size), np.arange(z.size))
+    jj, kk = jj.ravel().tolist(), kk.ravel().tolist()
+    return DeviceSpec(
+        mesh=MeshSpec(dimensionality=3,
+                      axes={"x": x.tolist(), "y": y.tolist(), "z": z.tolist()}),
+        doping=DopingSpec(kind="array",
+                          values=np.full((z.size, y.size, x.size), 1e17).tolist()),
+        contacts=[
+            ContactSpec(name="left", kind="ohmic",
+                        nodes={"i": [0] * len(jj), "j": jj, "k": kk}, V=0.0),
+            ContactSpec(name="right", kind="ohmic",
+                        nodes={"i": [x.size - 1] * len(jj), "j": jj, "k": kk}, V=0.0),
+        ],
+        bias={"left": 0.05, "right": 0.0},
+    )
+
+
 def _run_cli(spec, tmp_path, name):
     job = str(tmp_path / f"{name}.json")
     out = str(tmp_path / f"{name}.npz")

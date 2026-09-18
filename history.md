@@ -3157,9 +3157,106 @@ affordable) used only by G4; G5's dt0/t_end were separately retuned
 aggressive-first-step regime, verified directly (charge-conservation
 identity holds to 4e-7 relative before being written as a gate).
 
-Verification: `test_m45_transient3d.py` 6/6 passed in 212.03s (G4
-alone ~80s -- kept slow-but-real rather than xfail'd, per the explicit
-ask); `test_m45_ac3d.py` 5/5 passed in 315.66s. Full fast suite:
-**1961 passed, 5 skipped, 1 xfailed, 0 failed** (+5 over M45's own
-1956 baseline, matching the 5 new gates). Working tree UNCOMMITTED;
-nothing pushed.
+Verification (re-run after a session interruption/restart, since the
+figures below were not confirmed to have actually completed before
+that restart -- CLAUDE.md's own rule against trusting an unconfirmed
+claim applies to this session's own prior output, not just others'):
+`test_m45_transient3d.py` 6/6 passed in 218.57s (G4 alone a sizeable
+share of that -- kept slow-but-real rather than xfail'd, per the
+explicit ask); `test_m45_ac3d.py` 5/5 passed in 291.07s. Regression
+sweep (test_m45_transient3d, test_m45_ac3d, test_m17_transient2d,
+test_m18_ac2d, test_m17_transient, test_m18_ac): 37 passed in 795.98s
+(was 32/431.41s before this pass's 5 new gates -- matches exactly).
+Full fast suite: **1968 passed, 5 skipped, 1 xfailed, 0 failed** (+12
+over M45's own 1956 baseline: the 5 new gates above, plus 7 more from
+two more test files that also exist on disk from this same follow-up
+-- see below).
+
+Two more items from the original gap list were ALSO closed the same
+day (found on disk after a session interruption/restart, then verified
+by actually running them rather than trusted on sight):
+`tests/test_m45_gaa_multigate.py` (2 gates -- a genuinely multi-gate
+GAA Device3D, reusing M42-S4's `build_fin_corner_slab(gaa=True)`
+fixture, run through both ac3d.y_parameters on all 5 ports and
+transient3d.solve_transient; checks every gate's own low-frequency
+self-admittance is finite and positively capacitive, and that a
+transient step on the ohmic contact leaves every gate's own bc.V
+untouched) and `tests/test_m45_stiff_physics_coupling.py` (5 gates --
+transient3d.py/ac3d.py driven together with each of impact ionization,
+local BTBT, incomplete ionization, density-gradient, and a Schottky
+contact, one at a time, via a deliberately GENTLE step/frequency point
+rather than re-triggering the already-understood large-step stiffness
+from the stall investigation above; found and recorded one honest
+pre-existing scope note, not a new bug: density-gradient is
+equilibrium-only in Device3D, so a dg=True transient/AC run starts
+from a DG-corrected initial condition but the correction does not
+persist into the dynamics themselves). Both files together: 7/7 passed
+in 28.48s. Full detail in pytcad/M45-TRANSIENT-AC-3D-PLAN.md sections
+9-10, including the updated status of every item on the original gap
+list (performance measurement and GUI/wire-format exposure remain the
+two genuinely open ones). Working tree UNCOMMITTED; nothing pushed.
+
+## 2026-09-19 -- M45: GUI/wire-format exposure (the last gap), plus a real regression found and fixed
+
+User asked to implement the last remaining M45 gap: GUI/wire-format
+exposure for Device3D transient/AC. Full detail in
+pytcad/M45-TRANSIENT-AC-3D-PLAN.md section 11.
+
+**What changed**: `DeviceSpec`/`TransientSpec`/`ACSpec` were already
+dimension-agnostic wire formats -- no change needed there. The
+dimensionality gate lived purely in `gui/services/solver_runner.py`'s
+dispatch (`run_transient`'s `if d==3: raise` guard; the AC block's
+`if isinstance(device, Device3D): raise` guard) and
+`AppController.canRunAc`'s `dimensionality != 3` exclusion. All three
+removed/replaced: `run_transient` now calls `transient3d.solve_transient`
+for `d==3` with the identical calling convention transient2d.py already
+uses; the AC dispatch now picks `ac.y_parameters`/`ac2d.y_parameters`/
+`ac3d.y_parameters` by device type, stamping `"F"`/`"S"` unit strings
+for a Device3D result (a real per-device admittance, unlike 1D/2D's
+per-area/per-depth convention) instead of refusing; `canRunAc` just
+checks a spec exists now. No `canRunTransient` gate existed at all (the
+Transient tab was always shown, previously erroring at solve time for
+3D) -- 3D transient now simply works with zero QML changes.
+
+**A real regression, found by this work and fixed, not glossed over**:
+wiring a genuinely different fixture (an ohmic-only, uniformly-doped
+3D resistor -- none of M45's own diode-based gates ever built one)
+surfaced a bug in the section-8 `lam==0.0` efficiency short-circuit
+added the previous day. That short-circuit returned "not converged"
+the instant the line search failed, without first checking whether the
+wanted correction was already below `tol_update` -- wrong for a device
+that reaches its bias-point steady state almost immediately (no
+minority-carrier dynamics, no junction), where later time steps have
+an essentially-zero true residual and the line search's own merit
+comparison goes numerically unstable at that scale, spuriously
+reporting `lam=0`. The pre-existing code (before section 8) handled
+this correctly by checking tolerance regardless of what `lam` was
+chosen; the short-circuit bypassed that check. Fixed by moving the
+tolerance check back before the bail, matching the original order
+exactly -- the "genuinely stalled, bail fast" optimization is now only
+reached when the correction is ALSO still above tolerance. Re-verified
+directly: all 6 `test_m45_transient3d.py` gates still pass, actually
+*faster* than before (169.98s vs 218.57s) since the case that exposed
+this no longer wastes time in either direction.
+
+**Verification**: `gui/tests/test_ac_gui.py` + `test_transient_gui.py`:
+39/39 passed (6.81s) -- includes new `test_cli_3d_transient_stamps_
+schema_v3_and_matches_direct_call` and `test_cli_3d_ac_matches_direct_
+ac3d_call` (both cross-check the GUI-stamped result against a direct
+pytcad call on an independently-built device), plus
+`test_ac_refuses_on_device3d`/`test_can_run_ac_hidden_for_a_3d_spec`
+renamed and repurposed to assert the new (working) behavior rather
+than the old refusal. `tests/test_m45_ac3d.py` +
+`test_m45_gaa_multigate.py` + `test_m45_stiff_physics_coupling.py`
+(re-run since the `_newton_step` fix touches shared code): 12/12
+passed. Full fast suite: **1971 passed, 5 skipped, 1 xfailed, 0 failed**
+(+3 over the prior 1968 baseline, matching the 3 net-new tests exactly
+-- renamed/repurposed tests are 1-for-1 swaps, not additions). Working
+tree UNCOMMITTED; nothing pushed.
+
+Every item from M45's original post-landing gap survey is now closed
+except performance measurement, which stays open by design (CLAUDE.md's
+own rule requires a real `benchmarks/` entry for any performance claim,
+never asked for here). M45 is now complete for its full scope,
+including the GUI. Next up per ARCHITECTURE.md's queue: M44
+(hydrodynamic transport).

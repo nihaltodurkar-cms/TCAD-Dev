@@ -1113,8 +1113,39 @@ already-gated pattern one axis further -- see
 M45-TRANSIENT-AC-3D-PLAN.md for the two findings from this slice (a
 missing bc.kappa factor caught by inspection, and a poorly-conditioned
 first reduction fixture caught by a failing gate and root-caused before
-being fixed). The front of the dimensional-lift track is now **M44**
-(hydrodynamic -> coupled, then 2D/3D). M47 (3D
+being fixed). A same-day follow-up closed M45's own two cheap disclosed
+gaps: 3D transient physics reference gates (transient2d.py's own
+already-gated G1/G4/G5 ported one axis further) and a real 3D MOSFET
+fixture + gm/fT gates for ac3d.py. The reference-gate pass surfaced a
+genuine efficiency bug in transient3d.py's own Newton loop (a fully-
+failed line search, lam=0, was not detected -- the loop kept recomputing
+the identical doomed step up to opts.max_iter=100 times, ~800s wasted
+on a single failed step) and, after fixing that, a genuine mesh-
+resolution finding (Nz=3's lone interior z-node has double a boundary
+node's control-volume width, so one aggressive step can force the
+Newton loop's single shared damping factor to 0 even though every other
+node -- including a hypothetical 2D problem -- would already have
+converged; confirmed directly by re-running the same comparison at
+Nz=7, which converges cleanly). Neither finding was a case for porting
+anything to C++ (per-iteration cost was never the bottleneck, confirmed
+directly) -- see M45-TRANSIENT-AC-3D-PLAN.md section 8 for the full
+investigation. A second follow-up (2026-09-19) closed M45's remaining
+GUI/wire-format exposure gap: solver_runner.py's transient/AC dispatch
+now routes a Device3D spec to transient3d.py/ac3d.py instead of
+refusing outright, and AppController.canRunAc no longer excludes
+dimensionality==3. This pass found and fixed a REAL regression in the
+section-8 efficiency fix: the `lam==0.0` short-circuit in
+transient3d.py's `_newton_step` returned "not converged" without first
+checking whether the wanted correction was already below tolerance --
+wrong for a device that reaches its steady state almost immediately
+(an ohmic resistor, unlike M45's own diode-based gates), where the line
+search's own merit comparison goes numerically unstable at
+already-converged (near-machine-precision) residuals and spuriously
+reports lam=0. Fixed by restoring the original tolerance check BEFORE
+the bail (see M45-TRANSIENT-AC-3D-PLAN.md section 11.1) -- a fresh,
+physically different GUI fixture caught what M45's own thorough gate
+suite had not exercised. The front of the dimensional-lift track is now
+**M44** (hydrodynamic -> coupled, then 2D/3D). M47 (3D
 engine completion) remains the largest unscoped item, deliberately
 last. See `history.md` for session-by-session detail and open handoff
 notes.
