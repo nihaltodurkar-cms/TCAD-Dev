@@ -2433,7 +2433,19 @@ class Device1D:
         # F/J, bit-identical.
         if theta is not None:
             KAPPA0, ALPHA = self._KAPPA0, self._ALPHA_RELAX
-            kappa_s = KAPPA0 * self.mu_n0 * n_lag * theta   # per node
+            # M44 Slice 4 finding: n_lag underflows to ~1e-14 in a
+            # deep-minority region -- left unfloored, kappa_s vanishes
+            # there and decouples that node from every neighbor at
+            # once, which measurably rank-deficient a 2D grid's larger
+            # Jacobian (Device1D's tridiagonal structure tolerates a
+            # single weak link better, which is why this was found in
+            # Slice 4, not here -- but the same floor belongs here too,
+            # for the same reason `_STIFF_DENSITY_FLOOR` exists: a node
+            # with ~0 carriers has no physically meaningful electron
+            # temperature to solve for anyway). See hydro_grid.py's own
+            # matching fix and M44-HYDRODYNAMIC-PLAN.md Slice 4.
+            n_floor = np.maximum(n_lag, 1e-8)
+            kappa_s = KAPPA0 * self.mu_n0 * n_floor * theta   # per node
             theta_edge = 0.5 * (theta[:-1] + theta[1:])
             kappa_edge = 0.5 * (kappa_s[:-1] + kappa_s[1:])
             grad_theta = (theta[1:] - theta[:-1]) / h
@@ -2442,15 +2454,15 @@ class Device1D:
             # convective (theta_edge's own linear dependence) and
             # conductive (kappa_edge's linear dependence on theta,
             # through kappa_s, AND grad_theta's explicit dependence).
-            dkappa_L = 0.5 * KAPPA0 * self.mu_n0[:-1] * n_lag[:-1]  # d kappa_edge/d theta[e]
-            dkappa_R = 0.5 * KAPPA0 * self.mu_n0[1:] * n_lag[1:]    # d kappa_edge/d theta[e+1]
+            dkappa_L = 0.5 * KAPPA0 * self.mu_n0[:-1] * n_floor[:-1]  # d kappa_edge/d theta[e]
+            dkappa_R = 0.5 * KAPPA0 * self.mu_n0[1:] * n_floor[1:]    # d kappa_edge/d theta[e+1]
             dw_dthetaL = (-2.5 * 0.5 * Jn_lag
                          - dkappa_L * grad_theta - kappa_edge * (-1.0 / h))
             dw_dthetaR = (-2.5 * 0.5 * Jn_lag
                          - dkappa_R * grad_theta - kappa_edge * (1.0 / h))
 
-            Q_src = Qheat_lag - ALPHA * n_lag * (theta - 1.0)
-            dQ_dtheta = -ALPHA * n_lag
+            Q_src = Qheat_lag - ALPHA * n_floor * (theta - 1.0)
+            dQ_dtheta = -ALPHA * n_floor
 
             F_T = np.empty(N)
             base = 3 * N
@@ -2758,7 +2770,16 @@ class Device1D:
                     psi = psi + dpsi
                     n, p = n_new, p_new
                     if energy_balance:
-                        theta = np.clip(theta + dtheta, 0.05, 1000.0)
+                        # Relative clip, same convention as n/p's own
+                        # 0.1x-10x bound -- an unclipped/absolute-range
+                        # clip let a single early Newton step overshoot
+                        # by >30x (Tn 300K -> 10800K in one iterate),
+                        # which was harmless in 1D but corrupted y/z-
+                        # uniformity once the same code was ported to a
+                        # multi-row 2D/3D grid (found while gating M44
+                        # Slice 4 -- see M44-HYDRODYNAMIC-PLAN.md).
+                        theta = np.clip(theta + dtheta, 0.1 * theta,
+                                       10.0 * theta)
                         theta[0], theta[-1] = 1.0, 1.0
                 if opts.verbose:
                     print(f"   it {it:2d}  |F|={np.abs(F).max():.3e}  "

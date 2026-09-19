@@ -532,7 +532,7 @@ NotImplementedError sites, not inferred from filenames):
   Trap-assisted tunneling           Y     Y     Y    --
   Density gradient / quantum        Y     Y     Y    -- (M42 S1-S4 done)
   Self-heating (lattice T)          Y     -     -    M43
-  Hydrodynamic / energy balance     Y*    -     -    M44
+  Hydrodynamic / energy balance     Y     Y     Y    -- (electron-only)
   Transient / small-signal AC       Y     Y     Y    --
   Adaptive refinement               Y     Y     Y    --
   Process: implant/diffuse/oxide    Y     Y     -    M35
@@ -739,11 +739,35 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        simply slow there via a direct sparse solve); the small-grid
        gates are the confirmed 3D evidence, no larger-scale number is
        claimed.
-  M44  Hydrodynamic -> coupled, then 2D/3D    [XL]  NOT STARTED
-       Two steps: hydrodynamic.py must first become a coupled 1D
-       model (it is pure post-processing today) before any
-       dimensional lift is meaningful -- overshoot is a 3D
-       short-channel effect that a 1D-only closure cannot show.
+  M44  Hydrodynamic -> coupled, then 2D/3D    [XL]  LANDED 2026-09-19
+       Electron-only (hole energy balance deferred, disclosed).
+       Slice 1: Tn appended as a 4th Device1D DOF (rows 3N..4N-1, base
+       3N block untouched), three-moment energy-transport model
+       (Grasser/Tang/Kosina/Selberherr 2003), Tn-consistent Canali
+       mobility feedback via hydrodynamic.py's own
+       effective_field_from_temperature. Slice 2: benchmarked before
+       compiling anything (M32 discipline) -- found and fixed an
+       unvectorized Python assembly loop instead (18x -> 1.1x
+       overhead), concluding NO C++ is needed for the 1D path. Slice 3:
+       pytcad/hydro_grid.py, a D-generic (2D/3D) standalone kernel
+       following ii_grid.py/btbt_grid.py's pure-Python convention (NOT
+       thermal_grid.py's compiled one -- this physics has no nested
+       Newton solve, so it never gets hot enough to justify a
+       compile, confirmed by measurement). Slice 4: wired into
+       Device2D/Device3D, same appended-DOF design. Three real bugs
+       found while gating Slice 4: a DirichletBC/PinnedBC array-shape
+       bug, an unfloored deep-minority density causing measurable
+       Jacobian rank deficiency, and a missing transverse control-
+       volume weight on the flux-divergence term (the actual cause of
+       an 87% y-uniform Tn mismatch -- Slice 3's own gates had used an
+       artificially uniform dV that couldn't expose it). After all
+       fixes, y/z-uniform Device2D/Device3D reproduce Device1D's own
+       Tn(x) to round-off (3e-13 / 4e-10). No C++ anywhere in this
+       milestone despite the original scope note's expectation -- see
+       pytcad/M44-HYDRODYNAMIC-PLAN.md for the full record, every
+       gate, and the quantitative-benchmark gap (disclosed, same class
+       as M14's G-A: no accessible digitized published overshoot
+       curve).
   M45  Transient and AC -> 3D                 [XL]  LANDED 2026-09-18
        transient3d.py and ac3d.py, direct lifts of transient2d.py's/
        ac2d.py's own already-gated pattern one axis further (device.py/
@@ -835,7 +859,7 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        M35 (its own track). Needs a proper plan doc before any code.
 
 ORDERING: M41[S](done) -> M43[L](done) -> M42[L](done, S1-S4) ->
-M46[L](done) -> M45[XL](done) -> M44[XL], with M35 (3D process, LANDED separately)
+M46[L](done) -> M45[XL](done) -> M44[XL](done), with M35 (3D process, LANDED separately). M47 (3D engine completion) is now the front of the dimensional-lift track, the largest unscoped item, deliberately last.
 and M47 (engine completion, last deliberately -- more to learn by landing a few of
 M41-M46 first) as separate tracks.
 
@@ -1144,11 +1168,13 @@ already-converged (near-machine-precision) residuals and spuriously
 reports lam=0. Fixed by restoring the original tolerance check BEFORE
 the bail (see M45-TRANSIENT-AC-3D-PLAN.md section 11.1) -- a fresh,
 physically different GUI fixture caught what M45's own thorough gate
-suite had not exercised. The front of the dimensional-lift track is now
-**M44** (hydrodynamic -> coupled, then 2D/3D). M47 (3D
-engine completion) remains the largest unscoped item, deliberately
-last. See `history.md` for session-by-session detail and open handoff
-notes.
+suite had not exercised. M44 (hydrodynamic -> coupled, then 2D/3D)
+LANDED 2026-09-19 -- see pytcad/M44-HYDRODYNAMIC-PLAN.md for the full
+record (electron-only, no C++ needed anywhere, three real bugs found
+and fixed while gating Slice 4). M47 (3D engine completion) is now the
+front of the dimensional-lift track and the largest unscoped item,
+deliberately last. See `history.md` for session-by-session detail and
+open handoff notes.
 
 Standing rules: every slice ships suite-green with pre-existing tests
 unchanged; adversarial probe pass before each commit; optional deps

@@ -46,13 +46,16 @@ from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
 from .materials import (
     SILICON, SIC_4H, Semiconductor, mobility_caughey_thomas, mobility_cvt,
-    nie_effective, lifetime_scharfetter, recombination,
+    mobility_field, nie_effective, lifetime_scharfetter, recombination,
 )
 from .device import (D0_REF, bernoulli, dbernoulli, fd_density,
                      fd_ddensity_deta, fd_node_factors, fd_ohmic_values,
                      ionized_dE_kt, ionized_doping, ionized_eta_doping,
                      Models, NewtonOptions)
 from .fermi import FERMI_ETA_MAX
+from .constants import KB
+from . import hydrodynamic as _hydro
+from .hydro_grid import grid_hydro as _grid_hydro
 # Moved to contacts.py (the unstructured solvers import it and should
 # not have to import a structured solver to get it).  Re-exported
 # under both names so existing import sites keep working.
@@ -323,6 +326,15 @@ class Device2D:
         self.LD = np.sqrt(self.eps * self.VT / (Q * self.Ns))
         self.J0 = Q * D0_REF * self.Ns / self.LD
         self.R0 = D0_REF * self.Ns / self.LD ** 2
+
+        # M44 Slice 4: same scaling constants as Device1D's own
+        # (device.py's __init__, identical derivation) -- see
+        # M44-HYDRODYNAMIC-PLAN.md Slice 1.
+        self._ALPHA_RELAX = (1.5 * KB * self.T * self.Ns * self.LD
+                             / (_hydro.TAU_W_N * self.J0 * self.VT))
+        self._KAPPA0 = (2.5 * (KB * KB / Q) * self.Ns * self.T * self.T
+                        / (self.LD * self.J0 * self.VT))
+        self.Tn = None
 
         self.xs = mesh.x / self.LD
         self.ys = mesh.y / self.LD
@@ -628,6 +640,33 @@ class Device2D:
         self.dp_edge_y[0, :] = (2.0 * mu_p_surf * self.mu_p0[1, :]
                                / (mu_p_surf + self.mu_p0[1, :])
                                * self.VT / D0_REF)
+
+    # ------------------------------------------------------------------
+    def _update_energy_mobility(self, theta):
+        """M44: recompute EVERY edge diffusivity from the Tn-consistent
+        Canali mobility (Device1D's own Finding 3 -- reuse
+        hydrodynamic.effective_field_from_temperature +
+        materials.mobility_field, LAGGED one outer Newton iterate,
+        same convention as `_update_surface_mobility` above and
+        Device1D's own `field_mobility` lag). This REPLACES the plain
+        bulk mobility everywhere (not just a surface row), since Tn is
+        a device-wide unknown, not a channel-local one -- Device2D has
+        no other field-dependent mobility path to compose with
+        (`Models.field_mobility` stays refused; see this class's own
+        `__init__` guard, unaffected by this)."""
+        Tn = theta * self.T
+        E_eff = _hydro.effective_field_from_temperature(
+            Tn, self.mu_n0, _hydro.TAU_W_N, self.T)
+        mu_n = mobility_field(self.mu_n0, E_eff, self.mat, "n")
+        mu_p = mobility_field(self.mu_p0, E_eff, self.mat, "p")
+
+        def hmean(lo, hi):
+            return 2.0 * lo * hi / (lo + hi)
+
+        self.dn_edge_x = hmean(mu_n[:, :-1], mu_n[:, 1:]) * self.VT / D0_REF
+        self.dp_edge_x = hmean(mu_p[:, :-1], mu_p[:, 1:]) * self.VT / D0_REF
+        self.dn_edge_y = hmean(mu_n[:-1, :], mu_n[1:, :]) * self.VT / D0_REF
+        self.dp_edge_y = hmean(mu_p[:-1, :], mu_p[1:, :]) * self.VT / D0_REF
 
     # ------------------------------------------------------------------
     def add_contact(self, name, i, j, V=0.0):
@@ -1301,6 +1340,11 @@ class Device2D:
             psi_c = psi + self.band_shift
             self.n = self.nie_s * np.exp(np.clip(psi_c, -700, 700))
             self.p = self.nie_s * np.exp(np.clip(-psi_c, -700, 700))
+        if getattr(self.models, "energy_balance", False):
+            # M44: zero current at equilibrium => zero Joule heating =>
+            # theta==1 is the EXACT steady-state solution (same
+            # reduction Device1D's own solve_equilibrium uses).
+            self.Tn = np.full((self.Ny, self.Nx), self.T)
         return self
 
     # ------------------------------------------------------------------
@@ -1330,7 +1374,9 @@ class Device2D:
         return _nl_evaluate(self._btbt_nl_paths, psi_flat, self.VT, Eg_J,
                             mr, mc, mv)
 
-    def _residual_jacobian(self, psi, n, p, voltages):
+    def _residual_jacobian(self, psi, n, p, voltages, theta=None,
+                           n_lag=None, Jn_lag_x=None, Jn_lag_y=None,
+                           Qheat_lag=None):
         Ny, Nx, N = self.Ny, self.Nx, self.N
         hx, hy, dVx, dVy, dV = self.hx, self.hy, self.dVx, self.dVy, self.dV
         C = self.C
@@ -1770,14 +1816,61 @@ class Device2D:
             cols = np.concatenate([cols] + extra_cols)
             vals = np.concatenate([vals] + extra_vals)
 
-        J = csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+        base_dirichlet = (
+            strip_rows if strip_rows_list else np.zeros(0, dtype=int))
+
+        # M44 Slice 4: coupled electron energy balance, appended as a
+        # 4th block (rows/cols 3*N..4*N-1) -- SAME appended-DOF design
+        # as Device1D (device.py's own `_residual_jacobian`, see
+        # M44-HYDRODYNAMIC-PLAN.md Slice 1/4). The 3*N block above is
+        # COMPLETELY UNCHANGED by this: `theta is None` (default)
+        # returns exactly the pre-M44 F/J, bit-identical.
+        if theta is not None:
+            # w = transverse control-volume width (dVy for an x-edge,
+            # dVx for a y-edge) -- MANDATORY, matches this class's own
+            # Poisson residual (`dVy[:,None]*div_x + dVx[None,:]*div_y`
+            # above). Omitting it was a real bug found while gating
+            # Slice 4: it breaks exact y-uniformity between a boundary
+            # row (half-width dVy) and an interior row (full-width).
+            # See hydro_grid.py's own docstring and
+            # M44-HYDRODYNAMIC-PLAN.md Slice 4 note 3.
+            axes = [
+                dict(kL=kLx, kR=kRx,
+                     h=np.broadcast_to(hx[None, :], (Ny, Nx - 1)).ravel(),
+                     w=np.broadcast_to(dVy[:, None], (Ny, Nx - 1)).ravel(),
+                     Jn=Jn_lag_x.ravel()),
+                dict(kL=kSy, kR=kNy,
+                     h=np.broadcast_to(hy[:, None], (Ny - 1, Nx)).ravel(),
+                     w=np.broadcast_to(dVx[None, :], (Ny - 1, Nx)).ravel(),
+                     Jn=Jn_lag_y.ravel()),
+            ]
+            _dn_parts = [bc.j * Nx + bc.i for bc in self.bcs.values()
+                        if isinstance(bc, DirichletBC)]
+            dirichlet_nodes = (np.concatenate(_dn_parts).astype(int)
+                              if _dn_parts else np.zeros(0, dtype=int))
+            F_T, t_r, t_c, t_v = _grid_hydro(
+                N, axes, dV.ravel(), n_lag.ravel(), theta.ravel(),
+                Qheat_lag.ravel(), self.mu_n0.ravel(), self._KAPPA0,
+                self._ALPHA_RELAX, dirichlet_nodes)
+            base = 3 * N
+            rows = np.concatenate([rows, t_r + base])
+            cols = np.concatenate([cols, t_c + base])
+            vals = np.concatenate([vals, t_v])
+            F3 = np.concatenate([F3.ravel(), F_T])
+            self._dirichlet_rows = np.concatenate(
+                [base_dirichlet, dirichlet_nodes + base])
+            shape = 4 * N
+        else:
+            F3 = F3.ravel()
+            self._dirichlet_rows = base_dirichlet
+            shape = 3 * N
+
+        J = csr_matrix((vals, (rows, cols)), shape=(shape, shape))
         # `strip_rows` is exactly the set of GENUINELY Dirichlet rows:
         # the S_n/S_p branches above append to it only when S == 0, so a
         # Robin row (which has real off-diagonal entries and is an
         # equation, not a constraint) is correctly excluded. Recorded
         # here so the solve site cannot re-derive it differently.
-        self._dirichlet_rows = (
-            strip_rows if strip_rows_list else np.zeros(0, dtype=int))
         # F_n, F_p (returned raw, pre-Dirichlet-overwrite, shape (Ny,Nx),
         # scaled units) are the box-integration continuity residuals.  At an
         # interior node they are ~0 by construction of the Newton solve; AT
@@ -1821,6 +1914,19 @@ class Device2D:
                 psi[bc.j, bc.i], n[bc.j, bc.i], p[bc.j, bc.i] = psi0, n0, p0
 
         cur_voltages = {name: bc.V for name, bc in self.bcs.items() if isinstance(bc, DirichletBC)}
+
+        # M44 Slice 4: theta = Tn/T, warm-started (zero current on the
+        # very first bias point => theta==1 is EXACT there, not an
+        # approximation -- same argument as Device1D's own Slice 1).
+        energy_balance = getattr(self.models, "energy_balance", False)
+        if energy_balance:
+            theta = ((self.Tn / self.T).copy() if self.Tn is not None
+                     else np.ones((self.Ny, self.Nx)))
+            for name, bc in self.bcs.items():
+                if isinstance(bc, DirichletBC):
+                    theta[bc.j, bc.i] = 1.0
+            Jn_prev_x = np.zeros((self.Ny, self.Nx - 1))
+            Jn_prev_y = np.zeros((self.Ny - 1, self.Nx))
 
         # M31 P5-1 Phase D: opts.linsolve="auto" resolves ONCE, here.
         # Phase A-2 MEASURED 2D structured (B3) at 11,640 and 72,912
@@ -1868,7 +1974,36 @@ class Device2D:
                 for it in range(opts.max_iter):
                     if self.models.surface_mobility:
                         self._update_surface_mobility(psi)
-                    F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
+                    if energy_balance:
+                        self._update_energy_mobility(theta)
+                        n_lag = n.copy()
+                        # Wachutka (1990) electron quasi-Fermi-potential
+                        # gradient, per axis -- the SAME fix Device1D's
+                        # own Slice 1 needed (see
+                        # M44-HYDRODYNAMIC-PLAN.md Slice 1 note 2): the
+                        # raw electrostatic field gives thermodynamically
+                        # impossible negative heating in a diffusion-
+                        # dominated depletion region.
+                        phi_n_lag = psi - np.log(
+                            np.maximum(n_lag, 1e-300) / self.nie_s)
+                        En_x = -(phi_n_lag[:, 1:] - phi_n_lag[:, :-1]) / self.hx[None, :]
+                        En_y = -(phi_n_lag[1:, :] - phi_n_lag[:-1, :]) / self.hy[:, None]
+                        Hx_edge = Jn_prev_x * En_x
+                        Hy_edge = Jn_prev_y * En_y
+                        Qheat_lag = np.zeros((self.Ny, self.Nx))
+                        Qheat_lag[:, 1:-1] += 0.5 * (Hx_edge[:, :-1] + Hx_edge[:, 1:])
+                        Qheat_lag[:, 0] += Hx_edge[:, 0]
+                        Qheat_lag[:, -1] += Hx_edge[:, -1]
+                        Qheat_lag[1:-1, :] += 0.5 * (Hy_edge[:-1, :] + Hy_edge[1:, :])
+                        Qheat_lag[0, :] += Hy_edge[0, :]
+                        Qheat_lag[-1, :] += Hy_edge[-1, :]
+                        F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(
+                            psi, n, p, cur_voltages, theta=theta, n_lag=n_lag,
+                            Jn_lag_x=Jn_prev_x, Jn_lag_y=Jn_prev_y,
+                            Qheat_lag=Qheat_lag)
+                        Jn_prev_x, Jn_prev_y = Jn_x.copy(), Jn_y.copy()
+                    else:
+                        F, J, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
                     # Symmetric Dirichlet elimination; F is left alone
                     # because the convergence test (and the merit) read
                     # it. See pytcad/dirichlet.py.
@@ -1879,9 +2014,16 @@ class Device2D:
                         du, _ = linsolve.solve_linear(
                             Jd, rhs, method=resolved_linsolve, rtol=opts.linsolve_rtol,
                             block_size=opts.block_size, precond=opts.precond)
-                    dpsi = du[0::3].reshape(self.Ny, self.Nx)
-                    dn = du[1::3].reshape(self.Ny, self.Nx)
-                    dp = du[2::3].reshape(self.Ny, self.Nx)
+                    if energy_balance:
+                        N3 = 3 * self.N
+                        dpsi = du[0:N3:3].reshape(self.Ny, self.Nx)
+                        dn = du[1:N3:3].reshape(self.Ny, self.Nx)
+                        dp = du[2:N3:3].reshape(self.Ny, self.Nx)
+                        dtheta = du[N3:].reshape(self.Ny, self.Nx)
+                    else:
+                        dpsi = du[0::3].reshape(self.Ny, self.Nx)
+                        dn = du[1::3].reshape(self.Ny, self.Nx)
+                        dp = du[2::3].reshape(self.Ny, self.Nx)
 
                     dpsi = np.clip(dpsi, -opts.max_dpsi, opts.max_dpsi)
                     n_old, p_old = n, p
@@ -1901,6 +2043,8 @@ class Device2D:
                     rel_p = (np.abs(p_new - p_old)
                              / np.maximum(p_old, dens_floor)).max()
                     err = max(np.abs(dpsi).max(), rel_n, rel_p)
+                    if energy_balance:
+                        err = max(err, float(np.abs(dtheta).max()))
                     # M34-S6: with impact ionization, M15's backtracking
                     # line search on the 2-norm merit (Device1D's rule),
                     # except that convergence is judged on the FULL Newton
@@ -1944,6 +2088,15 @@ class Device2D:
                         psi = psi + lam * dpsi
                     else:
                         psi = psi + dpsi
+                        if energy_balance:
+                            # Relative clip -- see device.py's own note
+                            # on this same fix (M44-HYDRODYNAMIC-PLAN.md
+                            # Slice 4).
+                            theta = np.clip(theta + dtheta, 0.1 * theta,
+                                           10.0 * theta)
+                            for name, bc in self.bcs.items():
+                                if isinstance(bc, DirichletBC):
+                                    theta[bc.j, bc.i] = 1.0
                     n, p = n_new, p_new
                     if opts.verbose:
                         print(f"    it {it:2d}  |dpsi|={np.abs(dpsi).max():.3e}  |dn/n|={rel_n:.3e}")
@@ -1975,6 +2128,8 @@ class Device2D:
         self.last_converged = converged
 
         self.psi, self.n, self.p = psi, n, p
+        if energy_balance:
+            self.Tn = theta * self.T
         _, _, Jn_x, Jn_y, Jp_x, Jp_y, _, _ = self._residual_jacobian(psi, n, p, cur_voltages)
         self.Jn_x, self.Jp_x = Jn_x * self.J0, Jp_x * self.J0
         self.Jn_y, self.Jp_y = Jn_y * self.J0, Jp_y * self.J0

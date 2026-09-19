@@ -3260,3 +3260,113 @@ own rule requires a real `benchmarks/` entry for any performance claim,
 never asked for here). M45 is now complete for its full scope,
 including the GUI. Next up per ARCHITECTURE.md's queue: M44
 (hydrodynamic transport).
+
+---
+
+## 2026-09-19: M44 -- hydrodynamic transport LANDED (electron-only, no C++ anywhere)
+
+Full record in `pytcad/M44-HYDRODYNAMIC-PLAN.md`; summary here.
+
+**Scope**: `hydrodynamic.py` (M29) was a standalone post-processing
+closure -- local carrier temperature, no spatial energy-flux, never
+touching a device's own Newton system. M44's job was to make it
+genuinely coupled, per ARCHITECTURE.md's own scope note. Electron-only
+by deliberate scope reduction (hole energy balance deferred, disclosed
+-- matches the wider literature's own convention for n-channel
+overshoot).
+
+**Slice 0 (literature)**: fetched Grasser/Tang/Kosina/Selberherr,
+"A Review of Hydrodynamic and Energy-Transport Models," Proc. IEEE
+91(2) 2003. Confirmed the existing M29 local closure exactly matches
+the paper's own Eq. (5) (independent validation). Adopted the paper's
+three-moment energy-transport model (Eqs. 56-59) as the coupled
+equation. Mobility feedback reuses two ALREADY-gated pieces instead of
+inventing a new law: `hydrodynamic.effective_field_from_temperature`
+(M29's own inverse closure) feeding `materials.mobility_field` (Canali,
+already used by Device1D's `field_mobility`).
+
+**Slice 1 (Device1D)**: `Models.energy_balance` appends Tn as a 4th DOF
+block (rows 3N..4N-1), NOT interleaved -- the existing 3N block's code
+and indices are untouched, verified bit-identical off-path and via a
+93-test targeted regression (M13/M15/M16/M34, all touching
+`_residual_jacobian`). Two real bugs found by actually running the
+code: a transposed Jacobian diagonal term (caught instantly by
+FD-Jacobian) and negative carrier temperature under bias -- the exact
+same Wachutka (1990) quasi-Fermi-gradient pathology M19 self-heating
+already hit once, fixed the same way (`Jn.E_n`, not `Jn.E_psi`).
+
+**Slice 2 (benchmark before compiling)**: measured `energy_balance`
+1D wall time per CLAUDE.md's M32 rule instead of assuming. Found the
+new Tn-block assembly used a plain Python `for` loop (every other term
+in `_residual_jacobian` is vectorized) -- up to 18x overhead, growing
+with N. Vectorized it (bincount-style, no algorithm change); overhead
+dropped to ~1.1x flat. Conclusion: no C++ justified for the 1D path.
+
+**Slice 3 (`pytcad/hydro_grid.py`)**: corrected the plan's own
+"mirror thermal_grid.py" premise before writing code -- that module is
+hot because it runs a NESTED Newton solve inside an outer Gummel loop;
+M44's own architecture (Tn appended into the SAME Newton iterate,
+no nested solve) matches `ii_grid.py`/`btbt_grid.py`'s cost profile
+instead, and those stay pure Python. Built the D-generic kernel on
+their calling convention (flat `axes` list, `kL`/`kR` node indices).
+FD-Jacobian in 2D/3D and y/z-uniform reduction to Device1D all passed
+on first run -- misleadingly, as Slice 4 found. Measured (not
+assumed): ~18ms at 64,000 nodes, linear scaling -- no C++ needed here
+either.
+
+**Slice 4 (Device2D + Device3D wiring)** -- three real bugs found:
+1. `DirichletBC`/`PinnedBC.i`/`.j`/`.k` are always arrays (even for a
+   single-node contact); a list comprehension used `np.array([...])`
+   instead of `np.concatenate([...])`, corrupting the dirichlet-node
+   array's shape and crashing `grid_hydro`'s COO assembly.
+2. `kappa_s = KAPPA0*mu_n0*n_lag*theta` underflows to ~1e-14 in a
+   deep-minority region, decoupling those nodes from every neighbor at
+   once -- measured directly: Jacobian rank dropped to 72/123
+   (condition ~3e14). Fixed with `_STIFF_DENSITY_FLOOR` (the SAME
+   floor this codebase's n/p convergence metric already uses), applied
+   in both `hydro_grid.py` and Device1D's own Slice 1 code. Also fixed
+   theta's Newton-step clip from an absolute range to the relative
+   `0.1x-10x` clip n/p already use.
+3. **The actual root cause of an 87% y-uniform Tn mismatch**:
+   `hydro_grid.py`'s flux-divergence term was missing the transverse
+   control-volume weight device2d.py's own Poisson residual always
+   applies (`dVy[:,None]*div_x + dVx[None,:]*div_y` -- an x-face's flux
+   has a "depth" in y). Slice 3's own reduction gates never caught this
+   because they used an artificially row-uniform `dV` (Device1D's
+   scalar dV tiled identically at every row) instead of the real
+   `dV = outer(dVy, dVx)` a boundary row vs. an interior row actually
+   have. Diagnosed by direct bisection (confirmed the psi/n/p block
+   byte-identical to a decoupled baseline at every early iterate, ruled
+   out solver-noise theories via a resolution study showing the
+   mismatch did NOT vanish under refinement, then re-derived the
+   discretization against device2d.py's own convention). After the
+   fix: y-uniform Device2D reproduces Device1D's Tn(x) to **3.4e-13**
+   (round-off), not "close." Device3D applied all three lessons from
+   the start, found one NEW shape variant of bug 1 (`contact_k` gets
+   reassigned from a list to a deduped ndarray earlier in the same
+   function; re-wrapping it in `np.concatenate` a second time raised
+   "zero-dimensional arrays cannot be concatenated"), and reproduces
+   Device1D to **3.7e-10**.
+
+**Verification**: new gate files `tests/test_m44_hydrodynamic_coupled.py`
+(6), `test_m44_s3_hydro_grid.py` (4), `test_m44_s4_device2d.py` (3),
+`test_m44_s4_device3d.py` (3) -- 15 tests + 1 disclosed xfail (no
+accessible digitized published overshoot curve to match quantitatively,
+same class of gap as M14's G-A), all passing. Targeted regression:
+93 tests (M13/M15/M16/M34, Device1D-side) + 64 tests (Device2D
+validation/impact/BTBT/incomplete-ion/GateBC) + 36 tests (Device3D
+impact/BTBT/incomplete-ion) all passed, zero regressions.
+
+**Honest process note**: the transverse-weight bug was found only by
+building a LIVE, multi-row Device2D solve and comparing against
+Device1D end to end -- the standalone kernel gates, run in isolation,
+gave false confidence because they unknowingly exercised a degenerate,
+uniform-dV configuration that could never expose this class of bug.
+Generalizes: a dimensional-lift reduction gate must use the device's
+REAL row/layer-varying geometry, not a simplified stand-in.
+
+No C++ was needed anywhere in this milestone, despite the original
+instruction to use it -- measured twice (Slices 2 and 3), and both
+times the actual bottleneck was a plain Python inefficiency or, once
+fixed, nothing at all. `core/`, CMakeLists.txt, and the bindings
+directory are untouched. Working tree UNCOMMITTED; nothing pushed.

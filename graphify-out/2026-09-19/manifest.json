@@ -396,9 +396,9 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "pytcad/gui/controllers/app_controller.py": {
-    "mtime": 1789718163.7484975,
-    "seen": 1789722719.218415,
-    "ast_hash": "df8fb661db45bcd6ed74884eca1de850",
+    "mtime": 1789755618.4210284,
+    "seen": 1789757323.396543,
+    "ast_hash": "383186374fada5441225e7e0217bab98",
     "semantic_hash": ""
   },
   "pytcad/gui/controllers/band_diagram_controller.py": {
@@ -612,10 +612,10 @@
     "semantic_hash": "a01bcae6c00f4d1217268a3ffcbd093a"
   },
   "pytcad/gui/services/result_store.py": {
-    "mtime": 1789581433.5916548,
-    "seen": 1789716278.7380974,
-    "ast_hash": "d694b53f9db7520aa8abdd2d6f77cbe2",
-    "semantic_hash": "d694b53f9db7520aa8abdd2d6f77cbe2"
+    "mtime": 1789755781.620134,
+    "seen": 1789757323.3965623,
+    "ast_hash": "8e2907d76190a73287b181ddf84c1118",
+    "semantic_hash": ""
   },
   "pytcad/gui/services/solver_backend.py": {
     "mtime": 1789581433.5916548,
@@ -624,10 +624,10 @@
     "semantic_hash": "124b5d641c3f5be3e13a54476bfb6461"
   },
   "pytcad/gui/services/solver_runner.py": {
-    "mtime": 1789581433.5925746,
-    "seen": 1789716278.7380984,
-    "ast_hash": "35e6e2ef6af965f4ebd8c11a6b3234fa",
-    "semantic_hash": "35e6e2ef6af965f4ebd8c11a6b3234fa"
+    "mtime": 1789755590.9041677,
+    "seen": 1789757323.3965635,
+    "ast_hash": "2c5244b5bff5b9c019221eb550603372",
+    "semantic_hash": ""
   },
   "pytcad/gui/services/structure_model.py": {
     "mtime": 1789581433.5925746,
@@ -684,10 +684,10 @@
     "semantic_hash": "7e72be002445f3baa30aa354a661e215"
   },
   "pytcad/gui/tests/test_ac_gui.py": {
-    "mtime": 1789581433.5934992,
-    "seen": 1789716278.7381022,
-    "ast_hash": "9e9ee74b594e35006e4f976124be25ed",
-    "semantic_hash": "9e9ee74b594e35006e4f976124be25ed"
+    "mtime": 1789755845.1181087,
+    "seen": 1789757323.3965693,
+    "ast_hash": "56b03b2d791ab08e963fe57de3ba699f",
+    "semantic_hash": ""
   },
   "pytcad/gui/tests/test_ac_panel.py": {
     "mtime": 1789581433.5934992,
@@ -1086,10 +1086,10 @@
     "semantic_hash": "0b4a92023449f9b661f8ea7079efa13e"
   },
   "pytcad/gui/tests/test_solver_backend.py": {
-    "mtime": 1789581433.5955746,
-    "seen": 1789716278.7381275,
-    "ast_hash": "42bb535699dcb158f81073893333dc6e",
-    "semantic_hash": "42bb535699dcb158f81073893333dc6e"
+    "mtime": 1789755857.124479,
+    "seen": 1789757323.396604,
+    "ast_hash": "1c2ece768f0fd17bb840bed24bf739ed",
+    "semantic_hash": ""
   },
   "pytcad/gui/tests/test_solver_engine_label_bug.py": {
     "mtime": 1789581433.5955746,
@@ -1200,10 +1200,10 @@
     "semantic_hash": "1929bdce4bc81a66d9fd623d5909d7ad"
   },
   "pytcad/gui/tests/test_transient_gui.py": {
-    "mtime": 1789581433.5965745,
-    "seen": 1789716278.7381346,
-    "ast_hash": "c3caa6f0812d53276c2051c149bd7d14",
-    "semantic_hash": "c3caa6f0812d53276c2051c149bd7d14"
+    "mtime": 1789755735.1876814,
+    "seen": 1789757323.3966136,
+    "ast_hash": "793455040c7ce23481646e1e227e301c",
+    "semantic_hash": ""
   },
   "pytcad/gui/tests/test_undo_stack.py": {
     "mtime": 1789581433.5965745,
@@ -1362,9 +1362,9 @@
     "semantic_hash": "bb38c841ff1679c6efdc6255b9aab97d"
   },
   "pytcad/pytcad/device.py": {
-    "mtime": 1789730883.4209216,
-    "seen": 1789731489.9625084,
-    "ast_hash": "cfe85c52f42d00eeb2ac63b132ce0f90",
+    "mtime": 1789760089.8301523,
+    "seen": 1789760768.7863815,
+    "ast_hash": "6ea572c143dcd6a39379e8331d4995c3",
     "semantic_hash": ""
   },
   "pytcad/pytcad/device2d.py": {
@@ -2484,22 +2484,22 @@
     "semantic_hash": "9378bd03d56baaf78bd738ab3848f142"
   },
   ".github/workflows/ci.yml": {
-    "mtime": 1789581433.5809278,
-    "seen": 1789716278.7382193,
-    "ast_hash": "f61d05c774b0a479f87c53e2d414b8a9",
-    "semantic_hash": "f61d05c774b0a479f87c53e2d414b8a9"
+    "mtime": 1789760075.252617,
+    "seen": 1789760768.7864866,
+    "ast_hash": "19690da96d0478f8a3f7d1fdc42c16af",
+    "semantic_hash": ""
   },
   "ARCHITECTURE.md": {
-    "mtime": 1789755197.542057,
-    "seen": 1789755245.8565755,
-    "ast_hash": "c4b28a6489a9af79e87c1df5b8595dca",
+    "mtime": 1789757291.8685856,
+    "seen": 1789757323.3967373,
+    "ast_hash": "df744c516dc788401ce227c72225f3e4",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1789715470.8719568,
-    "seen": 1789716278.73822,
-    "ast_hash": "da38e636a290f8be0f80f0356cc23f69",
-    "semantic_hash": "da38e636a290f8be0f80f0356cc23f69"
+    "mtime": 1789759559.9226525,
+    "seen": 1789760768.7864876,
+    "ast_hash": "7eaee3244122d2f6edb1da34e0a1b8bb",
+    "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1789677142.4587224,
@@ -2508,9 +2508,9 @@
     "semantic_hash": "46395fd51cff101e15fecb97e88ebd10"
   },
   "history.md": {
-    "mtime": 1789755361.6809967,
-    "seen": 1789755374.1952703,
-    "ast_hash": "c99305d89498908b1b63fbee6226ab02",
+    "mtime": 1789757309.817174,
+    "seen": 1789757323.3967388,
+    "ast_hash": "b45c0fec13fe42702e3eccb98ae73499",
     "semantic_hash": ""
   },
   "pytcad/DESIGN.md": {
@@ -2518,36 +2518,6 @@
     "seen": 1789716278.7382212,
     "ast_hash": "7cf2e292bd30f46725d592127e958f58",
     "semantic_hash": "7cf2e292bd30f46725d592127e958f58"
-  },
-  "pytcad/M19-SELFHEATING-PLAN.md": {
-    "mtime": 1789581433.5826607,
-    "seen": 1789716278.7382216,
-    "ast_hash": "db251c768b77ec6f3e80d9b7264ab4e7",
-    "semantic_hash": "db251c768b77ec6f3e80d9b7264ab4e7"
-  },
-  "pytcad/M30-WORKBENCH-PLAN.md": {
-    "mtime": 1789581433.5826607,
-    "seen": 1789716278.738222,
-    "ast_hash": "db1c2963f0f6eae9c9f7b3c0cf2d93ee",
-    "semantic_hash": "db1c2963f0f6eae9c9f7b3c0cf2d93ee"
-  },
-  "pytcad/M31-P5-ASSEMBLY-NEWTON-PLAN.md": {
-    "mtime": 1789581433.5826607,
-    "seen": 1789716278.7382238,
-    "ast_hash": "53ad83b2acb2b6eb138983a7d74450b1",
-    "semantic_hash": "53ad83b2acb2b6eb138983a7d74450b1"
-  },
-  "pytcad/M33-INTERFACE-PLAN.md": {
-    "mtime": 1789581433.5826607,
-    "seen": 1789716278.7382243,
-    "ast_hash": "77af9449a2abc7af027f90d08dba7d35",
-    "semantic_hash": "77af9449a2abc7af027f90d08dba7d35"
-  },
-  "pytcad/M34-S1-PLAN.md": {
-    "mtime": 1789581433.5835743,
-    "seen": 1789716278.7382247,
-    "ast_hash": "1b14daa119b8891d5161ba451293bb9e",
-    "semantic_hash": "1b14daa119b8891d5161ba451293bb9e"
   },
   "pytcad/M35-3D-PROCESS-PLAN.md": {
     "mtime": 1789713152.162758,
@@ -2736,9 +2706,9 @@
     "semantic_hash": ""
   },
   "pytcad/pytcad/transient3d.py": {
-    "mtime": 1789741720.4337234,
-    "seen": 1789742348.7623088,
-    "ast_hash": "a5acb16ffaa0640715bd41c46970b3d6",
+    "mtime": 1789756066.9309509,
+    "seen": 1789757323.396652,
+    "ast_hash": "63f27d3b7102534cd967a1154b9d8f11",
     "semantic_hash": ""
   },
   "pytcad/tests/test_m45_ac3d.py": {
@@ -2754,9 +2724,9 @@
     "semantic_hash": ""
   },
   "pytcad/M45-TRANSIENT-AC-3D-PLAN.md": {
-    "mtime": 1789755345.2494826,
-    "seen": 1789755374.1952755,
-    "ast_hash": "dcb8d6412a2bfccc1aed771b4269494a",
+    "mtime": 1789757271.4839172,
+    "seen": 1789757323.3967438,
+    "ast_hash": "72bda11cdc38d9e85f9d6a010ed315f6",
     "semantic_hash": ""
   },
   "pytcad/tests/test_m45_gaa_multigate.py": {
@@ -2769,6 +2739,42 @@
     "mtime": 1789743024.6410537,
     "seen": 1789755245.856548,
     "ast_hash": "b4e4c48b3926193c9900a6f1f8fffd3f",
+    "semantic_hash": ""
+  },
+  "pytcad/benchmarks/m44_s2_hydro_measure.py": {
+    "mtime": 1789759975.9195385,
+    "seen": 1789760768.7862592,
+    "ast_hash": "e2c907e868114cc67be5a4c8e481aa9d",
+    "semantic_hash": ""
+  },
+  "pytcad/pytcad/hydro_grid.py": {
+    "mtime": 1789760570.7496874,
+    "seen": 1789760768.7863877,
+    "ast_hash": "832bb713e288fa3e6572c4abd9121e63",
+    "semantic_hash": ""
+  },
+  "pytcad/tests/test_m44_hydrodynamic_coupled.py": {
+    "mtime": 1789759276.6963532,
+    "seen": 1789760768.7864552,
+    "ast_hash": "03d64550e1133f912712da03a7779f61",
+    "semantic_hash": ""
+  },
+  "pytcad/tests/test_m44_s3_hydro_grid.py": {
+    "mtime": 1789760656.5527172,
+    "seen": 1789760768.7864556,
+    "ast_hash": "34a9b1975ac3395171fa88a66c03c9be",
+    "semantic_hash": ""
+  },
+  "repomix.config.json": {
+    "mtime": 1789759403.849206,
+    "seen": 1789760768.7864811,
+    "ast_hash": "48df71cbe13ad15e0a75e8de877d424f",
+    "semantic_hash": ""
+  },
+  "pytcad/M44-HYDRODYNAMIC-PLAN.md": {
+    "mtime": 1789760722.5510478,
+    "seen": 1789760768.7864907,
+    "ast_hash": "7c7a3bccae2a804e33643557a3daf42d",
     "semantic_hash": ""
   }
 }

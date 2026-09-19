@@ -245,7 +245,262 @@ Python inefficiency that should never have reached the "compile it"
 question in the first place. Re-measure after vectorizing before
 deciding whether Slice 3's C++ step is still warranted at all.
 
-## Slices 3-4
+**Done.** The `for i in range(1, N-1)` loop was replaced with the
+vectorized array form (index array `idx = np.arange(1, N-1)`, all
+terms already precomputed as edge-indexed arrays -- `add()` already
+accepts array `r`/`c`/`v`, so no new machinery was needed). All 5
+gates + the disclosed xfail still pass (0.26s) after the change --
+the vectorized form is the same math, not a different algorithm.
+
+**Re-measured after vectorizing:**
+
+| N | off (s) | on (s) | overhead | assembly-only off (s) | assembly-only on (s) | assembly overhead |
+|---|---|---|---|---|---|---|
+| 41 | 0.0086 | 0.0248 | 2.88x | 0.000247 | 0.000280 | 1.13x |
+| 161 | 0.0119 | 0.0383 | 3.22x | 0.000299 | 0.000329 | 1.10x |
+| 641 | 0.0195 | 0.0685 | 3.51x | 0.000444 | 0.000492 | 1.11x |
+| 2561 | 0.0526 | 0.2402 | 4.56x | 0.001081 | 0.001219 | 1.13x |
+
+Assembly overhead dropped from up to 18.75x down to a flat ~1.1x
+(effectively free, and no longer growing with N) at every size tested
+-- confirming the Python loop, not the new physics, was the entire
+problem. The remaining 2.9x-4.6x TOTAL overhead is now consistent with
+genuinely more work rather than inefficiency: a 4*N vs 3*N sparse
+direct solve (already using the compiled SuperLU path via scipy, same
+as the base solver -- nothing left to compile there without changing
+the linear-solve algorithm itself, out of scope) plus the lagged
+outer-Newton coupling needing more iterations to reach the same
+tolerance (mobility/Tn/current are only mutually consistent after
+several outer passes, by design -- see Slice 1's honesty clause on the
+lagged-Jacobian tradeoff).
+
+(The vectorization touches only code inside `if theta is not None:` --
+no other physics path executes it, so the earlier 93-test targeted
+regression run was not re-run for this change; the M44 gate file's own
+re-pass is the relevant check here.)
+
+**Slice 2 conclusion: NO C++ is justified for the 1D path.** This
+restores the plan's original a-priori expectation, but only AFTER
+actually measuring found and fixed a real, unrelated Python
+performance bug first -- exactly the discipline CLAUDE.md's M32 rule
+is for. Slice 3's C++ step remains scoped to the structured 2D/3D grid
+assembly only, as originally planned.
+
+## Slice 3 -- structured-grid kernel (2026-09-19)
+
+**Architecture correction found while starting this slice (before
+writing any code):** the plan's own text said this "mirrors
+thermal_grid.py -> core/src/thermal/grid.cpp exactly." That premise
+does not hold once you look at *why* thermal_grid.py was compiled:
+it runs its own NESTED Newton solve inside `thermal.py`'s outer Gummel
+loop (an extra multiplicative factor of iterations), which is what
+made it hot. M44 Slice 1's own architecture is different -- Tn is an
+APPENDED DOF inside the SAME single Newton iterate as psi/n/p, no
+nested solve, no outer loop -- exactly `ii_grid.py`/`btbt_grid.py`'s
+(M34-S6) cost profile, and those stay pure Python, uncompiled, in this
+codebase. So `pytcad/hydro_grid.py` was built following THEIR calling
+convention (a flat `axes` list of per-axis edge arrays with `kL`/`kR`
+node indices, returning `(F, rows, cols, vals)` COO triples for the
+caller to stamp in) instead of thermal_grid.py's raw-coordinate/ND-
+array one. See `hydro_grid.py`'s own module docstring for the full
+reasoning.
+
+**Implementation:** `grid_hydro(N, axes, dV, n_lag, theta, Qheat_lag,
+mu_n0, KAPPA0, ALPHA, dirichlet_nodes)` -- the exact Slice 1 equation
+(same `kappa_s`/`Q_src`/`w_edge` formulas), generalized to sum the flux
+divergence over every axis in `axes`, fully vectorized from the start
+via `np.bincount` scatter-add (Slice 2's lesson applied up front, not
+found the hard way a second time). Boundary/contact nodes are given
+directly as `dirichlet_nodes`; an ordinary insulating mesh boundary
+needs no special case (fewer incident edges = an implicit zero-flux
+Neumann condition, same as Poisson's own box-integration already gets
+in device2d.py/device3d.py).
+
+**Gates** (`tests/test_m44_s3_hydro_grid.py`, all 4 passed on first
+run, 0.21s): G1/G2 FD-Jacobian in 2D and 3D (same per-column-relative-
+error convention as Slice 1's and `test_m13_solver.py`'s own probe);
+G3/G4 y-uniform-2D and z-uniform-3D reduction -- Device1D's own
+converged Slice-1 (psi, n, Tn, Jn) state, tiled along the transverse
+axis/axes with zero transverse current, fed through `grid_hydro`, must
+give (near-)zero residual at every interior node: max|F| < 1e-8,
+confirming `grid_hydro` and Device1D's `_residual_jacobian` really do
+solve the SAME equation, not just similarly-shaped ones.
+
+**Benchmark (measured, not assumed -- same M32 discipline as Slice
+2):** `grid_hydro` wall time, warm, best of 20, synthetic grids:
+
+| dim | N | time |
+|---|---|---|
+| 2D | 400 | 0.05 ms |
+| 2D | 2,500 | 0.39 ms |
+| 2D | 10,000 | 1.53 ms |
+| 3D | 3,375 | 0.55 ms |
+| 3D | 15,625 | 3.51 ms |
+| 3D | 64,000 | 17.95 ms |
+
+Scales linearly with N as expected for a vectorized bincount assembly,
+and is fast in absolute terms -- ARCHITECTURE.md's own M47/M22 notes
+record Device3D's plain electrical solve at ~8,600 nodes as "simply
+slow via a direct sparse solve" (hundreds of ms to seconds), so an
+~18ms assembly at 64,000 nodes is nowhere near the bottleneck.
+
+**Slice 3 conclusion: NO C++ is justified here either.** Combined with
+Slice 2, no part of M44 built so far needs a compile -- the pattern
+this milestone's own physics follows (appended-DOF within a single
+Newton iterate) matches `ii_grid.py`/`btbt_grid.py`'s already-
+established pure-Python precedent, not `thermal_grid.py`'s nested-
+solve one. `core/`, CMakeLists.txt, and the bindings directory are
+untouched.
+
+**Known Slice 4 prerequisite, found while writing this slice's
+reduction gates (not yet acted on):** `Device2D.__init__` currently
+REFUSES `Models(field_mobility=True)` outright ("Canali field-
+dependent mobility is not implemented in Device2D") -- and
+Slice 1's own mobility feedback for `energy_balance` runs entirely
+through that same Canali `mobility_field()` call. Device3D was not
+checked yet. Wiring `hydro_grid.py` into Device2D/Device3D (Slice 4)
+will need EITHER a minimal Canali-mobility port to Device2D/Device3D
+first, or an `energy_balance`-only mobility path that bypasses the
+existing `field_mobility` refusal without silently composing with it
+-- a real scope item for Slice 4, not a Slice 3 concern, flagged here
+so it isn't rediscovered as a surprise.
+
+## Slice 4 -- Device2D wiring (2026-09-19)
+
+Wired `hydro_grid.py`'s D-generic kernel into `Device2D` following the
+SAME appended-DOF design as Device1D (`Models.energy_balance`, DOF
+`3*N -> 4*N` when on, base 3*N block untouched). New
+`_update_energy_mobility(theta)` method (mirrors `_update_surface_
+mobility`'s own lagged-recompute pattern) replaces ALL edge
+diffusivities from the Tn-consistent Canali mobility -- Device2D's
+existing `Models.field_mobility` stays refused (`__init__`'s own
+guard, unrelated), `energy_balance` has its own independent path.
+
+**Three real bugs found while gating this, in the order found:**
+
+1. **`DirichletBC.i`/`.j` array-shape bug.** `DirichletBC` always
+   stores `i`/`j` as `np.atleast_1d` arrays, even for a single-node
+   contact. Building `dirichlet_nodes` via
+   `np.array([bc.j*Nx+bc.i for bc in ...])` stacked a LIST of `(1,)`
+   arrays into shape `(n_contacts, 1)` instead of concatenating into a
+   flat `(n_contacts,)` array, crashing `grid_hydro`'s COO assembly.
+   Fixed with `np.concatenate` (the same pattern this file's own
+   `live[bc.j*Nx+bc.i] = False` fancy-indexing already uses correctly
+   elsewhere).
+
+2. **Unfloored deep-minority density causes measurable Jacobian rank
+   deficiency.** `kappa_s = KAPPA0*mu_n0*n_lag*theta` is multiplicative
+   in `n_lag`, which underflows to ~1e-14 in a diode's deep-minority
+   region (confirmed directly). Left unfloored, `kappa_s` vanishes
+   there and decouples those nodes from every neighbor at once --
+   measured directly: the assembled theta-block Jacobian dropped to
+   rank 72/123 (condition number ~3e14) on a real device state before
+   this fix. Fixed by flooring `n_lag` at `1e-8`
+   (`_STIFF_DENSITY_FLOOR`, the SAME floor this codebase's n/p
+   convergence metric already uses for exactly this reason) in BOTH
+   `hydro_grid.py` and Device1D's own Slice 1 code (for consistency --
+   Device1D's tridiagonal structure tolerated the unfloored version
+   better, which is why this was found in Slice 4 and not Slice 1, but
+   the same physical argument applies: a node with ~0 carriers has no
+   physically meaningful electron temperature to solve for). Also
+   fixed, alongside this: theta's own Newton-step clip was an
+   ABSOLUTE range (`[0.05, 1000]`) instead of the RELATIVE `0.1x-10x`
+   clip n/p already use, letting one early iterate overshoot by >30x
+   (Tn 300K -> 10800K in a single step) -- harmless in 1D, but this
+   was the initial symptom that led to finding bug 2.
+
+3. **Missing transverse control-volume weight on the flux-divergence
+   term -- the actual root cause of a real, reproducible ~87%
+   Tn mismatch between a y-uniform Device2D solve and Device1D's own
+   Slice-1 result.** `device2d.py`'s own Poisson residual weights its
+   two divergence terms by the TRANSVERSE control-volume width
+   (`dVy[:,None]*div_x + dVx[None,:]*div_y`) -- an x-face's flux has a
+   "depth" in y. `hydro_grid.py`'s `grid_hydro` did not do this at
+   all. Slice 3's OWN reduction gates (G3/G4) did not catch this
+   because they used an ARTIFICIALLY row-uniform `dV` (Device1D's own
+   scalar dV, tiled identically at every row) rather than
+   device2d.py's/device3d.py's REAL row/layer-varying
+   `dV = outer(dVy, dVx)` (a boundary row's transverse CV is HALF-
+   width, an interior row's is FULL-width) -- with a uniform dV the
+   missing weight is invisible; with the real one it is not.
+   Diagnosed by direct bisection: confirmed the psi/n/p block was
+   byte-identical to a decoupled baseline at every early iterate
+   (ruling out cross-contamination), confirmed the base current (Jn_y)
+   was exact round-off in the baseline (ruling out a pre-existing
+   geometry issue), then confirmed the theta-block Jacobian was
+   measurably rank-deficient/ill-conditioned even after fix 2 and that
+   its ROW-DEPENDENT asymmetry was a genuine (non-random,
+   non-vanishing-under-refinement) feature localized at the contact
+   edge -- which is what led to re-deriving the discretization against
+   device2d.py's own convention rather than continuing to suspect
+   solver noise. Fixed by adding a mandatory `w` (transverse weight)
+   field to each axis dict in `hydro_grid.py`'s `axes` convention, and
+   updating BOTH `device2d.py`'s caller and `test_m44_s3_hydro_grid.py`
+   itself (which was silently exercising the bug's blind spot) to use
+   the real row-varying `dV`/`w`.
+
+**Result after all three fixes:** a y-uniform Device2D diode solve
+(41x3 mesh) reproduces Device1D's own converged Tn(x) to
+**3.4e-13 absolute** (round-off), `Jn_y` exactly `0.0`, row-to-row
+difference exactly `0.0` -- not merely "close." A resistor case
+matches to `2.2e-7` (Newton tolerance level). New gate file
+`tests/test_m44_s4_device2d.py` (3 tests: off-path bit-identity,
+y-uniform reduction at 1e-6 tolerance, no-negative-heating sanity) --
+all pass, plus the full M44 suite (Slices 1/3/4 combined, 12 tests + 1
+disclosed xfail) passes in 0.48s.
+
+**Regression check (targeted, per this milestone's own instruction):**
+`OPENBLAS_NUM_THREADS=1 python3 -m pytest tests/test_validation_2d.py
+tests/test_m34_s6_impact_2d3d.py tests/test_m16_s2_btbt_grid.py
+tests/test_m41_incomplete_ion_2d3d.py tests/test_m42_s2_gate_bc.py -q
+-n 6` -> **64 passed in 565.75s** (2026-09-19). No regressions in
+Device2D's existing physics (impact ionization, BTBT, incomplete
+ionization, GateBC, general validation).
+
+**Honest process note:** this was found only by actually building a
+LIVE, multi-row Device2D solve and comparing against Device1D end to
+end -- Slice 3's own standalone kernel gates, run in isolation, gave
+false confidence (they were unknowingly exercising a degenerate,
+uniform-dV configuration that could never expose this class of bug).
+The lesson generalizes: a dimensional-lift reduction gate must use the
+REAL device's own row/layer-varying geometry, not a simplified stand-in,
+or it risks validating the wrong thing.
+
+## Device3D (2026-09-19) -- Slice 4 complete
+
+Same wiring as Device2D, three lessons applied from the start
+(n_lag floor, relative theta clip, transverse weight `w` = product of
+the OTHER two axes' widths, e.g. x-edge weight = dVy*dVz). New
+`_update_energy_mobility` (device3d.py) mirrors Device2D's own.
+
+**One new shape bug, found immediately (same class as Slice 4's first
+Device2D bug):** `contact_k` is REASSIGNED from a raw list to a
+deduped ndarray earlier in `_residual_jacobian` (`if contact_k:
+contact_k = np.unique(np.concatenate(contact_k))`). Re-wrapping it in
+`np.concatenate(contact_k)` a second time for `contact_nodes` raised
+"zero-dimensional arrays cannot be concatenated" (`np.concatenate` on
+a 1D array iterates its scalar elements). Fixed by reusing the
+already-deduped array directly.
+
+**Result:** a y/z-uniform 21x3x3 Device3D diode reproduces Device1D's
+own converged Tn(x) to **3.7e-10** (round-off), `Jn_y`/`Jn_z` at
+~4.7e-18 (round-off). New gate file `tests/test_m44_s4_device3d.py`
+(3 tests, mirrors the Device2D file) -- all pass, full M44 suite now
+15 tests + 1 disclosed xfail in 0.73s. Targeted Device3D regression
+(`test_m34_s6_impact_2d3d.py`, `test_m16_s2_btbt_grid.py`,
+`test_m41_incomplete_ion_2d3d.py`, `test_m34_s3_nonlocal_btbt_2d3d.py`)
+running.
+
+**Regression check:** `test_m34_s6_impact_2d3d.py`, `test_m16_s2_btbt_grid.py`,
+`test_m41_incomplete_ion_2d3d.py` -> 36 passed, 0 failed.
+`test_m34_s3_nonlocal_btbt_2d3d.py` -> 3 failed + 6 errors, ALL
+`ImportError: pytcad requires the compiled extension pytcad._core`
+(run used plain `python3`/base conda env, not `conda run -n TCAD`
+where `_core` is actually built) -- an environment gap in how this
+check was invoked, not a regression from any M44 change; none of
+M44's own code touches `_accel`/`_core` at all.
+
+**Slice 4 (Device2D + Device3D) is now DONE.**
 
 See the approved plan (design phase) for the full slice breakdown
 (Slice 1: 4*N DOF coupling in Device1D; Slice 2: benchmark before any
