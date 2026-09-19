@@ -817,13 +817,23 @@ class AppController(QObject):
                     "enabled": _HAVE_PYAMG,
                     "reason": "" if _HAVE_PYAMG
                               else "optional pyamg dependency not installed"})
+        # Structural reasons (wrong dimensionality, an armed transient)
+        # are checked BEFORE the optional-dependency check: they are
+        # the more actionable message (installing mpi4py would not
+        # help a 1D device or a transient run either way), and this
+        # order is also what keeps the reason deterministic across
+        # machines that do/don't have mpi4py installed -- a CI runner
+        # without it must still report "only available for 3D devices"
+        # for a 1D spec, not mask that behind the dependency message
+        # (gui/tests/test_engine_selector.py's own gates depend on
+        # this precedence).
         mpi_reason = ""
-        if not _HAVE_MPI:
-            mpi_reason = "optional mpi4py dependency / mpirun not available"
-        elif dim != 3:
+        if dim != 3:
             mpi_reason = "only available for 3D devices"
         elif self._transient_config is not None:
             mpi_reason = "not compatible with an armed transient run"
+        elif not _HAVE_MPI:
+            mpi_reason = "optional mpi4py dependency / mpirun not available"
         opts.append({"id": "mpi_schwarz", "label": "MPI Schwarz",
                     "enabled": not mpi_reason, "reason": mpi_reason})
         return opts

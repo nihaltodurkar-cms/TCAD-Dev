@@ -94,7 +94,13 @@ def test_g1_fd_jacobian_matches_numerical():
     F0, J0, *_ = _step_residual_jacobian(
         dev, psi, n, p, voltages, dev.n, dev.p, None, None, dV, dt_s, 1.0,
         k_free)
-    J0 = J0.toarray()
+    # Sparse column-slice throughout, never J0.toarray() on the full
+    # matrix -- test_validation_3d.py's own
+    # test_dd_jacobian_matches_finite_differences uses the same
+    # pattern for exactly this reason. A dense (70740, 70740) array
+    # wants 37.3 GiB, which OOMs on a standard CI runner even though
+    # only 50 columns are ever read below.
+    J0 = J0.tocsc()
 
     Nz, Ny, Nx = dev.Nz, dev.Ny, dev.Nx
     N3 = 3 * Nz * Ny * Nx
@@ -115,8 +121,9 @@ def test_g1_fd_jacobian_matches_numerical():
             u_m[2::3].reshape(shp), voltages, dev.n, dev.p, None, None,
             dV, dt_s, 1.0, k_free)
         fd = (Fp - Fm) / (2 * h)
-        worst = max(worst, np.abs(fd - J0[:, c]).max()
-                    / max(np.abs(J0[:, c]).max(), 1e-12))
+        an = np.asarray(J0[:, c].todense()).ravel()
+        worst = max(worst, np.abs(fd - an).max()
+                    / max(np.abs(an).max(), 1e-12))
     assert worst < 5e-5, f"Device3D transient FD-Jacobian mismatch: {worst:.3e}"
 
 
