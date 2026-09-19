@@ -104,6 +104,7 @@ add_library(tcad_core OBJECT
   src/nonlocal/paths.cpp
   src/thermal/grid.cpp
   src/dg/grid.cpp
+  src/unstructured3d/kernels.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # M34-S4 / M43 / M42-S3: the path tracer, thermal-grid, and
@@ -113,7 +114,8 @@ target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include
 # the target architecture.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(src/nonlocal/paths.cpp src/thermal/grid.cpp
-                              src/dg/grid.cpp PROPERTIES
+                              src/dg/grid.cpp src/unstructured3d/kernels.cpp
+                              PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 if(OpenMP_CXX_FOUND)
@@ -146,6 +148,7 @@ nanobind_add_module(_core STABLE_ABI NB_STATIC
   bindings/nonlocal_bindings.cpp
   bindings/thermal_bindings.cpp
   bindings/dg_bindings.cpp
+  bindings/unstructured3d_bindings.cpp
 )
 target_link_libraries(_core PRIVATE tcad_core)
 # The compiler toolchain lives in a SEPARATE, dedicated conda env

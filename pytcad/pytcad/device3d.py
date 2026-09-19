@@ -187,6 +187,121 @@ def _edge_pairs_z(Nx, Ny, Nz):
 
 
 # ----------------------------------------------------------------------
+#  M47 Slice 2a groundwork: the base-assembly COO stamps (Poisson flux,
+#  electron/hole continuity, local diagonal terms) factored into named,
+#  PURE (no closure-captured mutable state) block functions -- the
+#  structured-grid analogue of unstructured_dd3d.py's own M47 Slice 1
+#  block functions (_poisson_flux_geometry_coo etc.), same reasoning:
+#  isolation for a future C++ port's raw-COO parity test, and each
+#  block independently testable.
+#
+#  CONCATENATION IS ASSOCIATIVE, UNLIKE ADDITION -- this refactor is
+#  lower-risk than Slice 1's own was for exactly this reason. The
+#  original `_residual_jacobian` builds `rows`/`cols`/`vals` as plain
+#  Python LISTS, `.extend()`/`.append()`-ed by call order, concatenated
+#  EXACTLY ONCE at the end (`rows = np.concatenate(rows)`). Grouping
+#  those same sub-arrays into named functions that each return their
+#  OWN already-concatenated (rows,cols,vals) does not change the FINAL
+#  flat element order at all -- `np.concatenate([a,b,c,d])` is bit-
+#  identical to `np.concatenate([np.concatenate([a,b]), np.concatenate(
+#  [c,d])])` (concatenation preserves element order regardless of how
+#  the pieces are grouped, exactly unlike floating-point summation).
+#  So this split is safe by construction, verified by direct digest
+#  comparison below rather than re-derived from first principles the
+#  way Slice 1's COO/F ordering had to be.
+# ----------------------------------------------------------------------
+def _scatter3_coo(kL, kR, weight, row_comp, comp_L, dL, comp_R, dR):
+    """One axis's edge-Jacobian stamp -- the SAME formula
+    `Device3D._residual_jacobian`'s own (now-removed) nested `scatter()`
+    closure used, made pure (returns arrays instead of mutating a
+    captured list) so it can be called from a block function instead of
+    only from inside `_residual_jacobian` itself."""
+    w = weight.ravel(); dL = dL.ravel(); dR = dR.ravel()
+    rows = np.concatenate([3 * kL + row_comp, 3 * kL + row_comp,
+                           3 * kR + row_comp, 3 * kR + row_comp])
+    cols = np.concatenate([3 * kL + comp_L, 3 * kR + comp_R,
+                           3 * kL + comp_L, 3 * kR + comp_R])
+    vals = np.concatenate([w * dL, w * dR, -w * dL, -w * dR])
+    return rows, cols, vals
+
+
+def _poisson_flux_row_coo(kLx, kRx, wx_h, kSy, kNy, wy_h, kDz, kUz, wz_h):
+    """Poisson row (comp 0), x THEN y THEN z -- exact call order of the
+    original 3 `scatter()` calls."""
+    rx, cx, vx = _scatter3_coo(kLx, kRx, wx_h, 0, 0, -np.ones_like(wx_h),
+                               0, np.ones_like(wx_h))
+    ry, cy, vy = _scatter3_coo(kSy, kNy, wy_h, 0, 0, -np.ones_like(wy_h),
+                               0, np.ones_like(wy_h))
+    rz, cz, vz = _scatter3_coo(kDz, kUz, wz_h, 0, 0, -np.ones_like(wz_h),
+                               0, np.ones_like(wz_h))
+    return (np.concatenate([rx, ry, rz]), np.concatenate([cx, cy, cz]),
+           np.concatenate([vx, vy, vz]))
+
+
+def _electron_continuity_coo(kLx, kRx, wx_area, dJn_dpsiR_x, dJn_dn_L_x, dJn_dn_R_x,
+                             kSy, kNy, wy_area, dJn_dpsiR_y, dJn_dn_L_y, dJn_dn_R_y,
+                             kDz, kUz, wz_area, dJn_dpsiR_z, dJn_dn_L_z, dJn_dn_R_z):
+    """Electron continuity row (comp 1) -- x-psi, x-n, y-psi, y-n,
+    z-psi, z-n, exact call order of the original 6 `scatter()` calls."""
+    parts = [
+        _scatter3_coo(kLx, kRx, wx_area, 1, 0, -dJn_dpsiR_x, 0, dJn_dpsiR_x),
+        _scatter3_coo(kLx, kRx, wx_area, 1, 1, dJn_dn_L_x, 1, dJn_dn_R_x),
+        _scatter3_coo(kSy, kNy, wy_area, 1, 0, -dJn_dpsiR_y, 0, dJn_dpsiR_y),
+        _scatter3_coo(kSy, kNy, wy_area, 1, 1, dJn_dn_L_y, 1, dJn_dn_R_y),
+        _scatter3_coo(kDz, kUz, wz_area, 1, 0, -dJn_dpsiR_z, 0, dJn_dpsiR_z),
+        _scatter3_coo(kDz, kUz, wz_area, 1, 1, dJn_dn_L_z, 1, dJn_dn_R_z),
+    ]
+    return (np.concatenate([x[0] for x in parts]),
+           np.concatenate([x[1] for x in parts]),
+           np.concatenate([x[2] for x in parts]))
+
+
+def _hole_continuity_coo(kLx, kRx, wx_area, dJp_dpsiR_x, dJp_dp_L_x, dJp_dp_R_x,
+                         kSy, kNy, wy_area, dJp_dpsiR_y, dJp_dp_L_y, dJp_dp_R_y,
+                         kDz, kUz, wz_area, dJp_dpsiR_z, dJp_dp_L_z, dJp_dp_R_z):
+    """Hole continuity row (comp 2) -- x-psi, x-p, y-psi, y-p, z-psi,
+    z-p, exact call order of the original 6 `scatter()` calls."""
+    parts = [
+        _scatter3_coo(kLx, kRx, wx_area, 2, 0, -dJp_dpsiR_x, 0, dJp_dpsiR_x),
+        _scatter3_coo(kLx, kRx, wx_area, 2, 2, dJp_dp_L_x, 2, dJp_dp_R_x),
+        _scatter3_coo(kSy, kNy, wy_area, 2, 0, -dJp_dpsiR_y, 0, dJp_dpsiR_y),
+        _scatter3_coo(kSy, kNy, wy_area, 2, 2, dJp_dp_L_y, 2, dJp_dp_R_y),
+        _scatter3_coo(kDz, kUz, wz_area, 2, 0, -dJp_dpsiR_z, 0, dJp_dpsiR_z),
+        _scatter3_coo(kDz, kUz, wz_area, 2, 2, dJp_dp_L_z, 2, dJp_dp_R_z),
+    ]
+    return (np.concatenate([x[0] for x in parts]),
+           np.concatenate([x[1] for x in parts]),
+           np.concatenate([x[2] for x in parts]))
+
+
+def _base_diagonal_coo(diag_k, dV, dcden, dcdp, dRs_dn, dRs_dp):
+    """Local (same-node) diagonal terms: Poisson's charge term (two
+    forms depending on incomplete_ion), then SRH n-row, then SRH
+    p-row -- exact order/branch of the original 6 `append()` calls."""
+    dVf = dV.ravel()
+    rows, cols, vals = [], [], []
+    if dcden is None:
+        rows.append(3 * diag_k); cols.append(3 * diag_k + 1); vals.append(-dVf)
+        rows.append(3 * diag_k); cols.append(3 * diag_k + 2); vals.append(dVf)
+    else:
+        rows.append(3 * diag_k); cols.append(3 * diag_k + 1)
+        vals.append(-dVf * (1.0 - dcden.ravel()))
+        rows.append(3 * diag_k); cols.append(3 * diag_k + 2)
+        vals.append(dVf * (1.0 + dcdp.ravel()))
+
+    rows.append(3 * diag_k + 1); cols.append(3 * diag_k + 1)
+    vals.append(-dRs_dn.ravel() * dVf)
+    rows.append(3 * diag_k + 1); cols.append(3 * diag_k + 2)
+    vals.append(-dRs_dp.ravel() * dVf)
+
+    rows.append(3 * diag_k + 2); cols.append(3 * diag_k + 2)
+    vals.append(dRs_dp.ravel() * dVf)
+    rows.append(3 * diag_k + 2); cols.append(3 * diag_k + 1)
+    vals.append(dRs_dn.ravel() * dVf)
+    return (np.concatenate(rows), np.concatenate(cols), np.concatenate(vals))
+
+
+# ----------------------------------------------------------------------
 #  Device
 # ----------------------------------------------------------------------
 class Device3D:
@@ -1441,18 +1556,12 @@ class Device3D:
         F[:, 0] = F_psi.ravel(); F[:, 1] = F_n.ravel(); F[:, 2] = F_p.ravel()
         F = F.ravel()   # interleaved 3k, 3k+1, 3k+2
 
-        # --- Jacobian: edge-scatter helper (same pattern as device2d.py,
-        # one more axis) ---
-        rows, cols, vals = [], [], []
-
-        def scatter(kL, kR, weight, row_comp, comp_L, dL, comp_R, dR):
-            w = weight.ravel(); dL = dL.ravel(); dR = dR.ravel()
-            rows.extend([3 * kL + row_comp, 3 * kL + row_comp,
-                         3 * kR + row_comp, 3 * kR + row_comp])
-            cols.extend([3 * kL + comp_L, 3 * kR + comp_R,
-                         3 * kL + comp_L, 3 * kR + comp_R])
-            vals.extend([w * dL, w * dR, -w * dL, -w * dR])
-
+        # --- Jacobian: M47 Slice 2a groundwork -- the base COO stamps
+        # now live in module-level block functions (_poisson_flux_row_coo
+        # etc., see their own docstrings for why the split is safe by
+        # construction). `rows`/`cols`/`vals` stay plain lists here so
+        # the GateBC/impact/btbt/nonlocal-btbt code below (UNCHANGED)
+        # can keep appending to them exactly as before. ---
         kLx, kRx = _edge_pairs_x(Nx, Ny, Nz)
         kSy, kNy = _edge_pairs_y(Nx, Ny, Nz)
         kDz, kUz = _edge_pairs_z(Nx, Ny, Nz)
@@ -1465,9 +1574,10 @@ class Device3D:
         wx_h = wx_area * self.et_x / hx[None, None, :]
         wy_h = wy_area * self.et_y / hy[None, :, None]
         wz_h = wz_area * self.et_z / hz[:, None, None]
-        scatter(kLx, kRx, wx_h, 0, 0, -np.ones_like(wx_h), 0, np.ones_like(wx_h))
-        scatter(kSy, kNy, wy_h, 0, 0, -np.ones_like(wy_h), 0, np.ones_like(wy_h))
-        scatter(kDz, kUz, wz_h, 0, 0, -np.ones_like(wz_h), 0, np.ones_like(wz_h))
+        rows, cols, vals = [], [], []
+        p_r, p_c, p_v = _poisson_flux_row_coo(kLx, kRx, wx_h, kSy, kNy, wy_h,
+                                              kDz, kUz, wz_h)
+        rows.append(p_r); cols.append(p_c); vals.append(p_v)
 
         # electron continuity row (comp 1). M13 fd density-chain:
         #   d(Jn)/d(n_{k+1}) = an(Bp + Sn w_{k+1}),
@@ -1480,24 +1590,24 @@ class Device3D:
         if fd:
             dJn_dn_L_x = dJn_dn_L_x - an_x * Snx * wn[:, :, :-1]
             dJn_dn_R_x = dJn_dn_R_x + an_x * Snx * wn[:, :, 1:]
-        scatter(kLx, kRx, wx_area, 1, 0, -dJn_dpsiR_x, 0, dJn_dpsiR_x)
-        scatter(kLx, kRx, wx_area, 1, 1, dJn_dn_L_x, 1, dJn_dn_R_x)
 
         dJn_dpsiR_y = an_y * Sny
         dJn_dn_L_y, dJn_dn_R_y = -an_y * Bm_y, an_y * Bp_y
         if fd:
             dJn_dn_L_y = dJn_dn_L_y - an_y * Sny * wn[:, :-1, :]
             dJn_dn_R_y = dJn_dn_R_y + an_y * Sny * wn[:, 1:, :]
-        scatter(kSy, kNy, wy_area, 1, 0, -dJn_dpsiR_y, 0, dJn_dpsiR_y)
-        scatter(kSy, kNy, wy_area, 1, 1, dJn_dn_L_y, 1, dJn_dn_R_y)
 
         dJn_dpsiR_z = an_z * Snz
         dJn_dn_L_z, dJn_dn_R_z = -an_z * Bm_z, an_z * Bp_z
         if fd:
             dJn_dn_L_z = dJn_dn_L_z - an_z * Snz * wn[:-1, :, :]
             dJn_dn_R_z = dJn_dn_R_z + an_z * Snz * wn[1:, :, :]
-        scatter(kDz, kUz, wz_area, 1, 0, -dJn_dpsiR_z, 0, dJn_dpsiR_z)
-        scatter(kDz, kUz, wz_area, 1, 1, dJn_dn_L_z, 1, dJn_dn_R_z)
+
+        e_r, e_c, e_v = _electron_continuity_coo(
+            kLx, kRx, wx_area, dJn_dpsiR_x, dJn_dn_L_x, dJn_dn_R_x,
+            kSy, kNy, wy_area, dJn_dpsiR_y, dJn_dn_L_y, dJn_dn_R_y,
+            kDz, kUz, wz_area, dJn_dpsiR_z, dJn_dn_L_z, dJn_dn_R_z)
+        rows.append(e_r); cols.append(e_c); vals.append(e_v)
 
         # hole continuity row (comp 2). M13 fd density-chain:
         #   d(Jp)/d(p_{k+1}) = -ap(Bm_h + Sp w_{k+1}),
@@ -1510,47 +1620,30 @@ class Device3D:
         if fd:
             dJp_dp_L_x = dJp_dp_L_x + ap_x * Spx * wp[:, :, :-1]
             dJp_dp_R_x = dJp_dp_R_x - ap_x * Spx * wp[:, :, 1:]
-        scatter(kLx, kRx, wx_area, 2, 0, -dJp_dpsiR_x, 0, dJp_dpsiR_x)
-        scatter(kLx, kRx, wx_area, 2, 2, dJp_dp_L_x, 2, dJp_dp_R_x)
 
         dJp_dpsiR_y = ap_y * Spy
         dJp_dp_L_y, dJp_dp_R_y = ap_y * Bpy_h, -ap_y * Bmy_h
         if fd:
             dJp_dp_L_y = dJp_dp_L_y + ap_y * Spy * wp[:, :-1, :]
             dJp_dp_R_y = dJp_dp_R_y - ap_y * Spy * wp[:, 1:, :]
-        scatter(kSy, kNy, wy_area, 2, 0, -dJp_dpsiR_y, 0, dJp_dpsiR_y)
-        scatter(kSy, kNy, wy_area, 2, 2, dJp_dp_L_y, 2, dJp_dp_R_y)
 
         dJp_dpsiR_z = ap_z * Spz
         dJp_dp_L_z, dJp_dp_R_z = ap_z * Bpz_h, -ap_z * Bmz_h
         if fd:
             dJp_dp_L_z = dJp_dp_L_z + ap_z * Spz * wp[:-1, :, :]
             dJp_dp_R_z = dJp_dp_R_z - ap_z * Spz * wp[1:, :, :]
-        scatter(kDz, kUz, wz_area, 2, 0, -dJp_dpsiR_z, 0, dJp_dpsiR_z)
-        scatter(kDz, kUz, wz_area, 2, 2, dJp_dp_L_z, 2, dJp_dp_R_z)
+
+        h_r, h_c, h_v = _hole_continuity_coo(
+            kLx, kRx, wx_area, dJp_dpsiR_x, dJp_dp_L_x, dJp_dp_R_x,
+            kSy, kNy, wy_area, dJp_dpsiR_y, dJp_dp_L_y, dJp_dp_R_y,
+            kDz, kUz, wz_area, dJp_dpsiR_z, dJp_dp_L_z, dJp_dp_R_z)
+        rows.append(h_r); cols.append(h_c); vals.append(h_v)
 
         # local (same-node) diagonal terms: Poisson's charge term,
         # continuity's recombination cross terms
         diag_k = np.arange(N)
-        if dcden is None:
-            rows.append(3 * diag_k); cols.append(3 * diag_k + 1); vals.append(-dV.ravel())
-            rows.append(3 * diag_k); cols.append(3 * diag_k + 2); vals.append(dV.ravel())
-        else:
-            # d/dn (n - p - C_ion) = 1 - dcden;  d/dp = -1 - dcdp
-            rows.append(3 * diag_k); cols.append(3 * diag_k + 1)
-            vals.append(-dV.ravel() * (1.0 - dcden.ravel()))
-            rows.append(3 * diag_k); cols.append(3 * diag_k + 2)
-            vals.append(dV.ravel() * (1.0 + dcdp.ravel()))
-
-        rows.append(3 * diag_k + 1); cols.append(3 * diag_k + 1)
-        vals.append(-dRs_dn.ravel() * dV.ravel())
-        rows.append(3 * diag_k + 1); cols.append(3 * diag_k + 2)
-        vals.append(-dRs_dp.ravel() * dV.ravel())
-
-        rows.append(3 * diag_k + 2); cols.append(3 * diag_k + 2)
-        vals.append(dRs_dp.ravel() * dV.ravel())
-        rows.append(3 * diag_k + 2); cols.append(3 * diag_k + 1)
-        vals.append(dRs_dn.ravel() * dV.ravel())
+        d_r, d_c, d_v = _base_diagonal_coo(diag_k, dV, dcden, dcdp, dRs_dn, dRs_dp)
+        rows.append(d_r); cols.append(d_c); vals.append(d_v)
 
         # --- Robin (gate) BC on psi only, area-weighted per normal_axis,
         # referenced to the local bulk potential ---

@@ -153,6 +153,7 @@ from .device2d import _ohmic_values
 from .materials import SILICON, recombination, mobility_caughey_thomas
 from .moscap import EPS_OX_R
 from .unstructured_assembly3d import boundary_face_node_weights3d
+from . import _accel
 
 
 def _gate_node_terms(nodes, gates, eps, LD, VT):
@@ -208,10 +209,114 @@ def evaluate_doping_at_nodes3d(nodes, tets, region_of_tet, doping_by_region):
     return weighted / weight
 
 
-def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans):
+# ----------------------------------------------------------------------
+#  M47 Slice 1 (design-only groundwork): the interior-physics COO stamps
+#  below are factored into named blocks, ONE PER LOGICAL TERM, each
+#  returning raw (rows, cols, vals) -- no behavior change from the prior
+#  monolithic form, verified byte-identical (see
+#  tests/test_m47_s1_coo_block_refactor.py's own bit-identity gate,
+#  captured against the pre-refactor digests recorded in
+#  M47-3D-ENGINE-PLAN.md). This split exists so a later C++ port can
+#  expose the SAME blocks as separate kernels while an raw-COO parity
+#  test compares each block's (rows,cols,vals) individually, before any
+#  csr_matrix is built (M47-3D-ENGINE-PLAN.md section "1. Add raw COO
+#  parity tests"). The CALL ORDER below (and thus the np.concatenate
+#  order feeding csr_matrix) is NOT arbitrary -- scipy sums duplicate
+#  (row,col) entries in insertion order once the matrix is canonicalized
+#  (e.g. by .tocsc()/eliminate_csr downstream), so this order is the
+#  EXACT order the pre-refactor code emitted its add() calls in, traced
+#  and recorded in M47-3D-ENGINE-PLAN.md's own COO-ordering section --
+#  reordering these blocks would still be mathematically correct but
+#  would NOT be bit-identical, which is the whole reason it is kept
+#  fixed and commented here rather than left to a future "obviously
+#  equivalent" reshuffle.
+# ----------------------------------------------------------------------
+def _poisson_flux_geometry_coo(i_idx, j_idx, trans, comp3=None):
+    """The Poisson interior-flux Jacobian stamp, shared verbatim by the
+    equilibrium (N-DOF) and coupled (3N-DOF) assembly paths -- the ONE
+    piece of Poisson's Jacobian that is IDENTICAL in both regimes (the
+    flux term itself does not care whether n/p are slaved to psi or are
+    independent unknowns). `comp3=None` for the N-DOF equilibrium
+    indexing; `comp3=0` for the coupled path's psi-component-0-of-3
+    indexing (row/col = 3*node + 0)."""
+    if comp3 is None:
+        ii, jj = i_idx, j_idx
+    else:
+        ii, jj = 3 * i_idx + comp3, 3 * j_idx + comp3
+    rows = np.concatenate([ii, ii, jj, jj])
+    cols = np.concatenate([ii, jj, jj, ii])
+    vals = np.concatenate([-trans, trans, -trans, trans])
+    return rows, cols, vals
+
+
+def _poisson_equilibrium_diag_coo(node_vols_s, dnp):
+    """Equilibrium-ONLY: the slaved-carrier chain rule collapses to ONE
+    diagonal self-term (dn/dpsi + dp/dpsi = n+p), emitted AFTER the flux
+    geometry block -- the coupled path has no equivalent of this term
+    (there, the same physical derivative splits into two OFF-diagonal
+    entries into the n/p blocks instead; see
+    _poisson_charge_coupling_coo). These are genuinely different
+    Jacobian shapes, not the same term restated -- do not merge them."""
+    N = node_vols_s.shape[0]
+    diag_k = np.arange(N)
+    return diag_k, diag_k, -node_vols_s * dnp
+
+
+def _poisson_charge_coupling_coo(diag_k, node_vols_s):
+    """Coupled-ONLY: d(rho)/dn and d(rho)/dp as separate off-diagonal
+    entries into the psi row's n/p columns -- emitted BEFORE the flux
+    geometry block (opposite order from the equilibrium path's own
+    diagonal term, which comes AFTER). See _poisson_equilibrium_diag_coo's
+    docstring for why these are not interchangeable."""
+    rows = np.concatenate([3 * diag_k, 3 * diag_k])
+    cols = np.concatenate([3 * diag_k + 1, 3 * diag_k + 2])
+    vals = np.concatenate([-node_vols_s, node_vols_s])
+    return rows, cols, vals
+
+
+def _srh_auger_coo(diag_k, dRs_dn, dRs_dp, node_vols_s):
+    """SRH/Auger recombination's 2x2 (n,p) diagonal block -- emitted
+    FIRST in the coupled assembly, before Poisson's own charge-coupling
+    block (traced insertion order, not a style choice -- see this
+    module's own COO-ordering note above)."""
+    rows = np.concatenate([3 * diag_k + 1, 3 * diag_k + 1,
+                           3 * diag_k + 2, 3 * diag_k + 2])
+    cols = np.concatenate([3 * diag_k + 1, 3 * diag_k + 2,
+                           3 * diag_k + 1, 3 * diag_k + 2])
+    vals = np.concatenate([-dRs_dn * node_vols_s, -dRs_dp * node_vols_s,
+                           dRs_dn * node_vols_s, dRs_dp * node_vols_s])
+    return rows, cols, vals
+
+
+def _sg_carrier_coo(i_idx, j_idx, comp, dJ_dpsi_j, dJ_dself_i, dJ_dself_j):
+    """One carrier's (electron: comp=1, hole: comp=2) SG current
+    Jacobian -- the 8-entry i-row/j-row cross/diagonal block, SAME
+    shape for both carriers (only which derivative arrays and which
+    component index are passed differs), matching the source's own
+    K..R (electron) / S..Z (hole) call sequence exactly."""
+    ci, cj = 3 * i_idx + comp, 3 * j_idx + comp
+    i0, j0 = 3 * i_idx, 3 * j_idx
+    rows = np.concatenate([ci, ci, ci, ci, cj, cj, cj, cj])
+    cols = np.concatenate([i0, j0, ci, cj, i0, j0, ci, cj])
+    vals = np.concatenate([-dJ_dpsi_j, dJ_dpsi_j, dJ_dself_i, dJ_dself_j,
+                           dJ_dpsi_j, -dJ_dpsi_j, -dJ_dself_i, -dJ_dself_j])
+    return rows, cols, vals
+
+
+def _residual_jacobian_poisson3d_py(psi, C_s, nie_s, node_vols_s, edges, trans):
     """Scaled Poisson-equilibrium residual/Jacobian (Boltzmann carriers
     slaved to psi) -- 3D analogue of unstructured_poisson._residual_
-    jacobian, node_areas -> node_vols_s, otherwise identical."""
+    jacobian, node_areas -> node_vols_s, otherwise identical.
+
+    M47 Slice 1: this is now the VALIDATION ORACLE only (FD-Jacobian,
+    parity, see tests/test_m47_s1_*.py) -- production calls go through
+    `_residual_jacobian_poisson3d` below, which dispatches to the
+    compiled `pytcad._core.unstructured3d_residual_jacobian_equilibrium`
+    kernel via `_accel.require_accel()`. No PYTCAD_ACCEL=0 branch and no
+    runtime fallback dispatch -- this `_py` function is kept for
+    reference/testing only, per M47-3D-ENGINE-PLAN.md's architectural
+    constraint (M43 phase 4 already retired the project-wide pure-Python
+    production-fallback pattern; M47 does not reopen it)."""
     N = psi.shape[0]
     n = nie_s * np.exp(np.clip(psi, -700, 700))
     p = nie_s * np.exp(np.clip(-psi, -700, 700))
@@ -223,9 +328,33 @@ def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans):
     np.add.at(F, i_idx, flux)
     np.add.at(F, j_idx, -flux)
 
-    rows = np.concatenate([i_idx, i_idx, j_idx, j_idx, np.arange(N)])
-    cols = np.concatenate([i_idx, j_idx, j_idx, i_idx, np.arange(N)])
-    vals = np.concatenate([-trans, trans, -trans, trans, -node_vols_s * dnp])
+    # Order: flux geometry FIRST, diagonal charge term LAST -- the
+    # equilibrium-specific emission order (see
+    # _poisson_equilibrium_diag_coo's docstring).
+    geom_r, geom_c, geom_v = _poisson_flux_geometry_coo(i_idx, j_idx, trans)
+    diag_r, diag_c, diag_v = _poisson_equilibrium_diag_coo(node_vols_s, dnp)
+    rows = np.concatenate([geom_r, diag_r])
+    cols = np.concatenate([geom_c, diag_c])
+    vals = np.concatenate([geom_v, diag_v])
+    J = sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
+    return F, J
+
+
+def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans):
+    """M47 Slice 1 production dispatch: `pytcad._core.unstructured3d_
+    residual_jacobian_equilibrium`, via `_accel.require_accel()` -- no
+    PYTCAD_ACCEL=0 branch, no fallback (see `_residual_jacobian_
+    poisson3d_py`'s docstring). exp() stays here, in Python -- never
+    crosses into the compiled kernel (M47 design review item 1)."""
+    _accel.require_accel()
+    n = nie_s * np.exp(np.clip(psi, -700, 700))
+    p = nie_s * np.exp(np.clip(-psi, -700, 700))
+    i_idx, j_idx = edges[:, 0], edges[:, 1]
+    flux = trans * (psi[j_idx] - psi[i_idx])
+    N = psi.shape[0]
+    F, rows, cols, vals = _accel.core.unstructured3d_residual_jacobian_equilibrium(
+        n, p, C_s, node_vols_s, i_idx.astype(np.int64), j_idx.astype(np.int64),
+        trans, flux)
     J = sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
     return F, J
 
@@ -348,12 +477,16 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
                      auto_reason=auto_reason)
 
 
-def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
-                            eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
-                            material, Ns, LD, srh=True, auger=False):
+def _residual_jacobian_dd3d_py(psi, n, p, C_s, nie_s, node_vols_s, edges,
+                               eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
+                               material, Ns, LD, srh=True, auger=False):
     """Scaled coupled residual/Jacobian, interior physics only -- exact
     3D analogue of unstructured_dd._residual_jacobian (node_areas ->
     node_vols_s; no dlnnie term, this module is homojunction-only).
+
+    M47 Slice 1: this is now the VALIDATION ORACLE only -- see
+    `_residual_jacobian_poisson3d_py`'s docstring for the full note;
+    production calls go through `_residual_jacobian_dd3d` below.
 
     eps_trans here is trans_geom/LD (the M26-fixed scaled Poisson-flux
     coefficient -- see this module's docstring); the bare geometric
@@ -379,33 +512,28 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
     F[1::3] = -Rs * node_vols_s
     F[2::3] = Rs * node_vols_s
 
-    rows, cols, vals = [], [], []
     diag_k = np.arange(N)
+    i_idx, j_idx = edges[:, 0], edges[:, 1]
 
-    def add(r, c, v):
-        r = np.atleast_1d(np.asarray(r))
-        c = np.atleast_1d(np.asarray(c))
-        v = np.broadcast_to(np.asarray(v, dtype=float), r.shape)
-        rows.append(r); cols.append(c); vals.append(np.array(v))
-
-    add(3 * diag_k + 1, 3 * diag_k + 1, -dRs_dn * node_vols_s)
-    add(3 * diag_k + 1, 3 * diag_k + 2, -dRs_dp * node_vols_s)
-    add(3 * diag_k + 2, 3 * diag_k + 1, dRs_dn * node_vols_s)
-    add(3 * diag_k + 2, 3 * diag_k + 2, dRs_dp * node_vols_s)
+    # M47 Slice 1 groundwork: block order below is the traced source
+    # order (M47-3D-ENGINE-PLAN.md's COO-ordering section) --
+    # SRH/Auger FIRST, Poisson charge-coupling SECOND, Poisson flux
+    # geometry THIRD, electron SG FOURTH, hole SG LAST. This is NOT the
+    # same order the equilibrium path uses for its own (different)
+    # Poisson terms -- see _poisson_equilibrium_diag_coo's docstring.
+    # Reordering these blocks changes which duplicate-(row,col) entries
+    # scipy's canonicalization sums first, which is a real (if tiny)
+    # floating-point change -- kept fixed on purpose, not tidied.
+    srh_r, srh_c, srh_v = _srh_auger_coo(diag_k, dRs_dn, dRs_dp, node_vols_s)
 
     F[0::3] = -node_vols_s * (n - p - C_s)
-    add(3 * diag_k, 3 * diag_k + 1, -node_vols_s)
-    add(3 * diag_k, 3 * diag_k + 2, node_vols_s)
+    chg_r, chg_c, chg_v = _poisson_charge_coupling_coo(diag_k, node_vols_s)
 
-    i_idx, j_idx = edges[:, 0], edges[:, 1]
     dpsi_flux = eps_trans * (psi[j_idx] - psi[i_idx])
     np.add.at(F[0::3], i_idx, dpsi_flux)
     np.add.at(F[0::3], j_idx, -dpsi_flux)
-
-    add(3 * i_idx, 3 * i_idx, -eps_trans)
-    add(3 * i_idx, 3 * j_idx, eps_trans)
-    add(3 * j_idx, 3 * j_idx, -eps_trans)
-    add(3 * j_idx, 3 * i_idx, eps_trans)
+    geom_r, geom_c, geom_v = _poisson_flux_geometry_coo(
+        i_idx, j_idx, eps_trans, comp3=0)
 
     delta = psi[j_idx] - psi[i_idx]
     Bp, Bm = bernoulli(delta), bernoulli(-delta)
@@ -423,30 +551,50 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
     dJn_dpsi_j = D_n_s * trans * (n_j * dBp + n_i * dBm)
     dJn_dn_j = D_n_s * trans * Bp
     dJn_dn_i = -D_n_s * trans * Bm
-    add(3 * i_idx + 1, 3 * i_idx, -dJn_dpsi_j)
-    add(3 * i_idx + 1, 3 * j_idx, dJn_dpsi_j)
-    add(3 * i_idx + 1, 3 * i_idx + 1, dJn_dn_i)
-    add(3 * i_idx + 1, 3 * j_idx + 1, dJn_dn_j)
-    add(3 * j_idx + 1, 3 * i_idx, dJn_dpsi_j)
-    add(3 * j_idx + 1, 3 * j_idx, -dJn_dpsi_j)
-    add(3 * j_idx + 1, 3 * i_idx + 1, -dJn_dn_i)
-    add(3 * j_idx + 1, 3 * j_idx + 1, -dJn_dn_j)
+    e_r, e_c, e_v = _sg_carrier_coo(i_idx, j_idx, 1, dJn_dpsi_j, dJn_dn_i, dJn_dn_j)
 
     dJp_dpsi_j = D_p_s * trans * (p_j * dBm + p_i * dBp)
     dJp_dp_j = -D_p_s * trans * Bm
     dJp_dp_i = D_p_s * trans * Bp
-    add(3 * i_idx + 2, 3 * i_idx, -dJp_dpsi_j)
-    add(3 * i_idx + 2, 3 * j_idx, dJp_dpsi_j)
-    add(3 * i_idx + 2, 3 * i_idx + 2, dJp_dp_i)
-    add(3 * i_idx + 2, 3 * j_idx + 2, dJp_dp_j)
-    add(3 * j_idx + 2, 3 * i_idx, dJp_dpsi_j)
-    add(3 * j_idx + 2, 3 * j_idx, -dJp_dpsi_j)
-    add(3 * j_idx + 2, 3 * i_idx + 2, -dJp_dp_i)
-    add(3 * j_idx + 2, 3 * j_idx + 2, -dJp_dp_j)
+    h_r, h_c, h_v = _sg_carrier_coo(i_idx, j_idx, 2, dJp_dpsi_j, dJp_dp_i, dJp_dp_j)
 
-    J = sp.csr_matrix((np.concatenate(vals),
-                       (np.concatenate(rows), np.concatenate(cols))),
-                      shape=(3 * N, 3 * N))
+    rows = np.concatenate([srh_r, chg_r, geom_r, e_r, h_r])
+    cols = np.concatenate([srh_c, chg_c, geom_c, e_c, h_c])
+    vals = np.concatenate([srh_v, chg_v, geom_v, e_v, h_v])
+    J = sp.csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
+    return F, J, Jn, Jp
+
+
+def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
+                            eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
+                            material, Ns, LD, srh=True, auger=False):
+    """M47 Slice 1 production dispatch: `pytcad._core.unstructured3d_
+    residual_jacobian_coupled`, via `_accel.require_accel()` -- no
+    PYTCAD_ACCEL=0 branch, no fallback (see `_residual_jacobian_
+    dd3d_py`'s docstring). bernoulli()/dbernoulli() stay here, in
+    Python -- never cross into the compiled kernel (M47 design review
+    item 1). `trans_bare = eps_trans*LD` and `nie_phys = nie_s*Ns` are
+    recomputed here exactly as the oracle's own body does (M26-fix
+    recovery / physical-nie recovery), NOT passed some other way, so
+    the compiled kernel sees bit-identical inputs to the oracle's own
+    (see M47-3D-ENGINE-PLAN.md's parity-test record for why this
+    distinction is load-bearing, not cosmetic)."""
+    _accel.require_accel()
+    N = psi.shape[0]
+    i_idx, j_idx = edges[:, 0], edges[:, 1]
+    trans_bare = eps_trans * LD
+    flux = eps_trans * (psi[j_idx] - psi[i_idx])
+    delta = psi[j_idx] - psi[i_idx]
+    Bp, Bm = bernoulli(delta), bernoulli(-delta)
+    dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+    nie_phys = nie_s * Ns
+
+    F, rows, cols, vals, Jn, Jp = _accel.core.unstructured3d_residual_jacobian_coupled(
+        n, p, C_s, node_vols_s, i_idx.astype(np.int64), j_idx.astype(np.int64),
+        eps_trans, flux, trans_bare, D_n_s, D_p_s, Bp, Bm, dBp, dBm,
+        nie_phys, tau_n, tau_p, Ns, R0, srh, auger, material.Cn_auger,
+        material.Cp_auger)
+    J = sp.csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
     return F, J, Jn, Jp
 
 
