@@ -48,6 +48,7 @@ from .device import (_II_STAGES, _LS_MAX_HALVINGS, _LS_NEWTON_REGION,
                      _STIFF_DENSITY_FLOOR)
 
 from . import linsolve
+from . import _accel
 
 from .constants import KB_EV, Q, EPS0, thermal_voltage
 from .schottky import schottky_barrier_height_n as _schottky_barrier_height_n
@@ -1575,8 +1576,16 @@ class Device3D:
         wy_h = wy_area * self.et_y / hy[None, :, None]
         wz_h = wz_area * self.et_z / hz[:, None, None]
         rows, cols, vals = [], [], []
-        p_r, p_c, p_v = _poisson_flux_row_coo(kLx, kRx, wx_h, kSy, kNy, wy_h,
-                                              kDz, kUz, wz_h)
+        # M47 Slice 2a: production dispatch -- the 4 base-assembly COO
+        # blocks are unconditionally compiled (_poisson_flux_row_coo
+        # etc. are kept as the validation oracle only, see their own
+        # docstrings and M47-3D-ENGINE-PLAN.md's architectural
+        # constraint; no PYTCAD_ACCEL=0, no fallback).
+        _accel.require_accel()
+        p_r, p_c, p_v = _accel.core.device3d_poisson_flux_row(
+            kLx.astype(np.int64, copy=False), kRx.astype(np.int64, copy=False), wx_h.ravel(),
+            kSy.astype(np.int64, copy=False), kNy.astype(np.int64, copy=False), wy_h.ravel(),
+            kDz.astype(np.int64, copy=False), kUz.astype(np.int64, copy=False), wz_h.ravel())
         rows.append(p_r); cols.append(p_c); vals.append(p_v)
 
         # electron continuity row (comp 1). M13 fd density-chain:
@@ -1603,10 +1612,13 @@ class Device3D:
             dJn_dn_L_z = dJn_dn_L_z - an_z * Snz * wn[:-1, :, :]
             dJn_dn_R_z = dJn_dn_R_z + an_z * Snz * wn[1:, :, :]
 
-        e_r, e_c, e_v = _electron_continuity_coo(
-            kLx, kRx, wx_area, dJn_dpsiR_x, dJn_dn_L_x, dJn_dn_R_x,
-            kSy, kNy, wy_area, dJn_dpsiR_y, dJn_dn_L_y, dJn_dn_R_y,
-            kDz, kUz, wz_area, dJn_dpsiR_z, dJn_dn_L_z, dJn_dn_R_z)
+        e_r, e_c, e_v = _accel.core.device3d_electron_continuity(
+            kLx.astype(np.int64, copy=False), kRx.astype(np.int64, copy=False), wx_area.ravel(),
+            dJn_dpsiR_x.ravel(), dJn_dn_L_x.ravel(), dJn_dn_R_x.ravel(),
+            kSy.astype(np.int64, copy=False), kNy.astype(np.int64, copy=False), wy_area.ravel(),
+            dJn_dpsiR_y.ravel(), dJn_dn_L_y.ravel(), dJn_dn_R_y.ravel(),
+            kDz.astype(np.int64, copy=False), kUz.astype(np.int64, copy=False), wz_area.ravel(),
+            dJn_dpsiR_z.ravel(), dJn_dn_L_z.ravel(), dJn_dn_R_z.ravel())
         rows.append(e_r); cols.append(e_c); vals.append(e_v)
 
         # hole continuity row (comp 2). M13 fd density-chain:
@@ -1633,16 +1645,24 @@ class Device3D:
             dJp_dp_L_z = dJp_dp_L_z + ap_z * Spz * wp[:-1, :, :]
             dJp_dp_R_z = dJp_dp_R_z - ap_z * Spz * wp[1:, :, :]
 
-        h_r, h_c, h_v = _hole_continuity_coo(
-            kLx, kRx, wx_area, dJp_dpsiR_x, dJp_dp_L_x, dJp_dp_R_x,
-            kSy, kNy, wy_area, dJp_dpsiR_y, dJp_dp_L_y, dJp_dp_R_y,
-            kDz, kUz, wz_area, dJp_dpsiR_z, dJp_dp_L_z, dJp_dp_R_z)
+        h_r, h_c, h_v = _accel.core.device3d_hole_continuity(
+            kLx.astype(np.int64, copy=False), kRx.astype(np.int64, copy=False), wx_area.ravel(),
+            dJp_dpsiR_x.ravel(), dJp_dp_L_x.ravel(), dJp_dp_R_x.ravel(),
+            kSy.astype(np.int64, copy=False), kNy.astype(np.int64, copy=False), wy_area.ravel(),
+            dJp_dpsiR_y.ravel(), dJp_dp_L_y.ravel(), dJp_dp_R_y.ravel(),
+            kDz.astype(np.int64, copy=False), kUz.astype(np.int64, copy=False), wz_area.ravel(),
+            dJp_dpsiR_z.ravel(), dJp_dp_L_z.ravel(), dJp_dp_R_z.ravel())
         rows.append(h_r); cols.append(h_c); vals.append(h_v)
 
         # local (same-node) diagonal terms: Poisson's charge term,
         # continuity's recombination cross terms
         diag_k = np.arange(N)
-        d_r, d_c, d_v = _base_diagonal_coo(diag_k, dV, dcden, dcdp, dRs_dn, dRs_dp)
+        has_ii = dcden is not None
+        d_r, d_c, d_v = _accel.core.device3d_base_diagonal(
+            N, dV.ravel(), has_ii,
+            dcden.ravel() if has_ii else np.zeros(0),
+            dcdp.ravel() if has_ii else np.zeros(0),
+            dRs_dn.ravel(), dRs_dp.ravel())
         rows.append(d_r); cols.append(d_c); vals.append(d_v)
 
         # --- Robin (gate) BC on psi only, area-weighted per normal_axis,

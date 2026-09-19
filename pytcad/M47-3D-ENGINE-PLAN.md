@@ -449,3 +449,120 @@ Awaiting approval to proceed to the unstructured C++ slice's own design
 `core/src/unstructured3d/`, per the approved plan) -- no source code
 changes beyond this benchmark script and this doc happen without that
 approval.
+
+## Slice 2a: structured device3d.py base assembly -- LANDED
+
+Scope: the 4 base-assembly COO blocks device3d.py's own
+`_residual_jacobian` traced into (Poisson flux row, electron
+continuity, hole continuity, local diagonal terms) -- flag-independent
+by construction (fd/incomplete_ion affect the VALUES Python computes
+upstream, not which code stamps the COO pattern), so these run
+unconditionally, covering every `Models()` combination. Optional-
+physics composition (impact/btbt/nonlocal-btbt/hydrodynamic Tn/GateBC)
+stays entirely in Python, appended after these 4 blocks, unchanged.
+
+**Groundwork** (Python-only, mechanical): the 4 blocks factored into
+named module-level functions (`_poisson_flux_row_coo`,
+`_electron_continuity_coo`, `_hole_continuity_coo`,
+`_base_diagonal_coo`), safe by construction since `np.concatenate` is
+associative (grouping sub-arrays into named functions cannot change
+the final flat element order, unlike Slice 1's unstructured module,
+which needed the ordering re-derived from scratch). Verified via
+`test_validation_3d.py`'s existing FD-Jacobian gate (8 passed) --
+applying Slice 1's own lesson from the start this time, no separate
+bit-identity capture script was even needed.
+
+**C++ kernels**: `core/include/tcad/device3d/kernels.hpp`,
+`core/src/device3d/kernels.cpp`, `core/bindings/device3d_bindings.cpp`
+-- 4 bound functions (`device3d_poisson_flux_row`,
+`device3d_electron_continuity`, `device3d_hole_continuity`,
+`device3d_base_diagonal`), each writing DIRECTLY into one pre-sized
+output buffer at computed offsets -- NO intermediate per-term vectors,
+NO `insert()`/concatenation chain (Slice 1's reallocation-storm lesson
+applied as the design from line one, not retrofitted). Wired into
+`core/CMakeLists.txt` (+1 source, +1 in the `-ffp-contract=off` list,
++1 binding TU) and `core/bindings/module.cpp`.
+
+**Validation, all green on the FIRST attempt** (no bugs found this
+time, unlike Slice 1's 2 real bugs) -- `tests/test_m47_s2_device3d_
+accel_parity.py` (4 tests: all 4 kernels' raw COO vs the Python
+oracle, `np.array_equal`, plus reproducibility); `test_validation_3d.py`
+(8 passed, including the FD-Jacobian gate, now running against the
+COMPILED production path since dispatch was wired directly into
+`_residual_jacobian` -- `_poisson_flux_row_coo` etc. are kept as
+validation-oracle-only, no production role, matching the architectural
+constraint).
+
+**Production dispatch**: wired directly into `Device3D._residual_
+jacobian` (no separate dispatcher function needed, unlike Slice 1 --
+this is one method's own inline code, not a swappable module-level
+function). `_accel.require_accel()` guard, no `PYTCAD_ACCEL=0` branch.
+4 SEPARATE bound calls (not 1 orchestrator) -- the natural call sites
+here are 4 distinct points inside one large method with unrelated
+Python code (derivative-array computation) between each, unlike
+Slice 1's coupled kernel which had one natural single-call point; no
+micro-benchmark was run to confirm this shape is optimal (see below,
+this turned out to matter).
+
+**Benchmark re-run, HONEST result -- a regression, not a win (M32
+rule, same discipline as Slice 1)**: re-ran `benchmarks/m47_s0_
+assembly_measure.py`'s B4 row (2 runs). B4 full-size assembly is
+**measurably SLOWER after the compile**: 2.29-2.62 us/DOF (Step 0,
+pre-compile) -> 3.20-3.59 us/DOF (post-compile) -- a ~25-35% REGRESSION,
+not an improvement. Quick-size shows the same direction (2.29-2.62 ->
+2.10-3.87, noisier but not better). Not yet root-caused with a real
+profiler (same limitation as Slice 1's own unresolved item), but the
+most likely candidate, by direct analogy to Slice 1's confirmed
+mechanism: 4 SEPARATE bound calls means 4 separate marshalling passes
+(`to_vec()` copies) per Newton iterate, and `electron_continuity`/
+`hole_continuity` alone each carry 9 float64 arrays per call (3 axes x
+3 derivative arrays) -- likely more total marshalling VOLUME than
+Slice 1's unstructured kernel had, while the underlying arithmetic
+(4-or-8-entries-per-edge stamping) is exactly as cheap as before. The
+"4 bound calls vs 1 orchestrator" question Slice 1 measured and found
+negligible was measured on TRIVIAL reduction bodies at unstructured's
+own array sizes -- it was never re-measured for structured's larger
+per-call array COUNT, and this result suggests that assumption did not
+transfer.
+
+## Regression root-caused and fixed
+
+The "4 bound calls vs 1" hypothesis above was WRONG -- disproved by
+direct measurement rather than assumed correct. A per-kernel Python-
+vs-C++ timing split (isolating each of the 4 kernels' own raw call
+cost, same B4-full array sizes, no `Device3D` instrumentation
+overhead) showed the compiled kernels were ALREADY AS FAST OR FASTER
+than the Python oracle at the kernel level (`electron_continuity`:
+13.2ms C++ vs 19.9ms Python; `poisson_flux_row`: 2.3ms C++ vs 4.1ms
+Python) -- directly contradicting the benchmark harness's own 25-35%
+REGRESSION finding. That contradiction is what located the real bug:
+it had to be something in `_residual_jacobian`'s OWN call sites, not
+the kernels.
+
+Found it: all 9 call-site occurrences of `kLx.astype(np.int64)` (and
+the 5 sibling edge-index arrays) were passed to `_accel.core.device3d_*`
+with a BARE `.astype(np.int64)` -- and `np.ndarray.astype()` copies
+UNCONDITIONALLY unless `copy=False` is passed, even when the array's
+dtype already matches. `_edge_pairs_x`/`_y`/`_z` already return int64
+on this platform (`np.mgrid`'s default dtype), confirmed directly, so
+every one of those 9 calls was a wasted full-array copy, EVERY Newton
+iterate, of nothing. Fixed with `.astype(np.int64, copy=False)`
+(9 occurrences) -- a one-line-pattern fix, not a kernel change, and
+zero effect on FD-Jacobian/parity gates (12 re-run green,
+`test_validation_3d.py` + `test_m47_s2_device3d_accel_parity.py`).
+
+**Re-measured, 2 runs**: B4 full-size assembly is now 2.48-2.61 us/DOF
+-- squarely back inside the ORIGINAL pre-compile baseline range
+(2.29-2.62 us/DOF, Step 0). The regression is GONE. This is parity,
+not a clear win (same ballpark as the pure-Python path this replaced),
+consistent with Slice 1's own honest finding that this class of kernel
+does not obviously pay off from a straight port -- but the earlier
+25-35% REGRESSION was a real, fixable bug in the Python-side call
+sites, not an inherent property of the compiled kernels, and is now
+closed out.
+
+**Lesson for any future slice**: `ndarray.astype(dtype)` is NOT a
+no-op cast when the dtype already matches -- it copies regardless,
+silently, unless `copy=False` is passed explicitly. Check dtype
+assumptions at every `_accel` call-site boundary before assuming a
+"defensive cast" is free.
