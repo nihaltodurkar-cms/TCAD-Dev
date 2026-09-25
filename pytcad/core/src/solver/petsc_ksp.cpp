@@ -41,6 +41,7 @@ namespace tcad::solver {
 //  a message that says which of the two routes to take.
 // ----------------------------------------------------------------------
 bool have_petsc() { return false; }
+bool have_mumps() { return false; }
 const char* petsc_version() { return ""; }
 int petsc_index_bytes() { return 0; }
 
@@ -167,6 +168,14 @@ const PetscInt* as_petsc_int(const std::int64_t* src, std::int64_t count,
 
 bool have_petsc() { return true; }
 
+bool have_mumps() {
+#if defined(PETSC_HAVE_MUMPS)
+    return true;
+#else
+    return false;
+#endif
+}
+
 const char* petsc_version() {
     static const std::string v = std::to_string(PETSC_VERSION_MAJOR) + "." +
                                  std::to_string(PETSC_VERSION_MINOR) + "." +
@@ -186,6 +195,10 @@ KspResult solve_csr(std::int64_t n, std::int64_t nnz,
         throw InvalidArgument("solve_csr: indptr[n] = " +
                               std::to_string(indptr[n]) + " disagrees with nnz = " +
                               std::to_string(nnz));
+    if (cfg.direct_lu && !have_mumps())
+        throw LinearSolveFailure(
+            "petsc: MUMPS LU requested, but this PETSc was built without "
+            "MUMPS (conda-forge's petsc has it)");
     if (n > std::numeric_limits<PetscInt>::max())
         throw LinearSolveFailure(
             "petsc: matrix dimension " + std::to_string(n) +
@@ -255,6 +268,32 @@ KspResult solve_csr(std::int64_t n, std::int64_t nnz,
     Owned<KSP> ksp(KSPDestroy);
     check(KSPCreate(comm, &ksp.obj), "KSPCreate");
     check(KSPSetOperators(ksp.obj, A.obj, A.obj), "KSPSetOperators");
+    PC pc = nullptr;
+    check(KSPGetPC(ksp.obj, &pc), "KSPGetPC");
+    if (cfg.direct_lu) {
+#if defined(PETSC_HAVE_MUMPS)
+        // One exact factor-and-solve: no Krylov iteration, no
+        // preconditioner choice, no tolerance.  MUMPS picks its own
+        // fill-reducing ordering, which is what makes this cheap on the
+        // cube-shaped meshes where SuperLU's COLAMD fills in badly.
+        // Mirrored step for step by linsolve._solve_petsc_py.
+        check(KSPSetType(ksp.obj, KSPPREONLY), "KSPSetType");
+        check(PCSetType(pc, PCLU), "PCSetType");
+        check(PCFactorSetMatSolverType(pc, MATSOLVERMUMPS),
+              "PCFactorSetMatSolverType");
+#endif
+        check(KSPSetFromOptions(ksp.obj), "KSPSetFromOptions");
+        check(KSPSolve(ksp.obj, bv.obj, xv.obj), "KSPSolve");
+        KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+        PetscInt its = 0;
+        check(KSPGetConvergedReason(ksp.obj, &reason), "KSPGetConvergedReason");
+        check(KSPGetIterationNumber(ksp.obj, &its), "KSPGetIterationNumber");
+        KspResult r;
+        r.iterations = static_cast<int>(its);
+        r.converged_reason = static_cast<int>(reason);
+        std::copy(xbuf.begin(), xbuf.end(), x);
+        return r;
+    }
     check(KSPSetType(ksp.obj, KSPGMRES), "KSPSetType");
     // GMRES(m) forgets its Krylov basis every m steps; PETSc's default
     // m = 30 made no visible progress on this codebase's coupled 3D
@@ -263,8 +302,6 @@ KspResult solve_csr(std::int64_t n, std::int64_t nnz,
     // this to <= n.
     check(KSPGMRESSetRestart(ksp.obj, static_cast<PetscInt>(std::max(1, cfg.restart))),
           "KSPGMRESSetRestart");
-    PC pc = nullptr;
-    check(KSPGetPC(ksp.obj, &pc), "KSPGetPC");
     const bool point_block = cfg.block_size > 1 && n % cfg.block_size == 0;
     check(PCSetType(pc, point_block ? PCPBJACOBI : PCBJACOBI), "PCSetType");
     check(KSPSetTolerances(ksp.obj, cfg.rtol, cfg.atol, PETSC_CURRENT,

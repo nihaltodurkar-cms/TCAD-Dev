@@ -3,14 +3,14 @@
     "python": "3.11.16",
     "numpy": "2.4.6",
     "scipy": "1.17.1",
-    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.43",
     "processor": "unknown",
     "cpu_count": 10,
     "OPENBLAS_NUM_THREADS": "1",
     "OMP_NUM_THREADS": "unset",
     "PYTCAD_ACCEL": "unset",
-    "accel": "pytcad._core: 0.1.0, threads=1, petsc=3.25.4/32-bit-int, PYTCAD_ACCEL=auto",
-    "timestamp": "2026-09-10 10:34:46"
+    "accel": "pytcad._core: 0.1.0, threads=1, petsc=3.25.4/32-bit-int",
+    "timestamp": "2026-09-25 06:46:29"
   },
   "rows": [
     {
@@ -25,14 +25,15 @@
       "nnz": 600000,
       "assembly_s": 0.0,
       "assembly_calls": 0,
-      "linsolve_s": 0.5512812969998322,
+      "linsolve_s": 0.5457529649938806,
       "linsolve_calls": 9,
       "precond_s": 0.0,
-      "py_peak_mb": 62.03841495513916,
-      "total_s": 0.7169024849999914,
+      "py_peak_mb": 63.564701080322266,
+      "total_s": 0.7336398109982838,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run",
         "assembly not instrumented (no device handle, or a path that does not use _residual_jacobian)"
       ]
     },
@@ -46,16 +47,18 @@
       "error": "",
       "dof": 60006,
       "nnz": 380006,
-      "assembly_s": 0.1040138799999113,
+      "assembly_s": 0.16130515099939657,
       "assembly_calls": 11,
-      "linsolve_s": 0.21057546800034288,
+      "linsolve_s": 0.1871989540013601,
       "linsolve_calls": 10,
       "precond_s": 0.0,
-      "py_peak_mb": 41.251787185668945,
-      "total_s": 0.35815081999999165,
+      "py_peak_mb": 41.40517807006836,
+      "total_s": 0.39267365599880577,
       "spread_s": 0.0,
-      "repeats": 2,
-      "notes": []
+      "repeats": 1,
+      "notes": [
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
+      ]
     },
     {
       "name": "B3",
@@ -67,16 +70,18 @@
       "error": "",
       "dof": 72912,
       "nnz": 694301,
-      "assembly_s": 0.26219822200005183,
+      "assembly_s": 0.27090933199360734,
       "assembly_calls": 6,
-      "linsolve_s": 3.197541327999488,
+      "linsolve_s": 2.8201026499991713,
       "linsolve_calls": 5,
       "precond_s": 0.0,
-      "py_peak_mb": 90.35750484466553,
-      "total_s": 3.5051985699999477,
+      "py_peak_mb": 90.73246097564697,
+      "total_s": 3.1315450510010123,
       "spread_s": 0.0,
-      "repeats": 2,
-      "notes": []
+      "repeats": 1,
+      "notes": [
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
+      ]
     },
     {
       "name": "B4",
@@ -88,16 +93,18 @@
       "error": "",
       "dof": 68921,
       "nnz": 472361,
-      "assembly_s": 0.14545673199950215,
+      "assembly_s": 0.13903830999333877,
       "assembly_calls": 9,
-      "linsolve_s": 185.0055802869997,
+      "linsolve_s": 1.4181568399981188,
       "linsolve_calls": 9,
       "precond_s": 0.0,
-      "py_peak_mb": 60.3054084777832,
-      "total_s": 185.16631871200002,
+      "py_peak_mb": 60.83133125305176,
+      "total_s": 1.5708390330000839,
       "spread_s": 0.0,
-      "repeats": 2,
-      "notes": []
+      "repeats": 1,
+      "notes": [
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
+      ]
     },
     {
       "name": "B5",
@@ -109,17 +116,18 @@
       "error": "",
       "dof": 35937,
       "nnz": 238604,
-      "assembly_s": 0.39997066499927314,
+      "assembly_s": 0.29302456399818766,
       "assembly_calls": 25,
-      "linsolve_s": 126.28712189300018,
+      "linsolve_s": 0.7997867179874447,
       "linsolve_calls": 25,
       "precond_s": 0.0,
-      "py_peak_mb": 35.84604835510254,
-      "total_s": 126.77921349799999,
+      "py_peak_mb": 36.11814880371094,
+      "total_s": 1.1720328419978614,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
-        "equilibrium only; the avalanche/thermal columns of section 34 are not exercised by this run"
+        "equilibrium only; the avalanche/thermal columns of section 34 are not exercised by this run",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
       ]
     },
     {
@@ -132,17 +140,18 @@
       "error": "",
       "dof": 14884,
       "nnz": 73932,
-      "assembly_s": 0.03895115100090152,
+      "assembly_s": 0.041144150993204676,
       "assembly_calls": 19,
-      "linsolve_s": 0.42427106399918557,
+      "linsolve_s": 0.3864619549967756,
       "linsolve_calls": 19,
       "precond_s": 0.0,
-      "py_peak_mb": 9.495979309082031,
-      "total_s": 0.4688138159999653,
+      "py_peak_mb": 9.614202499389648,
+      "total_s": 0.43389890099933837,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
-        "2D AlGaAs/GaAs, not 3D GaN -- see the case docstring"
+        "2D AlGaAs/GaAs, not 3D GaN -- see the case docstring",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
       ]
     },
     {
@@ -155,17 +164,18 @@
       "error": "",
       "dof": 91125,
       "nnz": 625725,
-      "assembly_s": 0.1632759240001178,
+      "assembly_s": 0.15996341700156336,
       "assembly_calls": 8,
-      "linsolve_s": 51.075457285999846,
+      "linsolve_s": 48.70385335400351,
       "linsolve_calls": 9,
-      "precond_s": 1.5689561499996216,
-      "py_peak_mb": 96.04955196380615,
-      "total_s": 51.25683475999995,
+      "precond_s": 1.5448153120050847,
+      "py_peak_mb": 96.08603572845459,
+      "total_s": 48.886066923001636,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
-        "iterative (bicgstab) by design; AMG/MPI/GPU columns need pyamg/mpi4py/CuPy and are reported separately"
+        "iterative (bicgstab) by design; AMG/MPI/GPU columns need pyamg/mpi4py/CuPy and are reported separately",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
       ]
     },
     {
@@ -178,17 +188,18 @@
       "error": "",
       "dof": 34023,
       "nnz": 436789,
-      "assembly_s": 0.18357514800004537,
+      "assembly_s": 0.18849252999643795,
       "assembly_calls": 12,
-      "linsolve_s": 3.2667185720004,
+      "linsolve_s": 3.1144475219989545,
       "linsolve_calls": 11,
       "precond_s": 0.0,
-      "py_peak_mb": 106.47846794128418,
-      "total_s": 5.277781662999814,
+      "py_peak_mb": 72.81097507476807,
+      "total_s": 3.4149041090022365,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
-        "the M31 P5 assembler's own case; sized by geometry, not by the mesh size field -- see the case docstring. One assembly call is the post-convergence current extraction, not a Newton iteration"
+        "the M31 P5 assembler's own case; sized by geometry, not by the mesh size field -- see the case docstring. One assembly call is the post-convergence current extraction, not a Newton iteration",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
       ]
     },
     {
@@ -201,17 +212,42 @@
       "error": "",
       "dof": 7464,
       "nnz": 177012,
-      "assembly_s": 0.11214137299998583,
-      "assembly_calls": 18,
-      "linsolve_s": 6.673693579000201,
-      "linsolve_calls": 17,
+      "assembly_s": 0.1098928109931876,
+      "assembly_calls": 17,
+      "linsolve_s": 0.6608579220010142,
+      "linsolve_calls": 16,
       "precond_s": 0.0,
-      "py_peak_mb": 43.172698974609375,
-      "total_s": 7.322943228999975,
+      "py_peak_mb": 13.54748821258545,
+      "total_s": 0.8469896119968325,
       "spread_s": 0.0,
-      "repeats": 2,
+      "repeats": 1,
       "notes": [
-        "the case the DMPlex/distributed-Mat argument is about; deliberately small even at full size -- see the case docstring. One assembly call is the post-convergence current extraction, not a Newton iteration"
+        "the case the DMPlex/distributed-Mat argument is about; deliberately small even at full size -- see the case docstring. One assembly call is the post-convergence current extraction, not a Newton iteration",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
+      ]
+    },
+    {
+      "name": "B10",
+      "title": "2D nonlocal BTBT solve",
+      "tests": "field-line path tracing + nonlocal Newton block (M34)",
+      "size": "full",
+      "dim": 2,
+      "skipped": "",
+      "error": "",
+      "dof": 29256,
+      "nnz": 776043,
+      "assembly_s": 3.213636694003071,
+      "assembly_calls": 15,
+      "linsolve_s": 4.67393691801044,
+      "linsolve_calls": 14,
+      "precond_s": 0.0,
+      "py_peak_mb": 277.11742877960205,
+      "total_s": 8.361653844000102,
+      "spread_s": 0.0,
+      "repeats": 1,
+      "notes": [
+        "an M34 addition, not a section-34 case; the path tracer is compiled (M34-S4) -- compare PYTCAD_ACCEL=0/1",
+        "tracemalloc was active: total_s is inflated and is not comparable with an untraced run"
       ]
     }
   ]

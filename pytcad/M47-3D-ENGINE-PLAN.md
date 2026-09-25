@@ -1,12 +1,22 @@
 # M47: 3D numerical engine completion
 
-Status: Step 0 (benchmark-first decision) complete. Slice 1 design
-reviewed and corrected across 3 rounds (transcendental placement, exact
-COO/F emission order, Jn/Jp parity requirements, equilibrium-vs-coupled
-Poisson API split). Slice 1 groundwork (Python-only COO block refactor
-+ FD-Jacobian gates) landed and verified bit-identical -- see "Slice 1
-groundwork" below. No C++ kernels, no nanobind bindings, no numerical
-behavior change anywhere yet.
+Status (2026-09-24): **LANDED.** All three slices are in:
+
+- Slice 1 -- unstructured 3D (`unstructured_dd3d.py`) assembly compiled
+  (`core/src/unstructured3d/`), parity-gated against the Python oracle.
+- Slice 2a -- structured `Device3D._residual_jacobian` base assembly
+  compiled (`core/src/device3d/`), parity-gated. Optional-physics
+  composition (impact/btbt/nonlocal/hydrodynamic/GateBC) stays in Python
+  by design (see "Slice 2a" below) -- there is no "2b" pending.
+- Slice 3 -- heterojunctions in `unstructured_dd3d.py`
+  (`materials_per_node` + `band_offset`), see "Slice 3" at the end.
+
+Honest performance record: neither C++ slice is a clear wall-clock win
+over the numpy code it replaced (Slice 1: ~2x on the kernel, small on
+the whole solve; Slice 2a: parity), and the zero-copy binding follow-up
+measured NO change and was reverted (see "Zero-copy bindings" at the
+end). The earlier text below this line is the session-by-session
+record and describes each point in time, not current state.
 
 ## Slice 1 groundwork (landed, Python-only, no C++)
 
@@ -566,3 +576,90 @@ no-op cast when the dtype already matches -- it copies regardless,
 silently, unless `copy=False` is passed explicitly. Check dtype
 assumptions at every `_accel` call-site boundary before assuming a
 "defensive cast" is free.
+
+
+## Slice 3: heterojunctions in unstructured 3D -- LANDED (2026-09-24)
+
+A port of `unstructured_dd.py`'s 2D mechanism, not new physics. Both
+`solve_bias3d` and `solve_poisson_equilibrium3d` accept
+`materials_per_node` ((N,) Semiconductor per node) and
+`band_offset` ("nie" default, or "affinity"):
+
+- per-node nie (SRH, ohmic contact values, bulk initial guess, gate
+  reference potential);
+- the Anderson edge term `dlnnie = ln(nie_j/nie_i)`, ADDED to the
+  electron SG argument and SUBTRACTED from the hole one;
+- the affinity gauge's per-node shift `s = ln(Nc/nie) + chi/VT`
+  (referenced to node 0; same sign for both carriers); the equilibrium
+  solve slaves carriers to `psi + s` exactly as Device3D does;
+- per-node mobility from each node's own material (Caughey-Thomas
+  per material group when `doping_mobility=True`).
+
+Carried over from 2D unchanged, and stated rather than hidden: eps and
+SRH lifetimes come from the reference `material`, not per node.
+
+A homojunction -- no materials, or every node the same nie with no
+affinity step, on either gauge -- takes the pre-Slice-3 scalar path
+unchanged, so it is bit-identical BY CONSTRUCTION (gate G1 checks it
+rather than assuming it).
+
+C++ change: `unstructured3d_residual_jacobian_coupled` gained optional
+trailing arguments `nie_node` (per-node nie; the scalar is broadcast
+when omitted) and `Bp_h/Bm_h/dBp_h/dBm_h` (the hole's own Bernoulli
+arrays; the electron's are reused when omitted). The existing positional
+call, and therefore every pre-existing parity test, is unchanged.
+
+Gates (`tests/test_m47_s3_unstructured3d_hetero.py`, 22 tests, all
+green), with the measured values:
+
+| gate | what | measured |
+|---|---|---|
+| G1 | default / uniform materials / both gauges bit-identical (bias + equilibrium) | np.array_equal |
+| G2 | per-carrier equilibrium detailed balance, both gauges | quasi-Fermi spread <= 4.3e-14 (gate 1e-6) |
+| G3 | FD-Jacobian on every interface-edge node, nonzero dlnnie AND ds | < 1e-3 (the in-tree M47 FD gate's own step/threshold) |
+| G4 | compiled kernel == Python oracle with per-node nie + hole arrays | np.array_equal |
+| G5 | built-in potential vs the Anderson rule (Si / wider-gap Si) | rel err 1.4e-9 (gate 5%) |
+| G6 | equilibrium3d == zero-bias solve_bias3d on the hetero junction | < 1e-4 VT |
+| G7 (slow) | forward current vs structured Device3D heterojunction | within the existing 30% independent-discretization band |
+| G8 | bad band_offset / wrong-length materials_per_node refused | ValueError |
+| G9 | doping_mobility per-material branch exact for identical materials; slower-mobility half lowers current (both mobility branches) | np.array_equal; current ratio < 0.9 |
+| G10 | gated hetero device: equilibrium3d == zero-bias solve_bias3d; gate moves surface psi | < 1e-4 VT; > 1 VT shift |
+| G11 | init= warm start from the converged hetero state is a fixed point | <= 2 Newton iterations, < 1e-8 |
+| G12 | return_diagnostics on a hetero solve | shape (n_iter, N), finite, decaying |
+
+G9-G12 were added in a follow-up pass (2026-09-24) after an audit found
+those Slice 3 paths shipped without a gate. A second mutation check --
+dropping `-band_shift` from the gate reference potential in
+`solve_bias3d` only -- fails G10's affinity case, as it should.
+
+Mutation check (adversarial, not a unit test): giving the hole the
+electron's `+dlnnie` sign -- the bug CLAUDE.md's heterojunction gotcha
+describes -- fails G2's HOLE line only (quasi-Fermi spread 4.6) while
+G3 and G5 still pass, confirming G2 is the gate that guards it.
+
+Goldens: the only goldens in the tree are `tests/goldens/m13/*.npz`
+(structured). md5s recorded before the edit, re-checked after: all six
+unchanged, as expected -- no golden exercises `unstructured_dd3d.py`.
+
+## Zero-copy bindings: measured, no change, reverted (2026-09-24)
+
+The "Fix (b)" section above left one unexplored candidate: the
+bindings' per-call `to_vec` copy of every input array. Tried: a
+read-only (pointer, length) view in place of the copy, plus releasing
+the GIL around the kernel, for both the device3d and unstructured3d
+bindings. Measured with `benchmarks/m47_views_measure.py` (assembly
+ms/call via `benchmarks/instrument.py`, best of 5 full solves, full
+size), HEAD vs the change:
+
+| case | HEAD (copies) | views | spread within a column |
+|---|---|---|---|
+| B9 unstructured coupled | 9.39 ms/call | 10.11 ms/call | ~10% |
+| S3D structured coupled | 33.34 ms/call | 32.13 ms/call | ~10% |
+
+No difference outside run-to-run noise. The arithmetic says why: B9's
+~15k edges x ~14 arrays is ~1.7 MB of memcpy, ~0.2 ms against a ~10 ms
+call -- the copy was never the cost. Per the plan's own rule (keep a
+performance change only on a measured win), it was reverted; the
+script is kept so the null result can be re-run. The remaining cost is
+on the Python side of the boundary (Bernoulli precompute, COO -> CSR
+construction), not in the copy.

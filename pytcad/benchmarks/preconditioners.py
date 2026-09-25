@@ -112,6 +112,8 @@ CONFIGS = [
     ("bicgstab/ilu", "bicgstab", None, "auto"),
     ("bicgstab/schur", "bicgstab", 3, "schur"),
     ("petsc", "petsc", 3, "auto"),
+    # 2026-09-24: exact sparse LU through PETSc/MUMPS -- see F3D below.
+    ("mumps", "mumps", None, "auto"),
 ]
 
 # Which module(s) hold the `solve_linear` name this case's Newton loop
@@ -194,6 +196,42 @@ def _s3d_coupled(size, opts=None):
             dev.solve_bias({"anode": 0.3, "cathode": 0.0})
     return dev, run
 
+
+
+def _f3d_coupled(size, opts=None):
+    """The tri-gate FinFET of tests/test_model_benchmarks.py's M26 gate
+    (pytcad.finfet3d, Lg=0.4 um, 21,888 coupled DOF), driven through a
+    gate-voltage sweep of COUPLED `solve_bias` calls -- the same
+    `device3d.py` select_auto cell (3, False, True) as S3D, but a thin,
+    gated mesh instead of a cube.
+
+    Added 2026-09-24 because S3D alone had decided that cell, and on this
+    device the ranking inverts: GMRES slows as the channel inverts while
+    SuperLU's fill-in stays small. Equilibrium runs in setup, outside the
+    sweep, so only coupled solves are measured (the sweep forces one
+    method onto every solve_linear call, and the scalar equilibrium solve
+    must not be handed block_size=3 configurations).
+
+    `size` sets the number of gate-voltage points, not the mesh: quick =
+    4 points, full = the M26 gate's own 12. The mesh is the gate's."""
+    from pytcad.finfet3d import build_finfet3d
+
+    dev = build_finfet3d(Lg=0.4e-6, Lsd=0.3e-6, Hfin=0.3e-6, Wfin=0.2e-6,
+                         tox_cm=2e-7, Na=5e17, Nsd_peak=1e19,
+                         sigma_y=0.05e-6, sigma_lat=0.05e-6,
+                         NX=6, NY=4, NZ=4, mesh_ratio=1.3)
+    dev.solve_equilibrium()
+    Vg_list = np.linspace(-0.4, 1.2, 4 if size == "quick" else 12)
+
+    def run():
+        for Vg in Vg_list:
+            bias = {"drain": 0.05, "gate_top": Vg, "gate_left": Vg,
+                    "gate_right": Vg}
+            if opts is not None:
+                dev.solve_bias(bias, opts)
+            else:
+                dev.solve_bias(bias)
+    return dev, run
 
 
 def _u2d_poisson(size, opts=None):
@@ -286,6 +324,12 @@ _EXTRA_CASES = {
                 _s3d_coupled, dim=3,
                 notes="study-only fixture, not a dashboard row -- see "
                       "the comment above _s3d_coupled"),
+    "F3D": Case("F3D", "3D structured coupled bias, tri-gate FinFET",
+                "device3d.py select_auto cell (3, False, True), thin "
+                "gated mesh",
+                _f3d_coupled, dim=3,
+                notes="study-only fixture, not a dashboard row -- see "
+                      "_f3d_coupled's docstring"),
     "U2DP": Case("U2DP", "2D unstructured Poisson equilibrium",
                  "unstructured_poisson.py:141 select_auto cell "
                  "(2, True, False)",

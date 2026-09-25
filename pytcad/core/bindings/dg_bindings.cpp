@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "tcad/base/checks.hpp"
 #include "tcad/base/errors.hpp"
 #include "tcad/dg/kernels.hpp"
 
@@ -55,13 +56,23 @@ void register_dg(nb::module_& m) {
               std::vector<tcad::dg::Axis> axes(static_cast<std::size_t>(n_axes));
               std::int64_t edge_off = 0, node_off = 0;
               std::int64_t total_edges = 0;
-              for (int a = 0; a < n_axes; ++a) total_edges += n_edges.data()[a];
+              for (int a = 0; a < n_axes; ++a) {
+                  // A negative count could still sum to the right total and
+                  // hand the kernel a negative-length slice.
+                  if (n_edges.data()[a] < 0)
+                      throw tcad::InvalidArgument("n_edges: axis " + std::to_string(a) +
+                                                  " has a negative edge count");
+                  total_edges += n_edges.data()[a];
+              }
               if (static_cast<std::int64_t>(kL_concat.shape(0)) != total_edges ||
                   static_cast<std::int64_t>(kR_concat.shape(0)) != total_edges ||
                   static_cast<std::int64_t>(h_phys_concat.shape(0)) != total_edges)
                   throw tcad::InvalidArgument("kL/kR/h_phys: total length must match sum(n_edges)");
               if (static_cast<std::int64_t>(dV_phys_concat.shape(0)) != n_axes * N)
                   throw tcad::InvalidArgument("dV_phys: expected n_axes*N entries");
+              // The kernel reads pref/g/dV_phys at kL[e]/kR[e] unchecked.
+              tcad::check_indices(kL_concat.data(), total_edges, N, "kL");
+              tcad::check_indices(kR_concat.data(), total_edges, N, "kR");
 
               for (int a = 0; a < n_axes; ++a) {
                   const std::int64_t ne = n_edges.data()[a];

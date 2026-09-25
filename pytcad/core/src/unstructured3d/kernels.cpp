@@ -74,7 +74,7 @@ Coo poisson_charge_coupling(const std::vector<double>& node_vols_s) {
 }
 
 SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
-                    double nie_phys, const std::vector<double>& tau_n,
+                    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
                     const std::vector<double>& tau_p,
                     const std::vector<double>& node_vols_s, double Ns,
                     double R0, bool srh, bool auger, double auger_cn,
@@ -86,12 +86,16 @@ SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
     std::vector<double> dRs_dn(N, 0.0), dRs_dp(N, 0.0);
 
     if (srh) {
-        const double ni2 = nie_phys * nie_phys;
         for (std::size_t k = 0; k < N; ++k) {
+            // Per node (M47 Slice 3). For a homojunction every entry is
+            // the same value, so nie*nie is the same product the former
+            // scalar hoisted out of this loop -- bit-identical.
+            const double nie_k = nie_phys[k];
+            const double ni2 = nie_k * nie_k;
             const double n_phys = n[k] * Ns;
             const double p_phys = p[k] * Ns;
             const double excess = n_phys * p_phys - ni2;
-            const double den = tau_p[k] * (n_phys + nie_phys) + tau_n[k] * (p_phys + nie_phys);
+            const double den = tau_p[k] * (n_phys + nie_k) + tau_n[k] * (p_phys + nie_k);
             double R = excess / den;
             double dRdn = (p_phys * den - excess * tau_p[k]) / (den * den);
             double dRdp = (n_phys * den - excess * tau_n[k]) / (den * den);
@@ -264,9 +268,11 @@ CoupledResult residual_jacobian_coupled(
     const std::vector<double>& D_n_s, const std::vector<double>& D_p_s,
     const std::vector<double>& Bp, const std::vector<double>& Bm,
     const std::vector<double>& dBp, const std::vector<double>& dBm,
-    double nie_phys, const std::vector<double>& tau_n,
+    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
     const std::vector<double>& tau_p, double Ns, double R0, bool srh,
-    bool auger, double auger_cn, double auger_cp) {
+    bool auger, double auger_cn, double auger_cp,
+    const std::vector<double>& Bp_h, const std::vector<double>& Bm_h,
+    const std::vector<double>& dBp_h, const std::vector<double>& dBm_h) {
     const std::size_t N = C_s.size();
 
     // Block order: SRH/Auger FIRST, Poisson charge-coupling SECOND,
@@ -295,7 +301,7 @@ CoupledResult residual_jacobian_coupled(
     for (std::size_t e = 0; e < edge_j.size(); ++e)
         F1[static_cast<std::size_t>(edge_j[e])] -= sg_e.J_edge[e];
 
-    SgResult sg_h = sg_hole(edge_i, edge_j, trans_bare, D_p_s, p, Bp, Bm, dBp, dBm);
+    SgResult sg_h = sg_hole(edge_i, edge_j, trans_bare, D_p_s, p, Bp_h, Bm_h, dBp_h, dBm_h);
     std::vector<double> F2 = srh_r.F2_baseline;
     for (std::size_t e = 0; e < edge_i.size(); ++e)
         F2[static_cast<std::size_t>(edge_i[e])] += sg_h.J_edge[e];

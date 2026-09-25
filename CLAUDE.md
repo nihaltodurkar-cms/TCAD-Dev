@@ -1,46 +1,15 @@
 # CLAUDE.md — Guidance for AI agents working on PyTCAD
 
-This file is the complete briefing for working on this repo -- it does
-not assume you have seen any prior conversation, and it does not assume
-any particular model. Read it in full before touching any file, and
-follow it literally: where it says a file is frozen, do not edit it;
-where it says run the tests, actually run them and read the real
-output rather than assuming the change worked; where it gives a
-concrete gotcha below, that gotcha has already cost a real debugging
-session once and will cost another if repeated. If anything here
-conflicts with what a user asks for in a specific conversation, say so
-and ask, rather than silently picking one.
+Complete briefing for repo. Assumes no prior conversation, no particular model. Read in full before touching any file. Follow literally: frozen file = don't edit; "run tests" = actually run, read real output, don't assume. Each concrete gotcha below already cost one real debugging session; repeat costs another. If anything here conflicts with user request in a conversation, say so and ask — don't silently pick.
 
-**`Architecture_Master_Plan.md` was removed from the working tree on
-2026-09-10 and lives only in git history.** Docs across this repo still
-cite it by section number (34-37 for the benchmark cases, the dashboard
-and the no-unproven-performance-claims rule; 41-42 for architectural
-tests and the frozen API surface) because those sections are still the
-reasoning behind gates that exist. Read one with
-`git show a117d03:Architecture_Master_Plan.md`; do not treat a citation
-as a broken link.
+**`Architecture_Master_Plan.md` removed from working tree 2026-09-10, lives only in git history.** Docs still cite it by section number (34-37: benchmark cases, dashboard, no-unproven-performance-claims rule; 41-42: architectural tests, frozen API surface) — those sections still reason behind existing gates. Read via `git show a117d03:Architecture_Master_Plan.md`; citation not broken link.
 
-Read this before doing anything. Then read `history.md`
-(current state + open items -- read at least its LAST few entries,
-not just this file, since state changes faster than this file is
-updated), `ARCHITECTURE.md` (roadmap + live queue,
-including the governing future plan in sections 4b (M13-M30, now
-essentially closed) and 4c (M31 onward -- the C++/Python/Qt
-re-architecture, plus the proposed M32-M40 map)), and
-the active milestone spec -- as of 2026-08-31 the only genuinely OPEN
-core-solver item is `pytcad/M14-SURFACE-MOBILITY-PLAN.md`'s G-A
-(blocked on a paywalled source); M16/M17/M18/M19/M20/M21/M22 are all
-landed for their stated scope (see "Milestone state & plans" below and
-each milestone's own plan doc for exactly what that scope was and
-what's honestly still deferred). Also read `pytcad/GUI-IMPROVEMENT-
-PLAN.md` and `pytcad/3D-VISUALIZATION-PLAN.md` for GUI-side state.
+Read this first. Then read `history.md` (current state + open items — read at least LAST few entries; state changes faster than this file), `ARCHITECTURE.md` (roadmap + live queue; governing future plan in sections 4b (M13-M30, essentially closed) and 4c (M31 onward — C++/Python/Qt re-architecture, plus proposed M32-M40 map)), and active milestone spec. As of 2026-08-31 only genuinely OPEN core-solver item: `pytcad/M14-SURFACE-MOBILITY-PLAN.md`'s G-A (blocked on paywalled source); M16/M17/M18/M19/M20/M21/M22 all landed for stated scope (see "Milestone state & plans" below and each milestone's plan doc for scope and what's honestly deferred). Also read `pytcad/GUI-IMPROVEMENT-
+PLAN.md` and `pytcad/3D-VISUALIZATION-PLAN.md` for GUI state.
 
 ## What this is
 
-PyTCAD: a validated TCAD toolkit (1D/2D/3D drift-diffusion, process
-simulation) plus a Semiconductor Workbench layer (`workbench/`) and a
-PySide6/QML desktop GUI (`gui/`). Every educational surface must be
-backed by real computation. Never fake, never mock, never weaken tests.
+PyTCAD: validated TCAD toolkit (1D/2D/3D drift-diffusion, process simulation) + Semiconductor Workbench layer (`workbench/`) + PySide6/QML desktop GUI (`gui/`). Every educational surface backed by real computation. Never fake, never mock, never weaken tests.
 
 ## Layout
 
@@ -97,83 +66,34 @@ python3 examples/01_pn_diode.py            # examples 01..05
 
 ## Gotcha: line endings are MIXED, and no .gitattributes guards them
 
-`pytcad/pytcad/` mixes both, and there is no `.gitattributes`.
+`pytcad/pytcad/` mixes both; no `.gitattributes`.
 
-**Do not trust a checked-in list of WHICH files -- measure it.** This
-paragraph used to name `device.py` and `device2d.py` as the CRLF ones;
-re-measured 2026-09-10, both are LF and the counts had drifted from
-"18 CRLF / 28 LF" to **13 CRLF / 36 LF**. The set moves whenever a file
-gets rewritten, so the only durable form of this gotcha is the check
-itself:
+**Don't trust checked-in list of WHICH files — measure.** Paragraph once named `device.py` and `device2d.py` as CRLF; re-measured 2026-09-10, both LF, counts drifted "18 CRLF / 28 LF" → **13 CRLF / 36 LF**. Set moves whenever file rewritten; only durable form is the check:
 
 ```bash
 cd pytcad/pytcad && for f in *.py; do
   grep -qU $'\r' "$f" && echo "CRLF: $f"; done
 ```
 
-As of 2026-09-10 the 13 are: `adapt.py`, `constants.py`,
-`continuation.py`, `fermi.py`, `__init__.py`, `ionization.py`,
-`linsolve.py`, `materials.py`, `mesh.py`, `mesh2d.py`, `mesh3d.py`,
-`mosfet.py`, `process.py` -- plus `CLAUDE.md` itself. Note that
-`linsolve.py` is on that list and is exactly the file M31 P5-1 keeps
-editing.
+As of 2026-09-10 the 13: `adapt.py`, `constants.py`, `continuation.py`, `fermi.py`, `__init__.py`, `ionization.py`, `linsolve.py`, `materials.py`, `mesh.py`, `mesh2d.py`, `mesh3d.py`, `mosfet.py`, `process.py` — plus `CLAUDE.md` itself. `linsolve.py` on list = exactly file M31 P5-1 keeps editing.
 
-So a script that does the obvious thing --
+Script doing the obvious thing —
 
 ```python
 s = open(path).read();  ...;  open(path, "w").write(s)
 ```
 
--- silently rewrites the WHOLE FILE, because Python's universal-newline
-read turns `\r\n` into `\n` and the write does not put it back.  The
-edit is correct, the diff is 3,800 lines, and the real change is
-invisible inside it.  This has already happened once.
+— silently rewrites WHOLE FILE: Python universal-newline read turns `\r\n` into `\n`, write doesn't restore. Edit correct, diff 3,800 lines, real change invisible. Happened once already.
 
-When editing one of the CRLF files programmatically, either use binary
-mode (`open(p, "rb")` / `"wb"`) or restore the endings afterwards, and
-check `git diff --stat` before believing the change is small.  Do not
-"fix" this by adding a repo-wide `.gitattributes` mid-branch: renormalizing
-would touch every CRLF file at once and bury whatever else is in flight.
+Editing CRLF file programmatically: use binary mode (`open(p, "rb")` / `"wb"`) or restore endings after; check `git diff --stat` before believing change small. Don't "fix" by adding repo-wide `.gitattributes` mid-branch: renormalizing touches every CRLF file, buries in-flight work.
 
 ## The C++ engine (M31) -- REQUIRED as of M43 phase 4 (2026-09-16)
 
-`pytcad/core/` is a C++ numerical engine exposed as the single extension
-module `pytcad._core`. Through M43 phase 3 this was **always optional**
-(`pytcad/_accel.py` soft-imported it and fell back to a pure-Python
-reference path per kernel). **At the user's explicit request, that
-fallback was removed in phase 4**: the pure-Python bodies (`_<name>_py`)
-for the mesh-geometry kernels (P2), the process/adaptivity kernels (P4),
-the M34-S4 nonlocal path tracer, and the M43 thermal-grid assembly no
-longer exist. `_accel.require_accel()` raises a clear ImportError,
-naming the build command below, if `_core` is not importable when one
-of those functions is called. `import pytcad` ITSELF still never fails
-without the extension (gate G-F survives in that narrower, import-only
-form -- see `pytcad/_accel.py`'s own docstring) -- but calling
-`process.diffuse_numeric`, `ted.diffuse_with_defects`,
-`adapt_unstructured.indicator_*_tri`/`debye_ratio_tri`,
-`unstructured_assembly{,3d}.build_*`, `nonlocal_path.build_structured`,
-or `thermal_grid._residual_jacobian_grid` now requires it. The ONE
-exception, deliberately out of this scope: `linsolve.py`'s petsc4py
-backend (`_solve_petsc_py`) is a real, independent second implementation
-(PETSc's own official Python bindings), not a pure-Python stand-in for
-lack of a compiler, and was left untouched -- `method="petsc"` still
-works via petsc4py when `_core` was built without PETSc, or is entirely
-absent.
+`pytcad/core/` = C++ numerical engine exposed as single extension module `pytcad._core`. Through M43 phase 3 **always optional** (`pytcad/_accel.py` soft-imported, fell back to pure-Python reference per kernel). **At user's explicit request, fallback removed in phase 4**: pure-Python bodies (`_<name>_py`) for mesh-geometry kernels (P2), process/adaptivity kernels (P4), M34-S4 nonlocal path tracer, and M43 thermal-grid assembly no longer exist. `_accel.require_accel()` raises clear ImportError naming build command below if `_core` not importable when one called. `import pytcad` ITSELF still never fails without extension (gate G-F survives in narrower import-only form — see `pytcad/_accel.py` docstring) — but `process.diffuse_numeric`, `ted.diffuse_with_defects`, `adapt_unstructured.indicator_*_tri`/`debye_ratio_tri`, `unstructured_assembly{,3d}.build_*`, `nonlocal_path.build_structured`, `thermal_grid._residual_jacobian_grid` now require it. ONE deliberate exception: `linsolve.py`'s petsc4py backend (`_solve_petsc_py`) = real independent second implementation (PETSc's official Python bindings), not pure-Python stand-in; untouched — `method="petsc"` still works via petsc4py when `_core` built without PETSc or absent entirely.
 
-Practical consequence: **a checkout with no compiled `_core` can still
-`import pytcad`, but cannot run process simulation, AMR refinement, the
-nonlocal-BTBT tracer, or M43 self-heating.** `tests/test_accel_parity.py`,
-`test_accel_boundary.py`, `test_m34_s4_trace_parity.py`, and the M43
-thermal test files are all `skipif(not _accel.HAVE_ACCEL)` and were
-rewritten to check correctness/reproducibility on the sole compiled
-path (there is no second implementation left to diff against) rather
-than cross-path parity.
+Practical consequence: **checkout without compiled `_core` can `import pytcad`, but cannot run process simulation, AMR refinement, nonlocal-BTBT tracer, or M43 self-heating.** `tests/test_accel_parity.py`, `test_accel_boundary.py`, `test_m34_s4_trace_parity.py`, M43 thermal test files all `skipif(not _accel.HAVE_ACCEL)`, rewritten to check correctness/reproducibility on sole compiled path (no second implementation to diff) instead of cross-path parity.
 
-**No C++ compiler was installed on this machine when M43 phase 3
-started.** See the "No C++ compiler was installed..." note further
-below for the full incident record (a compiler installed directly into
-the Python env broke PySide6 once) and why the compiler now lives in a
-SEPARATE conda env (`tcad-cpp`) from the Python env (`tcad-dev`).
+**No C++ compiler installed on this machine when M43 phase 3 started.** See "No C++ compiler was installed..." note below for full incident (compiler installed into Python env broke PySide6 once) and why compiler lives in SEPARATE conda env (`tcad-cpp`) from Python env (`tcad-dev`).
 
 ```bash
 # in-place dev build -- nothing installed; the .so lands in pytcad/ so
@@ -192,78 +112,21 @@ conda run -n TCAD python -m build --wheel
 conda run -n TCAD pip install --no-build-isolation -ve .
 ```
 
-**PETSc is optional inside the extension** (M31 P3b), on the same
-principle one level down: the CMake option `TCAD_WITH_PETSC` is `AUTO`,
-so a build on a machine without PETSc still compiles and
-`linsolve.solve_linear(method="petsc")` falls back to petsc4py -- or, if
-that is missing too, raises `LinearSolveError` naming both routes. The
-in-place build above picks PETSc up automatically inside the `TCAD`
-conda env; `PKG_CONFIG_PATH` must point at `<prefix>/lib/pkgconfig`
-otherwise. Force either way with `-DTCAD_WITH_PETSC=ON` (fail the
-configure if absent) or `=OFF` (reproduce the pip-only CI job locally).
-`_accel.status()` says which you got, and `info["backend"]` from a
-`method="petsc"` solve says which one actually ran.
+**PETSc optional inside extension** (M31 P3b), same principle one level down: CMake option `TCAD_WITH_PETSC` is `AUTO`, so build without PETSc still compiles and `linsolve.solve_linear(method="petsc")` falls back to petsc4py — or, if missing too, raises `LinearSolveError` naming both routes. In-place build above picks PETSc up automatically inside `TCAD` conda env; otherwise `PKG_CONFIG_PATH` must point at `<prefix>/lib/pkgconfig`. Force with `-DTCAD_WITH_PETSC=ON` (configure fails if absent) or `=OFF` (reproduce pip-only CI job locally). `_accel.status()` says which you got; `info["backend"]` from `method="petsc"` solve says which actually ran.
 
-**What is compiled so far.** Mesh geometry (`unstructured_assembly{,3d}`
--- M31 P2), the PETSc KSP/PC configuration (`linsolve`, P3b), the
-process/adaptivity kernels (P4): the three per-triangle AMR indicators in
-`adapt_unstructured.py` and the 1D explicit diffusion time loops in
-`process.diffuse_numeric` / `ted.diffuse_with_defects`; the M34-S4
-nonlocal-BTBT path tracer (`nonlocal_path._trace_paths_py`'s C++ mirror);
-and, as of M43 phase 3 (2026-09-16), the structured-grid (D=2-or-3)
-self-heating assembly, `thermal_grid._residual_jacobian_grid_py` ->
-`core/src/thermal/grid.cpp` (`_core.thermal_grid_residual_jacobian`).
-Everything else is still pure Python and none of it is on a
-deprecation path.
+**What's compiled so far.** Mesh geometry (`unstructured_assembly{,3d}` — M31 P2), PETSc KSP/PC config (`linsolve`, P3b), process/adaptivity kernels (P4): three per-triangle AMR indicators in `adapt_unstructured.py` and 1D explicit diffusion time loops in `process.diffuse_numeric` / `ted.diffuse_with_defects`; M34-S4 nonlocal-BTBT path tracer (`nonlocal_path._trace_paths_py`'s C++ mirror); and, as of M43 phase 3 (2026-09-16), structured-grid (D=2-or-3) self-heating assembly, `thermal_grid._residual_jacobian_grid_py` -> `core/src/thermal/grid.cpp` (`_core.thermal_grid_residual_jacobian`). Since then (verified in tree 2026-09-24, not memory): M42-S3 density-gradient Lambda-row assembly (`core/src/dg/grid.cpp`); M47 3D assembly — `unstructured_dd3d.py`'s equilibrium and coupled residual/Jacobian (`core/src/unstructured3d/`) and `Device3D._residual_jacobian`'s four base COO blocks (`core/src/device3d/`); exact MUMPS sparse LU inside PETSc path (`linsolve.solve_linear(method="mumps")`, which `NewtonOptions(linsolve="auto")` picks for 3D structured coupled bias solves — see `linsolve._AUTO_EVIDENCE`). Every binding taking node indices or per-edge arrays range/length-checks up front, raises `IndexError`/`ValueError` (`core/include/tcad/base/checks.hpp`, gated by `tests/test_core_input_validation.py`) — before 2026-09-23 malformed array SEGV'd interpreter. Everything else still pure Python, none on deprecation path.
 
-**No C++ compiler was installed on this machine until M43 phase 3, and
-the compiler toolchain lives in a SEPARATE conda env from the one
-Python runs in -- `tcad-cpp`, never `tcad-dev`.** `cmake`/`ninja` were
-already in `tcad-dev`, but no `cl.exe`/`g++`/`clang++` existed
-anywhere, confirmed by trying to compile a trivial `<optional>`
-translation unit rather than assumed. The FIRST fix attempt --
-`conda install -n tcad-dev -c conda-forge gxx` -- silently broke
-PySide6 (`ImportError: DLL load failed while importing QtCore`): that
-install channel-switched `libhwloc` from conda-forge to the `defaults`
-channel (same version number, different binary/ABI) and downgraded
-`libxml2`, both as transitive dependency resolution side effects of
-adding a compiler into an env that already had a large, unrelated
-dependency graph. Caught only by actually running the GUI test suite
-afterward, not by anything at build/import time for `_core` itself.
-Fixed by reverting `tcad-dev` to its pre-compiler state
-(`conda install -n tcad-dev -c conda-forge --revision N`) and creating
-a genuinely separate env, `tcad-cpp` (`conda create -n tcad-cpp -c
-conda-forge gxx cmake ninja binutils`), used ONLY to supply
-`CMAKE_CXX_COMPILER`/`CMAKE_AR`/`CMAKE_RANLIB` paths -- `tcad-dev`
-itself gained zero new/changed packages the second time. Because the
-compiler and the Python interpreter now live in different envs,
-`_core.pyd` must not depend on `tcad-cpp`'s runtime DLLs
-(`libstdc++-6.dll`/`libgcc_s_seh-1.dll`/`libwinpthread-1.dll`/
-`libgomp-1.dll`) being reachable at import time -- `core/CMakeLists.txt`
-statically links all four into `_core` (`-static-libgcc
--static-libstdc++` plus a `-Wl,-Bstatic,--whole-archive
+**No C++ compiler on this machine until M43 phase 3; compiler toolchain lives in SEPARATE conda env from Python's — `tcad-cpp`, never `tcad-dev`.** `cmake`/`ninja` already in `tcad-dev`, but no `cl.exe`/`g++`/`clang++` anywhere — confirmed by compiling trivial `<optional>` TU, not assumed. FIRST fix attempt — `conda install -n tcad-dev -c conda-forge gxx` — silently broke PySide6 (`ImportError: DLL load failed while importing QtCore`): install channel-switched `libhwloc` conda-forge → `defaults` (same version, different binary/ABI) and downgraded `libxml2`, both transitive resolution side effects of adding compiler to env with large unrelated dep graph. Caught only by running GUI test suite after, not at `_core` build/import. Fixed: reverted `tcad-dev` (`conda install -n tcad-dev -c conda-forge --revision N`), created separate env `tcad-cpp` (`conda create -n tcad-cpp -c
+conda-forge gxx cmake ninja binutils`), used ONLY to supply `CMAKE_CXX_COMPILER`/`CMAKE_AR`/`CMAKE_RANLIB` paths — `tcad-dev` gained zero new/changed packages second time. Compiler and interpreter in different envs, so `_core.pyd` must not depend on `tcad-cpp`'s runtime DLLs (`libstdc++-6.dll`/`libgcc_s_seh-1.dll`/`libwinpthread-1.dll`/`libgomp-1.dll`) at import — `core/CMakeLists.txt` statically links all four into `_core` (`-static-libgcc
+-static-libstdc++` plus `-Wl,-Bstatic,--whole-archive
 -lwinpthread -lgomp -Wl,--no-whole-archive,-Bdynamic` group; `objdump
--p` on the built `.pyd` is the way to confirm zero non-system DLL
-dependencies beyond `python3XX.dll` -- checked directly, not assumed).
-This is now a durable, SAFE environment change: `tcad-cpp` exists
-alongside `tcad-dev` and never touches it; `pytcad/_core*.pyd` persists
-in the repo (gitignored) and imports with no runtime coupling to
-`tcad-cpp` at all. If a fresh checkout reports `_accel.status()` as
-"not built" again, rebuild via `tcad-cpp`'s compiler exactly as above
--- never install a compiler directly into `tcad-dev` again.
+-p` on built `.pyd` confirms zero non-system DLL deps beyond `python3XX.dll` — checked directly). Durable SAFE env change: `tcad-cpp` exists alongside `tcad-dev`, never touches it; `pytcad/_core*.pyd` persists in repo (gitignored), imports with no runtime coupling to `tcad-cpp`. Fresh checkout reports `_accel.status()` "not built" → rebuild via `tcad-cpp` compiler as above — never install compiler into `tcad-dev` again.
 
-**Where an accelerated function's transcendentals live matters.** The
-P4 kernels take `np.log(n)`, not `n`, and the nodal Debye lengths, not
-the doping -- numpy's `log`/`exp` and C++'s are independent
-implementations, and the gate is `np.array_equal`, so anything of that
-kind is computed ONCE on the Python side and only its result crosses.
-If you add a kernel, follow that; do not assume two libm builds agree
-without measuring it (as `core/src/process/diffuse.cpp` documents for the
-one exception).
+**Where accelerated function's transcendentals live matters.** P4 kernels take `np.log(n)`, not `n`, and nodal Debye lengths, not doping — numpy's `log`/`exp` and C++'s are independent implementations, gate is `np.array_equal`, so such things computed ONCE Python-side, only result crosses. New kernel: follow that; don't assume two libm builds agree without measuring (as `core/src/process/diffuse.cpp` documents for the one exception).
 
 ## Performance claims (M32)
 
-There is a benchmark suite. Use it.
+Benchmark suite exists. Use it.
 
 ```bash
 cd pytcad
@@ -271,69 +134,27 @@ OPENBLAS_NUM_THREADS=1 conda run -n TCAD python -m benchmarks            # quick
 OPENBLAS_NUM_THREADS=1 conda run -n TCAD python -m benchmarks --size full
 ```
 
-`Architecture_Master_Plan.md` section 36 forbids claiming the solver is
-"HPC-ready" (or fast, or scalable) without correctness + scaling + memory
-+ reproducibility in a table. `benchmarks/` is how that table gets made,
-and `benchmarks/BASELINE.md` is the checked-in reference to compare a
-change against. **A performance number that did not come from a
-benchmark run does not belong in a plan doc or a commit message** -- the
-project already has a drawer of one-off measurements that cannot be
-re-run, which is the problem M32 exists to end.
+`Architecture_Master_Plan.md` section 36 forbids claiming solver "HPC-ready" (or fast, or scalable) without correctness + scaling + memory + reproducibility in a table. `benchmarks/` makes that table; `benchmarks/BASELINE.md` = checked-in reference to compare against. **Performance number not from benchmark run doesn't belong in plan doc or commit message** — project already has drawer of unre-runnable one-off measurements; M32 exists to end that.
 
-Read `benchmarks/README.md` before quoting a column: `assembly` is
-residual and Jacobian together, `asm calls` is NOT the Newton iteration
-count, and `py peak MB` is a floor rather than a measurement. Each of
-those has a reason, and each is gated so it cannot be quietly dropped.
+Read `benchmarks/README.md` before quoting a column: `assembly` = residual + Jacobian together, `asm calls` NOT Newton iteration count, `py peak MB` is floor not measurement. Each has reason, each gated so can't be quietly dropped.
 
-Two environment variables govern the boundary:
+Two env vars govern boundary:
 
 | var | effect |
 |---|---|
-| `PYTCAD_ACCEL` | As of M43 phase 4 (2026-09-16), read ONLY by `linsolve.py`'s PETSc backend selection (`0` forces the petsc4py path, `1`/unset uses the compiled PETSc path when `_core` was built with it). It no longer affects any other kernel -- there is no pure-Python fallback left for `_accel.require_accel()`-gated functions to fall back to, so setting it there is a no-op. |
-| `PYTCAD_NUM_THREADS` | kernel threads. **Defaults to 1** -- threads would oversubscribe `workbench/batch.py`'s pool workers AND make scatter-add reductions non-reproducible, which breaks the `np.array_equal` goldens |
+| `PYTCAD_ACCEL` | As of M43 phase 4 (2026-09-16), read ONLY by `linsolve.py`'s PETSc backend selection (`0` forces petsc4py, `1`/unset uses compiled PETSc path when `_core` built with it). No effect on other kernels — no pure-Python fallback left for `_accel.require_accel()`-gated functions, so no-op there. |
+| `PYTCAD_NUM_THREADS` | kernel threads. **Defaults to 1** — threads oversubscribe `workbench/batch.py`'s pool workers AND make scatter-add reductions non-reproducible, breaking `np.array_equal` goldens |
 
-**The "run both ways" / "one CI job with no extension" pattern this
-section used to prescribe is RETIRED as of M43 phase 4.** `_core` is
-now required for most of the numerical core (see "The C++ engine (M31)"
-above) -- a no-extension run can no longer pass the suite, so
-`.github/workflows/ci.yml`'s "one job with no extension at all" leg (if
-still configured that way) needs updating to always build `_core`
-first; this was flagged but NOT itself changed as part of removing the
-pure-Python fallback -- check the actual current CI config before
-assuming either the old or new description is accurate.
+**"Run both ways" / "one CI job with no extension" pattern RETIRED as of M43 phase 4.** `_core` now required for most numerical core (see "The C++ engine (M31)") — no-extension run can't pass suite, so `.github/workflows/ci.yml`'s "one job with no extension at all" leg (if still configured) needs updating to always build `_core` first; flagged but NOT changed when fallback removed — check actual CI config before assuming old or new description accurate.
 
-One `pip install -r requirements.txt` (repo root: `pytcad/requirements.txt`)
-covers the library, GUI, tests, and all optional deps (gmsh, devsim,
-mpmath) -- verified on Linux and Windows. Run it once.
-Cap workers at `-n 6` on this machine (not `-n auto`) -- more workers
-oversubscribe available memory/cores.  Set `OPENBLAS_NUM_THREADS=1` (or
-export it in your shell) when running in parallel: numpy/scipy's BLAS
-otherwise spawns its own thread pool PER WORKER, oversubscribing the
-CPU across all `-n` workers simultaneously and making the run slower,
-not faster.  Running the two heavy M15 breakdown-ramp "slow" tests
-concurrently with everything else also slows the whole run down (CPU
-contention on the tests that need it least) -- run `not slow` and
-`slow` as two separate invocations, not one.
+One `pip install -r requirements.txt` (repo root: `pytcad/requirements.txt`) covers library, GUI, tests, all optional deps (gmsh, devsim, mpmath) — verified Linux and Windows. Run once. Cap workers `-n 6` on this machine (not `-n auto`) — more oversubscribe memory/cores. Set `OPENBLAS_NUM_THREADS=1` (or export) when parallel: numpy/scipy BLAS otherwise spawns own thread pool PER WORKER, oversubscribing CPU across all `-n` workers, slower not faster. Running two heavy M15 breakdown-ramp "slow" tests concurrently with everything also slows whole run (CPU contention) — run `not slow` and `slow` as two separate invocations.
 
-Suite invariant: **N passed, zero warnings**. `pytest.ini` exempts one
-intentional warning; anything new must be fixed at source or asserted
-with `pytest.warns` in the test that intends it.
+Suite invariant: **N passed, zero warnings**. `pytest.ini` exempts one intentional warning; anything new fixed at source or asserted with `pytest.warns` in intending test.
 
 ## Hard rules
 
-- Numerical core (`pytcad/*.py`): frozen EXCEPT where a milestone plan
-  explicitly amends it (M11-S3 did for Device1D heterojunctions;
-  M12-S2 added TAT). Any further core change needs the same explicit
-  sign-off + FD-Jacobian-first + bit-identical-off-path gates.
-- **Golden baseline before a core edit -- the achievable version.**
-  Older wordings of the amendment rule said "goldens committed before
-  the edit". That is IMPOSSIBLE and always was: `.gitignore` excludes
-  `*.npz`, so `tests/goldens/**` has never been tracked, and it should
-  not be -- a golden pins ONE machine's summation order (see the
-  bit-identity gotcha below), so a committed one would be a
-  machine-specific artifact masquerading as a shared reference. A rule
-  nobody can perform is worse than no rule, so what is actually
-  required is **reconstruct-and-compare**, the protocol M31 P4b used:
+- Numerical core (`pytcad/*.py`): frozen EXCEPT where milestone plan explicitly amends (M11-S3 for Device1D heterojunctions; M12-S2 added TAT). Further core change needs same explicit sign-off + FD-Jacobian-first + bit-identical-off-path gates.
+- **Golden baseline before core edit — achievable version.** Older wording said "goldens committed before the edit". IMPOSSIBLE, always was: `.gitignore` excludes `*.npz`, so `tests/goldens/**` never tracked, and shouldn't be — golden pins ONE machine's summation order (see bit-identity gotcha below), so committed one = machine-specific artifact posing as shared reference. Unperformable rule worse than none, so actually required: **reconstruct-and-compare**, protocol M31 P4b used:
     1. BEFORE the edit, record the md5sum of every golden the change
        could touch, in the plan file (not in git -- in the plan).
     2. Make the edit and regenerate.
@@ -343,272 +164,71 @@ with `pytest.warns` in the test that intends it.
     4. Record which goldens moved, which did not, and WHY each --
        a golden that moves for an unexplained reason is a defect, not
        a re-baseline.
-- Layering: QML -> controllers -> services -> QProcess subprocess ->
-  npz -> ResultStore -> canvas. Controllers/canvas never import pytcad.
-- `DeviceSpec` stays the wire format. Subprocess isolation per run.
-- New physics model = published-value benchmark in
-  `tests/test_model_benchmarks.py` FIRST + catalog metadata.
-- Optional deps stay optional (devsim auto-detected). EXCEPTION,
-  deliberate: pyvista/pyvistaqt (in requirements.txt) are a HARD
-  dependency of gui/ -- the 3D viewer (gui/services/viewer3d.py,
-  3D-VISUALIZATION-PLAN.md) imports them unconditionally at module
-  level, discussed and approved with the user, not an oversight.
-  Do not silently make it optional/guarded to match the devsim
-  pattern without asking first.
-- Every slice: suite green with pre-existing tests unchanged, an
-  adversarial probe pass BEFORE commit, honesty over polish (report
-  blockers, don't hide failures, don't ship fudge factors).
-- Do not commit automatically unless told; user pushes.
-- Never claim a change works, a bug is fixed, or the suite is green
-  without ACTUALLY RUNNING the command and reading its real output --
-  not "this should work," not inferring pass/fail from reading the
-  diff. If a run is still in progress, say so; don't guess the result.
-- Never write a doc/history entry naming a file, function, or class
-  you have not confirmed exists (grep or Read it first). A prior
-  session's history.md entry claimed new files
-  (`provenance_model.py`, `continuation_data.py`) that were never
-  actually created -- the real logic landed in `lab_controller.py`
-  and `solver_backend.py` instead. Do not repeat that mistake, and do
-  not trust that specific entry's file list.
+- Layering: QML -> controllers -> services -> QProcess subprocess -> npz -> ResultStore -> canvas. Controllers/canvas never import pytcad.
+- `DeviceSpec` stays wire format. Subprocess isolation per run.
+- New physics model = published-value benchmark in `tests/test_model_benchmarks.py` FIRST + catalog metadata.
+- Optional deps stay optional (devsim auto-detected). Deliberate EXCEPTION: pyvista/pyvistaqt (in requirements.txt) HARD dependency of gui/ — 3D viewer (gui/services/viewer3d.py, 3D-VISUALIZATION-PLAN.md) imports unconditionally at module level, discussed and approved with user, not oversight. Don't silently make optional/guarded to match devsim pattern without asking.
+- Every slice: suite green with pre-existing tests unchanged, adversarial probe pass BEFORE commit, honesty over polish (report blockers, don't hide failures, no fudge factors).
+- Don't commit automatically unless told; user pushes.
+- Never claim change works, bug fixed, or suite green without ACTUALLY RUNNING command and reading real output — not "should work," not inferring from diff. Run still in progress → say so; don't guess.
+- Never write doc/history entry naming file, function, or class not confirmed to exist (grep or Read first). Prior session's history.md entry claimed new files (`provenance_model.py`, `continuation_data.py`) never created — real logic landed in `lab_controller.py` and `solver_backend.py`. Don't repeat; don't trust that entry's file list.
 
 ## Workflow
 
-Plan -> user approves -> TDD (red first) -> implement -> hard debug
-(fuzz/probe adversarially, run live app/examples) -> commit.
-Working tree may be left dirty ONLY with openly-failing tests and a
-precise handoff note in `history.md` (see M12-S2
-precedent).
+Plan -> user approves -> TDD (red first) -> implement -> hard debug (fuzz/probe adversarially, run live app/examples) -> commit. Working tree may be left dirty ONLY with openly-failing tests + precise handoff note in `history.md` (see M12-S2 precedent).
 
 ## Gotchas learned the hard way (each cost a debugging session)
 
 **devsim**
-- `solve()` is PROCESS-GLOBAL (no device= arg): delete your
-  device+mesh in a finally block or stale states fail later solves.
-- mesher adds nodes if ps < segment length -> use FULL spacing.
-- Engines tabulate ni differently -> cross-engine psi agrees only to
-  ~25 mV and I-V to a constant factor ~2; anchor each engine to
-  analytic values instead of pointwise comparison.
-- `solve(info=True)` returns {'converged', 'iterations'} -- use it.
+- `solve()` PROCESS-GLOBAL (no device= arg): delete device+mesh in finally block or stale state fails later solves.
+- Mesher adds nodes if ps < segment length -> use FULL spacing.
+- Engines tabulate ni differently -> cross-engine psi agrees only ~25 mV, I-V to constant factor ~2; anchor each engine to analytic values, not pointwise comparison.
+- `solve(info=True)` returns {'converged', 'iterations'} — use it.
 
 **QML / PySide6**
-- Plain Python attributes are INVISIBLE to QML property lookup:
-  every controller handed to QML needs a @Property(QObject).
-  (Bit twice: treeModel/consoleModel, then cv controller.)
-- Context-property controllers must be Qt children of their parent
-  controller, not bare attributes -- else shutdown GC races QML
-  bindings and prints TypeError spam. Test ownership via shiboken
-  validity after engine teardown, not by capturing stderr (Qt writes
-  through a cached C stream that fd redirection misses).
-- Reading `.visible` reflects EFFECTIVE visibility through hidden
-  ancestors (StackLayout/tabs): headless tests must activate the
-  right tab before asserting child visibility.
+- Plain Python attributes INVISIBLE to QML property lookup: every controller handed to QML needs @Property(QObject). (Bit twice: treeModel/consoleModel, then cv controller.)
+- Context-property controllers must be Qt children of parent controller, not bare attributes — else shutdown GC races QML bindings, TypeError spam. Test ownership via shiboken validity after engine teardown, not stderr capture (Qt writes via cached C stream fd redirection misses).
+- `.visible` reflects EFFECTIVE visibility through hidden ancestors (StackLayout/tabs): headless tests must activate right tab before asserting child visibility.
 - Guard new bindings against null during teardown (`canvas ? ...`).
-- A binding built from `&&`/ternary can hand QML a raw `null`/
-  `undefined` instead of a real `false` (e.g. `a && a.b && a.b.c`
-  evaluates to `null` when `a.b` is null, not `false`) -- assigning
-  that to a `bool` property (`enabled:`, `visible:`) logs "Unable to
-  assign [undefined] to bool" every time. Wrap the whole expression
-  in `!!(...)` so it always resolves to a real boolean.
-- `gui/app.py` MUST construct `QApplication` (QtWidgets), not
-  `QGuiApplication` -- the 3D viewer (`gui/services/viewer3d.py`)
-  opens a real `QMainWindow`, and `QWidget` construction hard-ABORTS
-  THE WHOLE PROCESS if only a `QGuiApplication` exists ("QWidget:
-  Cannot create a QWidget without QApplication" -- confirmed by
-  reproducing it, not by reading docs). `QApplication` is a strict
-  superset of `QGuiApplication` (QML behaves identically under it),
-  so there is never a reason to use the narrower class once any
-  QtWidgets code exists anywhere in the app. Qt's application
-  singleton is fixed by whichever subclass constructs it FIRST in a
-  process and can never be upgraded afterward -- this is why
-  `gui/tests/conftest.py`'s session-scoped `_qt_application` fixture
-  must also construct `QApplication`, ahead of every test file's own
-  `gapp` fixture, not just the app's own bootstrap.
-- `pyvistaqt.QtInteractor` (VTK's live render window) does its OWN
-  windowing-system calls independent of Qt's platform plugin --
-  `QT_QPA_PLATFORM=offscreen` does not make it headless, and building
-  one under it raises an X11 `BadWindow` error, not a clean no-op
-  (confirmed directly). `pyvista.Plotter(off_screen=True)` DOES work
-  offscreen (VTK's own separate off-screen path) -- that asymmetry is
-  real, not a configuration mistake to try to fix. To test code that
-  builds a `Viewer3DWindow`, monkeypatch `viewer3d.QtInteractor` to a
-  small fake recording `add_mesh`/`remove_actor` calls (see
-  `gui/tests/test_viewer3d.py`'s `FakeInteractor`) -- this still
-  exercises the REAL `QMainWindow`/`QComboBox`/`QDoubleSpinBox` widget
-  tree and signal wiring, just not the actual GL surface.
-- **On this machine (NVIDIA RTX 5060 Ti, proprietary driver 610.57.04,
-  Wayland session with XWayland), a genuinely real `Viewer3DWindow` --
-  not the `FakeInteractor`-mocked one every test uses -- SEGFAULTS THE
-  WHOLE PROCESS**, not just under `QT_QPA_PLATFORM=offscreen` (the
-  already-documented `BadWindow` case above) but also against the
-  REAL display (`DISPLAY=:0`, no offscreen platform at all). Confirmed
-  directly 2026-09-17: `AppController.loadExample("resistor_3d")` ->
-  `.run()` -> `hasResult=True` with correct mesh stats and zero errors
-  all complete cleanly; the crash is isolated to
-  `AppController.openViewer3d()`'s `Viewer3DWindow(store)` construction
-  specifically, which fails with `X Error ... BadAccess ... GLX ...
-  X_GLXMakeCurrent` and a segfault (exit 139) -- reproduced identically
-  with the real NVIDIA GL, with `LIBGL_ALWAYS_SOFTWARE=1`, and with
-  `QT_QUICK_BACKEND=software`, so it is not a simple
-  hardware-vs-software-rasterizer switch. `glxinfo` itself reports
-  direct rendering fine; the conflict is specifically VTK's OWN GLX
-  context creation racing/colliding with something in the NVIDIA
-  driver's Wayland+XWayland GLX resource handling once Qt Quick's own
-  RHI context already holds one. Not investigated further (a
-  driver/windowing-stack issue, not app code -- no PyTCAD source change
-  is implicated) and not fixed. Consequence: on THIS machine, the 3D
-  viewer's actual VTK render surface has never been verified working
-  end-to-end outside of `FakeInteractor` -- if a future session needs a
-  real rendered screenshot of `Viewer3DWindow`, expect this crash and
-  do not spend time retrying GL environment variables that were already
-  ruled out above.
+- Binding built from `&&`/ternary can hand QML raw `null`/`undefined` instead of real `false` (e.g. `a && a.b && a.b.c` → `null` when `a.b` null, not `false`) — assigning to `bool` property (`enabled:`, `visible:`) logs "Unable to assign [undefined] to bool" every time. Wrap whole expression in `!!(...)`.
+- `gui/app.py` MUST construct `QApplication` (QtWidgets), not `QGuiApplication` — 3D viewer (`gui/services/viewer3d.py`) opens real `QMainWindow`, and `QWidget` construction hard-ABORTS WHOLE PROCESS if only `QGuiApplication` exists ("QWidget: Cannot create a QWidget without QApplication" — confirmed by reproducing). `QApplication` strict superset of `QGuiApplication` (QML identical under it), so never use narrower class once any QtWidgets code exists. Qt app singleton fixed by whichever subclass constructs FIRST in process, never upgradable — why `gui/tests/conftest.py`'s session-scoped `_qt_application` fixture must also construct `QApplication`, ahead of every test file's `gapp` fixture, not just app bootstrap.
+- `pyvistaqt.QtInteractor` (VTK live render window) does OWN windowing-system calls independent of Qt platform plugin — `QT_QPA_PLATFORM=offscreen` doesn't make it headless; building under it raises X11 `BadWindow`, not clean no-op (confirmed). `pyvista.Plotter(off_screen=True)` DOES work offscreen (VTK's separate off-screen path) — asymmetry real, not config mistake. To test code building `Viewer3DWindow`, monkeypatch `viewer3d.QtInteractor` to small fake recording `add_mesh`/`remove_actor` (see `gui/tests/test_viewer3d.py`'s `FakeInteractor`) — still exercises REAL `QMainWindow`/`QComboBox`/`QDoubleSpinBox` widget tree and signal wiring, just not GL surface.
+- **On this machine (NVIDIA RTX 5060 Ti, proprietary driver 610.57.04, Wayland + XWayland), genuinely real `Viewer3DWindow` — not `FakeInteractor`-mocked one tests use — SEGFAULTS WHOLE PROCESS**, not only under `QT_QPA_PLATFORM=offscreen` (documented `BadWindow` case) but also against REAL display (`DISPLAY=:0`, no offscreen). Confirmed 2026-09-17: `AppController.loadExample("resistor_3d")` -> `.run()` -> `hasResult=True` with correct mesh stats, zero errors, all clean; crash isolated to `AppController.openViewer3d()`'s `Viewer3DWindow(store)` construction, failing with `X Error ... BadAccess ... GLX ...
+  X_GLXMakeCurrent` + segfault (exit 139) — reproduced identically with real NVIDIA GL, with `LIBGL_ALWAYS_SOFTWARE=1`, and with `QT_QUICK_BACKEND=software`, so not simple hardware-vs-software rasterizer switch. `glxinfo` reports direct rendering fine; conflict is VTK's OWN GLX context creation colliding with NVIDIA driver's Wayland+XWayland GLX resource handling once Qt Quick's RHI context holds one. Not investigated further (driver/windowing-stack issue, no PyTCAD source implicated), not fixed. Consequence: on THIS machine, 3D viewer's real VTK render surface never verified end-to-end outside `FakeInteractor` — future session needing real `Viewer3DWindow` screenshot: expect crash, don't retry GL env vars already ruled out.
 
 **Python/testing**
-- pytest warning filters are REGEX: `cm^-3` never matches (caret =
-  anchor); escape as `cm\^-3`.
-- str.replace() patches SILENTLY no-op on stale strings -- always
-  assert the replace applied ("assert old in s").
-- The bash tool's cwd RESETS to /home/nihal between calls -- always
-  `cd` or pass workdir; the #1 cause of lost edits.
-- A `pgrep`/`pkill`/`ps | grep` WAIT CONDITION MATCHES ITS OWN COMMAND
-  LINE, so it never terminates.  `until ! pgrep -f "python -m pytest";
-  do sleep 10; done` finds the very shell that is running it (the
-  pattern is a substring of that shell's own argv) and waits forever;
-  so does `ps -eo args | grep -c "conda run"`, which reports 1 when the
-  answer is 0.  Confirmed directly 2026-09-12: four such loops sat
-  blocked for 13-38 minutes waiting on runs that had already finished.
-  Fix: use the Bash tool's own `run_in_background` on the real command
-  (the harness tracks THAT process and notifies on exit) rather than
-  polling for it; if you must poll, use a bracket (`[p]ytest`), match
-  on `$!`/a pidfile, or wait on an artifact the job writes.  Two
-  related traps from the same session: a loop waiting on a log file
-  belonging to a run that was killed waits forever (nothing will ever
-  write it), and a loop waiting for a task-output file's last line to
-  match `passed|failed` never fires because the harness appends its own
-  `[exited with code N]` line after pytest's summary.
-- Writing a doc in two parts to the SAME path truncates it (second
-  write replaces the file) -- write once, or append via bash.
-- Keep engine/QObject references alive in tests: dropping the engine
-  reference lets GC destroy the whole QML tree mid-test.
-- Heredocs double backslashes: check line continuations after
-  writing test files through bash.
-- np.polynomial.legendre.leggauss is module-level (not
-  Legendre.leggauss) in numpy 2.5.
-- GUI controller APIs: familySweep.configureFamily's FIRST arg is the
-  STEPPED CONTACT NAME (string); ViewportPanel.setViewMode takes
-  INTERNAL mode names ("series"/"bands"), not display names
-  ("Curves"/"Bands") -- wrong names silently no-op or render the
-  wrong view.
-- np.trapezoid is the modern name; scipy.sparse diags order (lo,main,up).
-- scipy's spsolve is NOT format-invariant: SuperLU solves CSR natively
-  via a format flag rather than converting to CSC first, so
-  spsolve(A_csr, b) and spsolve(A_csr.tocsc(), b) differ at ~1e-16
-  relative error, not bit-identical -- a linear-solve wrapper that
-  claims "exactly spsolve, bit-identical" must never reformat A for the
-  direct method, or it silently breaks bit-identity golden gates (see
-  pytcad/linsolve.py's solve_linear, M22 G2).
-- a size/dimensionality GATING computation (e.g. "only for 3D jobs
-  above N nodes") must have its OWN guard checked first -- writing the
-  gate's math as a bare statement before the `if` that's supposed to
-  protect it runs it unconditionally. Confirmed directly: an x-axis
-  doping-variation check for gui/services/solver_runner.py's MPI-
-  Schwarz gate called `doping.max(axis=2)` before checking
-  dimensionality == 3, and broke EVERY 1D/2D job in gui/tests
-  (AxisError -- a 1D array has no axis 2) -- caught only because the
-  FULL suite (590 tests) was run before calling the change done, not
-  just the handful of 3D-specific tests that seemed relevant. Run the
-  whole suite after touching a shared dispatch function, not the
-  subset the change is "about".
-- clamping an out-of-range value to survive a TRANSIENT Newton overshoot
-  (e.g. eta > FERMI_ETA_MAX during iteration) must not also clamp the
-  FINAL, converged answer -- that silently defeats whatever loud-refusal
-  check the clamp was protecting against, for the one case (a genuinely
-  invalid converged state) it exists to catch. Clamp only the trial
-  evaluation inside the loop; check the raw, unclamped value once more
-  after convergence.
-- sha256/np.array_equal "bit-identity" golden values (tests/goldens/
-  m13/*.npz, test_m13_solver.py's TAT_EQ_DIGEST/TAT_FW_DIGEST/
-  HETERO_FW_DIGEST) pin ONE machine's numpy/scipy/BLAS build's exact
-  floating-point summation order, not portable solver behavior --
-  confirmed directly merging a parallel branch 2026-09-04: goldens/
-  digests re-captured in a different sandbox failed bit-identity here
-  even with byte-identical code and byte-identical frozen_meshes.npz
-  (a pure-Python/numpy mesh-coordinate array IS portable; a Newton-
-  solve OUTPUT is not). Fix is the same either way: regenerate ON THE
-  TARGET MACHINE (PYTCAD_REGEN_M13_GOLDENS=1 for the .npz goldens;
-  recompute via the test module's own _digest() for the hardcoded
-  hex-string ones), verify physical sanity (finite, correct sign/
-  magnitude/positivity) before trusting the new value, never copy
-  golden bytes or digest strings between machines/sandboxes.
-- a safety gate built from ONE physical hazard does not automatically
-  cover a DIFFERENT hazard that happens to correlate with the same
-  axis/parameter. Confirmed directly 2026-09-04: gui/services/
-  solver_runner.py's MPI-Schwarz split-axis picker checked only
-  doping-gradient safety, which correctly judged finfet_3d's z-axis
-  doping-uniform -- but a GateBC's Robin/oxide-coupling term runs
-  along its own `normal_axis` (z, for finfet_3d's side gates)
-  regardless of doping, a geometric/electrostatic confinement
-  mechanism the doping check has no way to see. Result: a silently
-  WRONG (1.4e-3 relative field error, vs. ~1e-17 for the gate-free
-  devices the path was validated on) AND SLOWER (4.1x) production
-  result for any gated 3D device above the size gate, caught only by
-  actually exercising a "should be safe by the existing check" case
-  end to end rather than trusting the check's own reasoning. Fix was a
-  SECOND, independent exclusion (any axis matching a registered gate's
-  normal_axis), not a tweak to the first. When adding a safety/gating
-  heuristic, ask what OTHER mechanisms could break the same invariant
-  before trusting one check to cover the whole risk.
+- pytest warning filters are REGEX: `cm^-3` never matches (caret = anchor); escape as `cm\^-3`.
+- str.replace() patches SILENTLY no-op on stale strings — always assert applied ("assert old in s").
+- Bash tool cwd RESETS to /home/nihal between calls — always `cd` or pass workdir; #1 cause of lost edits.
+- `pgrep`/`pkill`/`ps | grep` WAIT CONDITION MATCHES OWN COMMAND LINE, never terminates. `until ! pgrep -f "python -m pytest";
+  do sleep 10; done` finds its own shell (pattern substring of shell argv), waits forever; `ps -eo args | grep -c "conda run"` reports 1 when answer is 0. Confirmed 2026-09-12: four such loops blocked 13-38 min on already-finished runs. Fix: use Bash tool's `run_in_background` on real command (harness tracks THAT process, notifies on exit) instead of polling; if must poll, use bracket (`[p]ytest`), match `$!`/a pidfile, or wait on artifact job writes. Two related traps same session: loop waiting on log of killed run waits forever (nothing writes it); loop waiting for task-output file's last line to match `passed|failed` never fires because harness appends own `[exited with code N]` line after pytest summary.
+- Writing doc in two parts to SAME path truncates (second write replaces) — write once, or append via bash.
+- Keep engine/QObject refs alive in tests: dropping engine ref lets GC destroy whole QML tree mid-test.
+- Heredocs double backslashes: check line continuations after writing test files through bash.
+- np.polynomial.legendre.leggauss is module-level (not Legendre.leggauss) in numpy 2.5.
+- GUI controller APIs: familySweep.configureFamily's FIRST arg = STEPPED CONTACT NAME (string); ViewportPanel.setViewMode takes INTERNAL mode names ("series"/"bands"), not display names ("Curves"/"Bands") — wrong names silently no-op or render wrong view.
+- np.trapezoid is modern name; scipy.sparse diags order (lo,main,up).
+- scipy spsolve NOT format-invariant: SuperLU solves CSR natively via format flag instead of converting to CSC, so spsolve(A_csr, b) vs spsolve(A_csr.tocsc(), b) differ ~1e-16 relative, not bit-identical — linear-solve wrapper claiming "exactly spsolve, bit-identical" must never reformat A for direct method, or silently breaks bit-identity golden gates (see pytcad/linsolve.py's solve_linear, M22 G2).
+- Size/dimensionality GATING computation (e.g. "only for 3D jobs above N nodes") needs OWN guard checked first — writing gate's math as bare statement before protecting `if` runs it unconditionally. Confirmed: x-axis doping-variation check for gui/services/solver_runner.py's MPI-Schwarz gate called `doping.max(axis=2)` before checking dimensionality == 3, broke EVERY 1D/2D job in gui/tests (AxisError — 1D array has no axis 2) — caught only because FULL suite (590 tests) run before calling done, not just 3D-specific subset. Run whole suite after touching shared dispatch function.
+- Clamping out-of-range value to survive TRANSIENT Newton overshoot (e.g. eta > FERMI_ETA_MAX during iteration) must not clamp FINAL converged answer — silently defeats loud-refusal check clamp protects, for exactly the case (genuinely invalid converged state) it exists to catch. Clamp only trial evaluation in loop; check raw unclamped value again after convergence.
+- sha256/np.array_equal "bit-identity" golden values (tests/goldens/m13/*.npz, test_m13_solver.py's TAT_EQ_DIGEST/TAT_FW_DIGEST/HETERO_FW_DIGEST) pin ONE machine's numpy/scipy/BLAS build's exact FP summation order, not portable solver behavior — confirmed merging parallel branch 2026-09-04: goldens/digests re-captured in different sandbox failed bit-identity here even with byte-identical code and byte-identical frozen_meshes.npz (pure-Python/numpy mesh-coordinate array IS portable; Newton-solve OUTPUT not). Fix: regenerate ON TARGET MACHINE (PYTCAD_REGEN_M13_GOLDENS=1 for .npz goldens; recompute via test module's _digest() for hardcoded hex strings), verify physical sanity (finite, correct sign/magnitude/positivity) before trusting, never copy golden bytes or digest strings between machines/sandboxes.
+- Safety gate built from ONE physical hazard doesn't automatically cover DIFFERENT hazard correlated with same axis/parameter. Confirmed 2026-09-04: gui/services/solver_runner.py's MPI-Schwarz split-axis picker checked only doping-gradient safety, correctly judged finfet_3d's z-axis doping-uniform — but GateBC's Robin/oxide-coupling term runs along own `normal_axis` (z, for finfet_3d side gates) regardless of doping, geometric/electrostatic confinement doping check can't see. Result: silently WRONG (1.4e-3 relative field error vs ~1e-17 for gate-free validated devices) AND SLOWER (4.1x) production result for any gated 3D device above size gate, caught only by exercising "should be safe by existing check" case end to end. Fix: SECOND independent exclusion (any axis matching registered gate's normal_axis), not tweak to first. Adding safety/gating heuristic: ask what OTHER mechanisms could break same invariant before trusting one check.
 
 **Physics/model conventions (empirically established)**
-- Device3D's ENTIRE dimensionless scaling (Ns, LD, J0, and even the
-  mesh coordinates themselves -- xs = mesh.x / LD) is derived from
-  max(|doping|) OF WHATEVER ARRAY THE DEVICE WAS BUILT WITH, not a
-  device-wide constant stored anywhere else. Two Device3D instances
-  covering different SLICES of the same physical device (MPI Schwarz
-  domain decomposition, gui/services/mpi_schwarz_runner.py) silently
-  disagree on units unless BOTH are pinned to the same reference via
-  the new `Ns_override` constructor param, computed once from the
-  FULL device's own doping array -- confirmed as a real risk by
-  reading the __init__ code before any correctness testing, not found
-  by a failure. Any future per-subdomain or per-region Device3D
-  construction needs the same pinning.
-- MOSCapacitor rho balances Qg SAME-sign; inversion sits at POSITIVE
-  phi_s for p-substrate; abrupt-junction discretization leaves rho=+-1
-  exactly at the two doping-step nodes (global charge balance is the
-  correct neutrality criterion, not node-wise).
-- Heterojunction SG deltas: electron dpsi + dln(nie), hole
-  dpsi - dln(nie) -- OPPOSITE signs; shared delta passes FD-Jacobian
-  but breaks hole detailed balance. Only a carrier-specific
-  equilibrium detailed-balance check catches it.
-- TAT WKB factors are SI-calibrated (F in V/m): mixing V/cm underflows
-  every probability and silently reduces TAT to SRH. Bulk-Si midgap
-  TAT underflows to exactly 0 at any realizable field -- gate the
-  factor law over synthetic fields, assert device-level enh==1.0 as
-  honest physics.
-- devsim ni tables differ from pytcad's -> cross-backend I-V agrees
-  only to a constant ~2x factor.
-- Implant windows beyond substrate length must be rejected by
-  validate_flow (keep that guard).
+- Device3D's ENTIRE dimensionless scaling (Ns, LD, J0, even mesh coords — xs = mesh.x / LD) derived from max(|doping|) OF WHATEVER ARRAY DEVICE BUILT WITH, not device-wide constant stored elsewhere. Two Device3D instances covering different SLICES of same physical device (MPI Schwarz domain decomposition, gui/services/mpi_schwarz_runner.py) silently disagree on units unless BOTH pinned to same reference via new `Ns_override` constructor param, computed once from FULL device's doping array — found by reading __init__ before correctness testing, not by failure. Future per-subdomain/per-region Device3D construction needs same pinning.
+- MOSCapacitor rho balances Qg SAME-sign; inversion at POSITIVE phi_s for p-substrate; abrupt-junction discretization leaves rho=+-1 exactly at two doping-step nodes (global charge balance is correct neutrality criterion, not node-wise).
+- Heterojunction SG deltas: electron dpsi + dln(nie), hole dpsi - dln(nie) — OPPOSITE signs; shared delta passes FD-Jacobian but breaks hole detailed balance. Only carrier-specific equilibrium detailed-balance check catches it.
+- TAT WKB factors SI-calibrated (F in V/m): mixing V/cm underflows every probability, silently reduces TAT to SRH. Bulk-Si midgap TAT underflows to exactly 0 at any realizable field — gate factor law over synthetic fields, assert device-level enh==1.0 as honest physics.
+- devsim ni tables differ from pytcad's -> cross-backend I-V agrees only to constant ~2x factor.
+- Implant windows beyond substrate length must be rejected by validate_flow (keep guard).
 - Checkpoint npz uses FLAT keys (species_P), not nested dicts.
-- 1D sweep channel name is "device", not the contact name.
-- Fermi integral: Boltzmann-limit deviation is exp(eta)/2^{3/2}
-  (exact Taylor series) -- set limit gates from the published math,
-  not round numbers. mpmath mp.quad on [0, inf) under-resolves the
-  t~eta knee (5e-5 off at eta=40): subdivide [1, eta+20, inf].
+- 1D sweep channel name is "device", not contact name.
+- Fermi integral: Boltzmann-limit deviation is exp(eta)/2^{3/2} (exact Taylor series) — set limit gates from published math, not round numbers. mpmath mp.quad on [0, inf) under-resolves t~eta knee (5e-5 off at eta=40): subdivide [1, eta+20, inf].
 
 ## Milestone state & plans
 
-Governing roadmap: `ARCHITECTURE.md` sections 4b and 4c (three parity
-tiers,
-M13-M30, gate-blocking rule 4b.4). Completed: M1-M10 (v0.5.0 tagged),
-M11-S1..S5 (heterostructure materials/wire/1D+2D core, HBT/HEMT
-templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13
-(Fermi-Dirac + incomplete ionization, G1-G8 all green -- unblocked
-M15+ per parity-plan rule 4b once green), M15 impact ionization
-(coupled Jacobian + continuation driver, all gates green -- see
-pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
-MILESTONE-BY-MILESTONE STATE (only M14's own G-A below is genuinely
-OPEN; M16-M22 are landed for their stated scope -- read each entry for
-what that scope actually was and what's honestly still deferred):
+Governing roadmap: `ARCHITECTURE.md` sections 4b and 4c (three parity tiers, M13-M30, gate-blocking rule 4b.4). Completed: M1-M10 (v0.5.0 tagged), M11-S1..S5 (heterostructure materials/wire/1D+2D core, HBT/HEMT templates), M12-S1+S2 (FN/WKB + Hurkx TAT, all gates green), M13 (Fermi-Dirac + incomplete ionization, G1-G8 all green — unblocked M15+ per parity-plan rule 4b), M15 impact ionization (coupled Jacobian + continuation driver, all gates green — see pytcad/M15-IONIZATION-PLAN.md and ARCHITECTURE.md section 5).
+MILESTONE-BY-MILESTONE STATE (only M14's G-A below genuinely OPEN; M16-M22 landed for stated scope — read each entry for actual scope and what's honestly deferred):
   M14 surface mobility -- MOSTLY COMPLETE: mobility_cvt() wired for
     Device2D.models.surface_mobility (G-D/G-E green); G-B (D_it) and
     G-C (S_n/S_p surface recombination velocity, a Robin flux-balance
@@ -798,64 +418,23 @@ what that scope actually was and what's honestly still deferred):
     inversion -- local Kane BTBT in structured 2D/3D -- was planned in
     pytcad/M16-S2-PLAN.md (2026-09-12) and LANDED 2026-09-13; see the
     M16 entry above for what that closed.
-GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py
-drives the real rendered QML tree (create_engine() + findChild +
-QMetaObject.invokeMethod -- never a controller call as a substitute for
-a UI action, except the couple of spots documented inline where Qt's
-offscreen platform cannot incubate ListView/Repeater delegates at all)
-across the 1D Process-Flow path and the 2D Structure/Device-Builder-
-template path. AT THE TIME (2026-08-28) there was no GUI entry point
-to a Device3D or the DEVSIM backend -- BOTH GAPS ARE NOW PARTLY CLOSED,
-see the GUI-IMPROVEMENT-PLAN.md and 3D-VISUALIZATION-PLAN.md bullets
-below; do not trust this sentence's claim in isolation, it describes a
-point in time, not current state. Found and fixed: numeric QML fields
-silently letting NaN through to the solver (app_controller.py
-finite-number guard), and saved projects silently dropping the
-Physics Lab's model toggles (project_store SCHEMA_VERSION 4->5,
-"models" key; see gui/tests/test_persistence_v5.py).
-GUI-IMPROVEMENT-PLAN.md (2026-08-29): Phases 1-4 SHIPPED -- C-V mode,
-family-sweep staleness, equilibrium-only Run, contour overlays,
-line-cut mode, a devsim/pytcad BACKEND SELECTOR (v0.6 Phase 2c, gated
-on compatible 1D devices -- closes half of the "no DEVSIM entry
-point" gap above), backend comparison, lab controller/provenance/
-continuation records, and a runtime state validator. A medium-effort
-/code-review pass on Phase 3/4 found and fixed 8 real bugs (a QML
-id/objectName typo causing a runtime crash, dead validator logic,
-non-notifying ListView bindings, a consumer with no real data
-producer, faked placeholder checks, duplicated logic, hardcoded theme
-colors) -- see history.md Addendum 22 for the full list. Do not
-assume Phase 3/4 code is correct just because it exists; that
-addendum is the record of what was actually verified, not the
-original (less careful) landing.
-3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-5 SHIPPED -- a
-hand-built `resistor_3d` example (the first GUI entry point to a
-Device3D, closing the other half of the gap above) and a PyVista/VTK
-viewer window (separate top-level QWidget, NOT embedded in QML) with
-interactive isosurface controls, volumetric rendering (Phase 3),
-animated bias-sweep playback with snapshot capture (Phase 4), and
-exploded multi-layer structural view (Phase 5). Landing this ALSO
-fixed a real bug from Phase 1: see the QApplication/QGuiApplication
-gotcha above.
-Live queue: ARCHITECTURE.md sections 5-7; session detail:
-`history.md`.
+GUI end-to-end smoke test (2026-08-28): gui/tests/test_smoke_e2e.py drives real rendered QML tree (create_engine() + findChild + QMetaObject.invokeMethod — never controller call substituting for UI action, except couple spots documented inline where Qt offscreen platform can't incubate ListView/Repeater delegates) across 1D Process-Flow path and 2D Structure/Device-Builder-template path. AT THE TIME (2026-08-28) no GUI entry point to Device3D or DEVSIM backend — BOTH GAPS NOW PARTLY CLOSED, see GUI-IMPROVEMENT-PLAN.md and 3D-VISUALIZATION-PLAN.md bullets below; sentence describes point in time, not current state. Found and fixed: numeric QML fields silently passing NaN to solver (app_controller.py finite-number guard), saved projects silently dropping Physics Lab model toggles (project_store SCHEMA_VERSION 4->5, "models" key; see gui/tests/test_persistence_v5.py).
+GUI-IMPROVEMENT-PLAN.md (2026-08-29): Phases 1-4 SHIPPED — C-V mode, family-sweep staleness, equilibrium-only Run, contour overlays, line-cut mode, devsim/pytcad BACKEND SELECTOR (v0.6 Phase 2c, gated on compatible 1D devices — closes half of "no DEVSIM entry point" gap), backend comparison, lab controller/provenance/continuation records, runtime state validator. Medium-effort /code-review pass on Phase 3/4 found and fixed 8 real bugs (QML id/objectName typo causing runtime crash, dead validator logic, non-notifying ListView bindings, consumer with no real data producer, faked placeholder checks, duplicated logic, hardcoded theme colors) — see history.md Addendum 22 for full list. Don't assume Phase 3/4 code correct because it exists; addendum is record of what actually verified, not original (less careful) landing.
+3D-VISUALIZATION-PLAN.md (2026-08-29/30): Phases 1-5 SHIPPED — hand-built `resistor_3d` example (first GUI entry point to Device3D, closing other half of gap) and PyVista/VTK viewer window (separate top-level QWidget, NOT embedded in QML) with interactive isosurface controls, volumetric rendering (Phase 3), animated bias-sweep playback with snapshot capture (Phase 4), exploded multi-layer structural view (Phase 5). Landing ALSO fixed real Phase 1 bug: see QApplication/QGuiApplication gotcha above.
+Live queue: ARCHITECTURE.md sections 5-7; session detail: `history.md`.
 
-## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+Project has knowledge graph at graphify-out/ with god nodes, community structure, cross-file relationships.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
-## Token-efficient codebase navigation
+- Codebase questions: first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for focused concepts. Return scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep.
+- If graphify-out/wiki/index.md exists, use for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain insufficient.
+- After modifying code, run `graphify update .` to keep graph current (AST-only, no API cost).
 
-- For codebase questions, use `graphify query`, `graphify path`, and
-  `graphify explain` first when graphify-out/graph.json exists.
-- Use `ast-grep` for precise structural searches of Python/C++ rather than
-  reading whole files or using broad grep when an AST pattern is appropriate.
-- Read only the files/regions needed for the task.
-- Use `repomix` only for broad architecture/context snapshots, not routine
-  implementation tasks.
-- Do not read `repomix-output.xml` wholesale for ordinary coding tasks.
-- Prefer concise tool output and avoid unnecessary explanations.
+- Codebase questions: use `graphify query`, `graphify path`, `graphify explain` first when graphify-out/graph.json exists.
+- Use `ast-grep` for precise structural Python/C++ searches instead of reading whole files or broad grep when AST pattern fits.
+- Read only files/regions needed.
+- Use `repomix` only for broad architecture/context snapshots, not routine implementation.
+- Don't read `repomix-output.xml` wholesale for ordinary coding.
+- Prefer concise tool output, avoid unnecessary explanations.

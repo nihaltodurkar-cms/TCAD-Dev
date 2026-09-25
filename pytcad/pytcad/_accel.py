@@ -75,6 +75,17 @@ def have_petsc():
     return bool(probe is not None and probe())
 
 
+def have_mumps():
+    """True if the COMPILED PETSc backend is available and selected (see
+    have_petsc) AND its PETSc has MUMPS, i.e. linsolve.solve_linear(
+    method="mumps") can run through pytcad._core. getattr for the same
+    stale-.so reason as have_petsc."""
+    if not have_petsc():
+        return False
+    probe = getattr(_core_mod, "mumps_available", None)
+    return bool(probe is not None and probe())
+
+
 def status():
     """A one-line human-readable summary, for test output and bug reports."""
     if not HAVE_ACCEL:

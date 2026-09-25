@@ -46,6 +46,10 @@ const char* petsc_version();
 /// a 32-bit-index PETSc cannot address a matrix with >2^31 nonzeros.
 int petsc_index_bytes();
 
+/// True when the PETSc this was compiled against has MUMPS (conda-forge's
+/// does).  False without PETSc, or with a PETSc built without it.
+bool have_mumps();
+
 /// Everything P3a configured on the KSP, in one place.
 struct KspConfig {
     double rtol = 1e-10;
@@ -54,6 +58,10 @@ struct KspConfig {
     int restart = 100;     ///< GMRES(m); the caller has already clamped it to <= n
     int block_size = 0;    ///< 0 -> no point-block structure -> PCBJACOBI
     bool nonzero_guess = false;  ///< x holds an initial guess on entry
+    /// Exact sparse LU through MUMPS (KSPPREONLY + PCLU) instead of
+    /// GMRES.  The iterative fields above are then unused.  Throws
+    /// LinearSolveFailure when !have_mumps().
+    bool direct_lu = false;
 };
 
 /// What the solve reports back.  Note what is NOT here: a verdict.  The

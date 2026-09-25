@@ -1,22 +1,10 @@
 # Semiconductor Workbench - Architecture Plan
 ==========================================================
-Date: 2026-09-14 (compacted). Status summary: M1-M12 SHIPPED. Tier-1
-parity (M13-M20) COMPLETE except M14's G-A (paywalled source). Tier-2
-(M21-M26) COMPLETE to disclosed slice levels. Tier-3 (M27-M30 Part I)
-LANDED; M30 Part II (GUI/product layer) LANDED 2026-09-09. M31 (C++/
-PETSc engine) IN PROGRESS. M32-M50 (proposed post-M31 map) mostly
-landed per the status table in 4c below. M41 (dimensional-lift track)
-IN PROGRESS, M41/M16-S2 landed, M43 next.
+Date: 2026-09-14 (compacted). Status: M1-M12 SHIPPED. Tier-1 parity (M13-M20) COMPLETE except M14's G-A (paywalled source). Tier-2 (M21-M26) COMPLETE to disclosed slice levels. Tier-3 (M27-M30 Part I) LANDED; M30 Part II (GUI/product layer) LANDED 2026-09-09. M31 (C++/PETSc engine) IN PROGRESS. M32-M50 (proposed post-M31 map) mostly landed per status table in 4c below. M41 (dimensional-lift track) IN PROGRESS, M41/M16-S2 landed, M43 next.
 
-This file is the LIVE roadmap + status record. For blow-by-blow
-debugging narratives behind any "LANDED"/"COMPLETE" line, see that
-milestone's own `pytcad/M*-PLAN.md` and `history.md` -- this file
-states outcomes and open items, not session transcripts.
+This file = LIVE roadmap + status record. Debugging narratives behind any "LANDED"/"COMPLETE" line: see milestone's own `pytcad/M*-PLAN.md` and `history.md` -- this file states outcomes + open items, not session transcripts.
 
-Long-term ambition: a learning + research TCAD environment matching,
-and on select axes (see section 4e) beating, DEVSIM/Silvaco/Sentaurus
-while staying open, modular, and understandable. Every educational
-surface must be backed by actual computed physics.
+Long-term ambition: learning + research TCAD env matching, and on select axes (see section 4e) beating, DEVSIM/Silvaco/Sentaurus while staying open, modular, understandable. Every educational surface backed by actual computed physics.
 
 Target flow:
   UI -> app -> core(Device)+physics(ModelConfig)
@@ -67,71 +55,33 @@ workbench/
   app/       Controllers + services: thin orchestration only.
   ui/        QML views over core/analysis objects.
 
-Placement rule: workbench/ lives beside pytcad/. The numerical core
-is NEVER modified except to expose values it already computes, or via
-the explicit frozen-core amendment mechanism (CLAUDE.md).
+Placement rule: workbench/ lives beside pytcad/. Numerical core NEVER modified except to expose values it already computes, or via explicit frozen-core amendment mechanism (CLAUDE.md).
 
 ------------------------------------------------------------------------
 3. M1-M12 -- SHIPPED FOUNDATION (compact record)
 ------------------------------------------------------------------------
-M1 Domain core + model catalog. M2 RunRecord + result schema v2.
-M3 ResultStore/analysis boundary + SolverBackend protocol. M4 Physics
-Lab foundation (catalog panel, provenance view). M5 Device Builder
-(pn diode/NMOS/MOS-C templates). M6 Process Builder (1D, per-region
-implants). M7 DEVSIM backend (equilibrium slice, opt-in). M8 first new
-physics beyond the original five models. M9 educational physics lab
-(model on/off comparisons). M10 deck/workflow translation layer.
-All SHIPPED; each proved behavioral equivalence or added independently
-validated capability, adversarial-probed before ship.
+M1 Domain core + model catalog. M2 RunRecord + result schema v2. M3 ResultStore/analysis boundary + SolverBackend protocol. M4 Physics Lab foundation (catalog panel, provenance view). M5 Device Builder (pn diode/NMOS/MOS-C templates). M6 Process Builder (1D, per-region implants). M7 DEVSIM backend (equilibrium slice, opt-in). M8 first new physics beyond original five models. M9 educational physics lab (model on/off comparisons). M10 deck/workflow translation layer. All SHIPPED; each proved behavioral equivalence or added independently validated capability, adversarial-probed before ship.
 
-M11 HETEROSTRUCTURES -- ALL SHIPPED (S1-S5): Ge/GaAs/InGaAs/AlGaAs
-materials; DeviceSpec.region_materials wire format; Device1D eps(x)
-flux-form Poisson + Anderson band offsets via CARRIER-SPECIFIC ln(nie)
-edge deltas (electron dpsi + dln(nie), hole dpsi - dln(nie) -- a
-shared delta passes FD-Jacobian but breaks hole detailed balance);
-Device2D box-integration equivalent; HBT/HEMT templates + UI.
+M11 HETEROSTRUCTURES -- ALL SHIPPED (S1-S5): Ge/GaAs/InGaAs/AlGaAs materials; DeviceSpec.region_materials wire format; Device1D eps(x) flux-form Poisson + Anderson band offsets via CARRIER-SPECIFIC ln(nie) edge deltas (electron dpsi + dln(nie), hole dpsi - dln(nie) -- shared delta passes FD-Jacobian but breaks hole detailed balance); Device2D box-integration equivalent; HBT/HEMT templates + UI.
 
-M12 TUNNELING & QUANTUM CORRECTIONS -- ALL SHIPPED (S1-S3): FN/WKB
-analysis module (workbench/physics/tunneling.py); Hurkx TAT in
-Device1D (SI-calibrated fields -- V/cm underflows silently); S3
-(density gradient) folded into M20 (COMPLETE, see below).
+M12 TUNNELING & QUANTUM CORRECTIONS -- ALL SHIPPED (S1-S3): FN/WKB analysis module (workbench/physics/tunneling.py); Hurkx TAT in Device1D (SI-calibrated fields -- V/cm underflows silently); S3 (density gradient) folded into M20 (COMPLETE, see below).
 
 ------------------------------------------------------------------------
 4. SENTAURUS-PARITY ROADMAP (M13-M30) -- STATUS
 ------------------------------------------------------------------------
-Three parity tiers: TIER 1 "SDevice local-physics parity, Si 1D/2D"
-(statistics, mobility, II, BTBT, transient, AC, self-heating, DG).
-TIER 2 "SProcess-lite + general geometry" (unstructured meshing,
-mask-driven process, TED/OED, 3D iterative solvers). TIER 3
-"System-level" (mixed-mode circuit, hydrodynamic, MC implant,
-calibration).
+Three parity tiers: TIER 1 "SDevice local-physics parity, Si 1D/2D" (statistics, mobility, II, BTBT, transient, AC, self-heating, DG). TIER 2 "SProcess-lite + general geometry" (unstructured meshing, mask-driven process, TED/OED, 3D iterative solvers). TIER 3 "System-level" (mixed-mode circuit, hydrodynamic, MC implant, calibration).
 
-Deliberately OUT OF SCOPE, permanently: Monte-Carlo Boltzmann
-transport, atomistic kinetic-MC diffusion, radiation/SEE,
-ferroelectric/phase-change materials, full viscoelastic oxidation
-mechanics, Maxwell/EM solvers, PDK-grade compact-model extraction,
-bit-identity with commercial tools, any performance claim without the
-section-36 benchmark table.
+Permanently OUT OF SCOPE: Monte-Carlo Boltzmann transport, atomistic kinetic-MC diffusion, radiation/SEE, ferroelectric/phase-change materials, full viscoelastic oxidation mechanics, Maxwell/EM solvers, PDK-grade compact-model extraction, bit-identity w/ commercial tools, any performance claim w/o section-36 benchmark table.
 
-STANDING ENGINEERING RULES (unchanged, still binding):
-1. Any milestone touching a device core uses the M11-S3 amendment
-   mechanism: explicit sign-off, FD-Jacobian-first, bit-identity with
-   the model off, acceptance tests before merge.
-2. Every new model lands in tests/test_model_benchmarks.py FIRST with
-   published constants; the benchmark error is quoted in the commit.
-3. GATE BLOCKING: a milestone with quantitative acceptance gates blocks
-   its declared dependents until every gate is green under the
-   full-suite invariant. "Mostly green" is not green -- M15 was once
-   declared complete while two of its own gates were unreachable
-   (M15-IONIZATION-PLAN.md's debug-pass record is the cautionary case).
-4. New meshes/linear solvers ship with golden parity tests against
-   existing validated paths before anything uses them.
-5. Optional dependencies stay optional, auto-detected, graceful refusal.
-6. Result schema changes are additive + versioned.
-7. Honesty clauses are mandatory: what is NOT modeled, where it breaks,
-   which gates are qualitative.
-8. GUI grows only along validated data paths; no plot without a
-   store a test validates.
+STANDING ENGINEERING RULES (unchanged, binding):
+1. Milestone touching device core uses M11-S3 amendment mechanism: explicit sign-off, FD-Jacobian-first, bit-identity w/ model off, acceptance tests before merge.
+2. Every new model lands in tests/test_model_benchmarks.py FIRST w/ published constants; benchmark error quoted in commit.
+3. GATE BLOCKING: milestone w/ quantitative acceptance gates blocks declared dependents until every gate green under full-suite invariant. "Mostly green" ≠ green -- M15 once declared complete while two own gates unreachable (M15-IONIZATION-PLAN.md's debug-pass record = cautionary case).
+4. New meshes/linear solvers ship w/ golden parity tests vs existing validated paths before anything uses them.
+5. Optional deps stay optional, auto-detected, graceful refusal.
+6. Result schema changes additive + versioned.
+7. Honesty clauses mandatory: what NOT modeled, where it breaks, which gates qualitative.
+8. GUI grows only along validated data paths; no plot w/o store a test validates.
 
 STATUS BY MILESTONE (live -- supersedes any per-milestone spec text):
 
@@ -285,42 +235,18 @@ STATUS BY MILESTONE (live -- supersedes any per-milestone spec text):
 
 4a. GAP ANALYSIS SNAPSHOT (drafted pre-M13; kept for what motivated the
 roadmap -- the status table above is the live record, not this list):
-Fermi-Dirac/incomplete ionization, surface mobility, coupled II, BTBT,
-TAT, self-heating, transient, AC, DG, 2D heterojunctions were all
-[partial]/[missing] when drafted; all now landed to the tier-1 scope
-above except M14 G-A. Process (implant/diffusion/oxidation/deposition-
-etch), unstructured meshing, adaptive refinement, 3D scale, mixed-mode
-circuit, calibration/splits were all [partial]/[missing]; all landed to
-the tier-2/3 scope above.
+Fermi-Dirac/incomplete ionization, surface mobility, coupled II, BTBT, TAT, self-heating, transient, AC, DG, 2D heterojunctions all [partial]/[missing] when drafted; all now landed to tier-1 scope above except M14 G-A. Process (implant/diffusion/oxidation/deposition-etch), unstructured meshing, adaptive refinement, 3D scale, mixed-mode circuit, calibration/splits all [partial]/[missing]; all landed to tier-2/3 scope above.
 
 4b.6 GEOMETRY FOUNDATION DECISION (M21 phase 3's mesher): gmsh, not raw
-OpenCASCADE/pythonocc-core or FreeCAD. gmsh is the one open project
-bundling an OCC-based CAD kernel, unstructured 2D/3D meshing, and
-Physical-Group region tagging in one Python-importable package;
-DEVSIM already documents importing gmsh meshes directly. Validated,
-not merely decided: examples/debug_geometry_gmsh_conformality.py
-confirms a gmsh-built p-n diode mesh is CONFORMAL across the material
-interface (shared node tags exactly at the junction, region areas
-match analytic to 1e-16, zero degenerate triangles) -- what box-
-integration FV assembly requires. A hard-debug finding: an ungrounded
-gmsh size field over-refined a device to 21344 nodes; regrounding it
-in pytcad.mesh.debye_length (the same quantity phase 1's own h/L_D
-constraint uses) cut this to ~2100 nodes. Full record:
-M21-MESHING-PLAN.md section 12. A 3D repeat of the conformality check
-remains undone (3D unstructured meshing is out of Phase 3's scope).
+OpenCASCADE/pythonocc-core or FreeCAD. gmsh = one open project bundling OCC-based CAD kernel, unstructured 2D/3D meshing, Physical-Group region tagging in one Python-importable package; DEVSIM already documents importing gmsh meshes directly. Validated, not merely decided: examples/debug_geometry_gmsh_conformality.py confirms gmsh-built p-n diode mesh CONFORMAL across material interface (shared node tags exactly at junction, region areas match analytic to 1e-16, zero degenerate triangles) -- what box-integration FV assembly requires. Hard-debug finding: ungrounded gmsh size field over-refined device to 21344 nodes; regrounding in pytcad.mesh.debye_length (same quantity phase 1's h/L_D constraint uses) cut to ~2100 nodes. Full record: M21-MESHING-PLAN.md section 12. 3D repeat of conformality check undone (3D unstructured meshing out of Phase 3 scope).
 
 ------------------------------------------------------------------------
 5. POST-M31 ROADMAP (M31-M50)
 ------------------------------------------------------------------------
-STATUS OF THIS SECTION: M31 is REAL (planned, gated, in progress, own
-plan doc). M32-M50 is a PROPOSED map grounded in this repo's own
-disclosed gaps (4b.1, each M*-PLAN.md's honest-limits section,
-Architecture_Master_Plan.md sections 34/35) -- nothing below is
-committed until it has its own plan doc and gates.
+STATUS OF THIS SECTION: M31 REAL (planned, gated, in progress, own plan doc). M32-M50 = PROPOSED map grounded in repo's own disclosed gaps (4b.1, each M*-PLAN.md's honest-limits section, Architecture_Master_Plan.md sections 34/35) -- nothing below committed until own plan doc + gates.
 
 5.1 M31 -- C++/PYTHON/QT PRODUCTION ARCHITECTURE  [XL, IN PROGRESS]
-Full spec: pytcad/M31-CPP-ARCHITECTURE-PLAN.md. Progressive extraction
-(Architecture_Master_Plan.md section 37) -- NOT a rewrite.
+Full spec: pytcad/M31-CPP-ARCHITECTURE-PLAN.md. Progressive extraction (Architecture_Master_Plan.md section 37) -- NOT rewrite.
 
   P0  build system + CI + C++/Python boundary          LANDED
   P1  de-couple device.py; two latent bugs fixed        LANDED
@@ -335,38 +261,14 @@ Full spec: pytcad/M31-CPP-ARCHITECTURE-PLAN.md. Progressive extraction
   P8  Qt shell hardening                              NOT STARTED
   P9  promote pytcad_cpp to default                   N/A (no P5)
 
-THE MEASUREMENT THAT ORDERED THESE PHASES -- do not re-derive it:
-structured 3D assembly is NOT the bottleneck (a 24^3 equilibrium solve
-spends 98% of wall time in _superlu.gssv; assembly is 0.011s of
-0.494s); the pure-Python node-block-Jacobi GMRES already does 68,921
-nodes in 4.71s, so the direct-LU wall is ALGORITHMIC, not linguistic.
-The genuine blocker was unstructured mesh geometry (~80k tri/s 2D,
-~3.5k tets/s 3D -- minutes of Python dict overhead before any physics
-ran); P2 closed it to 3.16M tri/s / 1.99M tets/s, bit-identical.
+THE MEASUREMENT THAT ORDERED THESE PHASES -- do not re-derive:
+structured 3D assembly NOT bottleneck (24^3 equilibrium solve spends 98% wall time in _superlu.gssv; assembly 0.011s of 0.494s); pure-Python node-block-Jacobi GMRES already does 68,921 nodes in 4.71s, so direct-LU wall is ALGORITHMIC, not linguistic. Genuine blocker was unstructured mesh geometry (~80k tri/s 2D, ~3.5k tets/s 3D -- minutes of Python dict overhead before any physics); P2 closed it to 3.16M tri/s / 1.99M tets/s, bit-identical.
 
-P5 STOPPED after P5-0: P5-1's Phase A-2 measured all 8 solver-
-selection cells (the discriminator is COUPLING, not dimension --
-largest win: 3D structured coupled bias, 44.56s -> 1.60s, 27.9x, via
-petsc/direct auto-selection, no default moved). P5 proper's own exit
-criterion then fired: B9's assembly SHARE rose 11x (1.5%->16.3%) but
-its ABSOLUTE cost did not move (~109ms) against an ongoing second-
-engine maintenance cost -- see M31-P5-ASSEMBLY-NEWTON-PLAN.md section
-12. P6/P7 are NOT blocked on a C++ assembler that will not exist --
-re-scope against the Python+PETSc stack P5-0/P5-1 actually built.
+P5 STOPPED after P5-0: P5-1's Phase A-2 measured all 8 solver-selection cells (discriminator = COUPLING, not dimension -- largest win: 3D structured coupled bias, 44.56s -> 1.60s, 27.9x, via petsc/direct auto-selection, no default moved). P5 proper's own exit criterion then fired: B9's assembly SHARE rose 11x (1.5%->16.3%) but ABSOLUTE cost unchanged (~109ms) vs ongoing second-engine maintenance cost -- see M31-P5-ASSEMBLY-NEWTON-PLAN.md section 12. P6/P7 NOT blocked on C++ assembler that won't exist -- re-scope vs Python+PETSc stack P5-0/P5-1 actually built.
 
-OPEN DECISION carried out of P2: build_unstructured_stencil is
-winding-sensitive (a clockwise-wound triangle contributes NEGATIVE
-dual-cell areas); gmsh emits CCW so no real caller hits it, but the
-compiled path faithfully reproduces the quirk and it is PINNED by a
-test rather than papered over. Fixing it changes physics and must
-land on both paths (Python oracle + C++) at once.
+OPEN DECISION from P2: build_unstructured_stencil winding-sensitive (clockwise triangle contributes NEGATIVE dual-cell areas); gmsh emits CCW so no real caller hits it, but compiled path faithfully reproduces quirk, PINNED by test not papered over. Fix changes physics, must land on both paths (Python oracle + C++) at once.
 
-ADJOINT NOTE (relevant to M47 below): P5's stopping means the
-"expose dR/dp, keep J^T-friendly assembly" gate this section originally
-wanted on the C++ assembler never had an assembler to apply to. The
-Dirichlet-transpose half of that gate was instead closed on the PYTHON
-path (P4b: symmetric row-AND-column elimination in dirichlet.py). M47
-should depend on P4b's fix, not on a P5 that stopped.
+ADJOINT NOTE (relevant to M47 below): P5 stopping means "expose dR/dp, keep J^T-friendly assembly" gate originally wanted on C++ assembler never had assembler to apply to. Dirichlet-transpose half closed on PYTHON path instead (P4b: symmetric row-AND-column elimination in dirichlet.py). M47 should depend on P4b's fix, not stopped P5.
 
 5.2 PROPOSED M32-M40 (each row names the 4b.1/plan-doc gap it retires)
 
@@ -493,33 +395,15 @@ should depend on P4b's fix, not on a P5 that stopped.
        Opens solar/photodetector/imager devices. No C++ dependency
        beyond meshing.
 
-Suggested order: M31 P3a -> M32 -> P4..P7 -> M35 (spine). Parallel
-tracks: physics M33->M37; system M30-Part-II(landed)->M38(landed);
-optics M40 standalone. C++-gated: M34 (needs P4, has it), M35 (needs
-P2, has it); M36/M39 (needed P5, which stopped -- re-scope first).
-M32 sits deliberately inside the M31 track, not after it, because P7's
-scaling claims need the dashboard to police them (section 36).
+Suggested order: M31 P3a -> M32 -> P4..P7 -> M35 (spine). Parallel tracks: physics M33->M37; system M30-Part-II(landed)->M38(landed); optics M40 standalone. C++-gated: M34 (needs P4, has it), M35 (needs P2, has it); M36/M39 (needed P5, stopped -- re-scope first). M32 deliberately inside M31 track, not after, since P7's scaling claims need dashboard to police them (section 36).
 
-WHAT IS PERMANENTLY OUT OF SCOPE (stated so it is never rediscovered
-as a "gap"): p-/r-refinement (node motion, M21's own exclusion);
-bit-identity with commercial tools. Device3D AC's "permanently out of
-scope" call is DEMOTED to a deferral to re-cost (see M45) -- it was
-made when 3D died at ~27k nodes, and M31 removes that constraint.
+PERMANENTLY OUT OF SCOPE (stated so never rediscovered as "gap"): p-/r-refinement (node motion, M21's own exclusion); bit-identity w/ commercial tools. Device3D AC's "permanently out of scope" call DEMOTED to deferral to re-cost (see M45) -- made when 3D died at ~27k nodes; M31 removes that constraint.
 
 5.3 THE ROAD TO 3D -- DIMENSIONAL-LIFT MILESTONES (M41-M47)
 
-Organized by DIMENSION rather than capability: the DD spine (drift-
-diffusion, Fermi-Dirac, coupled/nonlocal II, local/nonlocal BTBT, TAT,
-AMR, mixed-mode) already reaches 3D on both structured and
-unstructured meshes -- M31 is about making 3D FAST, not making it
-exist. The debt is concentrated in physics added AFTER the DD core
-(quantum corrections, self-heating, hydrodynamic, transient, AC),
-each of which stopped at 1D/2D under a defensible "1D first" call that
-nobody has since revisited. Process simulation is the widest gap
-(3D device physics vs. 2D-at-best/1D-for-TED process input).
+Organized by DIMENSION not capability: DD spine (drift-diffusion, Fermi-Dirac, coupled/nonlocal II, local/nonlocal BTBT, TAT, AMR, mixed-mode) already reaches 3D on structured + unstructured meshes -- M31 about making 3D FAST, not making it exist. Debt concentrated in physics added AFTER DD core (quantum corrections, self-heating, hydrodynamic, transient, AC), each stopped at 1D/2D under defensible "1D first" call nobody revisited. Process simulation = widest gap (3D device physics vs 2D-at-best/1D-for-TED process input).
 
-COVERAGE MATRIX (Y = works, - = absent; verified against imports/
-NotImplementedError sites, not inferred from filenames):
+COVERAGE MATRIX (Y = works, - = absent; verified vs imports/NotImplementedError sites, not inferred from filenames):
 
   capability                       1D    2D    3D    gap owner
   --------------------------------------------------------------------
@@ -544,11 +428,7 @@ NotImplementedError sites, not inferred from filenames):
        core (hydrodynamic.py, schottky.py -- imported by __init__.py
        and nothing else).
 
-RULE: no dimensional lift lands without its reduction identity as a
-gate -- a 3D implementation whose z-uniform case does not reproduce
-the validated 2D answer to floating-point noise is a second,
-unvalidated code path, not a 3D implementation (the existing
-examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
+RULE: no dimensional lift lands w/o reduction identity as gate -- 3D impl whose z-uniform case doesn't reproduce validated 2D answer to floating-point noise = second, unvalidated code path, not 3D impl (existing examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
 
   M41  Incomplete ionization -> 2D/3D         [S]   LANDED 2026-09-12
        A port, not new physics: M13's shallow-dopant model factored to
@@ -842,33 +722,32 @@ examples/05_3d_reduces_to_2d.py pattern, 1.11e-16 V measured).
        rectify under bias. 10 gates in
        tests/test_m46_s3_schottky_2d3d.py, all green. See
        M46-SCHOTTKY-PLAN.md for the full record.
-  M47  3D numerical engine completion         [XL]  PROPOSED, NOT
-       SCOPED, NOT SIGNED OFF. Distinct from M41-M46: this is the
-       ENGINE work underneath all of them. Two concrete gaps found by
-       direct inspection: (a) M31's C++ coverage stops short of 3D
-       residual/Jacobian assembly (device3d.py/unstructured_dd3d.py
-       assembly is still pure Python/numpy -- see CLAUDE.md "What is
-       compiled so far"); (b) unstructured_dd3d.py is explicitly
-       homojunction-only (no materials_per_node/dlnnie mechanism) --
-       adding one is genuine new-feature work needing its own plan,
-       not a port. Expected difficulties: the frozen-core amendment
-       protocol applies to every touch of device3d.py/
-       unstructured_dd3d.py; 3D's edge/GateBC normal_axis combinatorics
-       are a real step up from 2D; 3D test batteries are already the
-       suite's slowest part. Depends on/overlaps M31 P4 (landed) and
-       M35 (its own track). Needs a proper plan doc before any code.
+  M47  3D numerical engine completion         [XL]  LANDED
+       2026-09-24 (pytcad/M47-3D-ENGINE-PLAN.md is the record). Both
+       gaps closed: (a) 3D assembly compiled -- unstructured_dd3d.py
+       (Slice 1, core/src/unstructured3d/) and Device3D's base coupled
+       assembly (Slice 2a, core/src/device3d/), each parity-gated
+       np.array_equal against its retained Python oracle; optional-
+       physics composition stays in Python by design. Neither port is a
+       clear wall-clock win (recorded honestly in the plan; a zero-copy
+       binding follow-up measured no change and was reverted). (b)
+       unstructured_dd3d.py heterojunctions (Slice 3): materials_per_node
+       + band_offset ("nie"/"affinity"), a port of unstructured_dd.py's
+       2D mechanism into both solve_bias3d and solve_poisson_
+       equilibrium3d, gated in tests/test_m47_s3_unstructured3d_
+       hetero.py (per-carrier detailed balance to 4e-14, Anderson
+       built-in potential to 1.4e-9, structured-Device3D current
+       comparison, mutation-checked against the shared-sign hole bug).
+       Same stated limits as 2D: eps and SRH lifetimes per reference
+       material, not per node.
 
-ORDERING: M41[S](done) -> M43[L](done) -> M42[L](done, S1-S4) ->
-M46[L](done) -> M45[XL](done) -> M44[XL](done), with M35 (3D process, LANDED separately). M47 (3D engine completion) is now the front of the dimensional-lift track, the largest unscoped item, deliberately last.
-and M47 (engine completion, last deliberately -- more to learn by landing a few of
-M41-M46 first) as separate tracks.
+ORDERING: M41[S](done) -> M43[L](done) -> M42[L](done, S1-S4) -> M46[L](done) -> M45[XL](done) -> M44[XL](done), w/ M35 (3D process, LANDED separately). M47 (3D engine completion) LANDED 2026-09-24, closing dimensional-lift track.
+and M47 (engine completion, last deliberately -- more to learn by landing a few of M41-M46 first) as separate tracks.
 
 ------------------------------------------------------------------------
 6. COMPETITIVE STRATEGY -- BEATING SENTAURUS/ATLAS, NOT JUST MATCHING
 ------------------------------------------------------------------------
-4b.0's framing: literal feature parity with a 30-person-decade
-incumbent is a fantasy; beat it on axes where its ARCHITECTURE, not
-its effort, prevents it from competing.
+4b.0's framing: literal feature parity w/ 30-person-decade incumbent = fantasy; beat it on axes where its ARCHITECTURE, not effort, prevents competing.
 
 WHERE WE CAN GENUINELY WIN (structural, not effort-based):
   W1  Differentiable simulation / adjoint sensitivities -- THE
@@ -889,24 +768,11 @@ WHERE WE CAN GENUINELY WIN (structural, not effort-based):
   W6  Cost and access -- zero licence cost, no seat limits, runs in CI
       (enables adoption of W1-W5, not itself a technical edge).
 
-WHERE PARITY IS THE HONEST CEILING: core device physics breadth (aim
-to match, achievable via 4b's tiers); process simulation (M35 is XL
-because 30 years of implant/diffusion calibration data live there).
+WHERE PARITY = HONEST CEILING: core device physics breadth (aim to match, achievable via 4b's tiers); process simulation (M35 XL since 30 years of implant/diffusion calibration data live there).
 
-WHERE TO CONCEDE, EXPLICITLY: foundry-calibrated model libraries (the
-calibration data is proprietary -- offer a calibration FRAMEWORK,
-never a pre-calibrated 5nm deck); industrial qualification/support/
-training/ecosystem; specialized vertical modules (power, memory,
-imagers, photonics).
+WHERE TO CONCEDE, EXPLICITLY: foundry-calibrated model libraries (calibration data proprietary -- offer calibration FRAMEWORK, never pre-calibrated 5nm deck); industrial qualification/support/training/ecosystem; specialized vertical modules (power, memory, imagers, photonics).
 
-STRUCTURAL CONSEQUENCE: adjoint capability must be DESIGNED IN, not
-retrofitted. M31 P5 (the intended host) stopped after P5-0, so M47/
-M48 below re-anchor to the Python-path fix (P4b's transpose-friendly
-Dirichlet elimination) rather than a C++ assembler that will not
-exist -- a smaller, still-real claim, to be re-scoped before M47
-starts (see 5.1's ADJOINT NOTE; note this is a different "M47" number
-than section 5.3's dimensional-engine M47 -- resolve the numbering
-collision before either is scoped in detail).
+STRUCTURAL CONSEQUENCE: adjoint capability must be DESIGNED IN, not retrofitted. M31 P5 (intended host) stopped after P5-0, so M47/M48 below re-anchor to Python-path fix (P4b's transpose-friendly Dirichlet elimination) not C++ assembler that won't exist -- smaller, still-real claim, re-scope before M47 starts (see 5.1's ADJOINT NOTE; this "M47" differs from section 5.3's dimensional-engine M47 -- resolve numbering collision before either scoped in detail).
 
   M47/48  Adjoint sensitivity engine          [L]  dQoI/dp via one
           forward + one adjoint solve, gated against FD gradients to
@@ -917,9 +783,7 @@ collision before either is scoped in detail).
   M49/50  Uncertainty quantification & sensitivity ranking [M]
   M50/51  ML surrogate / differentiable coupling [L]
 
-FALSIFIABLE CRITERIA (per section 36, no claim without a benchmark
-table; C1/C4 are the ones to chase first -- fully in our control,
-no Sentaurus licence needed):
+FALSIFIABLE CRITERIA (per section 36, no claim w/o benchmark table; chase C1/C4 first -- fully in our control, no Sentaurus licence needed):
   C1  Same device/targets: calibration converges in >=5x fewer forward
       solves than Nelder-Mead (W1/adjoint-calibration milestone).
   C2  On B7 (large synthetic 3D), one-GPU-workstation time-to-solution
@@ -934,251 +798,35 @@ no Sentaurus licence needed):
 7. STANDING OPEN ITEMS (not covered by a numbered milestone above)
 ------------------------------------------------------------------------
 - GUI has no freeform/arbitrary geometry authoring (sketch-and-drag).
-  The library already solves on an arbitrary gmsh mesh
-  (unstructured_poisson.py/unstructured_dd.py); nothing in the GUI
-  builds or edits one. 3D device AUTHORING has a domain model
-  (Region/ContactDef/DomainDevice with optional z-extent) and, as of
-  2026-09-13, Structure-panel GUI wiring (AppController.setDomainDepth/
-  setRegionZBounds, StructurePanel "3D DOMAIN" control, DopingEditor
-  per-region z-bounds row) -- a device author can go 2D-region-
-  authored -> 3D through the Structure panel for a simple ohmic-
-  contact device. Template-driven 3D examples and a freeform "Build 3D
-  device" wizard remain future work. Phase-1 scope: ohmic contacts
-  only (no gates), no range-restricted 3D contact faces, uniform
-  doping only in 3D -- all three already refused loudly, not silently
-  ignored.
-- No dedicated provenance-trace UI (click through mesh -> physics ->
-  material -> backend); result files carry the data, no single view
-  walks the chain.
+  Library already solves on arbitrary gmsh mesh
+  (unstructured_poisson.py/unstructured_dd.py); nothing in GUI builds/edits one. 3D device AUTHORING has domain model (Region/ContactDef/DomainDevice w/ optional z-extent) and, as of 2026-09-13, Structure-panel GUI wiring (AppController.setDomainDepth/setRegionZBounds, StructurePanel "3D DOMAIN" control, DopingEditor per-region z-bounds row) -- author can go 2D-region-authored -> 3D via Structure panel for simple ohmic-contact device. Template-driven 3D examples + freeform "Build 3D device" wizard = future work. Phase-1 scope: ohmic contacts only (no gates), no range-restricted 3D contact faces, uniform doping only in 3D -- all three refused loudly, not silently ignored.
+- No dedicated provenance-trace UI (click through mesh -> physics -> material -> backend); result files carry data, no single view walks chain.
 - M52 MULTI-METRIC CONVERGENCE + MESH STATS -- LANDED 2026-09-16.
-  This item used to read "No full numerical-diagnostics panel ... a
-  'convergence' viewport mode and RunRecord plumbing exist, not the
-  dedicated panel" -- investigating before building a new panel found
-  that claim stale: the GUI already has THREE diagnostics surfaces
-  reading the M2 RunRecord/ConvergenceStep substrate (SolverTelemetryPanel,
-  live/scrape-fed; the "convergence" viewport mode, post-hoc; and
-  PhysicsLabPanel's provenance/continuation tables) -- a fourth panel
-  would have duplicated them. The real, shared defect: both
-  `_draw_convergence` (mpl_canvas_item.py) and `PhysicsLabController.
-  convergenceData()` independently only ever read the FIRST tracked
-  Newton metric (`next(iter(step.metrics.values()))`), silently
-  dropping the rest -- confirmed a real bias-solve verbose line prints
-  3 (`|F|`/`|dpsi|`/`|dn/n|`, device.py:2451-2453). Fixed in place: the
-  convergence plot now draws every tracked metric per stage (distinct
-  linestyle, shared stage color), `convergenceData()` gained a
-  `"metrics"` dict alongside the unchanged `"residuals"` key, and
-  `provenanceRows()` gained per-axis mesh-extent rows (`AppController.
-  meshStats`' axis breakdown was already computed and thrown away).
-  A real bug was caught by real-app verification and fixed before
-  landing: the new mesh rows initially mislabeled raw cm values "um"
-  with no conversion (`[0, 0.00012] um` for a 1.2 um channel) --
-  fixed with the same *1e4 conversion every other mesh-coordinate
-  readout in the GUI uses. See `M52-DIAGNOSTICS-MULTIMETRIC-PLAN.md`.
-  Deliberately out of scope: a new panel/tab, unifying
-  SolverTelemetryPanel's live scrape pipeline with the post-hoc
-  RunRecord path (two independent pipelines for the same conceptual
-  chart), and rejected-bias-POINT-level data (continuation.py's
-  drivers still never persist individual backoff attempts, only the
-  coarse per-stage converged=False flag).
-- Additional device templates the original vision named: BJT, solar
-  cell, PIN diode explicitly (Schottky now has a standalone physics
-  module, M28, but no template). Only diode/MOSCAP/NMOS/HBT/HEMT/
-  FinFET exist as templates today.
-- No cross-backend GUI comparison (pytcad vs devsim side-by-side),
-  though both implement the SolverBackend protocol.
-- GPU (CUDA/CuPy) and MPI domain decomposition: LANDED but only in the
-  GUI's 3D solve path (gui/services/solver_runner.py +
-  mpi_schwarz_runner.py), not in pytcad's core Device classes
-  themselves. Which engine actually ran is surfaced via
-  AppController.solverEngineLabel. SYCL was not pursued (no native
-  Python binding).
+  Item formerly read "No full numerical-diagnostics panel ... a 'convergence' viewport mode and RunRecord plumbing exist, not the dedicated panel" -- investigation before building found claim stale: GUI already has THREE diagnostics surfaces reading M2 RunRecord/ConvergenceStep substrate (SolverTelemetryPanel, live/scrape-fed; "convergence" viewport mode, post-hoc; PhysicsLabPanel's provenance/continuation tables) -- fourth panel would duplicate. Real shared defect: both `_draw_convergence` (mpl_canvas_item.py) and `PhysicsLabController.
+  convergenceData()` independently read only FIRST tracked Newton metric (`next(iter(step.metrics.values()))`), silently dropping rest -- confirmed real bias-solve verbose line prints 3 (`|F|`/`|dpsi|`/`|dn/n|`, device.py:2451-2453). Fixed in place: convergence plot draws every tracked metric per stage (distinct linestyle, shared stage color), `convergenceData()` gained `"metrics"` dict beside unchanged `"residuals"` key, `provenanceRows()` gained per-axis mesh-extent rows (`AppController.
+  meshStats`' axis breakdown was already computed + thrown away). Real bug caught by real-app verification, fixed pre-landing: new mesh rows mislabeled raw cm values "um" w/o conversion (`[0, 0.00012] um` for 1.2 um channel) -- fixed w/ same *1e4 conversion every other GUI mesh-coordinate readout uses. See `M52-DIAGNOSTICS-MULTIMETRIC-PLAN.md`. Deliberately out of scope: new panel/tab, unifying SolverTelemetryPanel's live scrape pipeline w/ post-hoc RunRecord path (two independent pipelines, same conceptual chart), rejected-bias-POINT-level data (continuation.py drivers still never persist individual backoff attempts, only coarse per-stage converged=False flag).
+- More device templates original vision named: BJT, solar cell, PIN diode explicitly (Schottky has standalone physics module, M28, but no template). Only diode/MOSCAP/NMOS/HBT/HEMT/FinFET templates exist today.
+- No cross-backend GUI comparison (pytcad vs devsim side-by-side), though both implement SolverBackend protocol.
+- GPU (CUDA/CuPy) + MPI domain decomposition: LANDED but only in GUI's 3D solve path (gui/services/solver_runner.py + mpi_schwarz_runner.py), not pytcad core Device classes. Engine that ran surfaced via AppController.solverEngineLabel. SYCL not pursued (no native Python binding).
 - M51 GEOMETRY/MESH HOVER + OVERLAY -- LANDED 2026-09-16 (identified
-  2026-09-14, scoped and implemented same session). Investigating the
-  "NO INTERACTIVE 1D/2D GEOMETRY/MESH VIEWER" gap before implementing
-  found it narrower than first flagged: `ViewportPanel.qml` already had
-  real pan/zoom (`MouseArea` + `canvas.pan()`/`zoom()`/`fit()`/
-  `resetView()`), and `MplCanvasItem.hoverAt()` already drove a live
-  readout for 1D curve modes -- what was actually missing was hover for
-  2D field maps (doping/bands/recombination)/Structure/Mesh modes (all
-  silent no-ops, `hoverAt` bailed whenever `self._series` was empty,
-  which it always was there) and a mesh-overlay toggle for 2D field
-  maps. `hoverAt()` is now a dispatcher over four hover sources
-  (`_hover_series` unchanged, plus new `_hover_field_grid`/
-  `_hover_structure`/`_hover_mesh`), and a `meshOverlay` property mirrors
-  the existing `contours` property exactly, drawing the field map's own
-  true (non-uniform) mesh axis coordinates as an overlay. See
-  `M51-GEOMETRY-MESH-HOVER-PLAN.md` for the full writeup and honest
-  limits (no 3D hover here -- viewer3d.py already covers 3D; no
-  edge-level Structure inspection, only regions). Gated in
-  `gui/tests/test_mpl_canvas_hover_m51.py` (8/8); the pre-existing
-  `test_mpl_canvas_item.py`/`test_mpl_canvas_series.py`/
-  `test_viewport_pan_zoom_fast_path.py` suites re-run green, unchanged.
-  Verified against the real running app: a real solve, the actual
-  `mplCanvas` QML object in the live tree, a real hover producing
-  `"doping: 1.000e+17 cm^-3 @ x=2.03, y=0.53 um"`, and the real
-  mesh-overlay toggle adding/removing 100 grid lines on the actual
-  rendered figure.
+  2026-09-14, scoped + implemented same session). Investigating "NO INTERACTIVE 1D/2D GEOMETRY/MESH VIEWER" gap found it narrower than flagged: `ViewportPanel.qml` already had real pan/zoom (`MouseArea` + `canvas.pan()`/`zoom()`/`fit()`/`resetView()`), and `MplCanvasItem.hoverAt()` already drove live readout for 1D curve modes -- actually missing: hover for 2D field maps (doping/bands/recombination)/Structure/Mesh modes (all silent no-ops, `hoverAt` bailed whenever `self._series` empty, which it always was there) + mesh-overlay toggle for 2D field maps. `hoverAt()` now dispatcher over four hover sources (`_hover_series` unchanged, plus new `_hover_field_grid`/
+  `_hover_structure`/`_hover_mesh`), and `meshOverlay` property mirrors existing `contours` property exactly, drawing field map's own true (non-uniform) mesh axis coords as overlay. See `M51-GEOMETRY-MESH-HOVER-PLAN.md` for full writeup + honest limits (no 3D hover -- viewer3d.py covers 3D; no edge-level Structure inspection, only regions). Gated in `gui/tests/test_mpl_canvas_hover_m51.py` (8/8); pre-existing `test_mpl_canvas_item.py`/`test_mpl_canvas_series.py`/`test_viewport_pan_zoom_fast_path.py` suites re-run green, unchanged. Verified vs real running app: real solve, actual `mplCanvas` QML object in live tree, real hover producing `"doping: 1.000e+17 cm^-3 @ x=2.03, y=0.53 um"`, real mesh-overlay toggle adding/removing 100 grid lines on actual rendered figure.
 - 3D VIEWER PHASE 6 -- VECTOR FIELD VISUALIZATION -- LANDED 2026-09-14.
-  `gui/services/viewer3d.py`'s isosurface/volume/exploded-view viewer
-  had no vector-field rendering despite `ResultStore.vector_field()`/
-  `VectorField` already existing in the store protocol and
-  `solver_runner.extract_result()` already writing a real
-  `vector__current_density__{x,y,z}` (node-averaged Jn+Jp) for every
-  solved-bias 3D result -- the data existed, nothing visualized it.
-  Added `attach_vector_field()` (the vector analogue of
-  `attach_scalar_field()`) plus a new "Vector Field" sidebar dock:
-  arrow glyphs (`grid.glyph(orient=name, scale=name, tolerance=...)`,
-  arrow length/color both following the vector's own magnitude) and
-  streamlines (`grid.streamlines(...)` seeded from the grid's own
-  center/radius, rendered as tubes), both real VTK filters over the
-  actual solved data -- verified directly on the resistor_3d fixture
-  (125 streamline points, a 3280-point tube mesh, not a synthetic
-  check). `ResultStore.available_vectors()` added as a new protocol
-  member (default `[]`, same honest-default pattern as
-  `region_materials()`) so the vector dock disables itself outright
-  for an equilibrium-only or pre-solve store rather than showing a
-  live-looking control with nothing behind it. A real bug was caught
-  before shipping: this pyvista version's `streamlines(max_time=...)`
-  raises `pyvista.core.errors.DeprecationError`, which subclasses
-  RuntimeError -- an initial broad `except (ValueError, RuntimeError)`
-  around the streamline call silently swallowed it, which would have
-  made "Show streamlines" a permanent no-op for every user; fixed by
-  using the current `max_length` parameter and narrowing the except to
-  `ValueError` only (VTK's genuine "no valid seed" case), confirmed by
-  re-running the real pipeline and seeing actual streamline points.
-  A SECOND real bug reached the user before it was caught: `grid.glyph()`
-  does NOT carry the source vector array through under its own name --
-  its output only ever has PyVista's own fixed "GlyphVector"/
-  "GlyphScale" arrays -- so the first landing's `add_mesh(glyphs,
+  `gui/services/viewer3d.py`'s isosurface/volume/exploded-view viewer had no vector-field rendering despite `ResultStore.vector_field()`/`VectorField` already in store protocol and `solver_runner.extract_result()` already writing real `vector__current_density__{x,y,z}` (node-averaged Jn+Jp) for every solved-bias 3D result -- data existed, nothing visualized it. Added `attach_vector_field()` (vector analogue of `attach_scalar_field()`) + new "Vector Field" sidebar dock: arrow glyphs (`grid.glyph(orient=name, scale=name, tolerance=...)`, arrow length/color follow vector magnitude) and streamlines (`grid.streamlines(...)` seeded from grid's center/radius, rendered as tubes), both real VTK filters over actual solved data -- verified directly on resistor_3d fixture (125 streamline points, 3280-point tube mesh, not synthetic). `ResultStore.available_vectors()` added as new protocol member (default `[]`, same honest-default pattern as `region_materials()`) so vector dock disables itself for equilibrium-only or pre-solve store rather than showing live-looking control w/ nothing behind it.
+  Bug 1 (caught pre-ship): this pyvista version's `streamlines(max_time=...)` raises `pyvista.core.errors.DeprecationError`, subclass of RuntimeError -- initial broad `except (ValueError, RuntimeError)` silently swallowed it, making "Show streamlines" permanent no-op; fixed w/ current `max_length` param + except narrowed to `ValueError` only (VTK's genuine "no valid seed" case), confirmed by re-running real pipeline + seeing actual streamline points.
+  Bug 2 (reached user): `grid.glyph()` does NOT carry source vector array through under own name -- output only has PyVista's fixed "GlyphVector"/"GlyphScale" arrays -- so first landing's `add_mesh(glyphs,
   scalars="current_density")` raised `KeyError: 'Data array
-  (current_density) not present in this dataset'` the instant a real
-  user checked "Show arrows" in the actual running app. The mocked
-  `FakeInteractor` test suite could not catch this (its `add_mesh`
-  never inspects the `scalars=` kwarg against the mesh it was called
-  on) -- fixed by coloring glyphs by "GlyphScale" instead (verified
-  equal to the real vector magnitude), and closed the test gap itself
-  by adding `test_add_glyphs_and_add_streamlines_render_on_a_real_
-  pyvista_plotter` (a genuine off-screen `pv.Plotter`, no Qt/X11
-  needed, no FakeInteractor) that reproduces the exact KeyError when
-  run against the pre-fix code -- confirmed directly, not assumed.
-  A THIRD real bug reached the user before it was caught, again only
-  on a real (non-uniform) device rather than the uniform resistor-bar
-  fixture the original test coverage used: `vtkTubeFilter` can
-  silently DROP the source vector array entirely when a streamline
-  segment has few points -- confirmed directly on
-  `pn_junction_3d_example_spec` (a 16-point streamline kept
-  "current_density" before tubing, lost it after; a 150-point one on
-  the same device kept it both times) -- so the "Show streamlines"
-  checkbox raised the same `KeyError` class as the glyph bug, just on
-  a different device/code path. This is genuine, data-dependent VTK
-  behavior, not fixable upstream: fixed by checking
-  `name in tube.point_data` AFTER tubing and falling back to a solid-
-  colored tube rather than assuming the array survived. Gated by
-  `test_add_streamlines_falls_back_to_a_solid_tube_when_tube_drops_
-  the_field` (monkeypatches `PolyData.tube` to reproduce the exact
-  observed drop deterministically, since VTK's internal streamline
-  seeding is randomized and a synthetic 2-point polyline built by hand
-  did NOT reproduce the drop when tried directly). Stress-tested
-  afterward: 15 trials each of resistor_3d/pn_junction_3d/mosfet_3d/
-  bjt_3d_example_spec through the exact production glyph+streamline
-  code path, zero crashes. Gated in `gui/tests/test_viewer3d.py`/
-  `test_result_store.py`; full `gui/tests/` suite re-run green (795
-  passed) after all three fixes. Honest limit: Phase 4's sweep-playback snapshots
-  (`result_store.SweepSnapshots`) are scalar-only, so glyphs/
-  streamlines are NOT recomputed per playback frame -- toggle them off
-  before scrubbing a sweep. NOT done: a user-positioned streamline
-  seed plane (uses the grid center by default), E-field as a second
-  vector quantity (only current_density is exported today), and the
-  same feature for 2D (M51 above is the 1D/2D analogue, unscoped).
+  (current_density) not present in this dataset'` the instant real user checked "Show arrows" in running app. Mocked `FakeInteractor` suite couldn't catch it (its `add_mesh` never checks `scalars=` kwarg vs mesh) -- fixed by coloring glyphs by "GlyphScale" (verified equal to real vector magnitude); test gap closed by `test_add_glyphs_and_add_streamlines_render_on_a_real_
+  pyvista_plotter` (genuine off-screen `pv.Plotter`, no Qt/X11, no FakeInteractor), which reproduces exact KeyError vs pre-fix code -- confirmed directly, not assumed.
+  Bug 3 (reached user, only on real non-uniform device, not uniform resistor-bar fixture): `vtkTubeFilter` can silently DROP source vector array when streamline segment has few points -- confirmed directly on `pn_junction_3d_example_spec` (16-point streamline kept "current_density" before tubing, lost it after; 150-point one on same device kept it both times) -- so "Show streamlines" raised same `KeyError` class as glyph bug, different device/code path. Genuine data-dependent VTK behavior, not fixable upstream: fixed by checking `name in tube.point_data` AFTER tubing, falling back to solid-colored tube. Gated by `test_add_streamlines_falls_back_to_a_solid_tube_when_tube_drops_
+  the_field` (monkeypatches `PolyData.tube` to reproduce observed drop deterministically, since VTK streamline seeding randomized and hand-built 2-point polyline did NOT reproduce drop when tried). Stress-tested after: 15 trials each of resistor_3d/pn_junction_3d/mosfet_3d/bjt_3d_example_spec through exact production glyph+streamline path, zero crashes. Gated in `gui/tests/test_viewer3d.py`/`test_result_store.py`; full `gui/tests/` suite green (795 passed) after all three fixes.
+  Honest limit: Phase 4's sweep-playback snapshots (`result_store.SweepSnapshots`) scalar-only, so glyphs/streamlines NOT recomputed per playback frame -- toggle off before scrubbing sweep. NOT done: user-positioned streamline seed plane (uses grid center), E-field as second vector quantity (only current_density exported), same feature for 2D (M51 above = 1D/2D analogue, unscoped).
 - PARAVIEW EXPORT -- LANDED 2026-09-16. `gui/services/paraview_export.py`
-  (pure) writes a genuine ParaView-native `.vtu` for the current result
-  and, once sweep-snapshot playback data exists, a real `.pvd` time series
-  keyed by each step's bias voltage -- reusing `viewer3d.py`'s own
-  grid-building functions rather than a from-source ParaView build (both
-  `pq*` widgets and `paraview.simple` need one; investigated and rejected
-  as out of proportion given PyVista/VTK already covers the in-app
-  viewer). `Viewer3DWindow` gained a "ParaView Export" dock: export
-  actions plus "Open in ParaView" (`QProcess.startDetached` against a
-  `QSettings`-persisted executable path). See
-  `PARAVIEW-EXPORT-PLAN.md` for the full writeup and honest limits
-  (scalar-only `.pvd`, no real-ParaView visual verification available on
-  this machine). A real bug shipped past the first green test run and was
-  caught only by opening the actual app and clicking the real button: the
-  export handlers referenced `paraview_export` with no import of it in
-  scope (a claimed "lazy import" that was never actually written) --
-  every existing test called the underlying pure functions directly or a
-  different handler, none of them the two that were actually broken.
-  Fixed (the lazy import, inside each handler, to dodge the real
-  circular-import risk with `viewer3d.py`); closed the test gap with two
-  new handler-level tests. Gated in `gui/tests/test_paraview_export.py`
-  (10/10); `test_viewer3d.py`'s pre-existing 48 tests re-run green,
-  unchanged.
+  (pure) writes genuine ParaView-native `.vtu` for current result and, once sweep-snapshot playback data exists, real `.pvd` time series keyed by each step's bias voltage -- reusing `viewer3d.py`'s own grid-building functions rather than from-source ParaView build (both `pq*` widgets and `paraview.simple` need one; investigated + rejected as out of proportion since PyVista/VTK already covers in-app viewer). `Viewer3DWindow` gained "ParaView Export" dock: export actions + "Open in ParaView" (`QProcess.startDetached` vs `QSettings`-persisted executable path). See `PARAVIEW-EXPORT-PLAN.md` for full writeup + honest limits (scalar-only `.pvd`, no real-ParaView visual verification on this machine). Real bug shipped past first green test run, caught only by opening actual app + clicking real button: export handlers referenced `paraview_export` w/ no import in scope (claimed "lazy import" never written) -- existing tests called underlying pure functions or different handler, none the two broken ones. Fixed (lazy import inside each handler, dodging real circular-import risk w/ `viewer3d.py`); test gap closed w/ two new handler-level tests. Gated in `gui/tests/test_paraview_export.py` (10/10); `test_viewer3d.py`'s pre-existing 48 tests re-run green, unchanged.
 
 ------------------------------------------------------------------------
 8. NEXT SESSION QUEUE
 ------------------------------------------------------------------------
-Live front of the queue, updated 2026-09-18: M43 (self-heating -> 2D/3D,
-all 3 phases), M51/M52/the ParaView export item (section 7), M35 (3D
-process, full S1-S6 scope including smooth level-set geometry and
-direct tet meshing), and M42-S1 through S4 (density-gradient ->
-Device2D ohmic + GateBC, then Device3D, then a FinFET/GAA fin-corner
-confinement demonstration) have all LANDED since this paragraph was
-first written -- left dated so a reader can see what changed rather
-than silently rewriting history. M42 is now CLOSED as a track (section
-2/10.8 scoped it as S1-S4 exactly; nothing further is defined without
-a new plan doc). **M46 (S1+S2+S3)** also LANDED 2026-09-18 (Schottky
-contacts: Device1D's Dirichlet approximation and Robin thermionic-flux
-BC, then lifted to Device2D -- full parity -- and Device3D -- Dirichlet
-approximation only, no Robin machinery there to generalize -- see
-M46-SCHOTTKY-PLAN.md) and is now essentially complete for its own
-stated scope. **M45 (transient/AC -> 3D)** also LANDED 2026-09-18:
-transient3d.py and ac3d.py, direct lifts of transient2d.py's/ac2d.py's
-already-gated pattern one axis further -- see
-M45-TRANSIENT-AC-3D-PLAN.md for the two findings from this slice (a
-missing bc.kappa factor caught by inspection, and a poorly-conditioned
-first reduction fixture caught by a failing gate and root-caused before
-being fixed). A same-day follow-up closed M45's own two cheap disclosed
-gaps: 3D transient physics reference gates (transient2d.py's own
-already-gated G1/G4/G5 ported one axis further) and a real 3D MOSFET
-fixture + gm/fT gates for ac3d.py. The reference-gate pass surfaced a
-genuine efficiency bug in transient3d.py's own Newton loop (a fully-
-failed line search, lam=0, was not detected -- the loop kept recomputing
-the identical doomed step up to opts.max_iter=100 times, ~800s wasted
-on a single failed step) and, after fixing that, a genuine mesh-
-resolution finding (Nz=3's lone interior z-node has double a boundary
-node's control-volume width, so one aggressive step can force the
-Newton loop's single shared damping factor to 0 even though every other
-node -- including a hypothetical 2D problem -- would already have
-converged; confirmed directly by re-running the same comparison at
-Nz=7, which converges cleanly). Neither finding was a case for porting
-anything to C++ (per-iteration cost was never the bottleneck, confirmed
-directly) -- see M45-TRANSIENT-AC-3D-PLAN.md section 8 for the full
-investigation. A second follow-up (2026-09-19) closed M45's remaining
-GUI/wire-format exposure gap: solver_runner.py's transient/AC dispatch
-now routes a Device3D spec to transient3d.py/ac3d.py instead of
-refusing outright, and AppController.canRunAc no longer excludes
-dimensionality==3. This pass found and fixed a REAL regression in the
-section-8 efficiency fix: the `lam==0.0` short-circuit in
-transient3d.py's `_newton_step` returned "not converged" without first
-checking whether the wanted correction was already below tolerance --
-wrong for a device that reaches its steady state almost immediately
-(an ohmic resistor, unlike M45's own diode-based gates), where the line
-search's own merit comparison goes numerically unstable at
-already-converged (near-machine-precision) residuals and spuriously
-reports lam=0. Fixed by restoring the original tolerance check BEFORE
-the bail (see M45-TRANSIENT-AC-3D-PLAN.md section 11.1) -- a fresh,
-physically different GUI fixture caught what M45's own thorough gate
-suite had not exercised. M44 (hydrodynamic -> coupled, then 2D/3D)
-LANDED 2026-09-19 -- see pytcad/M44-HYDRODYNAMIC-PLAN.md for the full
-record (electron-only, no C++ needed anywhere, three real bugs found
-and fixed while gating Slice 4). M47 (3D engine completion) is now the
-front of the dimensional-lift track and the largest unscoped item,
-deliberately last. See `history.md` for session-by-session detail and
-open handoff notes.
+Live front of queue, updated 2026-09-18: M43 (self-heating -> 2D/3D, all 3 phases), M51/M52/ParaView export item (section 7), M35 (3D process, full S1-S6 scope incl. smooth level-set geometry + direct tet meshing), and M42-S1 through S4 (density-gradient -> Device2D ohmic + GateBC, then Device3D, then FinFET/GAA fin-corner confinement demo) all LANDED since paragraph first written -- left dated so reader sees what changed vs silent history rewrite. M42 now CLOSED as track (section 2/10.8 scoped it as S1-S4 exactly; nothing further defined w/o new plan doc). **M46 (S1+S2+S3)** also LANDED 2026-09-18 (Schottky contacts: Device1D's Dirichlet approximation + Robin thermionic-flux BC, lifted to Device2D -- full parity -- and Device3D -- Dirichlet approximation only, no Robin machinery there to generalize -- see M46-SCHOTTKY-PLAN.md), essentially complete for own stated scope. **M45 (transient/AC -> 3D)** also LANDED 2026-09-18: transient3d.py + ac3d.py, direct lifts of transient2d.py's/ac2d.py's already-gated pattern one axis further -- see M45-TRANSIENT-AC-3D-PLAN.md for two findings (missing bc.kappa factor caught by inspection; poorly-conditioned first reduction fixture caught by failing gate, root-caused before fix). Same-day follow-up closed M45's two cheap disclosed gaps: 3D transient physics reference gates (transient2d.py's gated G1/G4/G5 ported one axis further) + real 3D MOSFET fixture + gm/fT gates for ac3d.py. Reference-gate pass surfaced genuine efficiency bug in transient3d.py Newton loop (fully-failed line search, lam=0, not detected -- loop recomputed identical doomed step up to opts.max_iter=100 times, ~800s wasted on single failed step) and, after fix, genuine mesh-resolution finding (Nz=3's lone interior z-node has double boundary node's control-volume width, so one aggressive step can force Newton loop's single shared damping factor to 0 even though every other node -- incl. hypothetical 2D problem -- already converged; confirmed by re-running same comparison at Nz=7, converges cleanly). Neither finding case for porting to C++ (per-iteration cost never bottleneck, confirmed directly) -- see M45-TRANSIENT-AC-3D-PLAN.md section 8. Second follow-up (2026-09-19) closed M45's remaining GUI/wire-format exposure gap: solver_runner.py's transient/AC dispatch now routes Device3D spec to transient3d.py/ac3d.py instead of refusing, and AppController.canRunAc no longer excludes dimensionality==3. Pass found + fixed REAL regression in section-8 efficiency fix: `lam==0.0` short-circuit in transient3d.py's `_newton_step` returned "not converged" w/o first checking whether wanted correction already below tolerance -- wrong for device reaching steady state almost immediately (ohmic resistor, unlike M45's diode-based gates), where line search's merit comparison goes numerically unstable at already-converged (near-machine-precision) residuals and spuriously reports lam=0. Fixed by restoring original tolerance check BEFORE bail (see M45-TRANSIENT-AC-3D-PLAN.md section 11.1) -- fresh, physically different GUI fixture caught what M45's thorough gate suite hadn't exercised. M44 (hydrodynamic -> coupled, then 2D/3D) LANDED 2026-09-19 -- see pytcad/M44-HYDRODYNAMIC-PLAN.md (electron-only, no C++ needed, three real bugs found + fixed while gating Slice 4). M47 (3D engine completion) now front of dimensional-lift track + largest unscoped item, deliberately last. See `history.md` for session-by-session detail + open handoff notes.
 
-Standing rules: every slice ships suite-green with pre-existing tests
-unchanged; adversarial probe pass before each commit; optional deps
-stay optional; gate-bearing milestones block their dependents; a
-"COMPLETE, all gates green" status claim is not evidence on its own --
-measure it, don't trust the last status block (this file was wrong
-about M15 for a full session once, per M15-IONIZATION-PLAN.md).
+Standing rules: every slice ships suite-green w/ pre-existing tests unchanged; adversarial probe pass before each commit; optional deps stay optional; gate-bearing milestones block dependents; "COMPLETE, all gates green" claim not evidence alone -- measure it, don't trust last status block (this file was wrong about M15 for full session once, per M15-IONIZATION-PLAN.md).

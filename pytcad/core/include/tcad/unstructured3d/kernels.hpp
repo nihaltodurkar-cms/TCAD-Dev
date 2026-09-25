@@ -95,7 +95,9 @@ Coo poisson_charge_coupling(const std::vector<double>& node_vols_s);
 //  SRH + Auger recombination, exactly materials.recombination's
 //  Boltzmann form (np_eq=None path -- this module has no Fermi-Dirac
 //  composition, by its own documented scope). n/p here are SCALED
-//  (code units); nie_phys, Ns, R0 do the physical/scaled conversion
+//  (code units); nie_phys (PER NODE -- M47 Slice 3 heterojunctions;
+//  a homojunction passes N copies of one value, which is arithmetically
+//  identical to the former scalar), Ns, R0 do the physical/scaled conversion
 //  internally, matching the Python call site
 //  `recombination(n*Ns, p*Ns, nie_s*Ns, tau_n, tau_p, material,
 //  auger=auger)` then `Rs=R/R0` etc. Returns the F1/F2 BASELINE
@@ -111,7 +113,7 @@ struct SrhResult {
     Coo diag;
 };
 SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
-                    double nie_phys, const std::vector<double>& tau_n,
+                    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
                     const std::vector<double>& tau_p,
                     const std::vector<double>& node_vols_s, double Ns,
                     double R0, bool srh, bool auger, double auger_cn,
@@ -194,8 +196,15 @@ CoupledResult residual_jacobian_coupled(
     const std::vector<double>& D_n_s, const std::vector<double>& D_p_s,
     const std::vector<double>& Bp, const std::vector<double>& Bm,
     const std::vector<double>& dBp, const std::vector<double>& dBm,
-    double nie_phys, const std::vector<double>& tau_n,
+    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
     const std::vector<double>& tau_p, double Ns, double R0, bool srh,
-    bool auger, double auger_cn, double auger_cp);
+    bool auger, double auger_cn, double auger_cp,
+    // M47 Slice 3: the HOLE Scharfetter-Gummel Bernoulli arrays. On a
+    // heterojunction the hole argument is psi_j-psi_i-dlnnie+ds, not
+    // the electron's +dlnnie (opposite signs, CLAUDE.md gotcha), so the
+    // two carriers need separate arrays; a homojunction passes the
+    // electron arrays again, which reproduces the old single-set call.
+    const std::vector<double>& Bp_h, const std::vector<double>& Bm_h,
+    const std::vector<double>& dBp_h, const std::vector<double>& dBm_h);
 
 }  // namespace tcad::unstructured3d

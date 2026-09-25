@@ -54,13 +54,20 @@ first tetrahedral-mesh pass):
     (doping_mobility=True, Ntot_phys) -- ported directly from
     unstructured_dd.py's harmonic-edge-mean approach, since it needed
     no new 3D geometry.
-  - HETEROJUNCTIONS ARE NOT SUPPORTED in this module (no
-    materials_per_node parameter, no ln(nie) edge term) -- explicit
-    scope-down from unstructured_dd.py's 2D heterojunction support,
-    per this task's own instructions ("homojunction-only is fine to
-    START with for 3D"). A future session wanting this should port
-    unstructured_dd.py's dlnnie mechanism the same way Caughey-Thomas
-    was ported here -- it needs no new 3D geometry either.
+  - HETEROJUNCTIONS (M47 Slice 3, 2026-09-24): both solve functions
+    accept `materials_per_node` and `band_offset`, a PORT of
+    unstructured_dd.py's 2D mechanism, not new physics -- per-node nie
+    (SRH, ohmic contact values), the Anderson edge term
+    dlnnie = ln(nie_j/nie_i) added to the electron SG argument and
+    SUBTRACTED from the hole one, and band_offset="affinity"'s per-node
+    shift s = ln(Nc/nie) + chi/VT (referenced to node 0, same sign for
+    both carriers). The equilibrium solve slaves carriers to psi + s,
+    exactly as Device3D does. Limits carried over from 2D unchanged:
+    eps and SRH lifetimes come from the reference `material`, not per
+    node. A homojunction (no materials, or all nodes one material, on
+    either gauge) takes the pre-Slice-3 scalar path unchanged, so it is
+    bit-identical by construction. Gated in
+    tests/test_m47_s3_unstructured3d_hetero.py.
   - GATE (Robin) BC -- M26 follow-up, closing the "unstructured tet
     gate BC" gap flagged in finfet3d.py's own honesty clause: both
     solve functions now accept an optional `gates` argument, a
@@ -184,6 +191,51 @@ def _gate_node_terms(nodes, gates, eps, LD, VT):
     return terms
 
 
+def _material_fields3d(mats, T, VT, Ns, edges, band_offset):
+    """Per-node / per-edge heterojunction fields for `mats` (one
+    Semiconductor per node), unstructured_dd.solve_bias's own setup
+    lifted to 3D (M47 Slice 3):
+
+      nie_s      per-node scaled intrinsic density
+      band_shift per-node affinity-gauge shift s - s[0] (zeros on "nie")
+      dlnnie     per-edge ln(nie_s[j]/nie_s[i])  (electron +, hole -)
+      ds_edge    per-edge band_shift[j]-band_shift[i] (same sign both)
+      mu_n/mu_p  per-node low-field mobility (mu_max) of each material
+    """
+    nie_node = np.array([m.ni(T) for m in mats])
+    nie_s = nie_node / Ns
+    if band_offset == "affinity":
+        nc_node = np.array([m.Nc(T) for m in mats])
+        chi_node = np.array([m.chi for m in mats])
+        s_node = np.log(nc_node / nie_node) + chi_node / VT
+        band_shift = s_node - s_node[0]
+    else:
+        band_shift = np.zeros(len(mats))
+    i_e, j_e = edges[:, 0], edges[:, 1]
+    return dict(nie_s=nie_s, band_shift=band_shift,
+                dlnnie=np.log(nie_s[j_e] / nie_s[i_e]),
+                ds_edge=band_shift[j_e] - band_shift[i_e],
+                mu_n=np.array([m.mu_n_max for m in mats]),
+                mu_p=np.array([m.mu_p_max for m in mats]))
+
+
+def _resolve_materials3d(material, materials_per_node, band_offset, N):
+    """Validate the Slice 3 arguments; return the per-node material
+    array, or None for the homojunction fast path (no materials given,
+    or all nodes `material`-equivalent in nie AND no affinity step)."""
+    if band_offset not in ("nie", "affinity"):
+        raise ValueError(
+            f"band_offset must be 'nie' or 'affinity', got {band_offset!r}")
+    if materials_per_node is None:
+        return None
+    mats = np.asarray(materials_per_node, dtype=object)
+    if mats.shape != (N,):
+        raise ValueError(
+            f"materials_per_node has shape {mats.shape}, expected ({N},) "
+            "-- one Semiconductor per mesh node")
+    return mats
+
+
 def evaluate_doping_at_nodes3d(nodes, tets, region_of_tet, doping_by_region):
     """Per-node net doping [cm^-3], tet-volume-weighted over each
     node's touching tets -- the 3D analogue of unstructured_poisson.
@@ -213,10 +265,12 @@ def evaluate_doping_at_nodes3d(nodes, tets, region_of_tet, doping_by_region):
 #  M47 Slice 1 (design-only groundwork): the interior-physics COO stamps
 #  below are factored into named blocks, ONE PER LOGICAL TERM, each
 #  returning raw (rows, cols, vals) -- no behavior change from the prior
-#  monolithic form, verified byte-identical (see
-#  tests/test_m47_s1_coo_block_refactor.py's own bit-identity gate,
-#  captured against the pre-refactor digests recorded in
-#  M47-3D-ENGINE-PLAN.md). This split exists so a later C++ port can
+#  monolithic form, verified byte-identical against the pre-refactor
+#  digests recorded in M47-3D-ENGINE-PLAN.md. (This comment used to cite
+#  a tests/test_m47_s1_coo_block_refactor.py gate; no such file has ever
+#  existed in git history -- corrected 2026-09-24. The standing gates on
+#  these blocks are tests/test_m47_s1_unstructured3d_accel_parity.py and
+#  tests/test_m47_s1_unstructured3d_fd_jacobian.py.) This split exists so a later C++ port can
 #  expose the SAME blocks as separate kernels while an raw-COO parity
 #  test compares each block's (rows,cols,vals) individually, before any
 #  csr_matrix is built (M47-3D-ENGINE-PLAN.md section "1. Add raw COO
@@ -303,7 +357,8 @@ def _sg_carrier_coo(i_idx, j_idx, comp, dJ_dpsi_j, dJ_dself_i, dJ_dself_j):
     return rows, cols, vals
 
 
-def _residual_jacobian_poisson3d_py(psi, C_s, nie_s, node_vols_s, edges, trans):
+def _residual_jacobian_poisson3d_py(psi, C_s, nie_s, node_vols_s, edges, trans,
+                                    band_shift=None):
     """Scaled Poisson-equilibrium residual/Jacobian (Boltzmann carriers
     slaved to psi) -- 3D analogue of unstructured_poisson._residual_
     jacobian, node_areas -> node_vols_s, otherwise identical.
@@ -318,8 +373,11 @@ def _residual_jacobian_poisson3d_py(psi, C_s, nie_s, node_vols_s, edges, trans):
     constraint (M43 phase 4 already retired the project-wide pure-Python
     production-fallback pattern; M47 does not reopen it)."""
     N = psi.shape[0]
-    n = nie_s * np.exp(np.clip(psi, -700, 700))
-    p = nie_s * np.exp(np.clip(-psi, -700, 700))
+    # M47 Slice 3: carriers slaved to psi + band_shift (affinity gauge),
+    # exactly Device3D's psi_c; None keeps the homojunction arithmetic.
+    psi_c = psi if band_shift is None else psi + band_shift
+    n = nie_s * np.exp(np.clip(psi_c, -700, 700))
+    p = nie_s * np.exp(np.clip(-psi_c, -700, 700))
     dnp = n + p
 
     F = -node_vols_s * (n - p - C_s)
@@ -340,28 +398,31 @@ def _residual_jacobian_poisson3d_py(psi, C_s, nie_s, node_vols_s, edges, trans):
     return F, J
 
 
-def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans):
+def _residual_jacobian_poisson3d(psi, C_s, nie_s, node_vols_s, edges, trans,
+                                 band_shift=None):
     """M47 Slice 1 production dispatch: `pytcad._core.unstructured3d_
     residual_jacobian_equilibrium`, via `_accel.require_accel()` -- no
     PYTCAD_ACCEL=0 branch, no fallback (see `_residual_jacobian_
     poisson3d_py`'s docstring). exp() stays here, in Python -- never
     crosses into the compiled kernel (M47 design review item 1)."""
     _accel.require_accel()
-    n = nie_s * np.exp(np.clip(psi, -700, 700))
-    p = nie_s * np.exp(np.clip(-psi, -700, 700))
+    psi_c = psi if band_shift is None else psi + band_shift
+    n = nie_s * np.exp(np.clip(psi_c, -700, 700))
+    p = nie_s * np.exp(np.clip(-psi_c, -700, 700))
     i_idx, j_idx = edges[:, 0], edges[:, 1]
     flux = trans * (psi[j_idx] - psi[i_idx])
     N = psi.shape[0]
     F, rows, cols, vals = _accel.core.unstructured3d_residual_jacobian_equilibrium(
-        n, p, C_s, node_vols_s, i_idx.astype(np.int64), j_idx.astype(np.int64),
-        trans, flux)
+        n, p, C_s, node_vols_s, i_idx.astype(np.int64, copy=False),
+        j_idx.astype(np.int64, copy=False), trans, flux)
     J = sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
     return F, J
 
 
 def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
                                 C_phys, contacts, material=SILICON,
-                                T=300.0, opts=None, gates=None):
+                                T=300.0, opts=None, gates=None,
+                                materials_per_node=None, band_offset="nie"):
     """Newton-solve the 3D tet-mesh Poisson equilibrium. 3D analogue
     of unstructured_poisson.solve_poisson_equilibrium; contacts here
     are {name: (K, 3) boundary-face node-index array} (triangular
@@ -371,16 +432,34 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     "Vfb": float [V], "Vg": float [V], default 0.0}} Robin/oxide-
     coupling BC -- see this module's own docstring for the physics and
     the shared-edge double-counting caveat for a multi-face wrap-around
-    gate."""
+    gate.
+
+    materials_per_node / band_offset: heterojunction support (M47
+    Slice 3) -- see the module docstring and solve_bias3d."""
     opts = opts or NewtonOptions()
     VT = thermal_voltage(T)
     eps = material.eps_r * EPS0
     nie = material.ni(T)
-    Ns = max(float(np.abs(C_phys).max()), nie)
+    mats = _resolve_materials3d(material, materials_per_node, band_offset,
+                                C_phys.shape[0])
+    if mats is None:
+        Ns = max(float(np.abs(C_phys).max()), nie)
+    else:
+        Ns = max(float(np.abs(C_phys).max()),
+                 float(max(m.ni(T) for m in mats)))
     LD = np.sqrt(eps * VT / (Q * Ns))
 
     C_s = C_phys / Ns
-    nie_s = nie / Ns
+    nie_s, band_shift = nie / Ns, None
+    if mats is not None:
+        f = _material_fields3d(mats, T, VT, Ns, edges, band_offset)
+        if np.any(f["nie_s"] != f["nie_s"][0]):
+            nie_s = f["nie_s"]
+        else:
+            nie_s = float(f["nie_s"][0])
+        if np.any(f["band_shift"] != 0.0):
+            band_shift = f["band_shift"]
+    shift = 0.0 if band_shift is None else band_shift
     vols_s = node_vols / LD ** 3
     # M26 fix: the scaled Poisson-flux coefficient is trans_geom/LD, NOT
     # trans_geom*eps -- see this module's own docstring, "SCALING FIX"
@@ -392,17 +471,25 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
     trans_s = trans_geom / LD
     gate_terms = _gate_node_terms(nodes, gates, eps, LD, VT)
 
+    def nie_at(k):
+        return nie_s if np.isscalar(nie_s) else nie_s[k]
+
+    def shift_at(k):
+        return 0.0 if band_shift is None else band_shift[k]
+
     contact_node = {}
     for faces in contacts.values():
         for tri in faces:
             for node in map(int, tri):
                 if node not in contact_node:
-                    psi0, _, _ = _ohmic_values(C_s[node], nie_s, 0.0, VT)
-                    contact_node[node] = float(psi0)
+                    psi0, _, _ = _ohmic_values(C_s[node], nie_at(node), 0.0, VT)
+                    # M47 Slice 3: psi's reference moves by -band_shift
+                    # (zero on a homojunction / "nie" gauge).
+                    contact_node[node] = float(psi0) - shift_at(node)
     contact_idx = np.array(sorted(contact_node), dtype=int)
     contact_psi0 = np.array([contact_node[k] for k in contact_idx])
 
-    psi = np.arcsinh(C_s / (2.0 * nie_s))
+    psi = np.arcsinh(C_s / (2.0 * nie_s)) - shift
     psi[contact_idx] = contact_psi0
 
     N = psi.shape[0]
@@ -421,7 +508,8 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
         print(f"    unstructured3d-eq  auto -> {resolved_linsolve} "
               f"({auto_reason})")
     for it in range(opts.max_iter):
-        F, J = _residual_jacobian_poisson3d(psi, C_s, nie_s, vols_s, edges, trans_s)
+        F, J = _residual_jacobian_poisson3d(psi, C_s, nie_s, vols_s, edges, trans_s,
+                                            band_shift=band_shift)
         # M31 P5-0: the gate's Robin coupling used to be stamped one
         # entry at a time through a LIL view.  Accumulating it into a
         # diagonal and adding once is the same arithmetic in the same
@@ -433,7 +521,8 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
             if idx.size == 0:
                 continue
             Vg_s = g["Vg"] / VT
-            psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
+            psi_b_local = (np.arcsinh(C_s[idx] / (2.0 * nie_at(idx)))
+                           - (0.0 if band_shift is None else band_shift[idx]))
             F[idx] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
             for k, gt in zip(idx, gate_trans):
                 gate_diag[k] -= gt
@@ -479,10 +568,14 @@ def solve_poisson_equilibrium3d(nodes, tets, edges, node_vols, trans_geom,
 
 def _residual_jacobian_dd3d_py(psi, n, p, C_s, nie_s, node_vols_s, edges,
                                eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
-                               material, Ns, LD, srh=True, auger=False):
+                               material, Ns, LD, srh=True, auger=False,
+                               dlnnie=None, ds=None):
     """Scaled coupled residual/Jacobian, interior physics only -- exact
     3D analogue of unstructured_dd._residual_jacobian (node_areas ->
-    node_vols_s; no dlnnie term, this module is homojunction-only).
+    node_vols_s). dlnnie/ds are its heterojunction edge terms (M47
+    Slice 3): dlnnie ADDED to the electron SG argument and SUBTRACTED
+    from the hole one, ds added to both; None reproduces the
+    homojunction current exactly.
 
     M47 Slice 1: this is now the VALIDATION ORACLE only -- see
     `_residual_jacobian_poisson3d_py`'s docstring for the full note;
@@ -536,13 +629,24 @@ def _residual_jacobian_dd3d_py(psi, n, p, C_s, nie_s, node_vols_s, edges,
         i_idx, j_idx, eps_trans, comp3=0)
 
     delta = psi[j_idx] - psi[i_idx]
-    Bp, Bm = bernoulli(delta), bernoulli(-delta)
-    dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+    if dlnnie is None and ds is None:
+        Bp, Bm = bernoulli(delta), bernoulli(-delta)
+        dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+        Bp_h, Bm_h, dBp_h, dBm_h = Bp, Bm, dBp, dBm
+    else:
+        dz = 0.0 if dlnnie is None else dlnnie
+        dsv = 0.0 if ds is None else ds
+        delta_n = delta + dz + dsv
+        delta_p = delta - dz + dsv
+        Bp, Bm = bernoulli(delta_n), bernoulli(-delta_n)
+        dBp, dBm = dbernoulli(delta_n), dbernoulli(-delta_n)
+        Bp_h, Bm_h = bernoulli(delta_p), bernoulli(-delta_p)
+        dBp_h, dBm_h = dbernoulli(delta_p), dbernoulli(-delta_p)
     n_i, n_j = n[i_idx], n[j_idx]
     p_i, p_j = p[i_idx], p[j_idx]
 
     Jn = D_n_s * trans * (n_j * Bp - n_i * Bm)
-    Jp = -D_p_s * trans * (p_j * Bm - p_i * Bp)
+    Jp = -D_p_s * trans * (p_j * Bm_h - p_i * Bp_h)
     np.add.at(F[1::3], i_idx, Jn)
     np.add.at(F[1::3], j_idx, -Jn)
     np.add.at(F[2::3], i_idx, Jp)
@@ -553,9 +657,9 @@ def _residual_jacobian_dd3d_py(psi, n, p, C_s, nie_s, node_vols_s, edges,
     dJn_dn_i = -D_n_s * trans * Bm
     e_r, e_c, e_v = _sg_carrier_coo(i_idx, j_idx, 1, dJn_dpsi_j, dJn_dn_i, dJn_dn_j)
 
-    dJp_dpsi_j = D_p_s * trans * (p_j * dBm + p_i * dBp)
-    dJp_dp_j = -D_p_s * trans * Bm
-    dJp_dp_i = D_p_s * trans * Bp
+    dJp_dpsi_j = D_p_s * trans * (p_j * dBm_h + p_i * dBp_h)
+    dJp_dp_j = -D_p_s * trans * Bm_h
+    dJp_dp_i = D_p_s * trans * Bp_h
     h_r, h_c, h_v = _sg_carrier_coo(i_idx, j_idx, 2, dJp_dpsi_j, dJp_dp_i, dJp_dp_j)
 
     rows = np.concatenate([srh_r, chg_r, geom_r, e_r, h_r])
@@ -567,7 +671,8 @@ def _residual_jacobian_dd3d_py(psi, n, p, C_s, nie_s, node_vols_s, edges,
 
 def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
                             eps_trans, D_n_s, D_p_s, R0, tau_n, tau_p,
-                            material, Ns, LD, srh=True, auger=False):
+                            material, Ns, LD, srh=True, auger=False,
+                            dlnnie=None, ds=None):
     """M47 Slice 1 production dispatch: `pytcad._core.unstructured3d_
     residual_jacobian_coupled`, via `_accel.require_accel()` -- no
     PYTCAD_ACCEL=0 branch, no fallback (see `_residual_jacobian_
@@ -585,15 +690,32 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
     trans_bare = eps_trans * LD
     flux = eps_trans * (psi[j_idx] - psi[i_idx])
     delta = psi[j_idx] - psi[i_idx]
-    Bp, Bm = bernoulli(delta), bernoulli(-delta)
-    dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
     nie_phys = nie_s * Ns
+    extra = {}
+    if dlnnie is None and ds is None:
+        Bp, Bm = bernoulli(delta), bernoulli(-delta)
+        dBp, dBm = dbernoulli(delta), dbernoulli(-delta)
+    else:
+        # M47 Slice 3: carrier-specific SG arguments -- see the oracle.
+        dz = 0.0 if dlnnie is None else dlnnie
+        dsv = 0.0 if ds is None else ds
+        delta_n = delta + dz + dsv
+        delta_p = delta - dz + dsv
+        Bp, Bm = bernoulli(delta_n), bernoulli(-delta_n)
+        dBp, dBm = dbernoulli(delta_n), dbernoulli(-delta_n)
+        extra.update(Bp_h=bernoulli(delta_p), Bm_h=bernoulli(-delta_p),
+                     dBp_h=dbernoulli(delta_p), dBm_h=dbernoulli(-delta_p))
+    if np.ndim(nie_phys) != 0:
+        # per-node nie (heterojunction); the scalar slot is then unused.
+        extra["nie_node"] = np.ascontiguousarray(nie_phys, dtype=float)
+        nie_phys = float(nie_phys[0])
 
     F, rows, cols, vals, Jn, Jp = _accel.core.unstructured3d_residual_jacobian_coupled(
-        n, p, C_s, node_vols_s, i_idx.astype(np.int64), j_idx.astype(np.int64),
+        n, p, C_s, node_vols_s, i_idx.astype(np.int64, copy=False),
+        j_idx.astype(np.int64, copy=False),
         eps_trans, flux, trans_bare, D_n_s, D_p_s, Bp, Bm, dBp, dBm,
         nie_phys, tau_n, tau_p, Ns, R0, srh, auger, material.Cn_auger,
-        material.Cp_auger)
+        material.Cp_auger, **extra)
     J = sp.csr_matrix((vals, (rows, cols)), shape=(3 * N, 3 * N))
     return F, J, Jn, Jp
 
@@ -601,14 +723,23 @@ def _residual_jacobian_dd3d(psi, n, p, C_s, nie_s, node_vols_s, edges,
 def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
                  bias, material=SILICON, T=300.0, opts=None, srh=True,
                  auger=False, doping_mobility=False, Ntot_phys=None,
-                 init=None, return_diagnostics=False, gates=None):
+                 init=None, return_diagnostics=False, gates=None,
+                 materials_per_node=None, band_offset="nie"):
     """Newton-solve the coupled 3D tet-mesh drift-diffusion system at
     an applied bias. 3D analogue of unstructured_dd.solve_bias.
 
     contacts: {name: (K, 3) boundary-face node-index array}.
     doping_mobility/Ntot_phys: same Caughey-Thomas mobility support as
-    unstructured_dd.solve_bias (harmonic edge mean); NO heterojunction
-    support here (see module docstring).
+    unstructured_dd.solve_bias (harmonic edge mean), evaluated per
+    node's own material when materials_per_node is given.
+
+    materials_per_node / band_offset (M47 Slice 3): heterojunctions,
+    exactly unstructured_dd.solve_bias's arguments -- (N,) Semiconductor
+    per node (default: all `material`), and "nie" (Anderson dlnnie
+    gauge, default) or "affinity" (chi-aware per-node band shift).
+    `material` stays the scaling / eps / SRH-lifetime reference, as in
+    2D. Any other band_offset, or a wrong-length materials_per_node,
+    raises ValueError.
 
     gates: optional {name: {"faces": (K,3) int array, "tox_cm": float,
     "Vfb": float [V], "Vg": float [V] default}}; `bias` may also
@@ -633,12 +764,29 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     VT = thermal_voltage(T)
     eps = material.eps_r * EPS0
     nie = material.ni(T)
-    Ns = max(float(np.abs(C_phys).max()), nie)
+    mats = _resolve_materials3d(material, materials_per_node, band_offset,
+                                C_phys.shape[0])
+    if mats is None:
+        Ns = max(float(np.abs(C_phys).max()), nie)
+    else:
+        Ns = max(float(np.abs(C_phys).max()),
+                 float(max(m.ni(T) for m in mats)))
     LD = np.sqrt(eps * VT / (Q * Ns))
     R0 = D0_REF * Ns / LD ** 3
 
     C_s = C_phys / Ns
-    nie_s = nie / Ns
+    # M47 Slice 3: per-node fields only where they differ from the
+    # homojunction; otherwise the pre-Slice-3 scalar path, unchanged.
+    nie_s, band_shift, dlnnie, ds_edge = nie / Ns, None, None, None
+    if mats is not None:
+        f = _material_fields3d(mats, T, VT, Ns, edges, band_offset)
+        if np.any(f["nie_s"] != f["nie_s"][0]):
+            nie_s, dlnnie = f["nie_s"], f["dlnnie"]
+        else:
+            nie_s = float(f["nie_s"][0])
+        if np.any(f["band_shift"] != 0.0):
+            band_shift, ds_edge = f["band_shift"], f["ds_edge"]
+    shift = 0.0 if band_shift is None else band_shift
     vols_s = node_vols / LD ** 3
     eps_trans = trans_geom / LD   # M26 fix -- see module docstring's "SCALING FIX"
     tau_n = np.full_like(C_phys, material.tau_n0)
@@ -651,11 +799,22 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             raise ValueError(
                 "doping_mobility=True requires Ntot_phys (total ionized "
                 "impurity concentration per node).")
-        mu_n_node = mobility_caughey_thomas(Ntot_phys, material, T, "n")
-        mu_p_node = mobility_caughey_thomas(Ntot_phys, material, T, "p")
-    else:
+        if mats is None:
+            mu_n_node = mobility_caughey_thomas(Ntot_phys, material, T, "n")
+            mu_p_node = mobility_caughey_thomas(Ntot_phys, material, T, "p")
+        else:
+            # per material group, unstructured_dd.solve_bias's own loop
+            mu_n_node = np.empty(N); mu_p_node = np.empty(N)
+            for m in {id(mm): mm for mm in mats}.values():
+                sel = np.array([mm is m for mm in mats])
+                mu_n_node[sel] = mobility_caughey_thomas(Ntot_phys[sel], m, T, "n")
+                mu_p_node[sel] = mobility_caughey_thomas(Ntot_phys[sel], m, T, "p")
+    elif mats is None:
         mu_n_node = np.full(N, material.mu_n_max)
         mu_p_node = np.full(N, material.mu_p_max)
+    else:
+        mu_n_node = np.array([m.mu_n_max for m in mats])
+        mu_p_node = np.array([m.mu_p_max for m in mats])
 
     def hmean(lo, hi):
         return 2.0 * lo * hi / (lo + hi)
@@ -675,10 +834,14 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
                 contact_node_bias[node] = V
     contact_idx = np.array(sorted(contact_node_bias), dtype=int)
     contact_V = np.array([contact_node_bias[k] for k in contact_idx])
-    psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_s, contact_V, VT)
+    nie_c = nie_s if np.isscalar(nie_s) else nie_s[contact_idx]
+    psi0, n0, p0 = _ohmic_values(C_s[contact_idx], nie_c, contact_V, VT)
+    if band_shift is not None:
+        # n0/p0 are gauge-free; only psi0's reference moves (2D's own fix).
+        psi0 = psi0 - band_shift[contact_idx]
 
     if init is None:
-        psi = np.arcsinh(C_s / (2.0 * nie_s))
+        psi = np.arcsinh(C_s / (2.0 * nie_s)) - shift
         n = np.where(C_s >= 0, 0.5 * (C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)),
                     nie_s ** 2 / np.maximum(
                         0.5 * (-C_s + np.sqrt(C_s ** 2 + 4 * nie_s ** 2)), 1e-300))
@@ -710,7 +873,8 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
     for it in range(opts.max_iter):
         F, J, Jn, Jp = _residual_jacobian_dd3d(
             psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
-            R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger)
+            R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger,
+            dlnnie=dlnnie, ds=ds_edge)
         F3 = F.reshape(N, 3)
         # M31 P5-0: see solve_poisson_equilibrium3d for why the gate
         # coupling is accumulated and added once instead of stamped
@@ -721,7 +885,9 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
             if idx.size == 0:
                 continue
             Vg_s = g["Vg"] / VT
-            psi_b_local = np.arcsinh(C_s[idx] / (2.0 * nie_s))
+            nie_g = nie_s if np.isscalar(nie_s) else nie_s[idx]
+            psi_b_local = (np.arcsinh(C_s[idx] / (2.0 * nie_g))
+                           - (0.0 if band_shift is None else band_shift[idx]))
             F3[idx, 0] += gate_trans * (Vg_s - g["Vfb_s"] - (psi[idx] - psi_b_local))
             for k, gt in zip(idx, gate_trans):
                 gate_diag[3 * k] -= gt
@@ -781,7 +947,8 @@ def solve_bias3d(nodes, tets, edges, node_vols, trans_geom, C_phys, contacts,
 
     _, _, Jn, Jp = _residual_jacobian_dd3d(
         psi, n, p, C_s, nie_s, vols_s, edges, eps_trans, D_n_s, D_p_s,
-        R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger)
+        R0, tau_n, tau_p, material, Ns, LD, srh=srh, auger=auger,
+        dlnnie=dlnnie, ds=ds_edge)
 
     # terminal current: for each contact FACE, sum its net (electron+
     # hole) edge flux over the contact's nodes -- the box-integration

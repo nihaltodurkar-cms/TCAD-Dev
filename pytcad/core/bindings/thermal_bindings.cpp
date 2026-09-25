@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "tcad/base/checks.hpp"
 #include "tcad/base/errors.hpp"
 #include "tcad/thermal/kernels.hpp"
 
@@ -59,6 +60,12 @@ void register_thermal(nb::module_& m) {
               std::array<std::int64_t, 3> edge_lens{};   // shape[a]-1
               std::array<std::int64_t, 3> edge_totals{}; // total/shape[a]*(shape[a]-1)
               for (int a = 0; a < D; ++a) {
+                  // edge_totals below divides by each axis length.
+                  if (shape.data()[a] < 1)
+                      throw tcad::InvalidArgument("shape: axis " + std::to_string(a) +
+                                                  " has " +
+                                                  std::to_string(shape.data()[a]) +
+                                                  " nodes, need >= 1");
                   dims[static_cast<std::size_t>(a)] = shape.data()[a];
                   total *= shape.data()[a];
               }
@@ -77,6 +84,30 @@ void register_thermal(nb::module_& m) {
               if (static_cast<std::int64_t>(bc_kind.shape(0)) != 2 * D ||
                   static_cast<std::int64_t>(bc_rth.shape(0)) != 2 * D)
                   throw tcad::InvalidArgument("bc_kind/bc_rth: expected 2*D entries");
+              // split_axes trusts these totals; a short buffer was a heap
+              // overflow in the kernel.
+              std::int64_t sum_nodes = 0, sum_edges = 0, sum_edge_totals = 0;
+              for (int a = 0; a < D; ++a) {
+                  sum_nodes += node_lens[static_cast<std::size_t>(a)];
+                  sum_edges += edge_lens[static_cast<std::size_t>(a)];
+                  sum_edge_totals += edge_totals[static_cast<std::size_t>(a)];
+              }
+              tcad::check_length(static_cast<std::int64_t>(dV_concat.shape(0)), sum_nodes,
+                                 "dV_concat");
+              tcad::check_length(static_cast<std::int64_t>(h_concat.shape(0)), sum_edges,
+                                 "h_concat");
+              tcad::check_length(static_cast<std::int64_t>(ke_concat.shape(0)),
+                                 sum_edge_totals, "ke_concat");
+              tcad::check_length(static_cast<std::int64_t>(dke_concat.shape(0)),
+                                 sum_edge_totals, "dke_concat");
+              for (int i = 0; i < 2 * D; ++i) {
+                  const std::int64_t k = bc_kind.data()[i];
+                  // 0 isothermal, 1 resistance, 2 adiabatic (thermal_grid._BC_KIND)
+                  if (k < 0 || k > 2)
+                      throw tcad::InvalidArgument("bc_kind[" + std::to_string(i) + "] = " +
+                                                  std::to_string(k) +
+                                                  ", expected 0, 1 or 2");
+              }
 
               auto dV_ptrs = split_axes(dV_concat.data(), node_lens.data(), D);
               auto h_ptrs = split_axes(h_concat.data(), edge_lens.data(), D);
@@ -96,7 +127,6 @@ void register_thermal(nb::module_& m) {
                       dV_ptrs.data(), h_ptrs.data(), ke_ptrs.data(), dke_ptrs.data(),
                       bcs.data());
               }
-              const size_t nnz = r.vals.size();
               return nb::make_tuple(
                   publish(std::move(r.F)),
                   publish(std::move(r.rows)),

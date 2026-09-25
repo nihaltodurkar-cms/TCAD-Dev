@@ -51,6 +51,10 @@ void register_solver(nb::module_& m) {
     m.def("petsc_version", []() { return std::string(tcad::solver::petsc_version()); },
           "PETSc version this was compiled against, or '' without PETSc.");
 
+    m.def("mumps_available", &tcad::solver::have_mumps,
+          "True when the PETSc this extension was compiled against has "
+          "MUMPS, i.e. petsc_solve_csr(direct_lu=True) can run.");
+
     m.def("petsc_index_bytes", &tcad::solver::petsc_index_bytes,
           "sizeof(PetscInt) in the PETSc this was compiled against, or 0. "
           "Informational: the array boundary is int64 either way. A 4 here "
@@ -59,7 +63,7 @@ void register_solver(nb::module_& m) {
     m.def("petsc_solve_csr",
           [](I64 indptr, I64 indices, F64 values, F64 b,
              std::optional<F64> x0, double rtol, double atol, int maxiter,
-             int restart, int block_size) {
+             int restart, int block_size, bool direct_lu) {
               const std::int64_t n = static_cast<std::int64_t>(indptr.shape(0)) - 1;
               const std::int64_t nnz = static_cast<std::int64_t>(indices.shape(0));
               if (n < 0)
@@ -79,6 +83,7 @@ void register_solver(nb::module_& m) {
               cfg.restart = restart;
               cfg.block_size = block_size;
               cfg.nonzero_guess = x0.has_value();
+              cfg.direct_lu = direct_lu;
 
               std::vector<double> x(static_cast<std::size_t>(n), 0.0);
               if (x0) std::copy(x0->data(), x0->data() + n, x.begin());
@@ -97,6 +102,7 @@ void register_solver(nb::module_& m) {
           nb::arg("indptr"), nb::arg("indices"), nb::arg("values"), nb::arg("b"),
           nb::arg("x0").none(), nb::arg("rtol"), nb::arg("atol"),
           nb::arg("maxiter"), nb::arg("restart"), nb::arg("block_size"),
+          nb::arg("direct_lu") = false,
           "GMRES via PETSc's KSP on a sequential CSR matrix.\n\n"
           "Returns (x, iterations, converged_reason). A converged_reason <= 0 "
           "is NOT raised here: the caller recomputes the true residual and "

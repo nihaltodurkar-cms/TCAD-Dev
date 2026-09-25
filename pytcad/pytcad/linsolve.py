@@ -79,6 +79,35 @@ _HAVE_PETSC4PY = _importlib_util.find_spec("petsc4py") is not None
 # call by _accel.have_petsc(), not here.
 from . import _accel
 
+
+_PETSC4PY_MUMPS = None
+
+
+def _petsc4py_has_mumps():
+    """True if petsc4py is installed and its PETSc has MUMPS.  Imports
+    petsc4py (PETSc start-up) on first call only, so it is asked only
+    when the compiled backend cannot serve method="mumps"."""
+    global _PETSC4PY_MUMPS
+    if _PETSC4PY_MUMPS is None:
+        if not _HAVE_PETSC4PY:
+            _PETSC4PY_MUMPS = False
+        else:
+            try:
+                import petsc4py
+                petsc4py.init()
+                from petsc4py import PETSc
+                _PETSC4PY_MUMPS = bool(PETSc.Sys.hasExternalPackage("mumps"))
+            except Exception:
+                _PETSC4PY_MUMPS = False
+    return _PETSC4PY_MUMPS
+
+
+def mumps_available():
+    """True if method="mumps" can run on some backend: the compiled
+    PETSc path (pytcad._core) or petsc4py, each only if its PETSc has
+    MUMPS."""
+    return _accel.have_mumps() or _petsc4py_has_mumps()
+
 __all__ = ["solve_linear", "LinearSolveError", "select_auto"]
 
 # ----------------------------------------------------------------------
@@ -172,24 +201,24 @@ _AUTO_EVIDENCE = {
                "small. Refusing below 2,488 is therefore backed by a "
                "measurement showing direct genuinely wins there."),
     (3, False, True): dict(
-        method="gmres", min_dof=6591,
-        reason="S3D (Phase A-2): 3D structured coupled bias -- 44.56s "
-               "direct vs 1.60s (27.9x) at 27,783 DOF, and 1.45s vs "
-               "0.25s (5.8x) at 6,591. The win GROWS with size in "
-               "ABSOLUTE terms (1.3s saved -> 43s saved), which is the "
-               "opposite of the share-rises-because-the-rest-got-faster "
-               "trap M31 P5's re-decision turned on. \"gmres\" with "
-               "NewtonOptions' own defaults (block_size=3, "
-               "precond=\"auto\") IS the measured configuration: "
-               "_build_preconditioner routes a non-None block_size to "
-               "node block-Jacobi before ILU/AMG. CHOSEN OVER PETSC "
-               "DELIBERATELY -- petsc measured 1.67s here, within 4% of "
-               "gmres and inside run-to-run noise, but petsc is an "
-               "OPTIONAL dependency this function cannot see: on a "
-               "checkout without it every Newton iterate would pay a "
-               "failed petsc attempt plus a direct solve. When two "
-               "configurations tie, the one with no optional dependency "
-               "wins. Not measured below 6,591 DOF; refusing there."),
+        method="mumps", min_dof=6591,
+        reason="S3D + F3D (2026-09-24 re-measurement, "
+               "benchmarks/mumps_out/study.md): 3D structured coupled "
+               "bias. This cell used to resolve to gmres on S3D alone "
+               "(a cube diode: 48.31s direct vs 1.59s gmres at 27,783 "
+               "DOF). F3D -- the M26 tri-gate FinFET, a thin gated mesh "
+               "-- INVERTS that ranking: gmres 91.01s vs direct 18.71s "
+               "over a 12-point Vg sweep at 21,888 DOF, gmres slowing as "
+               "the channel inverts. MUMPS LU is exact and near the best "
+               "on BOTH shapes: 5.61s on F3D (16x faster than gmres, "
+               "3.3x faster than direct) and 2.05s on S3D (1.3x slower "
+               "than gmres, 24x faster than direct); 0.34s vs gmres "
+               "0.26s at S3D quick (6,591 DOF). petsc (GMRES) won S3D "
+               "full (0.81s) but was 16.11s on F3D, and failed to "
+               "converge at maxiter=500 on late F3D iterates in a "
+               "direct probe. Needs a MUMPS-capable PETSc; select_auto "
+               "resolves to direct when none is available. Not measured "
+               "below 6,591 DOF; refusing there."),
     (2, True, False): dict(
         method="petsc", min_dof=11341,
         reason="U2DP (Phase A-2): 2D unstructured SCALAR Poisson "
@@ -251,9 +280,17 @@ def select_auto(dim, unstructured, coupled, dof):
             entry["reason"] + f" This solve's {dof} DOF is below that "
             f"floor ({entry['min_dof']}) -- refusing to extrapolate "
             "below the smallest size actually measured.")
+    if entry["method"] == "mumps" and not mumps_available():
+        # The measured winner needs an optional dependency this process
+        # does not have. Resolve to what CAN run rather than let every
+        # Newton iterate pay a failed attempt before its direct fallback.
+        return "direct", (
+            entry["reason"] + " No MUMPS-capable PETSc backend is "
+            "available in this environment (compiled _core or petsc4py), "
+            "so resolving to direct.")
     return entry["method"], entry["reason"]
 
-_METHODS = ("direct", "gmres", "bicgstab", "gpu_direct", "petsc")
+_METHODS = ("direct", "gmres", "bicgstab", "gpu_direct", "petsc", "mumps")
 
 # Preconditioner flavor selector values (solve_linear `precond=`).
 _PRECOND = ("auto", "block_jacobi", "schur")
@@ -525,7 +562,8 @@ def _build_preconditioner(A, block_size=None, precond="auto"):
 # type, the same restart, the same PC, the same tolerances and the same
 # matrix, so their answers are compared with np.array_equal -- confirmed
 # bit-identical, not merely close.
-def _solve_petsc_py(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
+def _solve_petsc_py(A, b, *, rtol, atol, maxiter, restart, block_size, x0,
+                    direct_lu=False):
     """petsc4py backend (M31 P3a).  See the block comment above."""
     try:
         import petsc4py
@@ -556,6 +594,20 @@ def _solve_petsc_py(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
 
         ksp = PETSc.KSP().create()
         ksp.setOperators(M)
+        if direct_lu:
+            # method="mumps": exact LU, mirroring petsc_ksp.cpp's
+            # direct_lu branch step for step (PREONLY + LU + MUMPS).
+            ksp.setType(PETSc.KSP.Type.PREONLY)
+            pc = ksp.getPC()
+            pc.setType(PETSc.PC.Type.LU)
+            pc.setFactorSolverType("mumps")
+            ksp.setFromOptions()
+            ksp.solve(bv, xv)
+            reason = ksp.getConvergedReason()
+            iters = ksp.getIterationNumber()
+            x = xv.getArray().copy()
+            ksp.destroy(); M.destroy(); bv.destroy(); xv.destroy()
+            return x, int(iters), int(reason)
         ksp.setType(PETSc.KSP.Type.GMRES)
         # Same restart-too-small stall as scipy's gmres branch below
         # (this file's own restart comment there): PETSc's default
@@ -595,7 +647,8 @@ def _solve_petsc_py(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
     return x, int(iters), int(reason)
 
 
-def _solve_petsc_cpp(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
+def _solve_petsc_cpp(A, b, *, rtol, atol, maxiter, restart, block_size, x0,
+                     direct_lu=False):
     """Compiled backend (M31 P3b): the same configuration, in
     core/src/solver/petsc_ksp.cpp.
 
@@ -612,7 +665,7 @@ def _solve_petsc_cpp(A, b, *, rtol, atol, maxiter, restart, block_size, x0):
             np.ascontiguousarray(b, dtype=float),
             None if x0 is None else np.ascontiguousarray(x0, dtype=float),
             float(rtol), float(atol), int(maxiter), int(restart),
-            int(block_size or 0))
+            int(block_size or 0), bool(direct_lu))
     except LinearSolveError:
         # Already the documented class -- the C++ exception translator in
         # core/bindings/module.cpp maps tcad::LinearSolveFailure onto
@@ -682,8 +735,18 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
     can differ by an order of magnitude, so `rtol` is not the tight bound
     on the returned solution that it is for scipy's methods.
 
+    method="mumps" is an EXACT sparse LU (MUMPS) through the same two
+    PETSc backends (KSPPREONLY + PCLU), chosen by `select_auto` where a
+    direct factorization wins but SuperLU's fill-in does not (3D
+    structured coupled solves -- see _AUTO_EVIDENCE). rtol/maxiter/
+    restart/block_size/precond are ignored. Needs a PETSc with MUMPS
+    (conda-forge's has it); without one it raises LinearSolveError,
+    which every caller already falls back on, and `select_auto` never
+    recommends it. It matches "direct" to factorization precision, not
+    bit-for-bit (a different LU with a different ordering).
+
     info = {"method", "backend", "iterations", "converged", "residual"}
-    ("backend" only for method="petsc").  An iterative method that does
+    ("backend" only for method="petsc"/"mumps").  An iterative method that does
     not reach `rtol` within `maxiter` RAISES LinearSolveError rather than
     returning the unconverged iterate.
     """
@@ -760,14 +823,22 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
         return x, {"method": "gpu_direct", "iterations": 1,
                    "converged": True, "residual": resid}
 
-    if method == "petsc":
+    if method in ("petsc", "mumps"):
+        direct_lu = method == "mumps"
         # Backend choice, in this order and for this reason: the compiled
         # one when it exists (that is what P3b built, and it is the path
         # the later distributed/DMPlex phases extend), petsc4py when it
         # does not.  PYTCAD_ACCEL=0 forces the Python backend -- which is
         # how tests/test_accel_parity.py gets to run both in one process
         # and diff them.
-        use_cpp = _accel.have_petsc()
+        use_cpp = _accel.have_mumps() if direct_lu else _accel.have_petsc()
+        if direct_lu and not use_cpp and not _petsc4py_has_mumps():
+            raise LinearSolveError(
+                "mumps requested but no MUMPS-capable PETSc backend is "
+                "available: pytcad._core was built without PETSc/MUMPS and "
+                "petsc4py is missing or its PETSc lacks MUMPS "
+                "(`conda install -c conda-forge petsc4py` provides both). "
+                "Callers fall back to method='direct' on LinearSolveError.")
         if not use_cpp and not _HAVE_PETSC4PY:
             raise LinearSolveError(
                 "petsc requested but neither backend is available: the "
@@ -803,7 +874,7 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
             # coupled device Jacobians; clamped here, once, so neither
             # backend has to know the rule.
             restart=min(restart or 100, A.shape[0]),
-            block_size=block_size, x0=x0)
+            block_size=block_size, x0=x0, direct_lu=direct_lu)
         # The acceptance test is deliberately OUTSIDE both backends: one
         # residual, one threshold, one message, so "converged" means
         # exactly the same thing whichever one ran.
@@ -812,12 +883,17 @@ def solve_linear(A, b, *, method="direct", rtol=1e-10, atol=0.0,
         converged = (reason > 0) and np.all(np.isfinite(x)) and resid <= max(
             rtol, 1e-6)
         if not converged:
+            if direct_lu:
+                raise LinearSolveError(
+                    f"mumps LU failed (KSPConvergedReason={reason}, "
+                    f"relative residual={resid:.3e}) -- A is likely "
+                    f"singular; refusing to return the result")
             raise LinearSolveError(
                 f"petsc did not converge within {maxiter} iterations "
                 f"(KSPConvergedReason={reason}, relative residual="
                 f"{resid:.3e}, target rtol={rtol:.3e}) -- refusing to "
                 f"return the unconverged iterate")
-        return x, {"method": "petsc",
+        return x, {"method": method,
                    "backend": "cpp" if use_cpp else "petsc4py",
                    "iterations": iters, "converged": True, "residual": resid}
 

@@ -45,6 +45,18 @@ void check_edges(std::int64_t E, I64 kR, F64 w, const char* axis) {
                                     "-axis arrays disagree in length");
 }
 
+/// The continuity kernels read every per-edge array at [0, E) where
+/// E = kL.size(); a short one was an out-of-bounds read.
+void check_edges6(I64 kL, I64 kR, F64 w, F64 d0, F64 d1, F64 d2, const char* axis) {
+    const auto E = static_cast<std::int64_t>(kL.shape(0));
+    check_edges(E, kR, w, axis);
+    if (static_cast<std::int64_t>(d0.shape(0)) != E ||
+        static_cast<std::int64_t>(d1.shape(0)) != E ||
+        static_cast<std::int64_t>(d2.shape(0)) != E)
+        throw tcad::InvalidArgument(std::string("device3d ") + axis +
+                                    "-axis derivative arrays disagree in length");
+}
+
 }  // namespace
 
 void register_device3d(nb::module_& m) {
@@ -67,6 +79,9 @@ void register_device3d(nb::module_& m) {
           [](I64 kLx, I64 kRx, F64 wx_area, F64 dpsiRx, F64 dnLx, F64 dnRx,
              I64 kSy, I64 kNy, F64 wy_area, F64 dpsiRy, F64 dnLy, F64 dnRy,
              I64 kDz, I64 kUz, F64 wz_area, F64 dpsiRz, F64 dnLz, F64 dnRz) {
+              check_edges6(kLx, kRx, wx_area, dpsiRx, dnLx, dnRx, "x");
+              check_edges6(kSy, kNy, wy_area, dpsiRy, dnLy, dnRy, "y");
+              check_edges6(kDz, kUz, wz_area, dpsiRz, dnLz, dnRz, "z");
               return publish_coo(tcad::device3d::electron_continuity(
                   to_vec<std::int64_t>(kLx), to_vec<std::int64_t>(kRx), to_vec<double>(wx_area),
                   to_vec<double>(dpsiRx), to_vec<double>(dnLx), to_vec<double>(dnRx),
@@ -85,6 +100,9 @@ void register_device3d(nb::module_& m) {
           [](I64 kLx, I64 kRx, F64 wx_area, F64 dpsiRx, F64 dpLx, F64 dpRx,
              I64 kSy, I64 kNy, F64 wy_area, F64 dpsiRy, F64 dpLy, F64 dpRy,
              I64 kDz, I64 kUz, F64 wz_area, F64 dpsiRz, F64 dpLz, F64 dpRz) {
+              check_edges6(kLx, kRx, wx_area, dpsiRx, dpLx, dpRx, "x");
+              check_edges6(kSy, kNy, wy_area, dpsiRy, dpLy, dpRy, "y");
+              check_edges6(kDz, kUz, wz_area, dpsiRz, dpLz, dpRz, "z");
               return publish_coo(tcad::device3d::hole_continuity(
                   to_vec<std::int64_t>(kLx), to_vec<std::int64_t>(kRx), to_vec<double>(wx_area),
                   to_vec<double>(dpsiRx), to_vec<double>(dpLx), to_vec<double>(dpRx),
@@ -107,6 +125,14 @@ void register_device3d(nb::module_& m) {
                   static_cast<std::int64_t>(dRs_dp.shape(0)) != N)
                   throw tcad::InvalidArgument("device3d_base_diagonal: "
                                               "dV/dRs_dn/dRs_dp must have N entries");
+              // dcden/dcdp are read only on the incomplete-ionization path
+              // (the caller passes empty arrays otherwise).
+              if (has_incomplete_ion &&
+                  (static_cast<std::int64_t>(dcden.shape(0)) != N ||
+                   static_cast<std::int64_t>(dcdp.shape(0)) != N))
+                  throw tcad::InvalidArgument("device3d_base_diagonal: "
+                                              "dcden/dcdp must have N entries "
+                                              "when has_incomplete_ion");
               return publish_coo(tcad::device3d::base_diagonal(
                   N, to_vec<double>(dV), has_incomplete_ion, to_vec<double>(dcden),
                   to_vec<double>(dcdp), to_vec<double>(dRs_dn), to_vec<double>(dRs_dp)));

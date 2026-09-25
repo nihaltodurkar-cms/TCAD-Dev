@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "tcad/base/checks.hpp"
 #include "tcad/base/errors.hpp"
 #include "tcad/mesh/stencil.hpp"
 
@@ -51,6 +52,13 @@ void check_2d_i(const IdxF& a, size_t cols, const char* what) {
                                     std::to_string(cols) + ") int64 array");
 }
 
+/// Every entry of a connectivity array must name an existing node --
+/// see tcad/base/checks.hpp.
+void check_conn(const IdxF& a, const NodesF& nodes, const char* what) {
+    tcad::check_indices(a.data(), static_cast<std::int64_t>(a.size()),
+                        static_cast<std::int64_t>(nodes.shape(0)), what);
+}
+
 }  // namespace
 
 void register_mesh(nb::module_& m) {
@@ -58,6 +66,7 @@ void register_mesh(nb::module_& m) {
           [](NodesF nodes, IdxF tris, double min_area) {
               check_2d(nodes, 3, "nodes");
               check_2d_i(tris, 3, "triangles");
+              check_conn(tris, nodes, "triangles");
               tcad::mesh::Stencil2D r;
               {
                   nb::gil_scoped_release nogil;
@@ -74,6 +83,7 @@ void register_mesh(nb::module_& m) {
           [](NodesF nodes, IdxF tets, double min_volume) {
               check_2d(nodes, 3, "nodes");
               check_2d_i(tets, 4, "tets");
+              check_conn(tets, nodes, "tets");
               tcad::mesh::Stencil3D r;
               {
                   nb::gil_scoped_release nogil;
@@ -91,6 +101,8 @@ void register_mesh(nb::module_& m) {
               check_2d(nodes, 3, "nodes");
               check_2d_i(tris, 3, "triangles");
               check_2d_i(edges, 2, "edge_list");
+              check_conn(tris, nodes, "triangles");
+              check_conn(edges, nodes, "edge_list");
               tcad::mesh::FluxGeometry2D r;
               {
                   nb::gil_scoped_release nogil;
@@ -109,6 +121,8 @@ void register_mesh(nb::module_& m) {
               check_2d(nodes, 3, "nodes");
               check_2d_i(tets, 4, "tets");
               check_2d_i(edges, 2, "edge_list");
+              check_conn(tets, nodes, "tets");
+              check_conn(edges, nodes, "edge_list");
               const size_t ne = edges.shape(0);
               std::vector<double> trans(ne);
               {
@@ -125,6 +139,7 @@ void register_mesh(nb::module_& m) {
           [](NodesF nodes, IdxF faces) {
               check_2d(nodes, 3, "nodes");
               check_2d_i(faces, 3, "faces");
+              check_conn(faces, nodes, "faces");
               tcad::mesh::FaceWeights r;
               {
                   nb::gil_scoped_release nogil;
