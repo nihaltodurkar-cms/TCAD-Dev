@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <nanobind/stl/optional.h>
@@ -33,9 +34,13 @@ nb::ndarray<nb::numpy, T> publish(std::vector<T>&& v) {
     return nb::ndarray<nb::numpy, T>(held->data(), {held->size()}, owner);
 }
 
+/// Zero-copy read-only view of a bound 1-D array. Replaces the former
+/// `to_vec`, which copied every input into a fresh std::vector per call.
+/// The nanobind ndarray argument owns the buffer for the whole call; a
+/// kernel must not keep the span past its own return.
 template <typename T, typename Nd>
-std::vector<T> to_vec(const Nd& a) {
-    return std::vector<T>(a.data(), a.data() + a.shape(0));
+std::span<const T> as_span(const Nd& a) {
+    return std::span<const T>(a.data(), static_cast<std::size_t>(a.shape(0)));
 }
 
 /// The kernels scatter into F[edge_i[e]] / F[edge_j[e]] unchecked.
@@ -66,10 +71,10 @@ void register_unstructured3d(nb::module_& m) {
               check_edge_nodes(edge_i, edge_j, N);
 
               auto out = tcad::unstructured3d::residual_jacobian_equilibrium(
-                  to_vec<double>(n), to_vec<double>(p), to_vec<double>(C_s),
-                  to_vec<double>(node_vols_s), to_vec<std::int64_t>(edge_i),
-                  to_vec<std::int64_t>(edge_j), to_vec<double>(trans),
-                  to_vec<double>(flux));
+                  as_span<double>(n), as_span<double>(p), as_span<double>(C_s),
+                  as_span<double>(node_vols_s), as_span<std::int64_t>(edge_i),
+                  as_span<std::int64_t>(edge_j), as_span<double>(trans),
+                  as_span<double>(flux));
 
               return nb::make_tuple(publish(std::move(out.F)),
                                     publish(std::move(out.J.rows)),
@@ -118,14 +123,18 @@ void register_unstructured3d(nb::module_& m) {
               // Bernoulli arrays override the electron ones. Omitted, the
               // scalar is broadcast and the electron arrays reused --
               // exactly the former homojunction call.
-              std::vector<double> nie_v;
+              // Scalar nie is broadcast into an owned buffer; a per-node
+              // array is viewed in place.
+              std::vector<double> nie_fill;
+              std::span<const double> nie_v;
               if (nie_node) {
                   if (static_cast<std::int64_t>(nie_node->shape(0)) != N)
                       throw tcad::InvalidArgument("nie_node: expected " +
                                                   std::to_string(N) + " nodes");
-                  nie_v = to_vec<double>(*nie_node);
+                  nie_v = as_span<double>(*nie_node);
               } else {
-                  nie_v.assign(static_cast<std::size_t>(N), nie_phys);
+                  nie_fill.assign(static_cast<std::size_t>(N), nie_phys);
+                  nie_v = nie_fill;
               }
               const bool any_h = Bp_h || Bm_h || dBp_h || dBm_h;
               if (any_h && !(Bp_h && Bm_h && dBp_h && dBm_h))
@@ -138,20 +147,20 @@ void register_unstructured3d(nb::module_& m) {
                    static_cast<std::int64_t>(dBm_h->shape(0)) != E))
                   throw tcad::InvalidArgument(
                       "Bp_h/Bm_h/dBp_h/dBm_h: expected " + std::to_string(E) + " edges");
-              const auto bph = to_vec<double>(any_h ? *Bp_h : Bp);
-              const auto bmh = to_vec<double>(any_h ? *Bm_h : Bm);
-              const auto dbph = to_vec<double>(any_h ? *dBp_h : dBp);
-              const auto dbmh = to_vec<double>(any_h ? *dBm_h : dBm);
+              const auto bph = as_span<double>(any_h ? *Bp_h : Bp);
+              const auto bmh = as_span<double>(any_h ? *Bm_h : Bm);
+              const auto dbph = as_span<double>(any_h ? *dBp_h : dBp);
+              const auto dbmh = as_span<double>(any_h ? *dBm_h : dBm);
 
               auto out = tcad::unstructured3d::residual_jacobian_coupled(
-                  to_vec<double>(n), to_vec<double>(p), to_vec<double>(C_s),
-                  to_vec<double>(node_vols_s), to_vec<std::int64_t>(edge_i),
-                  to_vec<std::int64_t>(edge_j), to_vec<double>(eps_trans),
-                  to_vec<double>(flux), to_vec<double>(trans_bare),
-                  to_vec<double>(D_n_s), to_vec<double>(D_p_s),
-                  to_vec<double>(Bp), to_vec<double>(Bm), to_vec<double>(dBp),
-                  to_vec<double>(dBm), nie_v, to_vec<double>(tau_n),
-                  to_vec<double>(tau_p), Ns, R0, srh, auger, auger_cn,
+                  as_span<double>(n), as_span<double>(p), as_span<double>(C_s),
+                  as_span<double>(node_vols_s), as_span<std::int64_t>(edge_i),
+                  as_span<std::int64_t>(edge_j), as_span<double>(eps_trans),
+                  as_span<double>(flux), as_span<double>(trans_bare),
+                  as_span<double>(D_n_s), as_span<double>(D_p_s),
+                  as_span<double>(Bp), as_span<double>(Bm), as_span<double>(dBp),
+                  as_span<double>(dBm), nie_v, as_span<double>(tau_n),
+                  as_span<double>(tau_p), Ns, R0, srh, auger, auger_cn,
                   auger_cp, bph, bmh, dbph, dbmh);
 
               return nb::make_tuple(publish(std::move(out.base.F)),

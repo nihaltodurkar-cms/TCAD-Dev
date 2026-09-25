@@ -663,3 +663,26 @@ performance change only on a measured win), it was reverted; the
 script is kept so the null result can be re-run. The remaining cost is
 on the Python side of the boundary (Bernoulli precompute, COO -> CSR
 construction), not in the copy.
+
+### Follow-up: redone with `std::span` after the C++20 switch (2026-09-25)
+
+The engine moved to C++20 (`core/CMakeLists.txt`), and at the user's
+request the device3d and unstructured3d bindings now pass inputs as
+`std::span<const T>` (`as_span`) instead of copying them (`to_vec`); the
+kernels take spans. No GIL change. Re-measured with the same script,
+this time as an interleaved same-session A/B against the HEAD build (two
+rounds, best of 5 full solves each, ms/call):
+
+| case | HEAD (`to_vec`) | spans |
+|---|---|---|
+| B9 unstructured coupled | 8.33, 8.59 | 7.82, 8.22 |
+| S3D structured coupled | 28.93, 28.48 | 27.29, 27.72 |
+
+Spans are faster in all four pairs, by 3-6% -- consistent in direction
+but inside the ~10% within-column spread, so a small real effect at
+best, not a clear win. (The earlier "no change" table compared runs
+taken at different times; this A/B is the better measurement.) Kept on
+code-quality grounds as much as speed: no per-call copies, and the
+kernel signatures now state that inputs are read-only views. Gates:
+parity/FD/M47 tests green, ASan/UBSan clean, full suite green, goldens
+byte-identical.

@@ -11,9 +11,9 @@
 
 namespace tcad::unstructured3d {
 
-Coo poisson_flux_geometry(const std::vector<std::int64_t>& edge_i,
-                          const std::vector<std::int64_t>& edge_j,
-                          const std::vector<double>& trans, int comp3) {
+Coo poisson_flux_geometry(std::span<const std::int64_t> edge_i,
+                          std::span<const std::int64_t> edge_j,
+                          std::span<const double> trans, int comp3) {
     // Python's `np.concatenate([ii,ii,jj,jj])` (rows) / `[ii,jj,jj,ii]`
     // (cols) / `[-trans,trans,-trans,trans]` (vals) is FOUR BLOCKS OF E
     // EACH -- term1 for every edge, then term2 for every edge, etc. --
@@ -39,9 +39,9 @@ Coo poisson_flux_geometry(const std::vector<std::int64_t>& edge_i,
     return out;
 }
 
-Coo poisson_equilibrium_diag(const std::vector<double>& node_vols_s,
-                             const std::vector<double>& n,
-                             const std::vector<double>& p) {
+Coo poisson_equilibrium_diag(std::span<const double> node_vols_s,
+                             std::span<const double> n,
+                             std::span<const double> p) {
     const std::size_t N = node_vols_s.size();
     Coo out;
     out.rows.resize(N);
@@ -56,7 +56,7 @@ Coo poisson_equilibrium_diag(const std::vector<double>& node_vols_s,
     return out;
 }
 
-Coo poisson_charge_coupling(const std::vector<double>& node_vols_s) {
+Coo poisson_charge_coupling(std::span<const double> node_vols_s) {
     // Python: rows=concat([3k,3k]), cols=concat([3k+1,3k+2]),
     // vals=concat([-vols,vols]) -- TWO BLOCKS OF N (E then F), not
     // interleaved per node.
@@ -73,10 +73,10 @@ Coo poisson_charge_coupling(const std::vector<double>& node_vols_s) {
     return out;
 }
 
-SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
-                    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
-                    const std::vector<double>& tau_p,
-                    const std::vector<double>& node_vols_s, double Ns,
+SrhResult srh_auger(std::span<const double> n, std::span<const double> p,
+                    std::span<const double> nie_phys, std::span<const double> tau_n,
+                    std::span<const double> tau_p,
+                    std::span<const double> node_vols_s, double Ns,
                     double R0, bool srh, bool auger, double auger_cn,
                     double auger_cp) {
     const std::size_t N = n.size();
@@ -131,11 +131,11 @@ SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
     return out;
 }
 
-Coo sg_carrier_jacobian(const std::vector<std::int64_t>& edge_i,
-                        const std::vector<std::int64_t>& edge_j, int comp,
-                        const std::vector<double>& dJ_dpsi_j,
-                        const std::vector<double>& dJ_dself_i,
-                        const std::vector<double>& dJ_dself_j) {
+Coo sg_carrier_jacobian(std::span<const std::int64_t> edge_i,
+                        std::span<const std::int64_t> edge_j, int comp,
+                        std::span<const double> dJ_dpsi_j,
+                        std::span<const double> dJ_dself_i,
+                        std::span<const double> dJ_dself_j) {
     // Python: rows=concat([ci,ci,ci,ci,cj,cj,cj,cj]) -- EIGHT BLOCKS OF
     // E (K,L,M,N,O,P,Q,R), not interleaved per edge.
     const std::size_t E = edge_i.size();
@@ -161,13 +161,13 @@ Coo sg_carrier_jacobian(const std::vector<std::int64_t>& edge_i,
     return out;
 }
 
-SgResult sg_electron(const std::vector<std::int64_t>& edge_i,
-                     const std::vector<std::int64_t>& edge_j,
-                     const std::vector<double>& trans_bare,
-                     const std::vector<double>& D_n_s,
-                     const std::vector<double>& n,
-                     const std::vector<double>& Bp, const std::vector<double>& Bm,
-                     const std::vector<double>& dBp, const std::vector<double>& dBm) {
+SgResult sg_electron(std::span<const std::int64_t> edge_i,
+                     std::span<const std::int64_t> edge_j,
+                     std::span<const double> trans_bare,
+                     std::span<const double> D_n_s,
+                     std::span<const double> n,
+                     std::span<const double> Bp, std::span<const double> Bm,
+                     std::span<const double> dBp, std::span<const double> dBm) {
     const std::size_t E = edge_i.size();
     SgResult out;
     out.J_edge.resize(E);
@@ -184,13 +184,13 @@ SgResult sg_electron(const std::vector<std::int64_t>& edge_i,
     return out;
 }
 
-SgResult sg_hole(const std::vector<std::int64_t>& edge_i,
-                 const std::vector<std::int64_t>& edge_j,
-                 const std::vector<double>& trans_bare,
-                 const std::vector<double>& D_p_s,
-                 const std::vector<double>& p,
-                 const std::vector<double>& Bp, const std::vector<double>& Bm,
-                 const std::vector<double>& dBp, const std::vector<double>& dBm) {
+SgResult sg_hole(std::span<const std::int64_t> edge_i,
+                 std::span<const std::int64_t> edge_j,
+                 std::span<const double> trans_bare,
+                 std::span<const double> D_p_s,
+                 std::span<const double> p,
+                 std::span<const double> Bp, std::span<const double> Bm,
+                 std::span<const double> dBp, std::span<const double> dBm) {
     const std::size_t E = edge_i.size();
     SgResult out;
     out.J_edge.resize(E);
@@ -230,11 +230,11 @@ void reserve_total(Coo& dst, std::size_t total) {
 }  // namespace
 
 Result residual_jacobian_equilibrium(
-    const std::vector<double>& n, const std::vector<double>& p,
-    const std::vector<double>& C_s, const std::vector<double>& node_vols_s,
-    const std::vector<std::int64_t>& edge_i,
-    const std::vector<std::int64_t>& edge_j,
-    const std::vector<double>& trans, const std::vector<double>& flux) {
+    std::span<const double> n, std::span<const double> p,
+    std::span<const double> C_s, std::span<const double> node_vols_s,
+    std::span<const std::int64_t> edge_i,
+    std::span<const std::int64_t> edge_j,
+    std::span<const double> trans, std::span<const double> flux) {
     const std::size_t N = C_s.size();
     Result out;
     out.F.resize(N);
@@ -259,20 +259,20 @@ Result residual_jacobian_equilibrium(
 }
 
 CoupledResult residual_jacobian_coupled(
-    const std::vector<double>& n, const std::vector<double>& p,
-    const std::vector<double>& C_s, const std::vector<double>& node_vols_s,
-    const std::vector<std::int64_t>& edge_i,
-    const std::vector<std::int64_t>& edge_j,
-    const std::vector<double>& eps_trans, const std::vector<double>& flux,
-    const std::vector<double>& trans_bare,
-    const std::vector<double>& D_n_s, const std::vector<double>& D_p_s,
-    const std::vector<double>& Bp, const std::vector<double>& Bm,
-    const std::vector<double>& dBp, const std::vector<double>& dBm,
-    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
-    const std::vector<double>& tau_p, double Ns, double R0, bool srh,
+    std::span<const double> n, std::span<const double> p,
+    std::span<const double> C_s, std::span<const double> node_vols_s,
+    std::span<const std::int64_t> edge_i,
+    std::span<const std::int64_t> edge_j,
+    std::span<const double> eps_trans, std::span<const double> flux,
+    std::span<const double> trans_bare,
+    std::span<const double> D_n_s, std::span<const double> D_p_s,
+    std::span<const double> Bp, std::span<const double> Bm,
+    std::span<const double> dBp, std::span<const double> dBm,
+    std::span<const double> nie_phys, std::span<const double> tau_n,
+    std::span<const double> tau_p, double Ns, double R0, bool srh,
     bool auger, double auger_cn, double auger_cp,
-    const std::vector<double>& Bp_h, const std::vector<double>& Bm_h,
-    const std::vector<double>& dBp_h, const std::vector<double>& dBm_h) {
+    std::span<const double> Bp_h, std::span<const double> Bm_h,
+    std::span<const double> dBp_h, std::span<const double> dBm_h) {
     const std::size_t N = C_s.size();
 
     // Block order: SRH/Auger FIRST, Poisson charge-coupling SECOND,

@@ -14,11 +14,11 @@ namespace {
 /// device3d.py's own `_scatter3_coo`'s `np.concatenate([...])` term
 /// order exactly). No intermediate allocation.
 void write_scatter4(Coo& out, std::size_t offset,
-                    const std::vector<std::int64_t>& kL,
-                    const std::vector<std::int64_t>& kR,
-                    const std::vector<double>& weight, int row_comp,
-                    int comp_L, const std::vector<double>& dL, int comp_R,
-                    const std::vector<double>& dR) {
+                    std::span<const std::int64_t> kL,
+                    std::span<const std::int64_t> kR,
+                    std::span<const double> weight, int row_comp,
+                    int comp_L, std::span<const double> dL, int comp_R,
+                    std::span<const double> dR) {
     const std::size_t E = kL.size();
     for (std::size_t e = 0; e < E; ++e) {
         const double w = weight[e], vL = dL[e], vR = dR[e];
@@ -38,12 +38,12 @@ void write_scatter4(Coo& out, std::size_t offset,
 }  // namespace
 
 Coo poisson_flux_row(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_h,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_h,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_h) {
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_h,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_h,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_h) {
     const std::size_t Ex = kLx.size(), Ey = kSy.size(), Ez = kDz.size();
     Coo out;
     const std::size_t total = 4 * (Ex + Ey + Ez);
@@ -62,15 +62,15 @@ Coo poisson_flux_row(
 }
 
 Coo electron_continuity(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_area, const std::vector<double>& dJn_dpsiR_x,
-    const std::vector<double>& dJn_dn_L_x, const std::vector<double>& dJn_dn_R_x,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_area, const std::vector<double>& dJn_dpsiR_y,
-    const std::vector<double>& dJn_dn_L_y, const std::vector<double>& dJn_dn_R_y,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_area, const std::vector<double>& dJn_dpsiR_z,
-    const std::vector<double>& dJn_dn_L_z, const std::vector<double>& dJn_dn_R_z) {
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_area, std::span<const double> dJn_dpsiR_x,
+    std::span<const double> dJn_dn_L_x, std::span<const double> dJn_dn_R_x,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_area, std::span<const double> dJn_dpsiR_y,
+    std::span<const double> dJn_dn_L_y, std::span<const double> dJn_dn_R_y,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_area, std::span<const double> dJn_dpsiR_z,
+    std::span<const double> dJn_dn_L_z, std::span<const double> dJn_dn_R_z) {
     const std::size_t Ex = kLx.size(), Ey = kSy.size(), Ez = kDz.size();
     Coo out;
     const std::size_t total = 8 * (Ex + Ey + Ez);
@@ -97,15 +97,15 @@ Coo electron_continuity(
 }
 
 Coo hole_continuity(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_area, const std::vector<double>& dJp_dpsiR_x,
-    const std::vector<double>& dJp_dp_L_x, const std::vector<double>& dJp_dp_R_x,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_area, const std::vector<double>& dJp_dpsiR_y,
-    const std::vector<double>& dJp_dp_L_y, const std::vector<double>& dJp_dp_R_y,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_area, const std::vector<double>& dJp_dpsiR_z,
-    const std::vector<double>& dJp_dp_L_z, const std::vector<double>& dJp_dp_R_z) {
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_area, std::span<const double> dJp_dpsiR_x,
+    std::span<const double> dJp_dp_L_x, std::span<const double> dJp_dp_R_x,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_area, std::span<const double> dJp_dpsiR_y,
+    std::span<const double> dJp_dp_L_y, std::span<const double> dJp_dp_R_y,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_area, std::span<const double> dJp_dpsiR_z,
+    std::span<const double> dJp_dp_L_z, std::span<const double> dJp_dp_R_z) {
     const std::size_t Ex = kLx.size(), Ey = kSy.size(), Ez = kDz.size();
     Coo out;
     const std::size_t total = 8 * (Ex + Ey + Ez);
@@ -131,11 +131,11 @@ Coo hole_continuity(
     return out;
 }
 
-Coo base_diagonal(std::int64_t N, const std::vector<double>& dV,
-                  bool has_incomplete_ion, const std::vector<double>& dcden,
-                  const std::vector<double>& dcdp,
-                  const std::vector<double>& dRs_dn,
-                  const std::vector<double>& dRs_dp) {
+Coo base_diagonal(std::int64_t N, std::span<const double> dV,
+                  bool has_incomplete_ion, std::span<const double> dcden,
+                  std::span<const double> dcdp,
+                  std::span<const double> dRs_dn,
+                  std::span<const double> dRs_dp) {
     const std::size_t Nu = static_cast<std::size_t>(N);
     Coo out;
     const std::size_t total = 6 * Nu;

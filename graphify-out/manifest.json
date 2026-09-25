@@ -6,16 +6,16 @@
     "semantic_hash": "3b541b9935fcf0831355da956f897645"
   },
   "pytcad/benchmarks/BASELINE.json": {
-    "mtime": 1789581433.5835743,
-    "seen": 1789716278.7380538,
-    "ast_hash": "e4180a754ff8ea2acee1c22e8325f3e9",
-    "semantic_hash": "e4180a754ff8ea2acee1c22e8325f3e9"
+    "mtime": 1790306697.7934396,
+    "seen": 1790310721.276873,
+    "ast_hash": "57bd0ccb825fb471ef9453309061acf3",
+    "semantic_hash": ""
   },
   "pytcad/benchmarks/FULL.json": {
-    "mtime": 1789581433.5848913,
-    "seen": 1789716278.7380552,
-    "ast_hash": "b63a3caa97ae2e30985c2793580f14a2",
-    "semantic_hash": "b63a3caa97ae2e30985c2793580f14a2"
+    "mtime": 1790306697.793516,
+    "seen": 1790310721.2768753,
+    "ast_hash": "9ce832c8d32ecf2ec5dd979b1ccbe14f",
+    "semantic_hash": ""
   },
   "pytcad/benchmarks/__init__.py": {
     "mtime": 1789581433.5848913,
@@ -1254,10 +1254,10 @@
     "semantic_hash": "f3af567d711b82284ef59564b6ed1a41"
   },
   "pytcad/pyproject.toml": {
-    "mtime": 1789581433.5973022,
-    "seen": 1789716278.7381375,
-    "ast_hash": "8300ffbba4c17579595cd858682f3710",
-    "semantic_hash": "8300ffbba4c17579595cd858682f3710"
+    "mtime": 1790308472.8225117,
+    "seen": 1790310721.2769852,
+    "ast_hash": "7fb28065ddd31916260a9e5fe626eba1",
+    "semantic_hash": ""
   },
   "pytcad/pytcad/__init__.py": {
     "mtime": 1789669260.7599385,
@@ -1656,8 +1656,8 @@
     "semantic_hash": "82db63228363a57c0c258cd109cfd900"
   },
   "pytcad/pytcad/unstructured_dd3d.py": {
-    "mtime": 1790277834.2753828,
-    "seen": 1790278852.0172927,
+    "mtime": 1790279095.7182684,
+    "seen": 1790310721.2770195,
     "ast_hash": "75f72eef1222d184061f631877c696a9",
     "semantic_hash": ""
   },
@@ -2490,15 +2490,15 @@
     "semantic_hash": ""
   },
   "ARCHITECTURE.md": {
-    "mtime": 1790277848.2947102,
-    "seen": 1790278852.0173814,
-    "ast_hash": "9a0f182855743c6aece8f54326305f77",
+    "mtime": 1790307505.5932372,
+    "seen": 1790310721.2770967,
+    "ast_hash": "fac0034ded704242b9ccd8fdb7559269",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1790277862.3982933,
-    "seen": 1790278852.017382,
-    "ast_hash": "79b2a72b79773296e943c003b482e36d",
+    "mtime": 1790308018.4977417,
+    "seen": 1790310721.2770972,
+    "ast_hash": "09aa01c36f88c9c61729091c134774ae",
     "semantic_hash": ""
   },
   "README.md": {
@@ -2513,18 +2513,6 @@
     "ast_hash": "7cf2e292bd30f46725d592127e958f58",
     "semantic_hash": "7cf2e292bd30f46725d592127e958f58"
   },
-  "pytcad/M35-3D-PROCESS-PLAN.md": {
-    "mtime": 1789713152.162758,
-    "seen": 1789716278.7382252,
-    "ast_hash": "b73113e26a9e4a705926eea784322eab",
-    "semantic_hash": "b73113e26a9e4a705926eea784322eab"
-  },
-  "pytcad/M42-DENSITY-GRADIENT-2D3D-PLAN.md": {
-    "mtime": 1789729140.9901428,
-    "seen": 1789730618.9842253,
-    "ast_hash": "169b941450a435aeedd60f19024b68e0",
-    "semantic_hash": ""
-  },
   "pytcad/PARAVIEW-EXPORT-PLAN.md": {
     "mtime": 1789635170.768666,
     "seen": 1789716278.7382262,
@@ -2538,16 +2526,16 @@
     "semantic_hash": "cc9c7a97e4ee4c014da71bcf82e9103e"
   },
   "pytcad/benchmarks/BASELINE.md": {
-    "mtime": 1789581433.5848913,
-    "seen": 1789716278.7382267,
-    "ast_hash": "e27187abf367d2a79749555c3ddea6f0",
-    "semantic_hash": "e27187abf367d2a79749555c3ddea6f0"
+    "mtime": 1790306697.793362,
+    "seen": 1790310721.2771003,
+    "ast_hash": "246959ebcdace961299ba57dafd5045f",
+    "semantic_hash": ""
   },
   "pytcad/benchmarks/FULL.md": {
-    "mtime": 1789581433.5848913,
-    "seen": 1789716278.7382271,
-    "ast_hash": "a9318b0b03dd3cd005012d261938d28d",
-    "semantic_hash": "a9318b0b03dd3cd005012d261938d28d"
+    "mtime": 1790306697.7934792,
+    "seen": 1790310721.2771008,
+    "ast_hash": "4da8c34844b310d64c8c809d59712fdf",
+    "semantic_hash": ""
   },
   "pytcad/benchmarks/README-devsim-II-blocker.md": {
     "mtime": 1789581433.5848913,
@@ -2586,9 +2574,9 @@
     "semantic_hash": "ccb21e2dc97e2f8de6941eadcf5a8e52"
   },
   "pytcad/core/CMakeLists.txt": {
-    "mtime": 1789808393.2219262,
-    "seen": 1790151126.7472553,
-    "ast_hash": "c8c0212c128ef69e902fa24becb543cb",
+    "mtime": 1790308472.820737,
+    "seen": 1790310721.2771046,
+    "ast_hash": "5b777f9d1235903d547fd549b01ce6e3",
     "semantic_hash": ""
   },
   "pytcad/examples/README_3d_sic_power_mosfet.md": {
@@ -2675,12 +2663,6 @@
     "ast_hash": "05cd264b0880dfd07646e6b4027ee0bd",
     "semantic_hash": ""
   },
-  "pytcad/M46-SCHOTTKY-PLAN.md": {
-    "mtime": 1789733140.0685005,
-    "seen": 1789733158.774084,
-    "ast_hash": "29f2fae1a8e2ffe5f050e37c416710a1",
-    "semantic_hash": ""
-  },
   "pytcad/tests/test_m46_s2_schottky_robin.py": {
     "mtime": 1789730982.7353008,
     "seen": 1789731489.9625847,
@@ -2715,12 +2697,6 @@
     "mtime": 1789807888.6748986,
     "seen": 1790151126.7472095,
     "ast_hash": "dc85065ede62eed5f217d4b41826d3fa",
-    "semantic_hash": ""
-  },
-  "pytcad/M45-TRANSIENT-AC-3D-PLAN.md": {
-    "mtime": 1789757271.4839172,
-    "seen": 1789757323.3967438,
-    "ast_hash": "72bda11cdc38d9e85f9d6a010ed315f6",
     "semantic_hash": ""
   },
   "pytcad/tests/test_m45_gaa_multigate.py": {
@@ -2765,12 +2741,6 @@
     "ast_hash": "48df71cbe13ad15e0a75e8de877d424f",
     "semantic_hash": ""
   },
-  "pytcad/M44-HYDRODYNAMIC-PLAN.md": {
-    "mtime": 1789798724.3421183,
-    "seen": 1789799397.2552223,
-    "ast_hash": "7eb32f563172a6fc0910d5468abf200f",
-    "semantic_hash": ""
-  },
   "pytcad/tests/test_m44_s4_device2d.py": {
     "mtime": 1789763188.9140263,
     "seen": 1789799397.2551868,
@@ -2790,15 +2760,15 @@
     "semantic_hash": ""
   },
   "pytcad/core/bindings/device3d_bindings.cpp": {
-    "mtime": 1790277629.9963965,
-    "seen": 1790278852.0171378,
-    "ast_hash": "c8a3ef65231609de384fd0ba7388476b",
+    "mtime": 1790309409.4476585,
+    "seen": 1790310721.276891,
+    "ast_hash": "bbbc61acea90b82903fe30909f1b3a29",
     "semantic_hash": ""
   },
   "pytcad/core/bindings/unstructured3d_bindings.cpp": {
-    "mtime": 1790277629.996866,
-    "seen": 1790278852.017144,
-    "ast_hash": "afebd445f2d67fd9f96cd531caaa06f4",
+    "mtime": 1790309409.4478345,
+    "seen": 1790310721.276895,
+    "ast_hash": "2c133f48567187989bab929a2a2c434e",
     "semantic_hash": ""
   },
   "pytcad/core/include/tcad/base/checks.hpp": {
@@ -2808,27 +2778,27 @@
     "semantic_hash": ""
   },
   "pytcad/core/include/tcad/device3d/kernels.hpp": {
-    "mtime": 1790277629.9847684,
-    "seen": 1790278852.0171456,
-    "ast_hash": "78a44de9e3e00c7c0c60265e4c2b83a7",
+    "mtime": 1790309409.447339,
+    "seen": 1790310721.2768965,
+    "ast_hash": "d11b69bb7db52284139a341d0ace90f6",
     "semantic_hash": ""
   },
   "pytcad/core/include/tcad/unstructured3d/kernels.hpp": {
-    "mtime": 1790277629.9965146,
-    "seen": 1790278852.0171516,
-    "ast_hash": "e8f028539a4053bb4d92bf3da15528f0",
+    "mtime": 1790309409.4475238,
+    "seen": 1790310721.2769008,
+    "ast_hash": "d4c104e450182dc17838b817520375c0",
     "semantic_hash": ""
   },
   "pytcad/core/src/device3d/kernels.cpp": {
-    "mtime": 1790277629.9856548,
-    "seen": 1790278852.0171518,
-    "ast_hash": "3ad5c6ac7b7675b1dbedfd36289f3088",
+    "mtime": 1790309409.447443,
+    "seen": 1790310721.2769015,
+    "ast_hash": "db3ac63c88e75d57ebff860792554f38",
     "semantic_hash": ""
   },
   "pytcad/core/src/unstructured3d/kernels.cpp": {
-    "mtime": 1790277629.9966147,
-    "seen": 1790278852.017157,
-    "ast_hash": "5020efb65dec52a8c5d0b68d716c0d0c",
+    "mtime": 1790309409.4475942,
+    "seen": 1790310721.276906,
+    "ast_hash": "b578ab3e8937845e65f8fc3ad793b1b1",
     "semantic_hash": ""
   },
   "pytcad/tests/test_core_input_validation.py": {
@@ -2856,9 +2826,9 @@
     "semantic_hash": ""
   },
   "pytcad/M47-3D-ENGINE-PLAN.md": {
-    "mtime": 1790277814.6720784,
-    "seen": 1790278852.0173862,
-    "ast_hash": "a85fac91607036c763563036ce071fb6",
+    "mtime": 1790310715.4232686,
+    "seen": 1790310721.2770987,
+    "ast_hash": "9a29169fdaeed42b833a4a3540a2cb40",
     "semantic_hash": ""
   },
   "pytcad/benchmarks/m47_views_measure.py": {
@@ -2880,9 +2850,9 @@
     "semantic_hash": ""
   },
   "pytcad/tests/test_m47_s3_unstructured3d_hetero.py": {
-    "mtime": 1790277288.617603,
-    "seen": 1790278852.0173514,
-    "ast_hash": "86dadce6761644528417be85a7b03f90",
+    "mtime": 1790279147.6964831,
+    "seen": 1790310721.2770703,
+    "ast_hash": "c08d673eb0388bb517308aeb607a8a49",
     "semantic_hash": ""
   },
   "pytcad/benchmarks/mumps_out/study.md": {

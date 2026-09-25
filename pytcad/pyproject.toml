@@ -9,7 +9,7 @@
 # DISTRIBUTION NOTE, stated rather than discovered later: the pure-Python
 # path installs from requirements.txt with plain pip on Linux and Windows
 # and has no compiler requirement.  The C++-accelerated build is
-# additionally gated on a C++17 toolchain, and the later PETSc/VTK-Qt
+# additionally gated on a C++20 toolchain, and the later PETSc/VTK-Qt
 # phases are not practically pip-wheelable -- conda-forge is the
 # supported channel for those.  The extension is optional at every step:
 # pytcad/_accel.py soft-imports it.

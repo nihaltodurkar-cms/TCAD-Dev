@@ -40,6 +40,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace tcad::unstructured3d {
@@ -70,9 +71,9 @@ struct Result {
 //  (3N-DOF, row/col = 3*node + comp3) form -- comp3=0 for the psi
 //  component, matching the Python oracle's own indexing convention.
 // ------------------------------------------------------------------
-Coo poisson_flux_geometry(const std::vector<std::int64_t>& edge_i,
-                          const std::vector<std::int64_t>& edge_j,
-                          const std::vector<double>& trans, int comp3);
+Coo poisson_flux_geometry(std::span<const std::int64_t> edge_i,
+                          std::span<const std::int64_t> edge_j,
+                          std::span<const double> trans, int comp3);
 
 // ------------------------------------------------------------------
 //  Equilibrium-ONLY: the slaved-carrier diagonal chain-rule term
@@ -80,16 +81,16 @@ Coo poisson_flux_geometry(const std::vector<std::int64_t>& edge_i,
 //  equivalent -- see _poisson_charge_coupling below, a DIFFERENT
 //  Jacobian shape for the same physical derivative.
 // ------------------------------------------------------------------
-Coo poisson_equilibrium_diag(const std::vector<double>& node_vols_s,
-                             const std::vector<double>& n,
-                             const std::vector<double>& p);
+Coo poisson_equilibrium_diag(std::span<const double> node_vols_s,
+                             std::span<const double> n,
+                             std::span<const double> p);
 
 // ------------------------------------------------------------------
 //  Coupled-ONLY: d(rho)/dn, d(rho)/dp as two OFF-diagonal entries into
 //  the psi row's n/p columns, emitted BEFORE flux geometry (opposite
 //  order from the equilibrium path's own diagonal term).
 // ------------------------------------------------------------------
-Coo poisson_charge_coupling(const std::vector<double>& node_vols_s);
+Coo poisson_charge_coupling(std::span<const double> node_vols_s);
 
 // ------------------------------------------------------------------
 //  SRH + Auger recombination, exactly materials.recombination's
@@ -112,10 +113,10 @@ struct SrhResult {
     std::vector<double> F2_baseline;
     Coo diag;
 };
-SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
-                    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
-                    const std::vector<double>& tau_p,
-                    const std::vector<double>& node_vols_s, double Ns,
+SrhResult srh_auger(std::span<const double> n, std::span<const double> p,
+                    std::span<const double> nie_phys, std::span<const double> tau_n,
+                    std::span<const double> tau_p,
+                    std::span<const double> node_vols_s, double Ns,
                     double R0, bool srh, bool auger, double auger_cn,
                     double auger_cp);
 
@@ -130,11 +131,11 @@ SrhResult srh_auger(const std::vector<double>& n, const std::vector<double>& p,
 //  builder for the COO block, mirroring the Python oracle's own
 //  _sg_carrier_coo helper exactly.
 // ------------------------------------------------------------------
-Coo sg_carrier_jacobian(const std::vector<std::int64_t>& edge_i,
-                        const std::vector<std::int64_t>& edge_j, int comp,
-                        const std::vector<double>& dJ_dpsi_j,
-                        const std::vector<double>& dJ_dself_i,
-                        const std::vector<double>& dJ_dself_j);
+Coo sg_carrier_jacobian(std::span<const std::int64_t> edge_i,
+                        std::span<const std::int64_t> edge_j, int comp,
+                        std::span<const double> dJ_dpsi_j,
+                        std::span<const double> dJ_dself_i,
+                        std::span<const double> dJ_dself_j);
 
 struct SgResult {
     std::vector<double> J_edge;   // Jn_edge or Jp_edge, edges array order
@@ -147,20 +148,20 @@ struct SgResult {
 // real bug caught by parity testing (M47-3D-ENGINE-PLAN.md) -- kept
 // as a named, distinct parameter so the two scaled quantities cannot
 // be silently swapped again at a call site.
-SgResult sg_electron(const std::vector<std::int64_t>& edge_i,
-                     const std::vector<std::int64_t>& edge_j,
-                     const std::vector<double>& trans_bare,
-                     const std::vector<double>& D_n_s,
-                     const std::vector<double>& n,   // full node array
-                     const std::vector<double>& Bp, const std::vector<double>& Bm,
-                     const std::vector<double>& dBp, const std::vector<double>& dBm);
-SgResult sg_hole(const std::vector<std::int64_t>& edge_i,
-                 const std::vector<std::int64_t>& edge_j,
-                 const std::vector<double>& trans_bare,
-                 const std::vector<double>& D_p_s,
-                 const std::vector<double>& p,   // full node array
-                 const std::vector<double>& Bp, const std::vector<double>& Bm,
-                 const std::vector<double>& dBp, const std::vector<double>& dBm);
+SgResult sg_electron(std::span<const std::int64_t> edge_i,
+                     std::span<const std::int64_t> edge_j,
+                     std::span<const double> trans_bare,
+                     std::span<const double> D_n_s,
+                     std::span<const double> n,   // full node array
+                     std::span<const double> Bp, std::span<const double> Bm,
+                     std::span<const double> dBp, std::span<const double> dBm);
+SgResult sg_hole(std::span<const std::int64_t> edge_i,
+                 std::span<const std::int64_t> edge_j,
+                 std::span<const double> trans_bare,
+                 std::span<const double> D_p_s,
+                 std::span<const double> p,   // full node array
+                 std::span<const double> Bp, std::span<const double> Bm,
+                 std::span<const double> dBp, std::span<const double> dBm);
 
 // ------------------------------------------------------------------
 //  Orchestrated entry points -- the ONLY two functions bound to
@@ -170,11 +171,11 @@ SgResult sg_hole(const std::vector<std::int64_t>& edge_i,
 /// N-DOF Poisson equilibrium. `n`, `p`, `flux` already computed in
 /// Python (exp() never crosses this boundary).
 Result residual_jacobian_equilibrium(
-    const std::vector<double>& n, const std::vector<double>& p,
-    const std::vector<double>& C_s, const std::vector<double>& node_vols_s,
-    const std::vector<std::int64_t>& edge_i,
-    const std::vector<std::int64_t>& edge_j,
-    const std::vector<double>& trans, const std::vector<double>& flux);
+    std::span<const double> n, std::span<const double> p,
+    std::span<const double> C_s, std::span<const double> node_vols_s,
+    std::span<const std::int64_t> edge_i,
+    std::span<const std::int64_t> edge_j,
+    std::span<const double> trans, std::span<const double> flux);
 
 /// 3N-DOF coupled drift-diffusion. `flux`, `Bp`, `Bm`, `dBp`, `dBm`
 /// already computed in Python (exp()/bernoulli() never cross this
@@ -187,24 +188,24 @@ struct CoupledResult {
     std::vector<double> Jp_edge;
 };
 CoupledResult residual_jacobian_coupled(
-    const std::vector<double>& n, const std::vector<double>& p,
-    const std::vector<double>& C_s, const std::vector<double>& node_vols_s,
-    const std::vector<std::int64_t>& edge_i,
-    const std::vector<std::int64_t>& edge_j,
-    const std::vector<double>& eps_trans, const std::vector<double>& flux,
-    const std::vector<double>& trans_bare,   // eps_trans*LD -- SG only, see sg_electron's own note
-    const std::vector<double>& D_n_s, const std::vector<double>& D_p_s,
-    const std::vector<double>& Bp, const std::vector<double>& Bm,
-    const std::vector<double>& dBp, const std::vector<double>& dBm,
-    const std::vector<double>& nie_phys, const std::vector<double>& tau_n,
-    const std::vector<double>& tau_p, double Ns, double R0, bool srh,
+    std::span<const double> n, std::span<const double> p,
+    std::span<const double> C_s, std::span<const double> node_vols_s,
+    std::span<const std::int64_t> edge_i,
+    std::span<const std::int64_t> edge_j,
+    std::span<const double> eps_trans, std::span<const double> flux,
+    std::span<const double> trans_bare,   // eps_trans*LD -- SG only, see sg_electron's own note
+    std::span<const double> D_n_s, std::span<const double> D_p_s,
+    std::span<const double> Bp, std::span<const double> Bm,
+    std::span<const double> dBp, std::span<const double> dBm,
+    std::span<const double> nie_phys, std::span<const double> tau_n,
+    std::span<const double> tau_p, double Ns, double R0, bool srh,
     bool auger, double auger_cn, double auger_cp,
     // M47 Slice 3: the HOLE Scharfetter-Gummel Bernoulli arrays. On a
     // heterojunction the hole argument is psi_j-psi_i-dlnnie+ds, not
     // the electron's +dlnnie (opposite signs, CLAUDE.md gotcha), so the
     // two carriers need separate arrays; a homojunction passes the
     // electron arrays again, which reproduces the old single-set call.
-    const std::vector<double>& Bp_h, const std::vector<double>& Bm_h,
-    const std::vector<double>& dBp_h, const std::vector<double>& dBm_h);
+    std::span<const double> Bp_h, std::span<const double> Bm_h,
+    std::span<const double> dBp_h, std::span<const double> dBm_h);
 
 }  // namespace tcad::unstructured3d

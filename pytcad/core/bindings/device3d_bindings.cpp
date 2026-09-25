@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <span>
 #include <vector>
 
 #include "tcad/base/errors.hpp"
@@ -28,9 +29,13 @@ nb::ndarray<nb::numpy, T> publish(std::vector<T>&& v) {
     return nb::ndarray<nb::numpy, T>(held->data(), {held->size()}, owner);
 }
 
+/// Zero-copy read-only view of a bound 1-D array. Replaces the former
+/// `to_vec`, which copied every input into a fresh std::vector per call.
+/// The nanobind ndarray argument owns the buffer for the whole call; a
+/// kernel must not keep the span past its own return.
 template <typename T, typename Nd>
-std::vector<T> to_vec(const Nd& a) {
-    return std::vector<T>(a.data(), a.data() + a.shape(0));
+std::span<const T> as_span(const Nd& a) {
+    return std::span<const T>(a.data(), static_cast<std::size_t>(a.shape(0)));
 }
 
 nb::tuple publish_coo(tcad::device3d::Coo&& c) {
@@ -67,9 +72,9 @@ void register_device3d(nb::module_& m) {
               check_edges(kSy.shape(0), kNy, wy_h, "y");
               check_edges(kDz.shape(0), kUz, wz_h, "z");
               return publish_coo(tcad::device3d::poisson_flux_row(
-                  to_vec<std::int64_t>(kLx), to_vec<std::int64_t>(kRx), to_vec<double>(wx_h),
-                  to_vec<std::int64_t>(kSy), to_vec<std::int64_t>(kNy), to_vec<double>(wy_h),
-                  to_vec<std::int64_t>(kDz), to_vec<std::int64_t>(kUz), to_vec<double>(wz_h)));
+                  as_span<std::int64_t>(kLx), as_span<std::int64_t>(kRx), as_span<double>(wx_h),
+                  as_span<std::int64_t>(kSy), as_span<std::int64_t>(kNy), as_span<double>(wy_h),
+                  as_span<std::int64_t>(kDz), as_span<std::int64_t>(kUz), as_span<double>(wz_h)));
           },
           nb::arg("kLx"), nb::arg("kRx"), nb::arg("wx_h"), nb::arg("kSy"),
           nb::arg("kNy"), nb::arg("wy_h"), nb::arg("kDz"), nb::arg("kUz"),
@@ -83,12 +88,12 @@ void register_device3d(nb::module_& m) {
               check_edges6(kSy, kNy, wy_area, dpsiRy, dnLy, dnRy, "y");
               check_edges6(kDz, kUz, wz_area, dpsiRz, dnLz, dnRz, "z");
               return publish_coo(tcad::device3d::electron_continuity(
-                  to_vec<std::int64_t>(kLx), to_vec<std::int64_t>(kRx), to_vec<double>(wx_area),
-                  to_vec<double>(dpsiRx), to_vec<double>(dnLx), to_vec<double>(dnRx),
-                  to_vec<std::int64_t>(kSy), to_vec<std::int64_t>(kNy), to_vec<double>(wy_area),
-                  to_vec<double>(dpsiRy), to_vec<double>(dnLy), to_vec<double>(dnRy),
-                  to_vec<std::int64_t>(kDz), to_vec<std::int64_t>(kUz), to_vec<double>(wz_area),
-                  to_vec<double>(dpsiRz), to_vec<double>(dnLz), to_vec<double>(dnRz)));
+                  as_span<std::int64_t>(kLx), as_span<std::int64_t>(kRx), as_span<double>(wx_area),
+                  as_span<double>(dpsiRx), as_span<double>(dnLx), as_span<double>(dnRx),
+                  as_span<std::int64_t>(kSy), as_span<std::int64_t>(kNy), as_span<double>(wy_area),
+                  as_span<double>(dpsiRy), as_span<double>(dnLy), as_span<double>(dnRy),
+                  as_span<std::int64_t>(kDz), as_span<std::int64_t>(kUz), as_span<double>(wz_area),
+                  as_span<double>(dpsiRz), as_span<double>(dnLz), as_span<double>(dnRz)));
           },
           nb::arg("kLx"), nb::arg("kRx"), nb::arg("wx_area"), nb::arg("dpsiRx"),
           nb::arg("dnLx"), nb::arg("dnRx"), nb::arg("kSy"), nb::arg("kNy"),
@@ -104,12 +109,12 @@ void register_device3d(nb::module_& m) {
               check_edges6(kSy, kNy, wy_area, dpsiRy, dpLy, dpRy, "y");
               check_edges6(kDz, kUz, wz_area, dpsiRz, dpLz, dpRz, "z");
               return publish_coo(tcad::device3d::hole_continuity(
-                  to_vec<std::int64_t>(kLx), to_vec<std::int64_t>(kRx), to_vec<double>(wx_area),
-                  to_vec<double>(dpsiRx), to_vec<double>(dpLx), to_vec<double>(dpRx),
-                  to_vec<std::int64_t>(kSy), to_vec<std::int64_t>(kNy), to_vec<double>(wy_area),
-                  to_vec<double>(dpsiRy), to_vec<double>(dpLy), to_vec<double>(dpRy),
-                  to_vec<std::int64_t>(kDz), to_vec<std::int64_t>(kUz), to_vec<double>(wz_area),
-                  to_vec<double>(dpsiRz), to_vec<double>(dpLz), to_vec<double>(dpRz)));
+                  as_span<std::int64_t>(kLx), as_span<std::int64_t>(kRx), as_span<double>(wx_area),
+                  as_span<double>(dpsiRx), as_span<double>(dpLx), as_span<double>(dpRx),
+                  as_span<std::int64_t>(kSy), as_span<std::int64_t>(kNy), as_span<double>(wy_area),
+                  as_span<double>(dpsiRy), as_span<double>(dpLy), as_span<double>(dpRy),
+                  as_span<std::int64_t>(kDz), as_span<std::int64_t>(kUz), as_span<double>(wz_area),
+                  as_span<double>(dpsiRz), as_span<double>(dpLz), as_span<double>(dpRz)));
           },
           nb::arg("kLx"), nb::arg("kRx"), nb::arg("wx_area"), nb::arg("dpsiRx"),
           nb::arg("dpLx"), nb::arg("dpRx"), nb::arg("kSy"), nb::arg("kNy"),
@@ -134,8 +139,8 @@ void register_device3d(nb::module_& m) {
                                               "dcden/dcdp must have N entries "
                                               "when has_incomplete_ion");
               return publish_coo(tcad::device3d::base_diagonal(
-                  N, to_vec<double>(dV), has_incomplete_ion, to_vec<double>(dcden),
-                  to_vec<double>(dcdp), to_vec<double>(dRs_dn), to_vec<double>(dRs_dp)));
+                  N, as_span<double>(dV), has_incomplete_ion, as_span<double>(dcden),
+                  as_span<double>(dcdp), as_span<double>(dRs_dn), as_span<double>(dRs_dp)));
           },
           nb::arg("N"), nb::arg("dV"), nb::arg("has_incomplete_ion"),
           nb::arg("dcden"), nb::arg("dcdp"), nb::arg("dRs_dn"), nb::arg("dRs_dp"));

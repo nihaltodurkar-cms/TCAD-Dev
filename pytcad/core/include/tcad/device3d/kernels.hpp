@@ -30,6 +30,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace tcad::device3d {
@@ -45,40 +46,40 @@ struct Coo {
 /// psi-flux weights (`wx_area*self.et_x/hx` etc., already computed in
 /// Python).
 Coo poisson_flux_row(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_h,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_h,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_h);
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_h,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_h,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_h);
 
 /// Electron continuity row (comp 1) -- x-psi, x-n, y-psi, y-n, z-psi,
 /// z-n, exact call order of the original 6 `scatter()` calls. The
 /// dJn_* arrays already carry the `fd` correction if that flag was on
 /// (computed in Python, unchanged by this port).
 Coo electron_continuity(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_area, const std::vector<double>& dJn_dpsiR_x,
-    const std::vector<double>& dJn_dn_L_x, const std::vector<double>& dJn_dn_R_x,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_area, const std::vector<double>& dJn_dpsiR_y,
-    const std::vector<double>& dJn_dn_L_y, const std::vector<double>& dJn_dn_R_y,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_area, const std::vector<double>& dJn_dpsiR_z,
-    const std::vector<double>& dJn_dn_L_z, const std::vector<double>& dJn_dn_R_z);
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_area, std::span<const double> dJn_dpsiR_x,
+    std::span<const double> dJn_dn_L_x, std::span<const double> dJn_dn_R_x,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_area, std::span<const double> dJn_dpsiR_y,
+    std::span<const double> dJn_dn_L_y, std::span<const double> dJn_dn_R_y,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_area, std::span<const double> dJn_dpsiR_z,
+    std::span<const double> dJn_dn_L_z, std::span<const double> dJn_dn_R_z);
 
 /// Hole continuity row (comp 2) -- same shape as electron_continuity,
 /// mirrors `_hole_continuity_coo` exactly (comp=2, p-derivative arrays).
 Coo hole_continuity(
-    const std::vector<std::int64_t>& kLx, const std::vector<std::int64_t>& kRx,
-    const std::vector<double>& wx_area, const std::vector<double>& dJp_dpsiR_x,
-    const std::vector<double>& dJp_dp_L_x, const std::vector<double>& dJp_dp_R_x,
-    const std::vector<std::int64_t>& kSy, const std::vector<std::int64_t>& kNy,
-    const std::vector<double>& wy_area, const std::vector<double>& dJp_dpsiR_y,
-    const std::vector<double>& dJp_dp_L_y, const std::vector<double>& dJp_dp_R_y,
-    const std::vector<std::int64_t>& kDz, const std::vector<std::int64_t>& kUz,
-    const std::vector<double>& wz_area, const std::vector<double>& dJp_dpsiR_z,
-    const std::vector<double>& dJp_dp_L_z, const std::vector<double>& dJp_dp_R_z);
+    std::span<const std::int64_t> kLx, std::span<const std::int64_t> kRx,
+    std::span<const double> wx_area, std::span<const double> dJp_dpsiR_x,
+    std::span<const double> dJp_dp_L_x, std::span<const double> dJp_dp_R_x,
+    std::span<const std::int64_t> kSy, std::span<const std::int64_t> kNy,
+    std::span<const double> wy_area, std::span<const double> dJp_dpsiR_y,
+    std::span<const double> dJp_dp_L_y, std::span<const double> dJp_dp_R_y,
+    std::span<const std::int64_t> kDz, std::span<const std::int64_t> kUz,
+    std::span<const double> wz_area, std::span<const double> dJp_dpsiR_z,
+    std::span<const double> dJp_dp_L_z, std::span<const double> dJp_dp_R_z);
 
 /// Local (same-node) diagonal terms: Poisson's charge term (two forms
 /// depending on incomplete_ion), then SRH n-row, then SRH p-row --
@@ -86,8 +87,8 @@ Coo hole_continuity(
 /// N each. `has_incomplete_ion=false` ignores dcden/dcdp (pass
 /// zero-length or any placeholder arrays; not read in that branch).
 Coo base_diagonal(
-    std::int64_t N, const std::vector<double>& dV, bool has_incomplete_ion,
-    const std::vector<double>& dcden, const std::vector<double>& dcdp,
-    const std::vector<double>& dRs_dn, const std::vector<double>& dRs_dp);
+    std::int64_t N, std::span<const double> dV, bool has_incomplete_ion,
+    std::span<const double> dcden, std::span<const double> dcdp,
+    std::span<const double> dRs_dn, std::span<const double> dRs_dp);
 
 }  // namespace tcad::device3d
