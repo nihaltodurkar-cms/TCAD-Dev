@@ -686,3 +686,54 @@ code-quality grounds as much as speed: no per-call copies, and the
 kernel signatures now state that inputs are read-only views. Gates:
 parity/FD/M47 tests green, ASan/UBSan clean, full suite green, goldens
 byte-identical.
+
+## Equilibrium Jacobian permittivity fix + compiled equilibrium stencil (2026-09-25, Windows)
+
+**Bug.** `Device3D._residual_jacobian_poisson`'s residual fluxes carry
+the edge permittivity `et_x/et_y/et_z` (M11-S4), but its Jacobian's
+stencil weights `wx/wy/wz` did not (the coupled Jacobian's `wx_h`
+already did). Finite-difference check across an eps step (Si 11.7 ->
+3.9): |J_fd - J| / |J_fd| = 2.0, against 1.1e-9 with uniform eps.
+Newton still reached the right root (F is exact) but inexactly: 40
+assemblies instead of 7 at eps_r 3.9, 66 at 2.0. Fixed at the user's
+explicit sign-off (`wx = wx * et_x` etc.); gated by
+`tests/test_device3d_poisson_jacobian_eps.py` (FD gate across the step
+in all three directions, and the Newton step count matching the
+uniform case).
+
+**Bit-identity off the fixed path.** With uniform eps, `et == 1.0`
+exactly, so nothing may move. md5 of the converged equilibrium `psi`
+and of the final `(F, J.data, J.indices, J.indptr)`, recorded BEFORE
+the edit (and reproduced twice, run to run), then re-checked after the
+fix, after factoring the stencil into `_poisson_eq_stencil_py`, and
+after each compiled step -- unchanged every time:
+
+| device | psi md5 | F+J md5 |
+|---|---|---|
+| B4/quick | `01c0f746e9d99180de9d84e47784b48f` | `13127b508d6bc2ae5f49b585ff9f42ef` |
+| B5/quick | `4fa40a5b206ee57e7c9eeacb8e393130` | `6d518565525729479804590cdf8bacd3` |
+| sic_power_mosfet_3d | `7630c8bf0a47197de57b9345490b9781` | `3fb101343c6beb535c5aea899513bfc8` |
+| umos_3d | `fe2a4f5ddf70725ba1c134d920152f9b` | `1ad46537882ab54a3ad0d61ea5de9633` |
+| moscap_3d | `2ea7f82ecb3386f57712adb06e29796c` | `72345cfdf278d660a16237a9c47fb7d7` |
+| resistor_3d | `8b7c6088cbaa1669bdd8a4fcfa79c648` | `4b5c8c7f30c82181d70d9885b16d727d` |
+| hetero_chi_only | `ebaaa89df60ee562d0d6c6e03a9447ca` | `51c6abaea93910b4789ae3e121d60603` |
+
+No golden moved: none of `tests/goldens/**` exists on this machine
+(they are gitignored and machine-specific; see CLAUDE.md), and every
+fingerprint above is byte-identical. A heterostructure with a real eps
+step is the only case whose Jacobian changes, and that is the fix.
+
+**Compiled stencil.** `core/src/device3d/poisson_eq.cpp`
+(`_core.device3d_poisson_eq_stencil`) produces F and the full
+pre-CSR COO -- stencil, diagonal, gate (Robin) diagonals, contact rows
+replaced -- in the Python oracle's exact order, written once into
+pre-sized buffers (this plan's "reserve from the start" lesson).
+`_poisson_eq_stencil_py` stays as the oracle
+(`tests/test_device3d_poisson_eq_accel_parity.py`, np.array_equal;
+a one-ulp reassociation mutant fails 9 of 13). scipy still builds the
+CSR: its duplicate summation follows an unstable per-row sort a C++
+port cannot reproduce bit for bit. Measured (Windows, B5 full, ms per
+`_residual_jacobian_poisson` call, best of 20): 31.0 -> 11.1; harness
+best of 3: B5 3.29s -> 2.85s, B4 2.68s -> 2.63s. The linear solve is
+now ~85% of both.
+

@@ -87,8 +87,18 @@ def test_a2_every_entry_names_its_evidence(cell):
     assert entry["min_dof"] >= 0
 
 
+@pytest.fixture
+def _backends_present(monkeypatch):
+    """This file gates the EVIDENCE TABLE, not the machine it runs on:
+    pin PETSc/MUMPS as available so a cell's measured method is what
+    select_auto returns. What happens without them is gated separately
+    (tests/test_linsolve_no_petsc.py, tests/test_linsolve_mumps.py)."""
+    monkeypatch.setattr(linsolve, "petsc_available", lambda: True)
+    monkeypatch.setattr(linsolve, "mumps_available", lambda: True)
+
+
 @pytest.mark.parametrize("cell", sorted(linsolve._AUTO_EVIDENCE))
-def test_a2_below_the_measured_floor_refuses(cell):
+def test_a2_below_the_measured_floor_refuses(cell, _backends_present):
     """No extrapolation below the smallest size actually measured."""
     dim, unstructured, coupled = cell
     entry = linsolve._AUTO_EVIDENCE[cell]

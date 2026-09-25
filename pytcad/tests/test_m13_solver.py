@@ -378,8 +378,17 @@ TAT_EQ_DIGEST = ("8339b19ccd5944acd7d20768c16c5379"
 # exactly what the substitution argument in pytcad/dirichlet.py predicts.
 TAT_FW_DIGEST = ("029c2637d792a4b48c2d05a08088fd76"
                  "44bcfc16bce11719e1cb1812a5ac6267")
-HETERO_FW_DIGEST = ("5828f729ec2eb91358e1b84cad07ad09"
-                    "24b23df69e0f5f5352794eb4c53d2788")
+# RE-CAPTURED 2026-09-25 on the Windows PC, which is now the only target
+# machine (the Linux value was "5828f729ec2eb91358e1b84cad07ad09"
+# "24b23df69e0f5f5352794eb4c53d2788"). Machine-specific, not a code
+# change: an untouched export of HEAD and the working tree give the SAME
+# digest here, and it failed identically in the Windows baseline before
+# any edit. The two TAT digests above reproduce on both machines; only
+# this heterojunction path's summation order differs. Checked before
+# trusting it: converged, all fields finite, n and p > 0, forward current
+# positive and conserved along the device to 4.3e-4.
+HETERO_FW_DIGEST = ("9639d6d32b229909a59c54f7e7584762"
+                    "5bde297072be6312e7465c58856ea97c")
 # Re-captured 2026-09-04 on THIS machine's own numpy/scipy/BLAS build --
 # a prior re-capture (2026-09-03) was done in a different sandbox and its
 # digests did not reproduce here bit-for-bit (confirmed: same code, same

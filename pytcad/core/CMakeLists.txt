@@ -103,10 +103,13 @@ add_library(tcad_core OBJECT
   src/process/indicators.cpp
   src/process/diffuse.cpp
   src/nonlocal/paths.cpp
+  src/nonlocal/segments.cpp
+  src/nonlocal/evaluate.cpp
   src/thermal/grid.cpp
   src/dg/grid.cpp
   src/unstructured3d/kernels.cpp
   src/device3d/kernels.cpp
+  src/device3d/poisson_eq.cpp
 )
 target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # M34-S4 / M43 / M42-S3: the path tracer, thermal-grid, and
@@ -115,9 +118,11 @@ target_include_directories(tcad_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include
 # of them -- stated explicitly rather than relied on as a default of
 # the target architecture.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  set_source_files_properties(src/nonlocal/paths.cpp src/thermal/grid.cpp
+  set_source_files_properties(src/nonlocal/paths.cpp src/nonlocal/segments.cpp
+                              src/nonlocal/evaluate.cpp
+                              src/thermal/grid.cpp
                               src/dg/grid.cpp src/unstructured3d/kernels.cpp
-                              src/device3d/kernels.cpp
+                              src/device3d/kernels.cpp src/device3d/poisson_eq.cpp
                               PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off")
 endif()
@@ -143,7 +148,18 @@ endif()
 # never several .so files: cross-.so C++ exception translation and
 # duplicated static state are a known footgun, and no consumer wants a
 # subset of the engine.
-nanobind_add_module(_core STABLE_ABI NB_STATIC
+#
+# MinGW: NOMINSIZE keeps the bindings at -O2 instead of nanobind's
+# default -Os. With GCC 16 + C++20, -Os emits an out-of-line call to
+# std::string's move constructor that the statically linked MinGW
+# libstdc++ does not resolve ("undefined reference to basic_string(
+# basic_string&&)" at link time) -- reproduced on a 2-line TU, which
+# links at -O2 and fails at -Os. Linux keeps nanobind's default.
+set(_TCAD_NB_OPTS "")
+if(MINGW)
+  list(APPEND _TCAD_NB_OPTS NOMINSIZE)
+endif()
+nanobind_add_module(_core STABLE_ABI NB_STATIC ${_TCAD_NB_OPTS}
   bindings/module.cpp
   bindings/mesh_bindings.cpp
   bindings/solver_bindings.cpp

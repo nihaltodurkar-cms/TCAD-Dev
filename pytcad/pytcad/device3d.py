@@ -187,6 +187,112 @@ def _edge_pairs_z(Nx, Ny, Nz):
     return kD, kU
 
 
+def _poisson_eq_stencil_py(psi, n, p, C, dnp, dV, et_x, et_y, et_z,
+                           hx, hy, hz, dVx, dVy, dVz,
+                           gate_rows=None, gate_vals=None, contact_k=None):
+    """Equilibrium Poisson residual F (Nz,Ny,Nx) BEFORE boundary
+    conditions, and the Jacobian's COO (rows, cols, vals): stencil +
+    diagonal, then the gate (Robin) diagonal entries `gate_rows`/
+    `gate_vals`, then every row in `contact_k` (sorted, unique) replaced
+    by an identity row -- the part of Device3D._residual_jacobian_poisson
+    that core/src/device3d/poisson_eq.cpp compiles. Kept as the ORACLE:
+    tests/test_device3d_poisson_eq_accel_parity.py holds the compiled
+    kernel to np.array_equal against it."""
+    Nz, Ny, Nx = psi.shape
+    N = psi.size
+    # M11-S4: position-dependent eps in flux form (uniform => 1.0)
+    Fx = et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
+    Fy = et_y * (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
+    Fz = et_z * (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
+
+    div_x = np.zeros((Nz, Ny, Nx)); div_x[:, :, :-1] += Fx; div_x[:, :, 1:] -= Fx
+    div_y = np.zeros((Nz, Ny, Nx)); div_y[:, :-1, :] += Fy; div_y[:, 1:, :] -= Fy
+    div_z = np.zeros((Nz, Ny, Nx)); div_z[:-1, :, :] += Fz; div_z[1:, :, :] -= Fz
+
+    F = (dVy[None, :, None] * dVz[:, None, None] * div_x
+       + dVx[None, None, :] * dVz[:, None, None] * div_y
+       + dVx[None, None, :] * dVy[None, :, None] * div_z
+       - dV * (n - p - C))
+
+    kLx, kRx = _edge_pairs_x(Nx, Ny, Nz)
+    wx = np.broadcast_to(dVy[None, :, None] * dVz[:, None, None] / hx[None, None, :],
+                          (Nz, Ny, Nx - 1)).ravel()
+    kSy, kNy = _edge_pairs_y(Nx, Ny, Nz)
+    wy = np.broadcast_to(dVx[None, None, :] * dVz[:, None, None] / hy[None, :, None],
+                          (Nz, Ny - 1, Nx)).ravel()
+    kDz, kUz = _edge_pairs_z(Nx, Ny, Nz)
+    wz = np.broadcast_to(dVx[None, None, :] * dVy[None, :, None] / hz[:, None, None],
+                          (Nz - 1, Ny, Nx)).ravel()
+    # The fluxes in F carry the edge permittivity et_*, so dF/dpsi
+    # must too (the coupled Jacobian's wx_h already does). Missing
+    # it left Newton inexact across an eps step: 40 steps instead of
+    # 7 at eps 11.7 -> 3.9 (tests/test_device3d_poisson_jacobian_eps.py).
+    # Uniform eps => et == 1.0 exactly, so this is bit-identical there.
+    wx = wx * et_x.ravel()
+    wy = wy * et_y.ravel()
+    wz = wz * et_z.ravel()
+
+    rows = np.concatenate([kLx, kRx, kLx, kRx, kSy, kNy, kSy, kNy,
+                            kDz, kUz, kDz, kUz])
+    cols = np.concatenate([kLx, kRx, kRx, kLx, kSy, kNy, kNy, kSy,
+                            kDz, kUz, kUz, kDz])
+    vals = np.concatenate([-wx, -wx, wx, wx, -wy, -wy, wy, wy,
+                            -wz, -wz, wz, wz])
+
+    diag_k = np.arange(N)
+    diag_v = (-dV * dnp).ravel()
+    rows = np.concatenate([rows, diag_k])
+    cols = np.concatenate([cols, diag_k])
+    vals = np.concatenate([vals, diag_v])
+
+    if gate_rows is not None and len(gate_rows):
+        rows = np.concatenate([rows, gate_rows])
+        cols = np.concatenate([cols, gate_rows])
+        vals = np.concatenate([vals, gate_vals])
+    if contact_k is not None and len(contact_k):
+        keep = ~np.isin(rows, contact_k)
+        rows, cols, vals = rows[keep], cols[keep], vals[keep]
+        rows = np.concatenate([rows, contact_k])
+        cols = np.concatenate([cols, contact_k])
+        vals = np.concatenate([vals, np.ones_like(contact_k, dtype=float)])
+    return F, rows, cols, vals
+
+
+def _poisson_eq_stencil_accel(psi, n, p, C, dnp, dV, et_x, et_y, et_z,
+                              hx, hy, hz, dVx, dVy, dVz,
+                              gate_rows=None, gate_vals=None, contact_k=None):
+    """_poisson_eq_stencil_py through core/src/device3d/poisson_eq.cpp,
+    bit-identical (tests/test_device3d_poisson_eq_accel_parity.py)."""
+    _accel.require_accel()
+    shp = np.shape(psi)
+    if len(shp) != 3:
+        raise ValueError(f"psi must be (Nz, Ny, Nx), got shape {shp}")
+    Nz, Ny, Nx = shp
+
+    def node(a):
+        a = np.asarray(a, dtype=np.float64)
+        if a.shape != shp:
+            raise ValueError(f"node field has shape {a.shape}, expected {shp}")
+        return np.ascontiguousarray(a).ravel()
+
+    def flat(a):
+        return np.ascontiguousarray(a, dtype=np.float64).ravel()
+
+    def idx(a):
+        return np.ascontiguousarray(
+            np.zeros(0) if a is None else a, dtype=np.int64).ravel()
+
+    gv = flat(np.zeros(0) if gate_vals is None else gate_vals)
+    F, rows, cols, vals = _accel.core.device3d_poisson_eq_stencil(
+        Nz, Ny, Nx, node(psi), node(n), node(p), node(C), node(dnp), node(dV),
+        flat(et_x), flat(et_y), flat(et_z), flat(hx), flat(hy), flat(hz),
+        flat(dVx), flat(dVy), flat(dVz), idx(gate_rows), gv, idx(contact_k))
+    return F.reshape(shp), rows, cols, vals
+
+
+_poisson_eq_stencil = _poisson_eq_stencil_accel
+
+
 # ----------------------------------------------------------------------
 #  M47 Slice 2a groundwork: the base-assembly COO stamps (Poisson flux,
 #  electron/hole continuity, local diagonal terms) factored into named,
@@ -864,82 +970,48 @@ class Device3D:
         # bit-identical.
         C, dnp = self._poisson_charge(psi, n, p, dnp)
 
-        # M11-S4: position-dependent eps in flux form (uniform => 1.0)
-        Fx = self.et_x * (psi[:, :, 1:] - psi[:, :, :-1]) / hx[None, None, :]
-        Fy = self.et_y * (psi[:, 1:, :] - psi[:, :-1, :]) / hy[None, :, None]
-        Fz = self.et_z * (psi[1:, :, :] - psi[:-1, :, :]) / hz[:, None, None]
+        # Boundary-condition Jacobian entries do not depend on psi, so
+        # they are gathered first and the stencil kernel appends them in
+        # the original order (gate diagonals, then contact rows replaced).
+        gates = [(bc.k * Nx * Ny + bc.j * Nx + bc.i, self._gate_face_weight(bc), bc)
+                 for bc in self.bcs.values() if isinstance(bc, GateBC)]
+        contact_k = [bc.k * Nx * Ny + bc.j * Nx + bc.i
+                     for bc in self.bcs.values()
+                     if isinstance(bc, (DirichletBC, PinnedBC))]
+        contact_k = (np.unique(np.concatenate(contact_k)) if contact_k
+                     else np.zeros(0, dtype=int))
+        gate_rows = (np.concatenate([kk for kk, _, _ in gates]) if gates
+                     else np.zeros(0, dtype=int))
+        gate_vals = (np.concatenate([-bc.kappa * w for _, w, bc in gates]) if gates
+                     else np.zeros(0))
 
-        div_x = np.zeros((Nz, Ny, Nx)); div_x[:, :, :-1] += Fx; div_x[:, :, 1:] -= Fx
-        div_y = np.zeros((Nz, Ny, Nx)); div_y[:, :-1, :] += Fy; div_y[:, 1:, :] -= Fy
-        div_z = np.zeros((Nz, Ny, Nx)); div_z[:-1, :, :] += Fz; div_z[1:, :, :] -= Fz
-
-        F = (dVy[None, :, None] * dVz[:, None, None] * div_x
-           + dVx[None, None, :] * dVz[:, None, None] * div_y
-           + dVx[None, None, :] * dVy[None, :, None] * div_z
-           - dV * (n - p - C))
-
-        kLx, kRx = _edge_pairs_x(Nx, Ny, Nz)
-        wx = np.broadcast_to(dVy[None, :, None] * dVz[:, None, None] / hx[None, None, :],
-                              (Nz, Ny, Nx - 1)).ravel()
-        kSy, kNy = _edge_pairs_y(Nx, Ny, Nz)
-        wy = np.broadcast_to(dVx[None, None, :] * dVz[:, None, None] / hy[None, :, None],
-                              (Nz, Ny - 1, Nx)).ravel()
-        kDz, kUz = _edge_pairs_z(Nx, Ny, Nz)
-        wz = np.broadcast_to(dVx[None, None, :] * dVy[None, :, None] / hz[:, None, None],
-                              (Nz - 1, Ny, Nx)).ravel()
-
-        rows = np.concatenate([kLx, kRx, kLx, kRx, kSy, kNy, kSy, kNy,
-                                kDz, kUz, kDz, kUz])
-        cols = np.concatenate([kLx, kRx, kRx, kLx, kSy, kNy, kNy, kSy,
-                                kDz, kUz, kUz, kDz])
-        vals = np.concatenate([-wx, -wx, wx, wx, -wy, -wy, wy, wy,
-                                -wz, -wz, wz, wz])
-
-        diag_k = np.arange(N)
-        diag_v = (-dV * dnp).ravel()
-        rows = np.concatenate([rows, diag_k])
-        cols = np.concatenate([cols, diag_k])
-        vals = np.concatenate([vals, diag_v])
+        F, rows, cols, vals = _poisson_eq_stencil(
+            psi, n, p, C, dnp, dV, self.et_x, self.et_y, self.et_z,
+            hx, hy, hz, dVx, dVy, dVz, gate_rows, gate_vals, contact_k)
 
         # --- Robin (gate) BC: add Gauss's-law flux, weighted by the
         # face area and referenced to the local bulk potential ---
         F_flat = F.ravel()
-        for bc in self.bcs.values():
-            if isinstance(bc, GateBC):
-                kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
-                w = self._gate_face_weight(bc)
-                Vg_s, Vfb_s = 0.0, bc.Vfb / self.VT   # equilibrium: gate at zero bias too
-                # M33-S5: same -band_shift reference as _bulk_psi_guess;
-                # identically 0 on the default "nie" gauge.
-                psi_b_local = (np.arcsinh(
-                    self.C[bc.k, bc.j, bc.i] / (2.0 * self.nie_s[bc.k, bc.j, bc.i]))
-                    - self.band_shift[bc.k, bc.j, bc.i])
-                F_flat[kk] += bc.kappa * w * (
-                    Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
-                rows = np.concatenate([rows, kk])
-                cols = np.concatenate([cols, kk])
-                vals = np.concatenate([vals, -bc.kappa * w])
+        for kk, w, bc in gates:
+            Vg_s, Vfb_s = 0.0, bc.Vfb / self.VT   # equilibrium: gate at zero bias too
+            # M33-S5: same -band_shift reference as _bulk_psi_guess;
+            # identically 0 on the default "nie" gauge.
+            psi_b_local = (np.arcsinh(
+                self.C[bc.k, bc.j, bc.i] / (2.0 * self.nie_s[bc.k, bc.j, bc.i]))
+                - self.band_shift[bc.k, bc.j, bc.i])
+            F_flat[kk] += bc.kappa * w * (
+                Vg_s - Vfb_s - (psi.ravel()[kk] - psi_b_local))
 
         # --- Dirichlet (contact) BC: replace the row entirely, always
         # at V = 0 -- equilibrium is by definition the zero-bias solve ---
-        contact_k = []
         for name, bc in self.bcs.items():
             if isinstance(bc, DirichletBC):
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
                 psi0 = self._bc_contact_values(bc, 0.0)[0]
                 F_flat[kk] = psi.ravel()[kk] - psi0
-                contact_k.append(kk)
             elif isinstance(bc, PinnedBC):
                 kk = bc.k * Nx * Ny + bc.j * Nx + bc.i
                 F_flat[kk] = psi.ravel()[kk] - bc.psi0
-                contact_k.append(kk)
-        if contact_k:
-            contact_k = np.unique(np.concatenate(contact_k))
-            keep = ~np.isin(rows, contact_k)
-            rows, cols, vals = rows[keep], cols[keep], vals[keep]
-            rows = np.concatenate([rows, contact_k])
-            cols = np.concatenate([cols, contact_k])
-            vals = np.concatenate([vals, np.ones_like(contact_k, dtype=float)])
 
         J = csr_matrix((vals, (rows, cols)), shape=(N, N))
         self._dirichlet_rows_poisson = (

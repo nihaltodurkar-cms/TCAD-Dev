@@ -36,7 +36,13 @@ from pytcad.linsolve import select_auto, _AUTO_EVIDENCE
 
 
 # ---------------------------------------------------------------- D-2/D-3
-def test_every_evidenced_combo_returns_its_own_method_above_the_floor():
+def test_every_evidenced_combo_returns_its_own_method_above_the_floor(monkeypatch):
+    # Gates the evidence table, not this machine: pin PETSc/MUMPS as
+    # available. Their absence is gated in tests/test_linsolve_no_petsc.py
+    # and tests/test_linsolve_mumps.py.
+    from pytcad import linsolve
+    monkeypatch.setattr(linsolve, "petsc_available", lambda: True)
+    monkeypatch.setattr(linsolve, "mumps_available", lambda: True)
     for (dim, unstructured, coupled), entry in _AUTO_EVIDENCE.items():
         method, reason = select_auto(dim, unstructured, coupled,
                                      dof=entry["min_dof"])

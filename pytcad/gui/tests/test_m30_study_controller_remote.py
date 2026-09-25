@@ -70,7 +70,12 @@ def _install_fake_remote_runner(monkeypatch, tmp_path, bad_hosts=()):
     remote_wd = str(tmp_path / "remote-wd")
 
     def factory(host, parent=None, work_dir=None):
-        fake_host = dataclasses.replace(host, remote_workdir=remote_wd)
+        # The "remote" command runs locally through a shell, so the
+        # default `python` resolves via PATH -- on Windows that can be a
+        # system Python without numpy ("No module named 'numpy'"). The
+        # loopback worker's interpreter is this test's own.
+        fake_host = dataclasses.replace(host, remote_workdir=remote_wd,
+                                        python=sys.executable)
         ssh_cmd = _FAKE_SSH_ALWAYS_FAIL if host.host in bad_hosts else _FAKE_SSH
         return RemoteJobRunner(fake_host, parent=parent, work_dir=work_dir,
                                ssh_cmd=ssh_cmd, scp_cmd=_FAKE_SCP)

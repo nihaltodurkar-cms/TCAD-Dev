@@ -310,6 +310,25 @@ class ResultStore(ABC):
         return []
 
 
+class _LoadedNpz(dict):
+    """An npz archive read fully into memory, keeping the read interface
+    NpzFile gives the store (`[key]`, `in`, `.files`, `.filename`) but
+    NOT an open file handle. A lazily-read NpzFile holds its file open
+    for the store's lifetime, and Windows cannot delete or replace an
+    open file -- that failed result cleanup, re-runs over the same path,
+    and temp-dir teardown. Contents are the file as it was when opened,
+    which is also what the open handle gave on Linux."""
+
+    def __init__(self, path):
+        with np.load(path) as z:
+            super().__init__((k, z[k]) for k in z.files)
+        self.filename = path
+
+    @property
+    def files(self):
+        return list(self.keys())
+
+
 class NpzResultStore(ResultStore):
     """Reads the key convention solver_runner.extract_result() writes.
 
@@ -322,9 +341,9 @@ class NpzResultStore(ResultStore):
 
     def __init__(self, path):
         self.path = path
-        self._d = np.load(path)
+        self._d = _LoadedNpz(path)   # read once; no handle kept open
         from .solver_backend import validate_result
-        validate_result(self._d)   # validates our open handle, no re-read
+        validate_result(self._d)   # validates what we loaded, no re-read
 
     def is_solved_result(self):
         return True

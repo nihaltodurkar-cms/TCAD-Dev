@@ -10,6 +10,7 @@ No real network or sshd involved.
 
 Usage: python fake_ssh.py [-p PORT] [-o K=V]... [-i FILE] TARGET COMMAND
 """
+import os
 import subprocess
 import sys
 
@@ -26,6 +27,16 @@ def main(argv):
     # argv[i] is TARGET (ignored -- there is no real remote host),
     # argv[i + 1] is the command string to execute "remotely."
     command = argv[i + 1]
+    # The pretend remote is a POSIX host, but the local shell may be
+    # cmd.exe, whose `mkdir` takes "-p" as a directory NAME (it left a
+    # stray "-p" folder in the project and failed on every later run).
+    # Do what POSIX `mkdir -p` does, portably. The path is taken
+    # verbatim: RemoteJobRunner sends exactly one, and a Windows path's
+    # backslashes must not be read as shell escapes.
+    if command.startswith("mkdir -p "):
+        os.makedirs(command[len("mkdir -p "):].strip().strip("'\""),
+                    exist_ok=True)
+        return 0
     return subprocess.run(command, shell=True).returncode
 
 

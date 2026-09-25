@@ -602,6 +602,15 @@ class NewtonOptions:
     # wrong, not merely unhelpful.
     precond: str = "auto"
     block_size: int | None = 3
+    # OPT-IN SuperLU column ordering (scipy spsolve's permc_spec) for
+    # STRUCTURED Device2D.solve_bias's direct Newton solve -- nothing
+    # else reads it. None (default) is the exact pre-existing call, no
+    # permc_spec passed. Measured end to end, 2026-09-25 (Windows, full
+    # benchmark sizes), "MMD_AT_PLUS_A" vs the default COLAMD: B3 4.09s
+    # -> 2.56s, B6 0.57s -> 0.41s -- but B10 (nonlocal BTBT) 13.3s ->
+    # 49.4s and B8 (unstructured) 3.6s -> 870.6s. The best ordering
+    # depends on the matrix structure, so this is never a default.
+    direct_ordering: str | None = None
 
     def __post_init__(self):
         # Refuse an unreachable preconditioner flavor loudly rather than
@@ -622,6 +631,12 @@ class NewtonOptions:
             raise ValueError(
                 f"NewtonOptions.block_size={self.block_size!r} must be "
                 "a positive int or None.")
+        if self.direct_ordering is not None and self.direct_ordering not in (
+                "COLAMD", "MMD_AT_PLUS_A", "MMD_ATA", "NATURAL"):
+            raise ValueError(
+                f"NewtonOptions.direct_ordering={self.direct_ordering!r} is "
+                "not a SuperLU column ordering -- choose from None, "
+                "'COLAMD', 'MMD_AT_PLUS_A', 'MMD_ATA', 'NATURAL'.")
 
 
 @dataclass

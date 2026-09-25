@@ -12,8 +12,10 @@
 #include <span>
 #include <vector>
 
+#include "tcad/base/checks.hpp"
 #include "tcad/base/errors.hpp"
 #include "tcad/device3d/kernels.hpp"
+#include "tcad/device3d/poisson_eq.hpp"
 
 namespace nb = nanobind;
 
@@ -65,6 +67,47 @@ void check_edges6(I64 kL, I64 kR, F64 w, F64 d0, F64 d1, F64 d2, const char* axi
 }  // namespace
 
 void register_device3d(nb::module_& m) {
+    m.def("device3d_poisson_eq_stencil",
+          [](std::int64_t Nz, std::int64_t Ny, std::int64_t Nx, F64 psi, F64 n, F64 p,
+             F64 C, F64 dnp, F64 dV, F64 et_x, F64 et_y, F64 et_z, F64 hx, F64 hy,
+             F64 hz, F64 dVx, F64 dVy, F64 dVz, I64 gate_rows, F64 gate_vals, I64 contact) {
+              if (Nz < 1 || Ny < 1 || Nx < 1)
+                  throw tcad::InvalidArgument("device3d_poisson_eq_stencil: empty grid");
+              const std::int64_t N = Nz * Ny * Nx;
+              auto need = [](const F64& a, std::int64_t len, const char* what) {
+                  if (static_cast<std::int64_t>(a.shape(0)) != len)
+                      throw tcad::InvalidArgument(
+                          std::string("device3d_poisson_eq_stencil: ") + what +
+                          " has " + std::to_string(a.shape(0)) + " entries, expected " +
+                          std::to_string(len));
+              };
+              need(psi, N, "psi"); need(n, N, "n"); need(p, N, "p"); need(C, N, "C");
+              need(dnp, N, "dnp"); need(dV, N, "dV");
+              need(et_x, Nz * Ny * (Nx - 1), "et_x");
+              need(et_y, Nz * (Ny - 1) * Nx, "et_y");
+              need(et_z, (Nz - 1) * Ny * Nx, "et_z");
+              need(hx, Nx - 1, "hx"); need(hy, Ny - 1, "hy"); need(hz, Nz - 1, "hz");
+              need(dVx, Nx, "dVx"); need(dVy, Ny, "dVy"); need(dVz, Nz, "dVz");
+              const auto G = static_cast<std::int64_t>(gate_rows.shape(0));
+              const auto K = static_cast<std::int64_t>(contact.shape(0));
+              need(gate_vals, G, "gate_vals");
+              tcad::check_indices(gate_rows.data(), G, N, "gate_rows");
+              tcad::check_indices(contact.data(), K, N, "contact");
+              tcad::device3d::PoissonEq r;
+              {
+                  nb::gil_scoped_release nogil;
+                  r = tcad::device3d::poisson_eq_stencil(
+                      Nz, Ny, Nx, psi.data(), n.data(), p.data(), C.data(), dnp.data(),
+                      dV.data(), et_x.data(), et_y.data(), et_z.data(), hx.data(),
+                      hy.data(), hz.data(), dVx.data(), dVy.data(), dVz.data(),
+                      gate_rows.data(), gate_vals.data(), G, contact.data(), K);
+              }
+              return nb::make_tuple(publish(std::move(r.F)), publish(std::move(r.rows)),
+                                    publish(std::move(r.cols)), publish(std::move(r.vals)));
+          },
+          "device3d._poisson_eq_stencil_py, compiled: (F flat, rows, cols, vals), "
+          "bit-identical to the Python oracle.");
+
     m.def("device3d_poisson_flux_row",
           [](I64 kLx, I64 kRx, F64 wx_h, I64 kSy, I64 kNy, F64 wy_h,
              I64 kDz, I64 kUz, F64 wz_h) {

@@ -32,8 +32,21 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
-from .btbt import HBAR_SI, Q_SI, segment_integrals
+from .btbt import HBAR_SI, Q_SI, _kane_u, segment_integrals
 from . import _accel
+
+
+def _segment_integrals(da, db, L, Eg_J, mr_kg, hbar=HBAR_SI):
+    """btbt.segment_integrals through the compiled kernel
+    (core/src/nonlocal/segments.cpp), bit-identical to it -- gated by
+    tests/test_accel_segment_integrals.py. btbt.segment_integrals stays
+    the published-math reference; this is the hot-path call."""
+    u = _kane_u(mr_kg)            # same refusal as the reference
+    _accel.require_accel()
+    f = lambda a: np.ascontiguousarray(a, dtype=np.float64)
+    return _accel.core.segment_integrals(f(da), f(db), f(L), float(u),
+                                         float(Eg_J), float(mr_kg),
+                                         float(hbar))
 
 
 @dataclass
@@ -136,9 +149,11 @@ class PathEval:
     fmax: np.ndarray
 
 
-def evaluate(paths, psi, VT, Eg_J, mr_kg, mc_kg, mv_kg,
+def _evaluate_py(paths, psi, VT, Eg_J, mr_kg, mc_kg, mv_kg,
              hbar=HBAR_SI, q=Q_SI):
-    """Evaluate every path at the live `psi` (see the module docstring)."""
+    """Evaluate every path at the live `psi` (see the module docstring).
+    Pure-Python ORACLE of `evaluate` (tests/test_accel_nonlocal_evaluate.py).
+    """
     psi = np.asarray(psi, dtype=float)
     N = psi.size
     P = paths.n_paths
@@ -270,6 +285,32 @@ def evaluate(paths, psi, VT, Eg_J, mr_kg, mc_kg, mv_kg,
     return PathEval(G, dG, dep, ddep_p[keep], ddep_node[keep],
                     ddep_col[keep], ddep_val[keep], Ik, Iik, reached,
                     length, fmin, fmax)
+
+
+def evaluate(paths, psi, VT, Eg_J, mr_kg, mc_kg, mv_kg,
+             hbar=HBAR_SI, q=Q_SI):
+    """Evaluate every path at the live `psi` (see the module docstring)
+    through core/src/nonlocal/evaluate.cpp -- bit-identical to
+    `_evaluate_py`, which stays the oracle. scipy still builds the two
+    CSR matrices from the kernel's COO triplets (see evaluate.hpp)."""
+    psi = np.asarray(psi, dtype=float)
+    if paths.n_paths == 0:
+        return _evaluate_py(paths, psi, VT, Eg_J, mr_kg, mc_kg, mv_kg, hbar, q)
+    u = _kane_u(mr_kg)            # same refusal as the reference
+    _accel.require_accel()
+    i64 = lambda a: np.ascontiguousarray(a, dtype=np.int64)
+    f64 = lambda a: np.ascontiguousarray(a, dtype=np.float64)
+    N, P = psi.size, paths.n_paths
+    (G, Ik, Iik, reached, length, fmin, fmax, g_r, g_c, g_v, d_r, d_c, d_v,
+     dd_p, dd_node, dd_col, dd_val) = _accel.core.evaluate_paths(
+        f64(psi.ravel()), i64(paths.start), i64(paths.offset), f64(paths.swts),
+        i64(paths.sidx), f64(paths.seg_len), f64(paths.gwts), i64(paths.gidx),
+        float(VT), float(Eg_J), float(mr_kg), float(mc_kg), float(mv_kg),
+        float(u), float(hbar), float(q))
+    dG = coo_matrix((g_v, (g_r, g_c)), shape=(P, N)).tocsr()
+    dep = coo_matrix((d_v, (d_r, d_c)), shape=(P, N)).tocsr()
+    return PathEval(G, dG, dep, dd_p, dd_node, dd_col, dd_val, Ik, Iik,
+                    reached.astype(bool), length, fmin, fmax)
 
 
 # ---------------------------------------------------------------------

@@ -680,6 +680,18 @@ def _node_coords(mesh_spec):
 # ----------------------------------------------------------------------
 #  Entry point
 # ----------------------------------------------------------------------
+def _recorded_linsolve(device, opts):
+    """The linear solver that actually ran the last phase, for the run
+    record: a concrete opts.linsolve as-is; for "auto", whatever the
+    device resolved it to (last_auto_method). Device1D/Device2D.
+    solve_equilibrium never read opts.linsolve and always solve direct,
+    so an equilibrium-only 1D/2D job leaves no resolution behind --
+    and "direct" is what ran."""
+    if opts.linsolve != "auto":
+        return opts.linsolve
+    return getattr(device, "last_auto_method", None) or "direct"
+
+
 def _solve_all(device, spec, opts, linsolve_bias=None):
     """Equilibrium + (optional) bias or sweep, emitting the same
     PYTCAD_STAGE markers JobRunner has always streamed.  Returns the
@@ -976,8 +988,12 @@ def run_job(job_path, out_path, capture_trace=True):
     is_large_3d = spec.mesh.dimensionality == 3 and node_count > 20_000
     use_amg_equilibrium = is_large_3d and _HAVE_PYAMG
     use_gpu_bias = is_large_3d and _HAVE_CUPY
+    # Below the size gate, "auto": pytcad.linsolve's measured per-cell
+    # choice (_AUTO_EVIDENCE). In 1D/2D it resolves to direct (measured
+    # to win there), so those jobs run exactly as before; structured 3D
+    # equilibrium takes petsc, or gmres where PETSc is absent.
     opts = NewtonOptions(verbose=True,
-                        linsolve="bicgstab" if use_amg_equilibrium else "direct")
+                        linsolve="bicgstab" if use_amg_equilibrium else "auto")
     # Always explicit, never None: _solve_all only overwrites
     # opts.linsolve when linsolve_bias is not None, so a machine with
     # pyamg but no cupy (equilibrium fast, bias not) would otherwise
@@ -987,7 +1003,7 @@ def run_job(job_path, out_path, capture_trace=True):
     # Falling back to direct every iteration is still correct (the
     # try/except in solve_bias catches it) but wastes a failed
     # bicgstab attempt each time for no reason once equilibrium is done.
-    linsolve_bias = "gpu_direct" if use_gpu_bias else "direct"
+    linsolve_bias = "gpu_direct" if use_gpu_bias else "auto"
 
     # 4-rank MPI Schwarz domain decomposition (gui/services/
     # mpi_schwarz_runner.py): confirmed directly on bjt_3d (a genuinely
@@ -1171,6 +1187,10 @@ def run_job(job_path, out_path, capture_trace=True):
     # unconditionally would misreport which solver engine actually
     # produced this result whenever the MPI path was taken.
     numerics = asdict(opts)
+    # "auto" is a request, not a solver: record what it resolved to.
+    numerics["linsolve_requested"] = opts.linsolve
+    if not use_mpi_schwarz:
+        numerics["linsolve"] = _recorded_linsolve(device, opts)
     if use_mpi_schwarz:
         numerics["linsolve"] = "direct"
         numerics["engine"] = "mpi_schwarz"

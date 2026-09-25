@@ -41,6 +41,9 @@ import numpy as np
 
 GND = "0"
 
+# Relative floor on the Newton step convergence test (see Circuit._newton).
+_NEWTON_RTOL = 1.0e-12
+
 
 class _MNA:
     """Node-name <-> unknown-index bookkeeping for Modified Nodal
@@ -309,7 +312,13 @@ class Circuit:
             x_new = np.linalg.solve(G, z)
             step = np.clip(x_new - x, -max_dv, max_dv)
             x = x + step
-            if np.max(np.abs(step)) < tol:
+            # tol is absolute, plus a relative floor: a large branch
+            # current (a diode at 1.2 V draws ~1.4e7 A) has an ulp of
+            # ~2e-9, above tol=1e-9, so its converged step cycles at
+            # round-off (measured 6.5e-8, i.e. 4.6e-15 relative) and the
+            # absolute test alone could never pass. _NEWTON_RTOL=1e-12
+            # adds at most ~1e-11 for ordinary volt/mA circuits.
+            if np.all(np.abs(step) <= tol + _NEWTON_RTOL * np.abs(x)):
                 converged = True
                 break
         if not converged:

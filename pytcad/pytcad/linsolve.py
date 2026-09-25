@@ -108,6 +108,12 @@ def mumps_available():
     MUMPS."""
     return _accel.have_mumps() or _petsc4py_has_mumps()
 
+
+def petsc_available():
+    """True if method="petsc" can run on some backend: the compiled
+    PETSc path (pytcad._core) or petsc4py."""
+    return bool(_accel.have_petsc() or _HAVE_PETSC4PY)
+
 __all__ = ["solve_linear", "LinearSolveError", "select_auto"]
 
 # ----------------------------------------------------------------------
@@ -155,14 +161,31 @@ _AUTO_EVIDENCE = {
                "fallbacks across a full 9-iterate Newton sequence "
                "(179.0s -> 1.51s at 68,921 DOF). Not measured below "
                "4,913 DOF (B4 quick size); refusing below that rather "
-               "than extrapolating."),
+               "than extrapolating.",
+        no_petsc=dict(
+            method="gmres",
+            reason="Without PETSc (Windows, 2026-09-25, through "
+                   "Device3D.solve_equilibrium's real dispatch): gmres "
+                   "0.14s vs direct 0.39s at B4 quick (4,913 DOF), 2.81s "
+                   "vs 187.3s at B4 full (68,921 DOF), 3.35s vs 128.5s "
+                   "at B5 full (35,937 DOF); zero direct fallbacks, "
+                   "potential equal to direct within 7.4e-15 relative.")),
     (3, True, True): dict(
         method="petsc", min_dof=2889,
         reason="B9 (Phase A): 3D unstructured coupled drift-diffusion "
                "-- petsc measured 10.6x-11.5x faster than direct "
                "(7.85s -> 0.68s at 7,464 DOF). Not measured below "
                "2,889 DOF (B9 quick size); refusing below that rather "
-               "than extrapolating."),
+               "than extrapolating.",
+        no_petsc=dict(
+            method="gmres",
+            reason="Without PETSc (Windows, 2026-09-25, through "
+                   "solve_bias3d's real dispatch): gmres 0.50s vs direct "
+                   "0.91s at B9 quick (2,889 DOF), 1.28s vs 7.38s at B9 "
+                   "full (7,464 DOF); zero direct fallbacks, state equal "
+                   "to direct within 8e-16 relative. bicgstab was 1.05s "
+                   "but needed one direct fallback on B9 full, so gmres "
+                   "(also what the petsc path itself runs).")),
     # ---- Phase A-2 (2026-09-10) ------------------------------------
     # Five cells that were absent until now. Adding them changes only
     # what `linsolve="auto"` RESOLVES TO; `NewtonOptions.linsolve` still
@@ -199,7 +222,12 @@ _AUTO_EVIDENCE = {
                "configuration is 0.97s against direct's 0.04s, i.e. 24x "
                "SLOWER, because KSP/PC setup dominates a system that "
                "small. Refusing below 2,488 is therefore backed by a "
-               "measurement showing direct genuinely wins there."),
+               "measurement showing direct genuinely wins there.",
+        no_petsc=dict(
+            method="gmres",
+            reason="Without PETSc: U3DP's own Phase A-2 scipy rows "
+                   "(benchmarks/phase_a2_out/u3dp.log) -- gmres 0.09s vs "
+                   "direct 0.16s at 2,488 DOF, all configs converged.")),
     (3, False, True): dict(
         method="mumps", min_dof=6591,
         reason="S3D + F3D (2026-09-24 re-measurement, "
@@ -231,7 +259,12 @@ _AUTO_EVIDENCE = {
                "system behaves like B4's scalar 3D case, not like B3/B8's "
                "coupled ones. Not measured below 11,341 DOF: at 1,001 "
                "the whole solve is 2 Newton steps and all eight configs "
-               "sit at 0.01s, which is timer resolution, not a result."),
+               "sit at 0.01s, which is timer resolution, not a result.",
+        no_petsc=dict(
+            method="gmres",
+            reason="Without PETSc: U2DP's own Phase A-2 scipy rows "
+                   "(benchmarks/phase_a2_out/full2.log) -- gmres 0.05s vs "
+                   "direct 0.12s at 11,341 DOF, all configs converged.")),
     (2, True, True): dict(
         method="direct", min_dof=0,
         reason="B8 (Phase A): 2D unstructured coupled drift-diffusion "
@@ -288,6 +321,18 @@ def select_auto(dim, unstructured, coupled, dof):
             entry["reason"] + " No MUMPS-capable PETSc backend is "
             "available in this environment (compiled _core or petsc4py), "
             "so resolving to direct.")
+    if entry["method"] == "petsc" and not petsc_available():
+        # Same principle for petsc: without a backend every Newton
+        # iterate would raise and fall back to DIRECT, the slow path the
+        # cell exists to avoid (187s vs 2.8s on B4 full). Take the cell's
+        # measured no-PETSc alternative; with none, resolve to direct.
+        alt = entry.get("no_petsc")
+        absent = (" No PETSc backend is available in this environment "
+                  "(compiled _core or petsc4py), so resolving to ")
+        if alt is None:
+            return "direct", entry["reason"] + absent + "direct."
+        return alt["method"], (entry["reason"] + absent + alt["method"]
+                               + ". " + alt["reason"])
     return entry["method"], entry["reason"]
 
 _METHODS = ("direct", "gmres", "bicgstab", "gpu_direct", "petsc", "mumps")

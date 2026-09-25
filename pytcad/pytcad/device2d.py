@@ -26,7 +26,7 @@ of the same code path.
 import warnings
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, diags
 from scipy.sparse.linalg import spsolve
 
 # M31 P4b: symmetric Dirichlet elimination -- see pytcad/dirichlet.py.
@@ -1199,6 +1199,23 @@ class Device2D:
         for _ in range(max_iter):
             F, J = self._dg_residual_jacobian_eq(psi, Lam_n, Lam_p, gamma=gamma)
             Jd, rhs = eliminate_csr(J, -F, self._dg_dirichlet_rows_eq)
+            # Row equilibration (each row scaled by its largest |entry|)
+            # before the direct solve. Same Newton step in exact
+            # arithmetic; it only stops SuperLU losing the Lambda rows,
+            # whose scale is g = sqrt(n or p) -- ~1e-9 or less next to a
+            # strongly inverted gate. Unscaled, those rows' corrections
+            # came back as round-off noise, which the 10*VT step clip
+            # then ratcheted: Lambda_p reached 11 V (pin 0.52 V) and the
+            # G-RED/G6 gates in tests/test_m42_s2_gate_bc.py failed on
+            # Windows, even at gamma = 0 where the exact answer is
+            # Lambda = 0. Equilibrated: G-RED agrees to 3.6e-15 and
+            # |Lambda_p| stays at the pin (2026-09-25). F, the line search
+            # and the convergence test are unchanged.
+            Jd = Jd.tocsr()
+            rs = np.asarray(abs(Jd).max(axis=1).todense()).ravel()
+            rs[rs == 0.0] = 1.0
+            Jd = diags(1.0 / rs) @ Jd
+            rhs = rhs / rs
             try:
                 d, _ = linsolve.solve_linear(Jd.tocsc(), rhs, method="direct")
             except linsolve.LinearSolveError:
@@ -2009,7 +2026,13 @@ class Device2D:
                     # it. See pytcad/dirichlet.py.
                     Jd, rhs = eliminate_csr(J, -F, self._dirichlet_rows)
                     if resolved_linsolve == "direct":
-                        du = spsolve(Jd.tocsc(), rhs)
+                        # opts.direct_ordering: opt-in, see NewtonOptions.
+                        # None passes no permc_spec -- the exact old call.
+                        if opts.direct_ordering is None:
+                            du = spsolve(Jd.tocsc(), rhs)
+                        else:
+                            du = spsolve(Jd.tocsc(), rhs,
+                                         permc_spec=opts.direct_ordering)
                     else:
                         du, _ = linsolve.solve_linear(
                             Jd, rhs, method=resolved_linsolve, rtol=opts.linsolve_rtol,
