@@ -9,7 +9,8 @@
 //                              staircase, _Edge_integer; autolimit 'data')
 //   ContourSet._autolev -> trim, keeping ONE level below zmin and ONE above zmax
 // Python's float floor division and divmod are reproduced as CPython
-// computes them (from fmod), not as floor(a / b).
+// computes them (from fmod), not as floor(a / b). The MaxNLocator itself
+// lives in max_n_locator.hpp since P2-S2 (the plot axes share it).
 //
 // gui/tests/test_desktop_contour_levels.py compares this with
 // matplotlib's own ContourSet.levels. Qt- and VTK-free.

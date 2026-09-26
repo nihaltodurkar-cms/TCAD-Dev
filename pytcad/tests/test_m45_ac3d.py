@@ -65,6 +65,7 @@ Gates:
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import functools
 import warnings
 import numpy as np
 import pytest
@@ -299,6 +300,44 @@ def _mosfet3d():
     return dev
 
 
+# G4 and G5 analyse the SAME biased MOSFET. y_parameters() costs ~250 s
+# here (measured 2026-09-26), almost all of it frequency-independent
+# setup (the ohmic ports' current-sensitivity rows), and each
+# frequency's Y is computed independently from that setup. So it runs
+# ONCE, at the union of both gates' frequencies, and each gate reads its
+# own frequencies back -- the same numbers as a call of its own
+# (test_y_parameters_per_frequency_is_independent_of_the_batch pins
+# that). The xdist group keeps both gates on one worker, so the cache is
+# shared (pytest.ini: --dist loadgroup).
+_G4_FREQS = np.array([1.0])            # low f: ~purely real
+_G5_FREQS = np.logspace(3, 11, 20)
+
+
+@functools.lru_cache(maxsize=None)
+def _mosfet3d_y():
+    return y_parameters(_mosfet3d(), np.concatenate([_G4_FREQS, _G5_FREQS]))
+
+
+def _mosfet3d_y_at(freqs):
+    full = _mosfet3d_y()
+    idx = [int(np.flatnonzero(full.freqs == f)[0]) for f in freqs]
+    return YParamResult3D(full.freqs[idx], full.Y[idx], full.port_names)
+
+
+def test_y_parameters_per_frequency_is_independent_of_the_batch():
+    """What the shared MOSFET result above relies on, on a device cheap
+    enough to run twice: Y at a frequency is bit-identical whether it is
+    computed alone or among others."""
+    dev = _resistor2d3d()[1]   # the 3D resistor, solved
+    batch = np.concatenate([_G4_FREQS, _G5_FREQS])
+    together = y_parameters(dev, batch)
+    for f in (_G4_FREQS[0], _G5_FREQS[7], _G5_FREQS[-1]):
+        alone = y_parameters(dev, np.array([f]))
+        k = int(np.flatnonzero(batch == f)[0])
+        assert np.array_equal(alone.Y[0], together.Y[k]), f
+
+
+@pytest.mark.xdist_group("m45_ac3d_mosfet")
 def test_g4_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
     """G4: direct 3D port of ac2d.py's own G-MOSFET-FD -- a real
     (not synthetic) Device3D MOSFET's Y[drain,gate] at low frequency
@@ -321,8 +360,7 @@ def test_g4_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
     I1, I2 = _drain_I(Vg0 - dVg), _drain_I(Vg0 + dVg)
     dIdVg = (I2 - I1) / (2 * dVg)
 
-    dev = _mosfet3d()
-    res = y_parameters(dev, np.array([1.0]))   # low f: ~purely real
+    res = _mosfet3d_y_at(_G4_FREQS)   # low f: ~purely real
     gi, di = res.port_names.index("gate"), res.port_names.index("drain")
     gm = res.Y[0, di, gi].real
 
@@ -330,14 +368,14 @@ def test_g4_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
     assert rel < 5e-2, f"AC3D gm={gm:.6e} vs FD dI_drain/dVg={dIdVg:.6e} (rel {rel:.2%})"
 
 
+@pytest.mark.xdist_group("m45_ac3d_mosfet")
 def test_g5_mosfet_ft_is_finite_and_within_swept_range():
     """G5: direct 3D port of ac2d.py's own G-MOSFET-FT -- a real
     Device3D MOSFET biased ON must show genuine current gain
     (|h21|>1 at low frequency) that rolls off with frequency, giving a
     finite cutoff_frequency() within the swept range."""
-    dev = _mosfet3d()
-    freqs = np.logspace(3, 11, 20)
-    res = y_parameters(dev, freqs)
+    freqs = _G5_FREQS
+    res = _mosfet3d_y_at(freqs)
     gi, di = res.port_names.index("gate"), res.port_names.index("drain")
 
     h21_mag = np.abs(res.Y[:, di, gi] / res.Y[:, gi, gi])

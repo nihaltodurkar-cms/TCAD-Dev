@@ -7,7 +7,9 @@
 
 #include <QtTest/QtTest>
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 using tcad::desktop::DeviceSpecDocument;
 using tcad::desktop::NpzError;
@@ -162,13 +164,18 @@ private slots:
         QVERIFY_THROWS_EXCEPTION(std::exception, DeviceSpecDocument::parse("{not json"));
     }
 
-    // Python's json.dumps writes NaN/Infinity/-Infinity; json.loads reads them.
+    // Python's json.dumps writes NaN/Infinity/-Infinity; json.loads reads
+    // them as float values, and so does this (P2-S1: a convergence trace's
+    // blown-up residual is Infinity, not a gap).
     void pythonJsonReadsNonFiniteTokens() {
-        const auto j = parse_python_json(R"({"a": NaN, "b": Infinity, "c": -Infinity, "d": [NaN]})");
-        QVERIFY(j["a"].is_null());
-        QVERIFY(j["b"].is_null());
-        QVERIFY(j["c"].is_null());
-        QVERIFY(j["d"][0].is_null());
+        const auto j = parse_python_json(R"({"a": NaN, "b": Infinity, "c": -Infinity, "d": [NaN, 1.5, null]})");
+        QVERIFY(j["a"].is_number_float() && std::isnan(j["a"].get<double>()));
+        QVERIFY(j["b"].is_number_float() && j["b"].get<double>() == std::numeric_limits<double>::infinity());
+        QVERIFY(j["c"].is_number_float() && j["c"].get<double>() == -std::numeric_limits<double>::infinity());
+        QVERIFY(std::isnan(j["d"][0].get<double>()));
+        QCOMPARE(j["d"][1].get<double>(), 1.5);
+        QVERIFY(j["d"][2].is_null());  // a real null stays null
+        QVERIFY(std::isinf(parse_python_json("-Infinity").get<double>()));
     }
 
     void pythonJsonLeavesStringLiteralsAlone() {
@@ -177,13 +184,29 @@ private slots:
         const auto j = parse_python_json("{\"note\": \"NaN \\\"Infinity\\\" -Infinity\\\\\", \"k\": 1}");
         QCOMPARE(j["note"].get<std::string>(), std::string("NaN \"Infinity\" -Infinity\\"));
         QCOMPARE(j["k"].get<int>(), 1);
-        QCOMPARE(replace_nonfinite_tokens(R"(["NaN", NaN])"), std::string(R"(["NaN", null])"));
+        QCOMPARE(replace_nonfinite_tokens(R"(["NaN", NaN])", "M:"), std::string(R"(["NaN", "M:NaN"])"));
+    }
+
+    // A genuine string equal to the internal marker is kept as a string:
+    // the marker is chosen so it cannot collide.
+    void pythonJsonMarkerNeverCapturesARealString() {
+        const auto j = parse_python_json("[\"\\u0000pyjson0:NaN\", NaN, \"\\u0000pyjson1:Infinity\"]");
+        QVERIFY(j[0].is_string());
+        QCOMPARE(j[0].get<std::string>(), std::string("\0pyjson0:NaN", 12));
+        QVERIFY(std::isnan(j[1].get<double>()));
+        QVERIFY(j[2].is_string());
+        // ... even when the string spells the marker with escaped letters
+        const auto k = parse_python_json("[\"\\u0000\\u0070yjson0:NaN\", NaN]");
+        QVERIFY(k[0].is_string());
+        QVERIFY(std::isnan(k[1].get<double>()));
     }
 
     void pythonJsonRejectsWhatPythonRejects() {
         QVERIFY_THROWS_EXCEPTION(PyJsonError, parse_python_json("{not json"));
         QVERIFY_THROWS_EXCEPTION(PyJsonError, parse_python_json("nan"));  // lowercase is not a token
         QVERIFY_THROWS_EXCEPTION(PyJsonError, parse_python_json("[1,]"));
+        QVERIFY_THROWS_EXCEPTION(PyJsonError, parse_python_json("{NaN: 1}"));  // a key must be a string
+        QVERIFY_THROWS_EXCEPTION(PyJsonError, parse_python_json("-NaN"));
     }
 
     // isinstance(True, int) is True in Python; 2.0 is a float.

@@ -6,17 +6,27 @@
 // TCAD_TEST_DATA: mosfet_2d.npz and resistor_3d.npz (solved), corrupt.npz,
 // schema99.npz, notes.txt, layers3d.npz (S6: a synthetic 3D result with a
 // current density, sweep snapshots and regions), and a copy of mosfet_2d.npz inside a
-// directory named with non-ASCII characters. Every window uses its own
+// directory named with non-ASCII characters. P2-S3's curve modes: diode_1d.npz
+// and its I-V sweep, transient and AC runs (diode_1d_iv/_transient/_ac.npz),
+// a C-V sweep (cv.npz), and the I-V run with one step marked rejected
+// (diode_1d_rejected.npz). Every window uses its own
 // settings file in a temporary directory -- never the user's.
 #include "shell/app_settings.hpp"
 #include "shell/display_panel.hpp"
 #include "shell/info_panel.hpp"
 #include "shell/main_window.hpp"
 #include "shell/playback_panel.hpp"
+#include "shell/plot_panel.hpp"
 #include "shell/view3d_panel.hpp"
 #include "views/colormaps.hpp"
 #include "data/contour_levels.hpp"
+#include "data/line_cut.hpp"
+#include "data/npz.hpp"
+#include "data/result_model.hpp"
 #include "views/field/field_view.hpp"
+#include "views/plot/curve_modes.hpp"
+#include "views/plot/plot_view.hpp"
+#include "theme/theme.hpp"
 
 #include <DockManager.h>
 #include <DockWidget.h>
@@ -35,8 +45,12 @@
 #include <QApplication>
 #include <QDir>
 #include <QDropEvent>
+#include <QElapsedTimer>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QFile>
 #include <QLabel>
+#include <QLineF>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMimeData>
@@ -66,6 +80,8 @@
 #include <vtkActor.h>
 #include <vtkTextActor.h>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <set>
@@ -81,6 +97,8 @@ using tcad::desktop::VolumePreset;
 using tcad::desktop::colorMapName;
 using tcad::desktop::lut_input;
 using tcad::desktop::volumePresetSpec;
+using tcad::desktop::plot::PlotView;
+using tcad::desktop::plot::ViewMode;
 
 // A named widget of one of the window's panels. Searched from the PANEL:
 // ADS takes the widgets of non-current tabs out of the window's object
@@ -214,6 +232,181 @@ class TestShell : public QObject {
         return ids->GetNumberOfValues() > 0;
     }
 
+
+    // -- curve modes (P2-S3, NATIVE-DESKTOP-PLAN.md 16.3) ---------------------
+    // One test per curve mode, on real 1D runs; the modes a result cannot
+    // show are absent; switching views keeps the GL context and is fast.
+    // PlotView itself (ticks, gaps, log rule, hover rule) is gated by
+    // test_plot.cpp; these gate what each mode feeds it.
+
+    std::unique_ptr<MainWindow> opened(const char* ini_name, const char* file) {
+        auto w = shown(ini(ini_name));
+        if (w && !w->tryOpen(data(file))) return nullptr;
+        return w;
+    }
+    static QList<ViewMode> comboModes(MainWindow* w) {
+        QList<ViewMode> out;
+        for (int i = 0; i < w->viewModeCombo()->count(); ++i)
+            out << static_cast<ViewMode>(w->viewModeCombo()->itemData(i).toInt());
+        return out;
+    }
+    // Chooses a mode the way a user does: the toolbar combo.
+    static bool chooseMode(MainWindow* w, ViewMode m) {
+        QComboBox* combo = w->viewModeCombo();
+        const int i = combo->findData(static_cast<int>(m));
+        if (i < 0) return false;
+        combo->setCurrentIndex(i);
+        emit combo->activated(i);
+        return w->viewMode() == m;
+    }
+    static QAction* logAction(MainWindow* w) {
+        for (QAction* a : w->findChildren<QAction*>())
+            if (a->text() == "Log scale") return a;
+        return nullptr;
+    }
+    static QString statusReadout(MainWindow* w) { return w->findChild<QLabel*>("Readout")->text(); }
+    // The mouse onto sample i of series s (a synthesized move: QTest::mouseMove
+    // moves the real cursor). Returns the plot's readout.
+    static QString hoverSample(PlotView* p, std::size_t s, std::size_t i) {
+        const auto& ser = p->model().series[s];
+        const QPointF at = p->toPixel(ser.x[i], ser.y[i], ser.axis);
+        QMouseEvent move(QEvent::MouseMove, at, p->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(p, &move);
+        return p->readout();
+    }
+    // Decision 3's readout entry for sample i of series s, from the RAW values.
+    static QString entry(const PlotView* p, std::size_t s, std::size_t i) {
+        const auto& m = p->model();
+        const auto& ser = m.series[s];
+        const double x = ser.x[i], a = std::abs(x);
+        QString e = ser.label + ": " + QString::asprintf("%.3e", ser.y[i]);
+        if (!ser.unit.isEmpty()) e += " " + ser.unit;
+        e += " @ " + ((x == 0 || (a >= 1e-3 && a < 1e4)) ? QString::asprintf("%.3f", x) : QString::asprintf("%.3e", x));
+        if (!m.x_unit.isEmpty()) e += " " + m.x_unit;
+        return e;
+    }
+    // TCAD_SHELL_SNAPSHOT=<dir>: saves the whole window as <name>.png, to look at.
+    static void snapshot(MainWindow* w, const QString& name) {
+        const QString dir = qEnvironmentVariable("TCAD_SHELL_SNAPSHOT");
+        if (dir.isEmpty()) return;
+        QApplication::processEvents();
+        w->grab().save(QDir(dir).filePath(name + ".png"));
+    }
+    static std::vector<double> um(const std::vector<double>& cm) {
+        std::vector<double> out(cm.size());
+        for (std::size_t i = 0; i < cm.size(); ++i) out[i] = cm[i] * 1e4;
+        return out;
+    }
+    // The plot is the visible view and the FieldView is hidden (and vice versa).
+    static bool plotShown(MainWindow* w) { return w->plotView()->isVisible() && !w->fieldView()->isVisible(); }
+    static bool mapShown(MainWindow* w) { return w->fieldView()->isVisible() && !w->plotView()->isVisible(); }
+
+    // -- overlays (P2-S5, NATIVE-DESKTOP-PLAN.md 16.3) ----------------------------
+    // Sweeps from other result files over the open one's: a comparison
+    // (dashed) and a family (one colour each), each on its OWN voltages,
+    // refused -- naming the mismatch -- when the contact, quantity, unit or
+    // channel differ.
+    using Kind = tcad::desktop::plot::OverlayCurve::Kind;
+
+    static std::unique_ptr<MainWindow> curvesOf(QTemporaryDir& tmp, const char* ini_name) {
+        auto w = shown(tmp.filePath(ini_name));
+        if (!w || !w->tryOpen(data("diode_1d_iv.npz"))) return nullptr;
+        return chooseMode(w.get(), ViewMode::Curves) ? std::move(w) : nullptr;
+    }
+    static tcad::desktop::SweepSeries sweepOf(const char* file) {
+        const auto npz = tcad::desktop::NpzFile::open(data(file).toStdWString());
+        return tcad::desktop::ResultModel::from_npz(npz).sweep();
+    }
+
+    // -- P2-S6 hardening (NATIVE-DESKTOP-PLAN.md 16.3) -----------------------------
+
+    // Distance (logical px) from `pt` to series t's polyline as drawn.
+    static double distanceToSeries(PlotView* p, std::size_t t, QPointF pt) {
+        const auto& s = p->model().series[t];
+        double best = 1e300;
+        QPointF prev;
+        bool have_prev = false;
+        for (std::size_t i = 0; i < s.x.size(); ++i) {
+            const QPointF q = p->toPixel(s.x[i], s.y[i], s.axis);
+            if (!std::isfinite(q.x()) || !std::isfinite(q.y())) {
+                have_prev = false;
+                continue;
+            }
+            best = std::min(best, QLineF(pt, q).length());
+            if (have_prev && s.line != tcad::desktop::plot::LineStyle::None) {
+                const QPointF d = q - prev;
+                const double len2 = d.x() * d.x() + d.y() * d.y();
+                if (len2 > 0) {
+                    const double u = std::clamp(((pt - prev).x() * d.x() + (pt - prev).y() * d.y()) / len2, 0.0, 1.0);
+                    best = std::min(best, QLineF(pt, prev + u * d).length());
+                }
+            }
+            prev = q;
+            have_prev = true;
+        }
+        return best;
+    }
+
+    // Image probe of the plot as drawn: the render is at the display scale,
+    // and each series' colour is drawn at one of its samples that no other
+    // series comes within 4 logical px of (samples of dashed/dotted lines are
+    // probed only where markers are drawn). Returns the number of series
+    // probed; `why` names the first failure.
+    static int probeSeriesColours(PlotView* p, QString* why) {
+        const QImage img = p->grab().toImage();
+        const double dpr = p->devicePixelRatioF();
+        if (img.width() != qRound(p->width() * dpr) || img.height() != qRound(p->height() * dpr)) {
+            *why = QString("render %1x%2 is not %3x%4 at dpr %5")
+                       .arg(img.width()).arg(img.height()).arg(p->width()).arg(p->height()).arg(dpr);
+            return -1;
+        }
+        const auto& m = p->model();
+        int probed = 0;
+        for (std::size_t s = 0; s < m.series.size(); ++s) {
+            const auto& ser = m.series[s];
+            const bool markers = ser.markers == tcad::desktop::plot::Markers::Always ||
+                                 (ser.markers == tcad::desktop::plot::Markers::Auto &&
+                                  ser.x.size() <= tcad::desktop::plot::kAutoMarkerMaxPoints);
+            if (!markers && ser.line != tcad::desktop::plot::LineStyle::Solid) continue;
+            bool done = false;
+            for (std::size_t i = 0; i < ser.x.size() && !done; ++i) {
+                const QPointF q = p->toPixel(ser.x[i], ser.y[i], ser.axis);
+                if (!std::isfinite(q.x()) || !p->plotRect().adjusted(3, 3, -3, -3).contains(q)) continue;
+                bool clear = true;
+                for (std::size_t o = 0; o < m.series.size() && clear; ++o)
+                    if (o != s && distanceToSeries(p, o, q) < 4.0) clear = false;
+                if (!clear) continue;
+                const QColor want = ser.colour;
+                const int cx = qRound(q.x() * dpr), cy = qRound(q.y() * dpr);
+                for (int dy = -1; dy <= 1 && !done; ++dy)
+                    for (int dx = -1; dx <= 1 && !done; ++dx) {
+                        const QColor got = img.pixelColor(cx + dx, cy + dy);
+                        if (std::abs(got.red() - want.red()) + std::abs(got.green() - want.green()) +
+                                std::abs(got.blue() - want.blue()) <= 40)
+                            done = true;
+                    }
+                if (!done) {
+                    *why = QString("series '%1' sample %2: colour %3 not drawn near (%4, %5)")
+                               .arg(ser.label).arg(i).arg(want.name()).arg(q.x()).arg(q.y());
+                    return -1;
+                }
+            }
+            if (done) ++probed;
+        }
+        return probed;
+    }
+
+    // Adversarial files (P2-S6): each opens, each mode shows it without
+    // inventing data, and hover never reports a NaN.
+    static QString hoverEverywhere(PlotView* p) {
+        QString seen;
+        for (int y = 0; y < p->height(); y += 17)
+            for (int x = 0; x < p->width(); x += 17) {
+                p->hoverAt(QPointF(x, y));
+                if (p->readout().contains("nan", Qt::CaseInsensitive)) return p->readout();
+            }
+        return {};
+    }
 
 private slots:
     void initTestCase() {
@@ -555,6 +748,29 @@ private slots:
         QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
         QTRY_VERIFY_WITH_TIMEOUT(w->backendClient() != nullptr, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(w->backendClient()->state() == tcad::desktop::BackendClient::State::Ready, 60000);
+    }
+
+    // A window closed while a backend call is in flight: the client's
+    // shutdown fails the pending replies, and their handlers must not run
+    // into the half-destroyed window (P2-S3 found this crash; it matches
+    // P1's unexplained shell crash, plan 16.10 -- a warmup still pending
+    // when a test's window closed under load).
+    void windowClosesWhileABackendCallIsInFlight() {
+        {
+            auto w = shown(ini("inflight_warmup.ini"));
+            QVERIFY(w);
+            QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
+            QTRY_VERIFY_WITH_TIMEOUT(w->backendClient() != nullptr, 5000);  // the warmup was sent
+            QVERIFY(w->backendClient()->state() != tcad::desktop::BackendClient::State::Ready);
+        }  // closed with system.warmup pending
+        {
+            auto w = shown(ini("inflight_map.ini"));
+            QVERIFY(w);
+            QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
+            selectItem(w.get(), derivedItem(w.get(), "Ec"));  // analysis.band_map pending
+            QVERIFY(w->backendClient() != nullptr);
+        }
+        QVERIFY(errorBoxes().isEmpty());  // nothing reported from a closed window
     }
 
     void backendFailureIsNamedAndTheViewStays() {
@@ -1199,108 +1415,839 @@ private slots:
         QVERIFY(v->normRange() == auto_range);
     }
 
-    // -- theme (S3c) ---------------------------------------------------------
-    void themeSwitchReachesQtAndVtk() {
+    // -- theme (S3c; one black-and-white scheme since 2026-09-26) ---------------
+    // What the window PAINTS, not only its palette: the palette checks passed
+    // while ADS drew a stock-grey Fields panel once (S3c screenshot). A
+    // "theme/choice" left in an old settings file must change nothing.
+    void theBlackAndWhiteThemeReachesQtVtkAndAds() {
         using namespace tcad::desktop::theme;
-        const QString path = ini("theme.ini");
-        {
-            auto w = shown(path);
-            QVERIFY(w);
-            QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
-            for (auto [choice, scheme] : {std::pair{Choice::Light, Scheme::Light}, std::pair{Choice::Dark, Scheme::Dark},
-                                          std::pair{Choice::Light, Scheme::Light}}) {
-                w->setThemeChoice(choice);
-                QVERIFY(w->theme()->scheme() == scheme);
-                const QPalette pal = QApplication::palette();
-                QCOMPARE(pal.color(QPalette::Window), qcolor(T::Window, scheme));
-                QCOMPARE(pal.color(QPalette::Base), qcolor(T::Base, scheme));
-                QCOMPARE(pal.color(QPalette::Text), qcolor(T::Text, scheme));
-                QCOMPARE(pal.color(QPalette::Highlight), qcolor(T::Accent, scheme));
-                double bg[3];
-                w->fieldView()->renderer()->GetBackground(bg);
-                const Rgb want_bg = rgb(T::Background, scheme), want_fg = rgb(T::Text, scheme);
-                QCOMPARE(bg[0], want_bg.r);
-                QCOMPARE(bg[1], want_bg.g);
-                QCOMPARE(bg[2], want_bg.b);
-                for (vtkTextProperty* tp : {w->fieldView()->scalarBar()->GetTitleTextProperty(),
-                                            w->fieldView()->scalarBar()->GetLabelTextProperty()}) {
-                    const double* c = tp->GetColor();
-                    QCOMPARE(c[0], want_fg.r);
-                    QCOMPARE(c[1], want_fg.g);
-                    QCOMPARE(c[2], want_fg.b);
-                }
-                // the rendered frame's corner is the background colour
-                const QImage frame = w->fieldView()->grabFramebuffer();
-                QCOMPARE(QColor(frame.pixel(2, 2)), qcolor(T::Background, scheme));
-                // what ADS actually PAINTS follows too: the Fields panel's
-                // empty area below its rows (a stylesheet palette(light)
-                // fill, or the list's base) -- the palette checks above
-                // passed while this was a stock grey (S3c screenshot).
-                QApplication::processEvents();
-                const QImage panel = w->fieldsDock()->grab().toImage();
-                QCOMPARE(QColor(panel.pixel(panel.width() / 2, panel.height() - 6)), qcolor(T::Base, scheme));
-            }
-            w->close();
-        }
-        auto w2 = shown(path);  // the choice (Light, last) persists
-        QVERIFY(w2);
-        QVERIFY(w2->theme()->choice() == Choice::Light);
-        QVERIFY(w2->theme()->scheme() == Scheme::Light);
-    }
-
-    // A theme applied at STARTUP (the saved choice) must be painted too --
-    // the live-switch test above passed while a light startup still drew
-    // a stock-grey Fields panel (S3c screenshot).
-    void savedThemeIsPaintedAtStartup_data() {
-        QTest::addColumn<QString>("choice");
-        QTest::newRow("light") << "light";
-        QTest::newRow("dark") << "dark";
-    }
-    void savedThemeIsPaintedAtStartup() {
-        using namespace tcad::desktop::theme;
-        QFETCH(QString, choice);
         // a fresh launch's palette, not whatever an earlier test left behind
         QApplication::setPalette(QApplication::style()->standardPalette());
-        const QString path = ini("startup_" + choice + ".ini");
+        const QString path = ini("theme_bw.ini");
         {
             QSettings s(path, QSettings::IniFormat);
-            s.setValue("theme/choice", choice);
+            s.setValue("theme/choice", "dark");  // from before 2026-09-26: ignored
         }
         auto w = shown(path);
         QVERIFY(w);
         QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
         QApplication::processEvents();
-        const Scheme scheme = choice == "light" ? Scheme::Light : Scheme::Dark;
-        QVERIFY(w->theme()->scheme() == scheme);
-        const QImage panel = w->fieldsDock()->grab().toImage();
-        QCOMPARE(QColor(panel.pixel(panel.width() / 2, panel.height() - 6)), qcolor(T::Base, scheme));
+        const QPalette pal = QApplication::palette();
+        QCOMPARE(pal.color(QPalette::Window), qcolor(T::Window));
+        QCOMPARE(pal.color(QPalette::Base), qcolor(T::Base));
+        QCOMPARE(pal.color(QPalette::Text), qcolor(T::Text));
+        QCOMPARE(pal.color(QPalette::Highlight), qcolor(T::Accent));
+        QCOMPARE(qcolor(T::Base), QColor(255, 255, 255));  // white surfaces, black text
+        QCOMPARE(qcolor(T::Text), QColor(0, 0, 0));
+        // VTK: background and scalar-bar text
+        double bg[3];
+        w->fieldView()->renderer()->GetBackground(bg);
+        const Rgb want_bg = rgb(T::Background), want_fg = rgb(T::Text);
+        QCOMPARE(bg[0], want_bg.r);
+        QCOMPARE(bg[1], want_bg.g);
+        QCOMPARE(bg[2], want_bg.b);
+        for (vtkTextProperty* tp :
+             {w->fieldView()->scalarBar()->GetTitleTextProperty(), w->fieldView()->scalarBar()->GetLabelTextProperty()}) {
+            const double* c = tp->GetColor();
+            QCOMPARE(c[0], want_fg.r);
+            QCOMPARE(c[1], want_fg.g);
+            QCOMPARE(c[2], want_fg.b);
+        }
         const QImage frame = w->fieldView()->grabFramebuffer();
-        QCOMPARE(QColor(frame.pixel(2, 2)), qcolor(T::Background, scheme));
-        QCOMPARE(w->fieldList()->palette().color(QPalette::Text), qcolor(T::Text, scheme));
-        // ADS paints from explicit token colours, not palette(...) references
+        QCOMPARE(QColor(frame.pixel(2, 2)), qcolor(T::Background));
+        // ADS: the Fields panel's empty area, from explicit token colours
+        const QImage panel = w->fieldsDock()->grab().toImage();
+        QCOMPARE(QColor(panel.pixel(panel.width() / 2, panel.height() - 6)), qcolor(T::Base));
         const QString qss = w->dockManager()->styleSheet();
         QVERIFY2(!qss.contains("palette("), "ADS stylesheet still reads the palette");
-        QVERIFY(qss.contains(qcolor(T::Window, scheme).name()));
-        QVERIFY(qss.contains(qcolor(T::Base, scheme).name()));
+        QVERIFY(qss.contains(qcolor(T::Window).name()) && qss.contains(qcolor(T::Base).name()));
+        // the plot's background
+        QVERIFY(w->setViewMode(ViewMode::Convergence));
+        QApplication::processEvents();
+        const QImage plot = w->plotView()->grab().toImage();
+        QCOMPARE(QColor(plot.pixel(2, 2)), qcolor(T::Base));
+        // no theme menu any more
+        for (QAction* a : w->findChildren<QAction*>())
+            QVERIFY2(!a->text().contains("Theme") && a->text() != "&Dark" && a->text() != "&System", qPrintable(a->text()));
     }
 
-    void systemThemeFollowsTheColourScheme() {
+    void theThemeIgnoresTheOsColourScheme() {
         using namespace tcad::desktop::theme;
-        auto w = shown(ini("theme_system.ini"));
+        auto w = shown(ini("theme_os.ini"));
         QVERIFY(w);
-        w->setThemeChoice(Choice::System);
         QStyleHints* hints = QGuiApplication::styleHints();
-        hints->setColorScheme(Qt::ColorScheme::Light);
-        QTRY_VERIFY(w->theme()->scheme() == Scheme::Light);
-        QCOMPARE(QApplication::palette().color(QPalette::Window), qcolor(T::Window, Scheme::Light));
-        hints->setColorScheme(Qt::ColorScheme::Dark);
-        QTRY_VERIFY(w->theme()->scheme() == Scheme::Dark);
-        QCOMPARE(QApplication::palette().color(QPalette::Window), qcolor(T::Window, Scheme::Dark));
-        w->setThemeChoice(Choice::Light);  // an explicit choice stops following the OS
-        hints->setColorScheme(Qt::ColorScheme::Dark);
-        QApplication::processEvents();
-        QVERIFY(w->theme()->scheme() == Scheme::Light);
+        for (auto scheme : {Qt::ColorScheme::Dark, Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            hints->setColorScheme(scheme);
+            QApplication::processEvents();
+            QCOMPARE(QApplication::palette().color(QPalette::Window), qcolor(T::Window));
+            QCOMPARE(QApplication::palette().color(QPalette::Text), qcolor(T::Text));
+        }
         hints->unsetColorScheme();
+    }
+
+    // -- curve modes (P2-S3) --------------------------------------------------
+    void curveModeFieldIsTheDefaultFor1D() {
+        auto w = opened("p2_field.ini", "diode_1d.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        const QList<ViewMode> modes = comboModes(w.get());
+        QVERIFY(modes.contains(ViewMode::Field) && modes.contains(ViewMode::Bands) && modes.contains(ViewMode::Recombination));
+        QVERIFY(!modes.contains(ViewMode::FieldMap));  // no map of a 1D result
+        QCOMPARE(w->viewMode(), ViewMode::Field);
+        QVERIFY(plotShown(w.get()));
+        QCOMPARE(w->viewModeCombo()->currentText(), QString("Field"));
+
+        // the curve is the field against x in um, raw
+        const auto field = w->result()->scalar(w->plotField());
+        QCOMPARE(p->model().series.size(), std::size_t{1});
+        const auto& s = p->model().series[0];
+        QVERIFY(s.y == field.values);
+        QVERIFY(s.x == um(w->result()->axis(0)));
+        QVERIFY(s.markers == tcad::desktop::plot::Markers::Never);  // ax.plot(x, field): no markers
+        QCOMPARE(p->model().x.label, QString("x [um]"));
+        QCOMPARE(p->model().y.label, QString::fromStdString(field.name + " [" + field.unit + "]"));
+
+        // hover: the raw sample, in the status bar too
+        const std::size_t mid = s.x.size() / 2;
+        QCOMPARE(hoverSample(p, 0, mid), entry(p, 0, mid));
+        QCOMPARE(statusReadout(w.get()), entry(p, 0, mid));
+        snapshot(w.get(), "field_1d");
+
+        // log through the toolbar's action: a true log axis of |v| (decision 8); the map's log is untouched
+        QAction* log = logAction(w.get());
+        QVERIFY(log && log->isEnabled());
+        log->trigger();
+        QVERIFY(w->plotLog() && p->model().y.scale == tcad::desktop::plot::Scale::Log);
+        QCOMPARE(p->model().y.label, QString::fromStdString("|" + field.name + "| [" + field.unit + "]"));
+        QVERIFY(!w->fieldView()->logScale());
+        QVERIFY(child<QCheckBox>(w->plotPanel(), "PlotLogCheck")->isChecked());
+        log->trigger();
+        QVERIFY(!w->plotLog() && p->model().y.scale == tcad::desktop::plot::Scale::Linear);
+
+        // the Fields list picks the field drawn
+        const QString other = w->plotField() == "doping" ? "potential" : "doping";
+        selectField(w.get(), other);
+        QCOMPARE(QString::fromStdString(w->plotField()), other);
+        QVERIFY(p->model().series[0].y == w->result()->scalar(other.toStdString()).values);
+        QCOMPARE(w->fieldList()->currentItem()->text(), other);
+    }
+
+    void curveModeCurvesDrawsTheSweep() {
+        auto w = opened("p2_series.ini", "diode_1d_iv.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QCOMPARE(w->viewMode(), ViewMode::Field);  // 1D: the field first
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        QVERIFY(plotShown(w.get()));
+        const auto sw = w->result()->sweep();
+        QCOMPARE(w->sweepChannel(), QString("device"));  // the first channel, as QML
+        const auto& m = p->model();
+        QCOMPARE(m.title, QString("anode sweep"));
+        QCOMPARE(m.x.label, QString("anode bias [V]"));
+        QCOMPARE(m.y.label, QString("device [A/cm^2]"));
+        QCOMPARE(m.series.size(), std::size_t{1});
+        QVERIFY(m.series[0].x == sw.voltages && m.series[0].y == sw.channels[0].values);
+        QCOMPARE(hoverSample(p, 0, 3), entry(p, 0, 3));
+        QVERIFY2(p->readout().startsWith("device: ") && p->readout().contains(" A/cm^2 @ ") &&
+                     p->readout().endsWith(" V"),
+                 qPrintable(p->readout()));
+
+        // the Plot panel offers the channel; an unknown one is refused
+        auto* combo = child<QComboBox>(w->plotPanel(), "SweepChannelCombo");
+        QVERIFY(combo->isEnabled() && combo->count() == 1 && combo->currentText() == "device");
+        QVERIFY(!w->setSweepChannel("nope"));
+        QCOMPARE(w->sweepChannel(), QString("device"));
+
+        // log: |I| on a log axis, label as QML's
+        logAction(w.get())->trigger();
+        QCOMPARE(p->model().y.label, QString("|device| [A/cm^2]"));
+        QVERIFY(p->model().y.scale == tcad::desktop::plot::Scale::Log);
+        snapshot(w.get(), "curves_log");
+        // ... and the channel combo is off outside Curves
+        QVERIFY(chooseMode(w.get(), ViewMode::Field));
+        QVERIFY(!combo->isEnabled());
+    }
+
+    void curveModeCVIsTheDefaultForACapacitanceSweep() {
+        auto w = opened("p2_cv.ini", "cv.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QCOMPARE(w->viewMode(), ViewMode::CV);
+        QVERIFY(!comboModes(w.get()).contains(ViewMode::Curves));  // a C-V sweep is not an I-V one
+        const auto sw = w->result()->sweep();
+        const auto& m = p->model();
+        QCOMPARE(m.title, QString("C-V sweep"));
+        QCOMPARE(m.x.label, QString("Vg [V]"));
+        QCOMPARE(m.y.label, QString("C [F/cm^2]"));
+        QVERIFY(m.series[0].x == sw.voltages && m.series[0].y == sw.channels[0].values);
+        QCOMPARE(m.series[0].label, QString("C"));
+        QCOMPARE(hoverSample(p, 0, 20), entry(p, 0, 20));
+        QVERIFY(!logAction(w.get())->isEnabled());  // QML's C-V has no log toggle
+        snapshot(w.get(), "cv");
+    }
+
+    void curveModeTransientDrawsEveryChannel() {
+        auto w = opened("p2_transient.ini", "diode_1d_transient.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Transient));
+        const auto tr = w->result()->transient();
+        const auto& m = p->model();
+        QCOMPARE(m.title, QString("anode transient"));
+        QCOMPARE(m.x.label, QString("t [s]"));
+        QCOMPARE(m.y.label, QString("current [A/cm^2]"));
+        QCOMPARE(m.series.size(), std::size_t{2});
+        QCOMPARE(m.series[0].label, QString("anode"));  // sorted by name, as QML
+        QCOMPARE(m.series[1].label, QString("cathode"));
+        QVERIFY(m.series[0].colour != m.series[1].colour);
+        for (std::size_t k = 0; k < 2; ++k) {
+            const auto it = std::find_if(tr.channels.begin(), tr.channels.end(),
+                                         [&](const auto& c) { return QString::fromStdString(c.name) == m.series[k].label; });
+            QVERIFY(it != tr.channels.end() && m.series[k].x == tr.times && m.series[k].y == it->values);
+        }
+        QVERIFY(!p->legendRect().isEmpty());
+        QVERIFY2(hoverSample(p, 1, 5).contains(entry(p, 1, 5)), qPrintable(p->readout()));
+        snapshot(w.get(), "transient");
+    }
+
+    void curveModeACHoversBothAxes() {
+        auto w = opened("p2_ac.ini", "diode_1d_ac.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::AC));
+        const auto ac = w->result()->ac();
+        const auto& m = p->model();
+        QCOMPARE(m.title, QString("anode AC sweep"));
+        QVERIFY(m.x.scale == tcad::desktop::plot::Scale::Log && m.has_y2);
+        QCOMPARE(m.y.label, QString("C [F/cm^2]"));
+        QCOMPARE(m.y2.label, QString("G [S/cm^2]"));
+        QCOMPARE(m.series.size(), std::size_t{2});
+        QVERIFY(m.series[0].y == ac.C && m.series[0].axis == tcad::desktop::plot::YAxis::Left);
+        QVERIFY(m.series[1].y == ac.G && m.series[1].axis == tcad::desktop::plot::YAxis::Right);
+        QVERIFY(m.y.colour == m.series[0].colour && m.y2.colour == m.series[1].colour);
+        // decision 5: C and G both hover (QML hovered C only)
+        QCOMPARE(hoverSample(p, 0, 0), entry(p, 0, 0));
+        QCOMPARE(hoverSample(p, 1, 6), entry(p, 1, 6));
+        QVERIFY2(p->readout().endsWith(" Hz") && p->readout().startsWith("G: "), qPrintable(p->readout()));
+        snapshot(w.get(), "ac");
+    }
+
+    void curveModeConvergenceDrawsTheTrace() {
+        using tcad::desktop::plot::MarkerShape;
+        auto w = opened("p2_conv.ini", "diode_1d_rejected.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Convergence));
+        const auto trace = *w->result()->trace();
+        const auto& m = p->model();
+        QVERIFY(m.y.scale == tcad::desktop::plot::Scale::Log);
+        QCOMPARE(m.x.label, QString("cumulative Newton iteration"));
+        QCOMPARE(m.y.label, QString("residual (all tracked metrics)"));
+        // one series per (step, metric), in order, on the cumulative axis; one cross per rejected step
+        std::size_t k = 0, rejected = 0;
+        double offset = 0;
+        for (const auto& step : trace) {
+            for (const auto& metric : step.metrics) {
+                QVERIFY(k < m.series.size());
+                const auto& s = m.series[k++];
+                QVERIFY(s.y == metric.values);
+                QCOMPARE(s.x.front(), offset);
+                QVERIFY(s.shape == MarkerShape::Dot);
+                const QString base = QString::fromStdString(step.stage).section(':', 0, 0);
+                QCOMPARE(s.label, base + ":" + QString::fromStdString(metric.name));
+                const auto want = base == "equilibrium" ? tcad::desktop::theme::DataColour::StageEquilibrium
+                                  : base == "bias"      ? tcad::desktop::theme::DataColour::StageBias
+                                                        : tcad::desktop::theme::DataColour::StageOther;
+                QCOMPARE(s.colour, tcad::desktop::theme::dataColour(want));
+            }
+            if (!step.converged) {
+                const auto& x = m.series[k++];
+                QVERIFY(x.shape == MarkerShape::Cross && x.label == "rejected" && x.in_legend == (rejected == 0));
+                QCOMPARE(x.y.front(), step.metrics.front().values.back());
+                QCOMPARE(x.x.front(), offset + static_cast<double>(step.metrics.front().values.size() - 1));
+                QCOMPARE(x.colour, tcad::desktop::theme::dataColour(tcad::desktop::theme::DataColour::Rejected));
+                ++rejected;
+            }
+            offset += static_cast<double>(step.metrics.front().values.size());
+        }
+        QCOMPARE(k, m.series.size());
+        QCOMPARE(rejected, std::size_t{1});
+        // the legend names each stage:metric once
+        QStringList legend;
+        for (const auto& s : m.series)
+            if (s.in_legend) legend << s.label;
+        QCOMPARE(legend.removeDuplicates(), qsizetype{0});
+        QVERIFY(legend.contains("sweep:F") && legend.contains("equilibrium:dpsi") && legend.contains("rejected"));
+        // hoverable -- new; QML's convergence view never was
+        const std::size_t probe = 1;  // equilibrium's dpsi series is series 0; a sweep series is later
+        QVERIFY(m.series[probe].y.size() > 3);
+        const QString r = hoverSample(p, probe, 2);
+        QVERIFY2(r.contains(entry(p, probe, 2)) && r.endsWith(" iteration"), qPrintable(r));
+        QVERIFY(!logAction(w.get())->isEnabled());  // always log
+        snapshot(w.get(), "convergence");
+    }
+
+    void curveModeBandsAndRecombinationThroughTheBackend() {
+        auto w = opened("p2_bands.ini", "diode_1d.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Bands));
+        QTRY_VERIFY_WITH_TIMEOUT(p->model().series.size() == 4, 120000);
+        const auto* bands = w->derivedModel("bands");
+        QVERIFY(bands);
+        const char* names[] = {"Ec", "Ev", "EFn", "EFp"};
+        for (std::size_t k = 0; k < 4; ++k) {
+            const auto& s = p->model().series[k];
+            QCOMPARE(s.label, QString(names[k]));
+            QVERIFY(s.y == bands->scalar(names[k]).values);
+            QVERIFY(s.x == um(w->result()->axis(0)));
+            QVERIFY(s.line == (k < 2 ? tcad::desktop::plot::LineStyle::Solid : tcad::desktop::plot::LineStyle::Dashed));
+        }
+        QCOMPARE(p->model().x.label, QString("depth [um]"));
+        QCOMPARE(p->model().y.label, QString("energy [eV]"));
+        const std::size_t mid = p->model().series[0].x.size() / 2;
+        QCOMPARE(hoverSample(p, 0, mid), entry(p, 0, mid));  // (ties: test_plot.cpp)
+        snapshot(w.get(), "bands");
+
+        QVERIFY(chooseMode(w.get(), ViewMode::Recombination));
+        QTRY_VERIFY_WITH_TIMEOUT(p->model().series.size() == 1, 120000);
+        const auto* rec = w->derivedModel("recombination");
+        QVERIFY(rec);
+        const auto& r = p->model().series[0];
+        QVERIFY(r.y == rec->scalar("R").values);  // signed; the log axis shows |R| (decision 8)
+        QVERIFY(p->model().y.scale == tcad::desktop::plot::Scale::Log);
+        QCOMPARE(p->model().y.label, QString("|R| [cm^-3 s^-1]"));
+        QVERIFY(!logAction(w.get())->isEnabled());
+        snapshot(w.get(), "recombination");
+        // back to Bands: cached, no second backend call
+        QVERIFY(chooseMode(w.get(), ViewMode::Bands));
+        QCOMPARE(p->model().series.size(), std::size_t{4});
+    }
+
+    void curveModeBackendFailureIsShownInThePlot() {
+        qputenv("TCAD_BACKEND_PYTHON", "C:/no/such/python.exe");
+        auto w = opened("p2_nobackend.ini", "diode_1d.npz");
+        QVERIFY(w);
+        QVERIFY(chooseMode(w.get(), ViewMode::Bands));
+        QTRY_VERIFY_WITH_TIMEOUT(w->lastError().contains("does not exist"), 10000);
+        qunsetenv("TCAD_BACKEND_PYTHON");
+        QVERIFY(w->plotView()->model().series.empty());
+        QVERIFY2(w->plotView()->model().empty_text.startsWith("Could not compute the bands"),
+                 qPrintable(w->plotView()->model().empty_text));
+    }
+
+    void curveModesAbsentWhenUnsupported() {
+        auto w = opened("p2_absent.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        // a 2D result without curve blocks: the map, its line cut (P2-S4), and its trace
+        QCOMPARE(comboModes(w.get()), (QList<ViewMode>{ViewMode::FieldMap, ViewMode::Cut, ViewMode::Convergence}));
+        QCOMPARE(w->viewMode(), ViewMode::FieldMap);
+        QVERIFY(mapShown(w.get()));
+        for (ViewMode m : {ViewMode::Field, ViewMode::Curves, ViewMode::CV, ViewMode::Transient, ViewMode::AC,
+                           ViewMode::Bands, ViewMode::Recombination}) {
+            QVERIFY(!w->setViewMode(m));
+            QCOMPARE(w->viewMode(), ViewMode::FieldMap);
+        }
+        // the View menu offers the same modes as the combo
+        QStringList menu;
+        for (QAction* a : w->findChild<QMenu*>("ViewModeMenu")->actions()) menu << a->text();
+        QCOMPARE(menu, (QStringList{"Field map", "Line cut", "Convergence"}));
+        // a C-V file has no I-V curves, no trace, no bands (it has no potential)
+        QVERIFY(w->tryOpen(data("cv.npz")));
+        QCOMPARE(comboModes(w.get()), (QList<ViewMode>{ViewMode::Field, ViewMode::CV}));
+        // the 1D diode: its field, trace, bands and R -- no sweep, transient or AC
+        QVERIFY(w->tryOpen(data("diode_1d.npz")));
+        QCOMPARE(comboModes(w.get()),
+                 (QList<ViewMode>{ViewMode::Field, ViewMode::Convergence, ViewMode::Bands, ViewMode::Recombination}));
+        // back to a 2D result: the map again, its GL view shown
+        QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
+        QCOMPARE(w->viewMode(), ViewMode::FieldMap);
+        QVERIFY(mapShown(w.get()));
+    }
+
+    void viewSwitchesKeepTheGlContextAndAreFast() {
+        auto w = opened("p2_switch.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        FieldView* v = w->fieldView();
+        QTRY_VERIFY(v->glInitializations() > 0);
+        const int inits = v->glInitializations();
+        std::vector<double> ms;
+        auto timed = [&](MainWindow* win, ViewMode m) {
+            QElapsedTimer t;
+            t.start();
+            const bool ok = chooseMode(win, m);
+            (tcad::desktop::plot::isCurveMode(m) ? static_cast<QWidget*>(win->plotView()) : win->fieldView())->repaint();
+            ms.push_back(static_cast<double>(t.nsecsElapsed()) * 1e-6);
+            QApplication::processEvents();
+            return ok;
+        };
+        for (int i = 0; i < 20; ++i) QVERIFY(timed(w.get(), i % 2 ? ViewMode::FieldMap : ViewMode::Convergence));
+        QCOMPARE(w->viewMode(), ViewMode::FieldMap);
+        QCOMPARE(v->glInitializations(), inits);  // hidden and shown, never re-created
+        QTRY_VERIFY(distinctColours(v) > 1);      // and it still renders
+        // every local mode of a 1D sweep, round and round (not bands/R: those start a backend call)
+        QVERIFY(w->tryOpen(data("diode_1d_iv.npz")));
+        QList<ViewMode> modes = comboModes(w.get());
+        modes.removeAll(ViewMode::Bands);
+        modes.removeAll(ViewMode::Recombination);
+        QCOMPARE(modes, (QList<ViewMode>{ViewMode::Field, ViewMode::Curves, ViewMode::Convergence}));
+        for (int i = 0; i < 20; ++i) QVERIFY(timed(w.get(), modes[i % modes.size()]));
+        QCOMPARE(v->glInitializations(), inits);
+        std::sort(ms.begin(), ms.end());
+        const double p95 = ms[static_cast<std::size_t>(0.95 * static_cast<double>(ms.size() - 1))];
+        qInfo("mode switch: p50 %.2f ms, p95 %.2f ms, max %.2f ms over %zu", ms[ms.size() / 2], p95, ms.back(), ms.size());
+        QVERIFY2(p95 <= 50.0, qPrintable(QString("mode switch p95 %1 ms > 50 ms").arg(p95)));
+    }
+
+    void fitAndLogActOnTheVisibleView() {
+        auto w = opened("p2_route.ini", "diode_1d_iv.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        const auto fitted = p->xView();
+        p->zoom(0.25);
+        QVERIFY(p->xView().lo != fitted.lo);
+        p->setFocus();
+        QTest::keyClick(w.get(), Qt::Key_F);  // Fit: the plot's, not the hidden map's
+        QCOMPARE(p->xView().lo, fitted.lo);
+        QCOMPARE(p->xView().hi, fitted.hi);
+        // the Plot panel's log and the toolbar's are one state
+        child<QCheckBox>(w->plotPanel(), "PlotLogCheck")->setChecked(true);
+        QVERIFY(w->plotLog() && logAction(w.get())->isChecked());
+        QVERIFY(!w->fieldView()->logScale());
+        // a mode without a log toggle disables it; returning restores it
+        QVERIFY(chooseMode(w.get(), ViewMode::Convergence));
+        QVERIFY(!logAction(w.get())->isEnabled());
+        QVERIFY(!child<QCheckBox>(w->plotPanel(), "PlotLogCheck")->isEnabled());
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        QVERIFY(logAction(w.get())->isEnabled() && logAction(w.get())->isChecked());
+        // on a 2D result the action drives the map again
+        QVERIFY(w->tryOpen(data("mosfet_2d.npz")));
+        QVERIFY(!logAction(w.get())->isChecked());
+        logAction(w.get())->trigger();
+        QVERIFY(w->fieldView()->logScale());
+    }
+
+    // -- line cut (P2-S4, NATIVE-DESKTOP-PLAN.md 16.3) --------------------------
+    // The cut itself is contract-tested against extract_line_cut
+    // (test_desktop_contracts.py); these gate the mode: what it cuts, where
+    // the line is drawn, what drives it.
+
+    void cutModeIsOffered2DOnly() {
+        auto w = opened("p2_cut_offer.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        QVERIFY(comboModes(w.get()).contains(ViewMode::Cut));
+        QVERIFY(w->tryOpen(data("resistor_3d.npz")));
+        QVERIFY(!comboModes(w.get()).contains(ViewMode::Cut));  // 3D cuts: out of scope (16.6)
+        QVERIFY(!w->setViewMode(ViewMode::Cut));
+        QVERIFY(w->tryOpen(data("diode_1d.npz")));
+        QVERIFY(!comboModes(w.get()).contains(ViewMode::Cut));
+    }
+
+    void cutModeShowsTheMapAboveItsCurve() {
+        auto w = opened("p2_cut_show.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        FieldView* v = w->fieldView();
+        PlotView* p = w->plotView();
+        QTRY_VERIFY(v->glInitializations() > 0);
+        const int inits = v->glInitializations();
+        QVERIFY(chooseMode(w.get(), ViewMode::Cut));
+        QVERIFY(v->isVisible() && p->isVisible());   // both, one splitter
+        QVERIFY(p->geometry().top() >= v->geometry().bottom());
+        QCOMPARE(w->cutIndex(), 0);                    // QML's default: y = 0
+        QVERIFY(w->cutHorizontal());
+        // the curve is the nearest-node row of the field the map shows
+        const auto f = v->fieldSource()->scalar(v->field());
+        const auto cut = tcad::desktop::line_cut(v->fieldSource()->axis(0), v->fieldSource()->axis(1), f.values,
+                                                 tcad::desktop::CutOrientation::Horizontal, v->fieldSource()->axis(1)[0]);
+        const auto& s = p->model().series.at(0);
+        QVERIFY(s.y == cut.values);
+        QVERIFY(s.x == um(cut.coord));
+        QCOMPARE(s.label, QString::fromStdString(f.name));
+        QCOMPARE(p->model().x.label, QString("x [um]"));
+        QCOMPARE(p->model().y.label, QString::fromStdString(f.name + " [" + f.unit + "]"));
+        QCOMPARE(p->model().title, QString("cut at y=%1 um (nearest node)").arg(QString::number(cut.actual * 1e4, 'g', 4)));
+        // the line on the map, where the cut is, above the map
+        QVERIFY(v->cutLineActor()->GetVisibility() && v->cutHaloActor()->GetVisibility());
+        double b[6];
+        v->cutLineActor()->GetMapper()->GetInput()->GetBounds(b);
+        QCOMPARE(b[2], v->axisUm(1)[0]);
+        QCOMPARE(b[3], v->axisUm(1)[0]);
+        QCOMPARE(b[0], v->edgesUm(0).front());
+        QCOMPARE(b[1], v->edgesUm(0).back());
+        QTRY_VERIFY(distinctColours(v) > 1);           // the map still renders
+        QCOMPARE(v->glInitializations(), inits);        // shown beside the plot, never reparented
+        QVERIFY(w->setCut(true, static_cast<int>(v->axisUm(1).size() / 4)));
+        snapshot(w.get(), "cut");
+        QVERIFY(w->setCut(true, 0));
+        // leaving the mode hides the line and the plot
+        QVERIFY(chooseMode(w.get(), ViewMode::FieldMap));
+        QVERIFY(!v->cutLineActor()->GetVisibility() && !p->isVisible() && v->isVisible());
+    }
+
+    void cutFollowsTheSliderAndTheOrientation() {
+        auto w = opened("p2_cut_drive.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        FieldView* v = w->fieldView();
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Cut));
+        const auto* src = v->fieldSource();
+        const auto values = src->scalar(v->field()).values;
+        const std::size_t nx = src->axis(0).size(), ny = src->axis(1).size();
+
+        // the slider: every position is a node of y; the label names it
+        auto* slider = child<QSlider>(w->plotPanel(), "CutPositionSlider");
+        auto* label = child<QLabel>(w->plotPanel(), "CutPositionLabel");
+        QVERIFY(slider->isEnabled());
+        QCOMPARE(slider->maximum(), static_cast<int>(ny) - 1);
+        const int k = static_cast<int>(ny / 2);
+        slider->setValue(k);
+        QCOMPARE(w->cutIndex(), k);
+        std::vector<double> row(values.begin() + static_cast<std::ptrdiff_t>(k * nx),
+                                values.begin() + static_cast<std::ptrdiff_t>((k + 1) * nx));
+        QVERIFY(p->model().series.at(0).y == row);
+        QVERIFY2(label->text().contains(QString("node %1 of %2").arg(k).arg(ny)), qPrintable(label->text()));
+        double b[6];
+        v->cutLineActor()->GetMapper()->GetInput()->GetBounds(b);
+        QCOMPARE(b[2], v->axisUm(1)[static_cast<std::size_t>(k)]);
+
+        // vertical: a column, along y; the index stays where the new axis allows
+        auto* orient = child<QComboBox>(w->plotPanel(), "CutOrientationCombo");
+        orient->setCurrentIndex(1);
+        emit orient->activated(1);
+        QVERIFY(!w->cutHorizontal());
+        QCOMPARE(w->cutIndex(), std::min(k, static_cast<int>(nx) - 1));
+        const std::size_t c = static_cast<std::size_t>(w->cutIndex());
+        std::vector<double> col(ny);
+        for (std::size_t j = 0; j < ny; ++j) col[j] = values[j * nx + c];
+        QVERIFY(p->model().series.at(0).y == col);
+        QVERIFY(p->model().series.at(0).x == um(src->axis(1)));
+        QCOMPARE(p->model().x.label, QString("y [um]"));
+        QVERIFY(p->model().title.startsWith("cut at x="));
+        v->cutLineActor()->GetMapper()->GetInput()->GetBounds(b);
+        QCOMPARE(b[0], v->axisUm(0)[c]);
+        QCOMPARE(b[1], v->axisUm(0)[c]);
+
+        // refused: outside the axis (nothing changes)
+        QVERIFY(!w->setCut(false, static_cast<int>(nx)));
+        QVERIFY(!w->setCut(false, -1));
+        QCOMPARE(w->cutIndex(), static_cast<int>(c));
+        // outside Line cut mode the controls are off
+        QVERIFY(chooseMode(w.get(), ViewMode::FieldMap));
+        QVERIFY(!slider->isEnabled() && !orient->isEnabled());
+    }
+
+    void cutFollowsTheFieldAndDerivedMaps() {
+        auto w = opened("p2_cut_field.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        FieldView* v = w->fieldView();
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Cut));
+        QVERIFY(w->setCut(true, 2));
+        // another field from the list: still Line cut, now cutting that field
+        const QString other = v->field() == "potential" ? "electron_density" : "potential";
+        selectField(w.get(), other);
+        QCOMPARE(w->viewMode(), ViewMode::Cut);
+        QCOMPARE(QString::fromStdString(v->field()), other);
+        QCOMPARE(p->model().series.at(0).label, other);
+        const auto vals = v->fieldSource()->scalar(other.toStdString()).values;
+        const std::size_t nx = v->fieldSource()->axis(0).size();
+        QVERIFY(p->model().series.at(0).y ==
+                std::vector<double>(vals.begin() + static_cast<std::ptrdiff_t>(2 * nx),
+                                    vals.begin() + static_cast<std::ptrdiff_t>(3 * nx)));
+        // a backend-derived map (wider than QML, which cut stored fields only)
+        selectItem(w.get(), derivedItem(w.get(), "Ec"));
+        QTRY_VERIFY_WITH_TIMEOUT(v->field() == "Ec", 120000);
+        QCOMPARE(w->viewMode(), ViewMode::Cut);
+        QTRY_VERIFY(p->model().series.size() == 1 && p->model().series[0].label == "Ec");
+        const auto ec = w->derivedModel("bands")->scalar("Ec").values;
+        QVERIFY(p->model().series.at(0).y ==
+                std::vector<double>(ec.begin() + static_cast<std::ptrdiff_t>(2 * nx),
+                                    ec.begin() + static_cast<std::ptrdiff_t>(3 * nx)));
+        QCOMPARE(p->model().y.label, QString("Ec [eV]"));
+    }
+
+    void cutLogAndHoverFollowDecisions8And9() {
+        auto w = opened("p2_cut_log.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(chooseMode(w.get(), ViewMode::Cut));
+        selectField(w.get(), "electron_density");
+        QAction* log = logAction(w.get());
+        QVERIFY(log->isEnabled());
+        log->trigger();   // the curve's log, not the map's
+        QVERIFY(w->plotLog() && p->model().y.scale == tcad::desktop::plot::Scale::Log);
+        QCOMPARE(p->model().y.label, QString("|electron_density| [cm^-3]"));
+        QVERIFY(!w->fieldView()->logScale());
+        const std::size_t mid = p->model().series[0].x.size() / 2;
+        QCOMPARE(hoverSample(p, 0, mid), entry(p, 0, mid));   // the raw value, x in um
+        QVERIFY(p->readout().endsWith(" um"));
+    }
+
+    void cutSwitchesKeepTheGlContext() {
+        auto w = opened("p2_cut_gl.ini", "mosfet_2d.npz");
+        QVERIFY(w);
+        FieldView* v = w->fieldView();
+        QTRY_VERIFY(v->glInitializations() > 0);
+        const int inits = v->glInitializations();
+        const ViewMode cycle[] = {ViewMode::Cut, ViewMode::FieldMap, ViewMode::Convergence, ViewMode::Cut};
+        for (int i = 0; i < 20; ++i) {
+            QVERIFY(chooseMode(w.get(), cycle[i % 4]));
+            QApplication::processEvents();
+        }
+        QCOMPARE(v->glInitializations(), inits);
+        QVERIFY(chooseMode(w.get(), ViewMode::Cut));
+        QTRY_VERIFY(distinctColours(v) > 1);
+    }
+
+    // -- overlays (P2-S5) -------------------------------------------------------
+    void overlayComparisonIsDashedOnItsOwnVoltages() {
+        auto w = curvesOf(tmp_, "p2_ov_cmp.ini");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_fine.npz"), Kind::Comparison), QString());
+        const auto fine = sweepOf("diode_1d_iv_fine.npz");
+        const auto& m = p->model();
+        QCOMPARE(m.series.size(), std::size_t{2});
+        const auto& c = m.series[1];
+        QCOMPARE(c.label, QString("diode_1d_iv_fine"));  // the file name, editable
+        QVERIFY(c.line == tcad::desktop::plot::LineStyle::Dashed);
+        QCOMPARE(c.colour, tcad::desktop::theme::dataColour(tcad::desktop::theme::DataColour::Comparison));
+        QVERIFY(c.x == fine.voltages);                      // its own ramp (finding 12) ...
+        QVERIFY(c.x != m.series[0].x);                      // ... not the primary's
+        QVERIFY(c.y == fine.channels[0].values);
+        QVERIFY(m.legend && !p->legendRect().isEmpty());
+        // hover names the overlay's own sample
+        const std::size_t k = c.x.size() - 1;
+        QVERIFY2(hoverSample(p, 1, k).contains(entry(p, 1, k)), qPrintable(p->readout()));
+        // a second comparison replaces the first (QML's setComparisonSource)
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_coarse.npz"), Kind::Comparison), QString());
+        QCOMPARE(w->overlays().size(), std::size_t{1});
+        QCOMPARE(p->model().series.size(), std::size_t{2});
+        QCOMPARE(p->model().series[1].label, QString("diode_1d_iv_coarse"));
+    }
+
+    void overlayFamilyGetsOneColourEachBeforeTheComparison() {
+        auto w = curvesOf(tmp_, "p2_ov_fam.ini");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_fine.npz"), Kind::Family), QString());
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_coarse.npz"), Kind::Comparison), QString());
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_coarse.npz"), Kind::Family), QString());
+        const auto& s = p->model().series;
+        QCOMPARE(s.size(), std::size_t{4});   // primary, family x2, then the comparison
+        QCOMPARE(s[1].label, QString("diode_1d_iv_fine"));
+        QCOMPARE(s[2].label, QString("diode_1d_iv_coarse"));
+        QCOMPARE(s[1].colour, tcad::desktop::theme::seriesColour(1));
+        QCOMPARE(s[2].colour, tcad::desktop::theme::seriesColour(2));
+        QVERIFY(s[1].line == tcad::desktop::plot::LineStyle::Solid && s[2].line == tcad::desktop::plot::LineStyle::Solid);
+        QVERIFY(s[3].line == tcad::desktop::plot::LineStyle::Dashed);
+        QVERIFY(s[2].x == sweepOf("diode_1d_iv_coarse.npz").voltages);
+        for (const auto& ser : s) QVERIFY(ser.in_legend);
+        snapshot(w.get(), "overlays");
+        // the same file twice in the family is refused
+        QVERIFY(!w->addOverlay(data("diode_1d_iv_fine.npz"), Kind::Family).isEmpty());
+        QCOMPARE(w->overlays().size(), std::size_t{3});
+    }
+
+    void overlayRefusesAMismatchNamingIt_data() {
+        QTest::addColumn<QString>("file");
+        QTest::addColumn<QString>("reason");
+        QTest::newRow("contact") << "diode_1d_iv_cathode.npz" << "swept contact is 'cathode', the open result's is 'anode'";
+        QTest::newRow("quantity") << "diode_1d_iv_quantity.npz" << "capacitance sweep, the open result is a current sweep";
+        QTest::newRow("contact first") << "cv.npz" << "swept contact is 'gate'";  // the FIRST mismatch is named
+        QTest::newRow("unit") << "diode_1d_iv_unit.npz" << "unit is 'mA/cm^2', the open result's is 'A/cm^2'";
+        QTest::newRow("channel") << "diode_1d_iv_channel.npz" << "no 'device' channel";
+        QTest::newRow("no sweep") << "diode_1d.npz" << "has no sweep";
+        QTest::newRow("itself") << "diode_1d_iv.npz" << "the open result itself";
+        QTest::newRow("missing") << "no_such_file.npz" << "file not found";
+        QTest::newRow("corrupt") << "corrupt.npz" << "";
+    }
+    void overlayRefusesAMismatchNamingIt() {
+        QFETCH(QString, file);
+        QFETCH(QString, reason);
+        auto w = curvesOf(tmp_, "p2_ov_refuse.ini");
+        QVERIFY(w);
+        const QString why = w->addOverlay(data(file), Kind::Family);
+        QVERIFY2(!why.isEmpty(), "accepted");
+        QVERIFY2(why.contains(reason), qPrintable(why));
+        QVERIFY2(w->lastError().contains(why), qPrintable(w->lastError()));   // reported, named
+        QVERIFY(w->overlays().empty());
+        QCOMPARE(w->plotView()->model().series.size(), std::size_t{1});
+    }
+
+    void overlayLabelsEditRemoveAndClear() {
+        auto w = curvesOf(tmp_, "p2_ov_edit.ini");
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+        QVERIFY(w->addOverlay(data("diode_1d_iv_fine.npz"), Kind::Family).isEmpty());
+        QVERIFY(w->addOverlay(data("diode_1d_iv_coarse.npz"), Kind::Comparison).isEmpty());
+        auto* list = child<QListWidget>(w->plotPanel(), "OverlayList");
+        QCOMPARE(list->count(), 2);
+        QVERIFY(list->isEnabled());
+        // edit a label in the list: the legend and readout follow
+        list->item(0)->setText("Na = 1e17");
+        QCOMPARE(w->overlays()[0].label, QString("Na = 1e17"));
+        QCOMPARE(p->model().series[1].label, QString("Na = 1e17"));
+        QVERIFY(!w->setOverlayLabel(0, "  "));   // an empty label is refused and undone
+        QCOMPARE(list->item(0)->text(), QString("Na = 1e17"));
+        // remove through the panel's button
+        list->setCurrentRow(0);
+        child<QPushButton>(w->plotPanel(), "RemoveOverlayButton")->click();
+        QCOMPARE(w->overlays().size(), std::size_t{1});
+        QCOMPARE(p->model().series.size(), std::size_t{2});
+        // log: the overlays too show |I| (decision 8), their values raw
+        logAction(w.get())->trigger();
+        QVERIFY(p->model().y.scale == tcad::desktop::plot::Scale::Log);
+        QVERIFY(p->model().series[1].y == sweepOf("diode_1d_iv_coarse.npz").channels[0].values);
+        // other modes: no overlays drawn, controls off, adding refused
+        QVERIFY(chooseMode(w.get(), ViewMode::Convergence));
+        QVERIFY(!list->isEnabled());
+        QVERIFY(w->addOverlay(data("diode_1d_iv_fine.npz"), Kind::Family).contains("Curves or C-V"));
+        // another result: overlays are relative to one result, so they go
+        QVERIFY(w->tryOpen(data("diode_1d_iv_fine.npz")));
+        QVERIFY(w->overlays().empty());
+    }
+
+    void overlayFollowsTheSelectedChannel() {
+        auto w = shown(ini("p2_ov_channel.ini"));
+        QVERIFY(w);
+        QVERIFY(w->tryOpen(data("diode_1d_iv_2ch.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        QVERIFY(w->setSweepChannel("extra"));
+        QCOMPARE(w->addOverlay(data("diode_1d_iv_fine_2ch.npz"), Kind::Family), QString());
+        const auto fine = sweepOf("diode_1d_iv_fine_2ch.npz");
+        auto chan = [&](const char* name) {
+            for (const auto& c : fine.channels)
+                if (c.name == name) return c.values;
+            return std::vector<double>{};
+        };
+        const auto& s = w->plotView()->model().series;
+        QVERIFY(s.at(1).y == chan("extra"));      // the channel shown, not the first one
+        QVERIFY(w->setSweepChannel("device"));
+        QVERIFY(w->plotView()->model().series.at(1).y == chan("device"));
+    }
+
+    void overlaysInCVMode() {
+        auto w = shown(ini("p2_ov_cv.ini"));
+        QVERIFY(w);
+        QVERIFY(w->tryOpen(data("cv.npz")));
+        QCOMPARE(w->viewMode(), ViewMode::CV);
+        QCOMPARE(w->addOverlay(data("cv_fine.npz"), Kind::Family), QString());
+        const auto& s = w->plotView()->model().series;
+        QCOMPARE(s.size(), std::size_t{2});
+        QVERIFY(s[1].x == sweepOf("cv_fine.npz").voltages);
+        const QString why = w->addOverlay(data("cv_as_current.npz"), Kind::Comparison);
+        QVERIFY2(why.contains("current sweep, the open result is a capacitance sweep"), qPrintable(why));
+    }
+
+    // -- P2-S6: every curve mode, drawn (run at scales 1 / 1.5 / 2 by test_desktop_hidpi.py)
+    void curveModeImagesProbe_data() {
+        QTest::addColumn<QString>("file");
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<QString>("overlay");   // "" none, else a family file
+        QTest::newRow("field_1d") << "diode_1d.npz" << int(ViewMode::Field) << "";
+        QTest::newRow("curves") << "diode_1d_iv.npz" << int(ViewMode::Curves) << "";
+        QTest::newRow("curves_overlays") << "diode_1d_iv.npz" << int(ViewMode::Curves) << "diode_1d_iv_fine.npz";
+        QTest::newRow("cv") << "cv.npz" << int(ViewMode::CV) << "";
+        QTest::newRow("transient") << "diode_1d_transient.npz" << int(ViewMode::Transient) << "";
+        QTest::newRow("ac") << "diode_1d_ac.npz" << int(ViewMode::AC) << "";
+        QTest::newRow("convergence") << "diode_1d_rejected.npz" << int(ViewMode::Convergence) << "";
+        QTest::newRow("bands") << "diode_1d.npz" << int(ViewMode::Bands) << "";
+        QTest::newRow("recombination") << "diode_1d.npz" << int(ViewMode::Recombination) << "";
+        QTest::newRow("cut") << "mosfet_2d.npz" << int(ViewMode::Cut) << "";
+    }
+    void curveModeImagesProbe() {
+        QFETCH(QString, file);
+        QFETCH(int, mode);
+        QFETCH(QString, overlay);
+        auto w = opened("p2_s6_images.ini", file.toUtf8().constData());
+        QVERIFY(w);
+        QVERIFY(chooseMode(w.get(), static_cast<ViewMode>(mode)));
+        if (!overlay.isEmpty())
+            QCOMPARE(w->addOverlay(data(overlay), tcad::desktop::plot::OverlayCurve::Kind::Family), QString());
+        PlotView* p = w->plotView();
+        QTRY_VERIFY_WITH_TIMEOUT(!p->model().series.empty(), 120000);   // bands/R: the backend
+        QApplication::processEvents();
+        QString why;
+        const int probed = probeSeriesColours(p, &why);
+        QVERIFY2(probed >= 0, qPrintable(why));
+        // every series probed, except where another series coincides with it everywhere
+        QVERIFY2(probed >= 1 && probed >= static_cast<int>(p->model().series.size()) - 2,
+                 qPrintable(QString("%1 of %2 series probed").arg(probed).arg(p->model().series.size())));
+        QVERIFY(!p->ticks(PlotView::Which::X).empty() && !p->ticks(PlotView::Which::Y).empty());
+        if (p->model().legend) QVERIFY(!p->legendRect().isEmpty());
+        if (!p->model().title.isEmpty()) QVERIFY(!p->titleRect().isEmpty());
+    }
+
+    void curveModesSurviveAdversarialFiles() {
+        using tcad::desktop::plot::Scale;
+        auto w = shown(ini("p2_s6_adversarial.ini"));
+        QVERIFY(w);
+        PlotView* p = w->plotView();
+
+        // every point unconverged: nothing to plot, said so with the note, no invented axes
+        QVERIFY(w->tryOpen(data("adv_all_unconverged.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        QVERIFY(p->model().series.empty());
+        QVERIFY2(p->model().empty_text.contains("did not converge") &&
+                     p->model().empty_text.contains("Nothing to plot"), qPrintable(p->model().empty_text));
+        logAction(w.get())->trigger();
+        QVERIFY(p->model().series.empty());
+        logAction(w.get())->trigger();
+        QVERIFY(hoverEverywhere(p).isEmpty());
+        QVERIFY(chooseMode(w.get(), ViewMode::Convergence));   // the trace is still there
+        QVERIFY(!p->model().series.empty());
+
+        // one point: drawn as a marker, with a finite, non-degenerate view
+        QVERIFY(w->tryOpen(data("adv_one_point.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::Curves));
+        QCOMPARE(p->model().series.at(0).x.size(), std::size_t{1});
+        QVERIFY(p->xView().lo < p->xView().hi && p->yView().lo < p->yView().hi);
+        QString why;
+        QVERIFY2(probeSeriesColours(p, &why) == 1, qPrintable(why));
+        QCOMPARE(hoverSample(p, 0, 0), entry(p, 0, 0));
+
+        // a trace whose steps carry no metrics: offered (the trace exists), and says so
+        QVERIFY(w->tryOpen(data("adv_trace_no_metrics.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::Convergence));
+        QVERIFY(p->model().series.empty());
+        QVERIFY2(p->model().empty_text.contains("no metrics"), qPrintable(p->model().empty_text));
+
+        // an all-NaN channel beside a good one: the good one drawn, NaN never read out
+        QVERIFY(w->tryOpen(data("adv_nan_channel.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::Transient));
+        QCOMPARE(p->model().series.size(), std::size_t{2});
+        QVERIFY2(probeSeriesColours(p, &why) == 1, qPrintable(why));   // anode; cathode has nothing to draw
+        QVERIFY(hoverEverywhere(p).isEmpty());
+
+        // AC at one frequency: a single-decade log view, both axes drawn
+        QVERIFY(w->tryOpen(data("adv_ac_one_freq.npz")));
+        QVERIFY(chooseMode(w.get(), ViewMode::AC));
+        QVERIFY(p->model().x.scale == Scale::Log);
+        QVERIFY(p->xView().lo > 0 && p->xView().lo < p->xView().hi);
+        // One value per axis is centred on each axis, so C's and G's single
+        // markers land on the SAME pixel: G, drawn last, is the one seen.
+        QVERIFY2(probeSeriesColours(p, &why) >= 0, qPrintable(why));
+        const QPointF c0 = p->toPixel(p->model().series[0].x[0], p->model().series[0].y[0], p->model().series[0].axis);
+        const QPointF g0 = p->toPixel(p->model().series[1].x[0], p->model().series[1].y[0], p->model().series[1].axis);
+        QVERIFY(QLineF(c0, g0).length() < 1.0);
+        const double dpr = p->devicePixelRatioF();
+        QCOMPARE(p->grab().toImage().pixelColor(qRound(g0.x() * dpr), qRound(g0.y() * dpr)), p->model().series[1].colour);
+    }
+
+    // Plan 16.4's last bench row: the 1D bands through a WARM backend (reported).
+    void bandsWithAWarmBackendIsReported() {
+        auto w = opened("p2_s6_bands_bench.ini", "diode_1d.npz");
+        QVERIFY(w);
+        QTRY_VERIFY_WITH_TIMEOUT(w->backendClient() != nullptr, 5000);   // warmed after a 1D open with Bands
+        QTRY_VERIFY_WITH_TIMEOUT(w->backendClient()->state() == tcad::desktop::BackendClient::State::Ready, 120000);
+        QElapsedTimer t;
+        t.start();
+        QVERIFY(chooseMode(w.get(), ViewMode::Bands));
+        QTRY_VERIFY_WITH_TIMEOUT(w->plotView()->model().series.size() == 4, 120000);
+        qInfo("1D bands through a warm backend: %.1f ms (request to curves drawn)",
+              static_cast<double>(t.nsecsElapsed()) * 1e-6);
     }
 
     // -- the view, driven through the shell ---------------------------------

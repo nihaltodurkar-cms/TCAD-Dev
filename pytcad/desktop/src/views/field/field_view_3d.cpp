@@ -315,7 +315,7 @@ void FieldView::setSurfaceMode(SurfaceMode m) {
             mapper_->ScalarVisibilityOn();
             break;
         case SurfaceMode::Context: {  // viewer3d.py's context surface: flat, 0.15 opaque
-            const theme::Rgb c = theme::rgb(theme::T::Context, scheme_);
+            const theme::Rgb c = theme::rgb(theme::T::Context);
             p->SetColor(c.r, c.g, c.b);
             p->SetOpacity(0.15);
             mapper_->ScalarVisibilityOff();
@@ -1004,7 +1004,7 @@ void FieldView::rebuildExploded() {
         auto actor = vtkSmartPointer<vtkActor>::New();
         actor->SetMapper(m);
         const theme::Rgb c = theme::regionRgb(list_index);
-        const theme::Rgb edge = theme::rgb(theme::T::BorderStrong, scheme_);
+        const theme::Rgb edge = theme::rgb(theme::T::BorderStrong);
         actor->GetProperty()->SetColor(c.r, c.g, c.b);
         actor->GetProperty()->SetOpacity(0.6);  // viewer3d.py's region surfaces
         actor->GetProperty()->EdgeVisibilityOn();

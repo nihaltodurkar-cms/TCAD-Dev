@@ -334,7 +334,10 @@ def test_flux_geometry3d_is_identical_at_every_thread_count(threads):
 # ----------------------------------------------------------------------
 #  G-E: absolute throughput floors
 # ----------------------------------------------------------------------
-@pytest.mark.slow
+# "timing", not "slow" (2026-09-26): a wall-clock throughput floor that
+# runs in ~1 s but failed under the parallel slow battery's load; it runs
+# in the serial timing pass (pytest.ini).
+@pytest.mark.timing
 @pytest.mark.parametrize("name,floor,build", [
     ("stencil2d", 2.0e6, "2d"),
     ("stencil3d", 1.0e6, "3d"),
@@ -653,7 +656,8 @@ def test_implant_2d_lateral_smoothing_matches_the_per_row_formula():
     assert_exact("implant_2d after the hoist", got, ref)
 
 
-@pytest.mark.slow
+# "timing", not "slow": same reason as test_throughput_floor above.
+@pytest.mark.timing
 @pytest.mark.parametrize("name,floor", [
     ("curvature", 5.0e7),
     ("log_density", 2.0e7),

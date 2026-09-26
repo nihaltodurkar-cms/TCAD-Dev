@@ -145,12 +145,44 @@ def _support_nodes(kk, Nx, Ny):
     return np.unique(np.concatenate(parts))
 
 
-def _ohmic_current_sensitivity(device, psi, n, p, voltages, kk):
-    """Real sensitivity row S (length 3N) of the DC current INTO the
-    device through an ohmic contact's node set `kk` (sum of F_n+F_p over
-    those nodes -- terminal_current()'s own quantity) with respect to
-    the full state vector, via a shared-step-size central finite
-    difference over kk's support (see _support_nodes).
+def _ohmic_current_sensitivities(device, psi, n, p, voltages, node_sets):
+    """Real sensitivity rows S (length 3N each), one per ohmic node set in
+    `node_sets`, of the DC current INTO the device through that contact
+    (sum of F_n+F_p over its nodes -- terminal_current()'s own quantity)
+    with respect to the full state vector. EXACT, from ONE assembly
+    (AC-SENSITIVITY-PLAN.md): dI/du = sum over the contact's nodes k of
+    the raw continuity Jacobian rows 3k+1 and 3k+2, which
+    Device2D._residual_jacobian copies out (current_rows_for) before its
+    contact BC replaces them -- the same F_n/F_p it returns, so this is
+    the derivative the finite difference below approximates. Generation
+    (+G in the n row, -G in the p row) and recombination cancel in that
+    sum exactly as they do in F_n+F_p. Gated against the FD row, within
+    the FD's own measured error, by tests/test_ac_sensitivity.py."""
+    N = device.N
+    device._residual_jacobian(psi, n, p, voltages,
+                              current_rows_for=np.unique(np.concatenate(node_sets)))
+    r, c, v = device._raw_current_rows
+    del device._raw_current_rows
+    in_state = c < 3 * N
+    rows_S = []
+    for kk in node_sets:
+        sel = in_state & np.isin(r // 3, kk)
+        S = np.zeros(3 * N)
+        np.add.at(S, c[sel], v[sel])
+        rows_S.append(S)
+    return rows_S
+
+
+def _ohmic_current_sensitivity_fd(device, psi, n, p, voltages, kk, rel_step=1e-6):
+    """The pre-AC-SENSITIVITY-PLAN implementation, kept as the gate oracle
+    for _ohmic_current_sensitivities (tests/test_ac_sensitivity.py) --
+    not used by y_parameters. Real sensitivity row S (length 3N) of the
+    DC current INTO the device through an ohmic contact's node set `kk`
+    (sum of F_n+F_p over those nodes -- terminal_current()'s own
+    quantity) with respect to the full state vector, via a
+    shared-step-size central finite difference over kk's support (see
+    _support_nodes): 2 x 3 x |support| full assemblies. rel_step=1e-6
+    reproduces the original step exactly.
 
     ONE step size per state component, shared across every node in the
     support set (not computed per-node) -- generalizing the exact fix
@@ -169,7 +201,7 @@ def _ohmic_current_sensitivity(device, psi, n, p, voltages, kk):
     bases = {0: psi_f, 1: n_f, 2: p_f}
     for comp, base in bases.items():
         scale = max(float(np.abs(base[support]).max()), 1.0)
-        h = scale * 1e-6
+        h = scale * rel_step
         for node in support:
             arrs_p = [psi_f.copy(), n_f.copy(), p_f.copy()]
             arrs_m = [psi_f.copy(), n_f.copy(), p_f.copy()]
@@ -260,7 +292,7 @@ def y_parameters(device, freqs):
             kinds.append("ohmic")
             b[3 * kk] = 1.0
             gate_weights.append(None)
-            S_ohmic.append(_ohmic_current_sensitivity(device, psi0, n0, p0, voltages, kk))
+            S_ohmic.append(None)   # filled below: one assembly for every ohmic port
         elif isinstance(bc, GateBC):
             kinds.append("gate")
             w = bc.kappa * device.dVx[bc.i]
@@ -271,6 +303,13 @@ def y_parameters(device, freqs):
             raise TypeError(f"y_parameters: unsupported BC type {type(bc).__name__} "
                              f"for port {name!r}")
         b_ports.append(b)
+
+    ohmic = [i for i, kind in enumerate(kinds) if kind == "ohmic"]
+    if ohmic:
+        rows_S = _ohmic_current_sensitivities(device, psi0, n0, p0, voltages,
+                                              [node_sets[i] for i in ohmic])
+        for i, S in zip(ohmic, rows_S):
+            S_ohmic[i] = S
 
     Y = np.empty((len(freqs), P, P), dtype=complex)
     for kf, f in enumerate(freqs):

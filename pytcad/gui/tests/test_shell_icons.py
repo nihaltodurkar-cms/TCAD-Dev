@@ -63,12 +63,11 @@ def test_every_sidebar_tab_icon_name_is_registered():
 def test_toolbar_icon_calls_reference_registered_names():
     text = open(TOOLBAR_QML, encoding="utf-8").read()
     # Icons.svg(<name-expr>, <color-expr>) calls for the toolbar buttons
-    # (run/stop/undo/redo/sun/moon). The name argument is either a plain
-    # string literal ("run") or a ternary between two literals
-    # (Theme.dark ? "sun" : "moon", the theme-toggle button) -- so this
-    # collects every quoted string appearing before the first top-level
-    # comma inside each Icons.svg(...) call, not just a single literal
-    # first argument.
+    # (run/stop/undo/redo; the sun/moon theme toggle went with the light/
+    # dark modes, 2026-09-26). The name argument is a string literal or a
+    # ternary between literals -- so this collects every quoted string
+    # appearing before the first top-level comma inside each
+    # Icons.svg(...) call, not just a single literal first argument.
     names_found = set()
     for call_start in [m.start() for m in re.finditer(r'Icons\.svg\(', text)]:
         arg_start = call_start + len('Icons.svg(')
@@ -79,7 +78,7 @@ def test_toolbar_icon_calls_reference_registered_names():
     assert names_found, "expected at least one Icons.svg(...) call in MainToolBar.qml"
     unknown = [n for n in names_found if n not in ICON_PATHS]
     assert not unknown, f"Icons.svg() call(s) with unregistered name(s): {unknown}"
-    expected_toolbar = {"run", "stop", "undo", "redo", "sun", "moon"}
+    expected_toolbar = {"run", "stop", "undo", "redo"}
     assert expected_toolbar <= names_found, (
         f"expected toolbar icon names {expected_toolbar} to all appear in "
         f"Icons.svg(...) calls, found: {names_found}"

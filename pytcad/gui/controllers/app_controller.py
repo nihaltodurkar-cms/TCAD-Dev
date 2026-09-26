@@ -21,6 +21,8 @@ from ..services.process_model import ProcessFlow, ProcessStep, validate_flow
 from ..services.process_result_store import ProcessResultStore
 from ..services.project_store import load_project, save_project
 from ..services.result_store import NpzResultStore, SpecResultStore
+from ..services.run_config import (
+    RUN_FIELDS, RunConfigError, backend_options, configure_run, engine_options)
 from ..services import sweep_derived
 from ..services.structure_model import GateModel, RegionSpec
 from ..services.undo_stack import Command, UndoStack
@@ -744,29 +746,9 @@ class AppController(QObject):
         the spec at Run time (see run()'s own comment on this), so
         self.spec.models can be stale/default here even though toggling
         a model in the Physics Lab should immediately be reflected in
-        whether devsim looks selectable."""
-        from workbench.solvers.base import backend_ids
-        opts = [{"id": "pytcad", "label": "pytcad", "enabled": True, "reason": ""}]
-        if "devsim" not in backend_ids():
-            opts.append({"id": "devsim", "label": "devsim", "enabled": False,
-                        "reason": "optional devsim dependency not installed"})
-            return opts
-        reason = ""
-        try:
-            from workbench.solvers.devsim_backend import check_devsim_compatible
-            if self.spec is not None:
-                import copy
-                trial = copy.copy(self.spec)
-                trial.models = dict(self.lab.model_config)
-                check_devsim_compatible(trial)
-        except ValueError as exc:
-            reason = str(exc)
-        except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}"
-        opts.append({"id": "devsim", "label": "devsim",
-                    "enabled": self.spec is not None and not reason,
-                    "reason": reason})
-        return opts
+        whether devsim looks selectable. (P3-S2: computed by
+        run_config.backend_options, shared with the native app.)"""
+        return backend_options(self.spec, self.lab.model_config)
 
     @Property(str, notify=structureChanged)
     def selectedBackend(self):
@@ -796,47 +778,9 @@ class AppController(QObject):
         doping/gate-layout refusal via _pick_mpi_split_axis is NOT
         re-derived here, since that needs the full doping array this
         list must stay cheap enough to recompute on every
-        structureChanged)."""
-        # Reached through gui.services.solver_runner, never imported
-        # directly out of core (test_m3_store_seam.py's own
-        # test_app_controller_never_imports_pytcad_core enforces that
-        # this controller only ever reaches core math through services);
-        # solver_runner.py already re-exports these three exactly for
-        # this "is the optional dependency present" purpose.
-        from gui.services.solver_runner import _HAVE_MPI, _HAVE_PYAMG, _HAVE_CUPY
-        dim = self.spec.mesh.dimensionality if self.spec is not None else None
-        opts = [{"id": "auto", "label": "Auto", "enabled": True,
-                "reason": ""}]
-        opts.append({"id": "direct", "label": "Direct", "enabled": True,
-                    "reason": ""})
-        opts.append({"id": "gpu_direct", "label": "GPU direct",
-                    "enabled": _HAVE_CUPY,
-                    "reason": "" if _HAVE_CUPY
-                              else "optional cupy dependency not installed"})
-        opts.append({"id": "amg", "label": "AMG (bicgstab)",
-                    "enabled": _HAVE_PYAMG,
-                    "reason": "" if _HAVE_PYAMG
-                              else "optional pyamg dependency not installed"})
-        # Structural reasons (wrong dimensionality, an armed transient)
-        # are checked BEFORE the optional-dependency check: they are
-        # the more actionable message (installing mpi4py would not
-        # help a 1D device or a transient run either way), and this
-        # order is also what keeps the reason deterministic across
-        # machines that do/don't have mpi4py installed -- a CI runner
-        # without it must still report "only available for 3D devices"
-        # for a 1D spec, not mask that behind the dependency message
-        # (gui/tests/test_engine_selector.py's own gates depend on
-        # this precedence).
-        mpi_reason = ""
-        if dim != 3:
-            mpi_reason = "only available for 3D devices"
-        elif self._transient_config is not None:
-            mpi_reason = "not compatible with an armed transient run"
-        elif not _HAVE_MPI:
-            mpi_reason = "optional mpi4py dependency / mpirun not available"
-        opts.append({"id": "mpi_schwarz", "label": "MPI Schwarz",
-                    "enabled": not mpi_reason, "reason": mpi_reason})
-        return opts
+        structureChanged). (P3-S2: computed by run_config.engine_options,
+        shared with the native app.)"""
+        return engine_options(self.spec, self._transient_config is not None)
 
     @Property(str, notify=structureChanged)
     def selectedEngine(self):
@@ -1726,102 +1670,25 @@ class AppController(QObject):
             return
         if self._busy:
             return
-        # v0.4: attach the CURRENT sweep config (None included) so a
-        # previously-run sweep can never linger on the spec after
-        # clearSweepConfig().  Validate BEFORE starting the subprocess --
-        # an unexecutable sweep should be an immediate, actionable error,
-        # not a failed job.
-        if self._sweep_config is not None:
-            try:
-                self._sweep_config.validate([c.name for c in self.spec.contacts])
-            except ValueError as exc:
-                # Deliberately NOT the arm-time summary ("Invalid sweep
-                # configuration"): this failure means the DEVICE changed
-                # under an armed sweep (e.g. the contact no longer
-                # exists), not that the user just typed bad values.
-                # SweepPanel keys its "arm rejected" note off the arm-time
-                # summary alone and must stay silent here.
-                self.errorRaised.emit(
-                    "Sweep cannot run on this device", str(exc))
-                return
-        # M17 phase 3: same pre-flight validation for an armed
-        # transient config, plus the mutual-exclusion check a sweep and
-        # a transient run can never both attach to the same spec --
-        # _solve_all resolves that deterministically (transient wins)
-        # but arming both is a user-facing mistake, not a state worth
-        # silently picking a winner for.
-        if self._transient_config is not None:
-            try:
-                self._transient_config.validate(
-                    [c.name for c in self.spec.contacts])
-            except ValueError as exc:
-                self.errorRaised.emit(
-                    "Transient run cannot run on this device", str(exc))
-                return
-        # M18 Phase 4: same pre-flight validation for an armed AC
-        # config, plus extending the sweep/transient mutual-exclusion
-        # check to a 3-way one -- at most ONE of the three may be
-        # armed on a single Run.
-        if self._ac_config is not None:
-            try:
-                self._ac_config.validate([c.name for c in self.spec.contacts])
-            except ValueError as exc:
-                self.errorRaised.emit(
-                    "AC analysis cannot run on this device", str(exc))
-                return
-        armed = sum(cfg is not None for cfg in
-                    (self._sweep_config, self._transient_config, self._ac_config))
-        if armed > 1:
-            self.errorRaised.emit(
-                "Cannot run more than one of Sweep/Transient/AC together",
-                "Clear all but one of the armed configurations first.")
+        # P3-S2: the armed-configuration checks, their messages and the
+        # spec stamping live in gui/services/run_config.py, shared with
+        # the native app through the backend service (spec.configure_run).
+        # The CURRENT sweep config (None included) is attached, so a
+        # previously-run sweep never lingers after clearSweepConfig(); the
+        # Lab's validated catalog config is what executes (the M2
+        # RunRecord stamps it, so every run proves which physics ran).
+        try:
+            configured = configure_run(
+                self.spec, sweep=self._sweep_config, transient=self._transient_config,
+                ac=self._ac_config, equilibrium_only=self.lab.equilibrium_only,
+                models=self.lab.model_config, backend=self._backend, engine=self._engine)
+        except RunConfigError as exc:
+            self.errorRaised.emit(exc.title, exc.detail)
             return
-        # GUI-IMPROVEMENT-PLAN.md Phase 1c: "Equilibrium only" sets
-        # spec.bias = None instead of the usual contact-voltage dict --
-        # solver_runner.py's _solve_all() already skips solve_bias
-        # entirely whenever spec.bias is None (test_solver_runner.py's
-        # test_equilibrium_only_when_bias_is_none exercises exactly this
-        # path). A sweep always overrides the bias branch regardless of
-        # spec.bias (_solve_all checks spec.sweep FIRST), so the two are
-        # mutually exclusive -- catch that here with an actionable error
-        # rather than letting it reach solve_bias inside the sweep ramp.
-        if self.lab.equilibrium_only and self._sweep_config is not None:
-            self.errorRaised.emit(
-                "Cannot run equilibrium-only with a sweep armed",
-                "Clear the voltage sweep configuration first, or turn "
-                "off 'Equilibrium only' in the Physics Lab.")
-            return
-        self.spec.sweep = self._sweep_config
-        self.spec.transient = self._transient_config
-        self.spec.ac = self._ac_config
-        if self.lab.equilibrium_only:
-            self.spec.bias = None
-        # The Lab's validated catalog config is what executes; the M2
-        # RunRecord stamps it, so every run proves which physics ran.
-        self.spec.models = dict(self.lab.model_config)
-        # v0.6 Phase 2c: apply the selected backend. Defense in depth --
-        # the QML selector should already prevent choosing an
-        # incompatible backend (backendOptionsForQml uses this SAME
-        # check), but re-check here too in case the spec changed after
-        # the backend was picked (e.g. picked "devsim" on a 1D device,
-        # then a process re-run or structure edit changed dimensionality
-        # without the selector being touched again).
-        if self._backend != "pytcad":
-            try:
-                from workbench.solvers.devsim_backend import check_devsim_compatible
-                check_devsim_compatible(self.spec)
-            except Exception as exc:
-                self.errorRaised.emit(
-                    f"Cannot run with backend '{self._backend}'", str(exc))
-                return
-        self.spec.backend = self._backend
-        # v0.6 Phase 2d: engine selection only applies to the pytcad
-        # backend's own linear-solve path (solver_runner.run_job) --
-        # devsim has no such concept, so a stray non-"auto" engine left
-        # selected from a prior pytcad run must not leak into a devsim
-        # job (harmless either way, since devsim_backend.run() never
-        # reads spec.engine, but explicit is safer than relying on that).
-        self.spec.engine = self._engine if self._backend == "pytcad" else "auto"
+        # Stamped onto self.spec itself, as before: the spec object keeps
+        # its identity (_last_run_spec, the comparisons, read it).
+        for name in RUN_FIELDS:
+            setattr(self.spec, name, getattr(configured, name))
         # Final review I-3: a fresh run invalidates whatever is on show.
         # Mirrors runProcess()'s clear-on-start: during a long sweep, the
         # previous run's curves must not sit there looking current.
@@ -1931,17 +1798,13 @@ class AppController(QObject):
             return
         if self._busy or self._comparison_runner.running:
             return
-        from workbench.core.catalog import ModelCatalog
-        off = {key: False for key in ModelCatalog.list()}
-        import copy
-        spec_off = copy.deepcopy(self._last_run_spec)
-        spec_off.sweep = copy.deepcopy(self._last_run_spec.sweep)
-        spec_off.models = off
-        spec_off.bias = dict(self._last_run_spec.bias or {}) \
-            if self._last_run_spec.bias else None
+        # P3-S6: the spec and label live in gui/services/family_jobs.py,
+        # shared with the native app (the backend's comparison.job).
+        from ..services import family_jobs
+        spec_off = family_jobs.comparison_spec(self._last_run_spec)
         self.consoleModel.append(
             "Starting comparison solve (all models OFF)...")
-        self._comparison_label = "all models off"
+        self._comparison_label = family_jobs.COMPARISON_LABEL
         try:
             self._comparison_runner.start(spec_off)
         except Exception as exc:

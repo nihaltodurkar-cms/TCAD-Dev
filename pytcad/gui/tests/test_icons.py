@@ -68,8 +68,8 @@ def test_qml_svg_accepts_a_real_color_object_not_just_a_string():
     engine = QQmlEngine()
     engine.addImportPath(QML_DIR)
     probe = _make_probe(engine)
-    # Theme.accent (dark, default) is "#8b5cf6" -- same hex either way.
-    assert probe.property("urlRunFromColorObject") == "image://icons/run/8b5cf6"
+    # Theme.accent is black (one black-and-white scheme since 2026-09-26).
+    assert probe.property("urlRunFromColorObject") == "image://icons/run/000000"
 
 
 def test_qml_svg_unknown_name_returns_empty_string():

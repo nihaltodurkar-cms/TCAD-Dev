@@ -37,11 +37,14 @@ def _solved_1d_canvas():
     ctl = AppController()
     ctl.loadExample("diode_1d")
     ctl.run()
-    for _ in range(300):
+    # Setup, not the measurement: the solve runs in a subprocess (Python
+    # start-up + imports), which took over the old 3 s cap once, right
+    # after a full suite (2026-09-26). Returns as soon as it is done.
+    deadline = time.monotonic() + 60.0
+    while ctl.busy and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
-        if not ctl.busy:
-            break
+    app.processEvents()
     assert ctl.hasResult, "solve did not complete in time for this test"
 
     item = MplCanvasItem()
@@ -76,6 +79,7 @@ def test_pan_sets_the_fast_path_flag_and_skips_the_rebuild():
     )
 
 
+@pytest.mark.timing  # wall-clock budget: run serially (pytest.ini "timing")
 def test_pan_fast_path_is_measurably_faster_than_a_full_rebuild():
     app, item = _solved_1d_canvas()
     item.renderToImage()

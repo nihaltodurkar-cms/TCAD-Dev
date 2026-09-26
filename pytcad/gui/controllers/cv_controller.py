@@ -2,30 +2,15 @@
 JobRunner subprocess and exposes the result store.  Deliberately a
 separate controller (no god-controller growth); same ownership pattern
 as FamilySweepController."""
-import json
 import os
 import tempfile
 import uuid
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from ..services import cv_job
 from ..services.job_runner import JobRunner
 from ..services.result_store import NpzResultStore
-
-
-class _CVJob:
-    """Adapts plain C-V parameters to the `to_json(path)` contract
-    JobRunner.start() expects (the same generic contract ProcessFlow
-    now satisfies directly via its own to_json/from_json -- see
-    gui/services/process_model.py -- but a bare dict of C-V params has
-    no dataclass of its own to grow that method on)."""
-
-    def __init__(self, params):
-        self.params = dict(params)
-
-    def to_json(self, path):
-        with open(path, "w") as fh:
-            json.dump(self.params, fh)
 
 
 class CVController(QObject):
@@ -43,13 +28,7 @@ class CVController(QObject):
 
     @Slot(float, float, float, float, float)
     def runCV(self, nsub_cm3, tox_nm, vstart, vstop, vstep):
-        job = _CVJob({
-            "nsub_cm3": float(nsub_cm3),
-            "tox_nm": float(tox_nm),
-            "vstart": float(vstart),
-            "vstop": float(vstop),
-            "vstep": abs(float(vstep)) or 0.05,
-        })
+        job = cv_job.CVJob(cv_job.cv_params(nsub_cm3, tox_nm, vstart, vstop, vstep))
         try:
             self._runner.start(job)
         except Exception as exc:

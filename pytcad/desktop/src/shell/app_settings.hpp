@@ -1,6 +1,7 @@
 // The shell's persistent settings (NATIVE-DESKTOP-PLAN.md section
-// 15.13, S3b): window geometry, dock layout, recent files and, from S3c,
-// the theme choice.
+// 15.13, S3b): window geometry, dock layout and recent files. (S3c's theme
+// choice is gone: one black-and-white scheme since 2026-09-26; an old
+// "theme/choice" key is ignored.)
 //
 // INI, not the registry, so a user or a test can read, reset or delete
 // it. Three modes:
@@ -25,7 +26,9 @@ public:
     // Bump when the dock layout changes incompatibly: a saved layout of
     // another version is ignored (default layout), never half-applied.
     // 2: the Info panel joined the layout (S3d). 3: the Display panel (S5e).
-    static constexpr int kLayoutVersion = 4;  // 4: S6's 3D and Playback docks
+    // 4: S6's 3D and Playback docks. 5: the Plot panel and the central splitter (P2-S3).
+    // 6: the Run and Console docks (P3-S4). 7: the Telemetry dock (P3-S5).
+    static constexpr int kLayoutVersion = 7;
     static constexpr int kMaxRecent = 10;
 
     static std::unique_ptr<AppSettings> userDefault();

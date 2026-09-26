@@ -17,6 +17,29 @@ ApplicationWindow {
     title: "PyTCAD" + (appController.isDirty ? " *" : "")
     color: Theme.background
     font.family: Theme.family
+    // Qt's own controls (menu bar, split handles, check boxes, menus) paint
+    // from the palette, which otherwise follows the OS: a dark Windows
+    // setting drew white menu titles on the white bar and black split
+    // handles. Pinned to the one black-and-white scheme (Theme.qml).
+    palette.window: Theme.chromeBg
+    palette.windowText: Theme.text
+    palette.base: Theme.panel
+    palette.alternateBase: Theme.panelAlt
+    palette.text: Theme.text
+    palette.button: Theme.chromeBg
+    palette.buttonText: Theme.text
+    palette.brightText: Theme.error
+    palette.highlight: Theme.accent
+    palette.highlightedText: Theme.textOnAccent
+    palette.light: Theme.panel
+    palette.midlight: Theme.panelAlt
+    palette.mid: Theme.border
+    palette.dark: Theme.borderStrong
+    palette.shadow: Theme.borderStrong
+    palette.placeholderText: Theme.textFaint
+    palette.toolTipBase: Theme.cardBg
+    palette.toolTipText: Theme.text
+    palette.link: Theme.accent
 
     // Set by the close-confirmation dialog's "Save" button: after the save
     // dialog is accepted and the project actually saves, quit instead of
@@ -42,7 +65,6 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Z"; onActivated: if (appController.canUndo) appController.undo() }
     Shortcut { sequence: "Ctrl+Y"; onActivated: if (appController.canRedo) appController.redo() }
     Shortcut { sequence: "Ctrl+S"; onActivated: saveFileDialog.open() }
-    Shortcut { sequence: "Ctrl+D"; onActivated: { Theme.toggle(); viewport.syncTheme() } }
 
     menuBar: MenuBar {
         // v3.0 glassmorphism: same reasoning as MainToolBar.qml's
@@ -101,13 +123,6 @@ ApplicationWindow {
                        onTriggered: appController.cancel() }
         }
         Menu {
-            title: "&View"
-            MenuItem {
-                text: Theme.dark ? "Light theme" : "Dark theme"
-                onTriggered: { Theme.toggle(); viewport.syncTheme() }
-            }
-        }
-        Menu {
             title: "&Help"
             MenuItem { text: "About"; onTriggered: aboutDialog.open() }
         }
@@ -125,65 +140,9 @@ ApplicationWindow {
         viewport: viewport
     }
 
-    // v3.0 glassmorphism: the ambient colour wash every translucent
-    // dock below reveals. Painted once, behind everything, instead of
-    // per-panel -- a flat Theme.background alone under a translucent
-    // panel just looks "faded", not "glass". A static pre-blurred
-    // wallpaper image (gui/qml/assets/glass_wallpaper.png, generated
-    // offline with PIL's GaussianBlur) stands in for a live backdrop
-    // blur: QtQuick has no cheap way to blur arbitrary sibling content
-    // in real time (that's what MultiEffect's layer.enabled would do,
-    // and that already caused a real regression -- see the
-    // workbenchDock comment below), so a rich, already-blurred bitmap
-    // is what the translucent panels above actually reveal. Purely
-    // decorative -- z-order (declared before mainSplit) puts it behind
-    // every dock without needing z: values. PreserveAspectCrop fills
-    // the window at any size/aspect without distortion.
-    Image {
-        anchors.fill: parent
-        source: "assets/glass_wallpaper.png"
-        fillMode: Image.PreserveAspectCrop
-        smooth: true
-        asynchronous: true
-    }
-    Rectangle {
-        // Light theme still needs the wallpaper visible but much
-        // dimmer (the reference look is dark-mode; light mode gets a
-        // soft near-white veil over the same image instead of a
-        // second, different background).
-        anchors.fill: parent
-        visible: !Theme.dark
-        color: Qt.rgba(1, 1, 1, 0.72)
-    }
-
-    // Theme.ambientGlow1/ambientGlow2: two soft colour blobs (violet
-    // accent + blue "running" hue) painted ON TOP of the wallpaper/veil
-    // above but still BEHIND every dock, so panels in different screen
-    // regions catch a different tint -- the "colour glow behind frosted
-    // glass" cue the tokens' own doc comment in Theme.qml describes.
-    // v3.2: GlowBlob.qml (concentric same-hue rings, brightest at
-    // center) replaces v3.1's single flat-color circle -- a solid disc
-    // with a visible hard edge read as a colored sticker, not an
-    // ambient wash, confirmed by looking at the real running app. Still
-    // no live blur/gradient effect, for the same reason the wallpaper
-    // itself is a pre-blurred static image rather than a live
-    // MultiEffect: layer effects here previously made an entire dock's
-    // content invisible on a real (non-offscreen) display -- see the
-    // workbenchDock comment below.
-    GlowBlob {
-        width: parent.width * 0.85
-        height: width
-        x: -width * 0.28
-        y: -height * 0.32
-        color: Theme.ambientGlow1
-    }
-    GlowBlob {
-        width: parent.width * 0.68
-        height: width
-        x: parent.width - width * 0.52
-        y: parent.height - height * 0.48
-        color: Theme.ambientGlow2
-    }
+    // One black-and-white scheme (Theme.qml, 2026-09-26): the v3.x colour
+    // wallpaper and ambient glow blobs behind the docks are gone; the
+    // window's own colour (Theme.background) shows through.
 
     SplitView {
         id: mainSplit
@@ -645,11 +604,6 @@ ApplicationWindow {
                 objectName: "solverEngineLabel"
                 visible: appController.hasResult && text.length > 0
                 text: appController.solverEngineLabel
-                color: Theme.textFaint
-                font.pixelSize: Theme.fsTiny
-            }
-            Label {
-                text: Theme.dark ? "dark" : "light"
                 color: Theme.textFaint
                 font.pixelSize: Theme.fsTiny
             }

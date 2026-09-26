@@ -411,6 +411,80 @@ def _b10(size):
     return dev, run
 
 
+# ----------------------------------------------------------------------
+#  B11 -- 3D MOSFET small-signal (AC) analysis
+# ----------------------------------------------------------------------
+def _b11(size):
+    """A 4-terminal 3D MOSFET (source/drain/body ohmic + gate), biased
+    ON, then its N-port admittance by pytcad.ac3d.y_parameters at 5
+    frequencies -- the workflow an AC run performs. Added for
+    AC-SENSITIVITY-PLAN.md: y_parameters' ohmic-port current
+    sensitivity is ~97% of an AC analysis (measured 2026-09-26), and a
+    change to it needs a re-runnable number, not a hand timing.
+
+    The measured region holds the DC bias solve as well, because the
+    harness contract (tests/test_m32_benchmarks.py) requires an observed
+    linear solve and y_parameters factors with scipy's splu directly,
+    which the harness does not instrument. The bias solve is small
+    beside the AC analysis (~3 s of ~250 s at full size). Mesh and
+    equilibrium are outside it. "full" is test_m45_ac3d.py's own
+    MOSFET (96x35x3 nodes); "quick" a uniform 12x8x3 one."""
+    from pytcad import NewtonOptions
+    from pytcad.ac3d import y_parameters
+    from pytcad.device3d import Device3D
+    from pytcad.mesh import graded_mesh
+    from pytcad.mesh2d import Mesh2D
+    from pytcad.mesh3d import Mesh3D
+    from pytcad.moscap import flatband_voltage
+    from pytcad.mosfet import mosfet_doping
+
+    Lg, Lsd, depth, Na, Nsd, tox = 0.3e-4, 0.2e-4, 0.5e-4, 1e17, 1e20, 3e-7
+    L = 2 * Lsd + Lg
+    if size == "quick":
+        x, y = np.linspace(0.0, L, 12), np.linspace(0.0, depth, 8)
+    else:
+        nx, ny = 40, 20
+        x = graded_mesh(L, [Lsd, Lsd + Lg], h_min=L / (nx * 20), h_max=L / nx, ratio=1.15)
+        y = graded_mesh(depth, [0.0], h_min=depth / (ny * 20), h_max=depth / ny, ratio=1.15)
+    z = np.linspace(0.0, 5e-6, 3)
+    mesh3 = Mesh3D(x, y, z)
+    dop2d, Nt2d = mosfet_doping(Mesh2D(x, y), Lsd, Lg, Na, Nsd, Lg / 4.0, Lg / 4.0)
+    dev = Device3D(mesh3, np.tile(dop2d, (z.size, 1, 1)),
+                   Ntotal=np.tile(Nt2d, (z.size, 1, 1)))
+    kk_all = np.arange(mesh3.Nz)
+
+    def face(i_range, j_val):
+        ii, kk = np.meshgrid(i_range, kk_all)
+        return ii.ravel(), np.full(ii.size, j_val), kk.ravel()
+
+    for name, i_range, j_val in (
+            ("source", np.where(mesh3.x <= Lsd)[0], 0),
+            ("drain", np.where(mesh3.x >= Lsd + Lg)[0], 0),
+            ("body", np.arange(mesh3.Nx), mesh3.Ny - 1)):
+        i, j, k = face(i_range, j_val)
+        dev.add_contact(name, i=i, j=j, k=k, V=0.0)
+    gi, gj, gk = face(np.where((mesh3.x > Lsd) & (mesh3.x < Lsd + Lg))[0], 0)
+    dev.add_gate("gate", i=gi, j=gj, k=gk, tox_cm=tox,
+                 Vfb=flatband_voltage(-Na, tox, "n+poly", 0.0, 300.0), Vg=0.0,
+                 normal_axis="y")
+    opts = NewtonOptions(max_iter=40)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")   # degenerate-doping advisory
+        dev.solve_equilibrium(opts)
+
+    freqs = np.logspace(3, 11, 5)
+
+    def run():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dev.solve_bias({"drain": 0.1, "gate": 1.0}, opts)
+        assert dev.last_converged
+        res = y_parameters(dev, freqs)
+        assert np.all(np.isfinite(res.Y))
+    return dev, run
+
+
 CASES = [
     Case("B1", "1D Poisson", "PDE IR, BCs, Jacobian", _b1, dim=1),
     Case("B2", "1D diode", "DD, convergence, conservation", _b2, dim=1),
@@ -447,6 +521,13 @@ CASES = [
          dim=2,
          notes="an M34 addition, not a section-34 case; the path tracer "
                "is compiled (M34-S4) -- compare PYTCAD_ACCEL=0/1"),
+    Case("B11", "3D MOSFET AC (y_parameters)",
+         "small-signal N-port admittance: DC bias + 5-frequency AC", _b11,
+         dim=3,
+         notes="an AC-SENSITIVITY-PLAN.md addition, not a section-34 case; "
+               "the measured region includes the DC bias solve (the "
+               "harness needs an observed linear solve; y_parameters' "
+               "splu is not instrumented) -- see the case docstring"),
 ]
 
 

@@ -125,8 +125,9 @@ def test_process_mode_renders_a_nonblank_multi_species_plot(gapp):
     assert item._mode == "process"
     img = item.renderToImage()
     assert not img.isNull()
-    colours = {img.pixel(x, y) for x in range(0, img.width(), 41)
-              for y in range(0, img.height(), 41)}
+    # every pixel: a 41-px grid landed only on the white background once the
+    # scheme went black and white (2026-09-26); the plot itself was drawn
+    colours = {img.pixel(x, y) for x in range(img.width()) for y in range(img.height())}
     assert len(colours) > 1
 
 

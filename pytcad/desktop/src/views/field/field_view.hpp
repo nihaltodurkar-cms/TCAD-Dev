@@ -45,6 +45,7 @@
 //     result's regions, and sweep-snapshot playback.
 #pragma once
 
+#include "data/line_cut.hpp"
 #include "data/result_model.hpp"
 #include "theme/tokens.hpp"
 #include "views/colormaps.hpp"
@@ -187,7 +188,7 @@ public:
     double displayTransform(double raw) const;
 
     // Background and annotation colours from the theme tokens.
-    void applyTheme(theme::Scheme scheme);
+    void applyTheme();
     vtkScalarBarActor* scalarBar() const { return bar_; }
     bool is3D() const;
     const std::string& field() const { return field_; }
@@ -227,6 +228,19 @@ public:
     const HoverTimings& lastHoverTimings() const { return hover_t_; }
     // How often the GL context was (re)initialised: a reparent recreates it.
     int glInitializations() const { return gl_inits_; }
+
+    // ---- line cut (P2-S4): the cut's line drawn over a 2D map ----------------
+    // A dark halo under a light line, so it reads on any colour map; across
+    // the whole device at `position_um` on the cut axis (y for Horizontal, x
+    // for Vertical). Hidden with nullopt, on a new result, and outside 2D.
+    struct CutLine {
+        CutOrientation orientation;
+        double position_um;
+    };
+    void setCutLine(std::optional<CutLine> line);
+    const std::optional<CutLine>& cutLine() const { return cut_; }
+    vtkActor* cutLineActor() const { return cut_actor_; }
+    vtkActor* cutHaloActor() const { return cut_halo_actor_; }
 
     // ---- 3D (S6, field_view_3d.cpp). Each is a no-op outside a 3D result. ----
     void setSurfaceMode(SurfaceMode m);
@@ -362,7 +376,6 @@ private:
     ColorRange range_;
     std::array<double, 2> norm_{0.0, 1.0};
     std::vector<double> contour_levels_;
-    theme::Scheme scheme_ = theme::Scheme::Dark;
     QString readout_;
     SwitchTimings switch_t_;
     HoverTimings hover_t_;
@@ -389,6 +402,10 @@ private:
     vtkNew<vtkActor> contour_actor_;
     vtkNew<vtkPolyDataMapper> mesh_mapper_;
     vtkNew<vtkActor> mesh_actor_;
+    vtkNew<vtkPolyDataMapper> cut_mapper_;  // P2-S4: the cut line, shared by both actors
+    vtkNew<vtkActor> cut_halo_actor_;
+    vtkNew<vtkActor> cut_actor_;
+    std::optional<CutLine> cut_;
     vtkNew<vtkCellPicker> picker_;
     vtkNew<vtkStaticCellLocator> locator_;
     vtkSmartPointer<vtkPolyData> surface_;         // the displayed geometry, built per result

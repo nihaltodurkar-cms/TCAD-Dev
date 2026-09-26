@@ -245,8 +245,11 @@ void BackendClient::completeInflight(const nlohmann::json& response) {
         if (is_error) {
             const auto& e = response["error"];
             QString msg = QString::fromStdString(e.value("message", std::string("backend error")));
-            if (e.contains("data") && e["data"].contains("type"))
-                msg = QString::fromStdString(e["data"]["type"].get<std::string>()) + ": " + msg;
+            if (e.contains("data") && e["data"].is_object()) {
+                p.reply->error_data_ = e["data"];
+                if (e["data"].contains("type") && e["data"]["type"].is_string())
+                    msg = QString::fromStdString(e["data"]["type"].get<std::string>()) + ": " + msg;
+            }
             p.reply->fail(e.value("code", BackendReply::kProtocolError), msg);
         } else {
             p.reply->succeed(response.value("result", nlohmann::json()));

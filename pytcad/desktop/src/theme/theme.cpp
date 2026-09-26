@@ -4,20 +4,29 @@
 #include <QRegularExpression>
 #include <QStyle>
 #include <QStyleFactory>
-#include <QStyleHints>
 
 #include <utility>
 
 namespace tcad::desktop::theme {
 
-QColor qcolor(T t, Scheme s) {
-    const std::string_view h = hex(t, s);
+QColor qcolor(T t) {
+    const std::string_view h = hex(t);
     return QColor(QString::fromLatin1(h.data(), static_cast<qsizetype>(h.size())));
 }
 
-QPalette palette(Scheme s) {
+QColor seriesColour(std::size_t index) {
+    const std::string_view h = kSeriesPalette[index % kSeriesPalette.size()];
+    return QColor(QString::fromLatin1(h.data(), static_cast<qsizetype>(h.size())));
+}
+
+QColor dataColour(DataColour c) {
+    const std::string_view h = dataHex(c);
+    return QColor(QString::fromLatin1(h.data(), static_cast<qsizetype>(h.size())));
+}
+
+QPalette palette() {
     QPalette p;
-    auto set = [&](QPalette::ColorRole role, T t) { p.setColor(role, qcolor(t, s)); };
+    auto set = [&](QPalette::ColorRole role, T t) { p.setColor(role, qcolor(t)); };
     set(QPalette::Window, T::Window);
     set(QPalette::WindowText, T::Text);
     set(QPalette::Base, T::Base);
@@ -35,18 +44,18 @@ QPalette palette(Scheme s) {
     // Every role the ADS stylesheet reads (it paints dock panels with
     // palette(light) and splitter handles with palette(dark)) and Fusion
     // bevels with: an unset role falls back to a stock grey, which painted
-    // the light theme's Fields panel #787878 (found by S3c's screenshot).
+    // a Fields panel #787878 once (found by S3c's screenshot).
     set(QPalette::Light, T::Base);
     set(QPalette::Midlight, T::AlternateBase);
     set(QPalette::Mid, T::Border);
     set(QPalette::Dark, T::BorderStrong);
     set(QPalette::Shadow, T::Background);
     for (auto role : {QPalette::Text, QPalette::ButtonText, QPalette::WindowText})
-        p.setColor(QPalette::Disabled, role, qcolor(T::TextFaint, s));
+        p.setColor(QPalette::Disabled, role, qcolor(T::TextFaint));
     return p;
 }
 
-QString themedStyleSheet(const QString& qss, Scheme s) {
+QString themedStyleSheet(const QString& qss) {
     // The same role -> token mapping palette() uses above.
     static const std::pair<const char*, T> kRoles[] = {
         {"window", T::Window},     {"window-text", T::Text},    {"foreground", T::Text},
@@ -63,7 +72,7 @@ QString themedStyleSheet(const QString& qss, Scheme s) {
         out += qss.mid(last, m.capturedStart() - last);
         QString replacement = m.captured(0);
         for (const auto& [role, token] : kRoles)
-            if (m.captured(1) == QLatin1String(role)) replacement = qcolor(token, s).name();
+            if (m.captured(1) == QLatin1String(role)) replacement = qcolor(token).name();
         out += replacement;
         last = m.capturedEnd();
     }
@@ -71,46 +80,11 @@ QString themedStyleSheet(const QString& qss, Scheme s) {
     return out;
 }
 
-QString toString(Choice c) {
-    switch (c) {
-        case Choice::Light: return "light";
-        case Choice::Dark: return "dark";
-        case Choice::System: break;
-    }
-    return "system";
-}
-
-std::optional<Choice> choiceFromString(const QString& s) {
-    if (s == "system") return Choice::System;
-    if (s == "light") return Choice::Light;
-    if (s == "dark") return Choice::Dark;
-    return std::nullopt;
-}
-
-ThemeController::ThemeController(QObject* parent) : QObject(parent) {
-    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
-        if (choice_ == Choice::System) apply();
-    });
-}
-
-void ThemeController::setChoice(Choice c) {
-    choice_ = c;
-    apply();
-}
-
-void ThemeController::apply() {
-    Scheme s = Scheme::Dark;  // an unknown OS scheme: dark, the QML GUI's default
-    if (choice_ == Choice::Light)
-        s = Scheme::Light;
-    else if (choice_ == Choice::System && QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Light)
-        s = Scheme::Light;
-    scheme_ = s;
-    if (auto* app = qobject_cast<QApplication*>(QCoreApplication::instance())) {
-        if (app->style()->name().compare("fusion", Qt::CaseInsensitive) != 0)
-            app->setStyle(QStyleFactory::create("Fusion"));
-        app->setPalette(palette(s));
-    }
-    emit schemeChanged(s);
+void apply() {
+    auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+    if (!app) return;
+    if (app->style()->name().compare("fusion", Qt::CaseInsensitive) != 0) app->setStyle(QStyleFactory::create("Fusion"));
+    app->setPalette(palette());
 }
 
 }  // namespace tcad::desktop::theme

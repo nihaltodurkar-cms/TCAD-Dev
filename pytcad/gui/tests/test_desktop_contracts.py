@@ -13,6 +13,12 @@
    reports (vector fields, terminals, region metadata, sweep snapshots)
    equals NpzResultStore's on real results, including a 3D sweep, the
    only producer of sweep__snapshot__*.
+2c. Curve series (P2-S1, plan 16.3): the typed sweep / transient / AC /
+   convergence-trace accessors equal NpzResultStore's sweep_result(),
+   transient_result(), ac_result() and run_record().trace -- on real
+   I-V, C-V (moscap_runner), transient and AC runs, and on a synthetic
+   sweep with unconverged points, whose NaN masking real runs may never
+   exercise.
 3. DeviceSpec (plan 4.1): Python DeviceSpec -> C++ document -> Python
    DeviceSpec is lossless for every shipped example.
 4. The C++ unit tests pass.
@@ -47,13 +53,13 @@ pytestmark = pytest.mark.skipif(
     reason="native desktop app not built (powershell -File desktop\\build.ps1)")
 
 
-def _tool(name, *args):
+def _tool(name, *args, stdin=None):
     with open(MANIFEST) as fh:
         manifest = json.load(fh)
     env = dict(os.environ)
     env["PATH"] = manifest["runtime_bin"] + os.pathsep + env.get("PATH", "")
     exe = os.path.join(BUILD, manifest["tools"][name])
-    return subprocess.run([exe, *args], capture_output=True, text=True,
+    return subprocess.run([exe, *args], capture_output=True, text=True, input=stdin,
                           encoding="utf-8", env=env, timeout=120)
 
 
@@ -551,6 +557,283 @@ def test_lazy_blocks_fail_on_access_like_the_store(tmp_path, edit, store_call, e
     code, got = _dump(p)
     assert code == 0 and "result_error" not in got, got
     assert got["result"].get(err_key), got["result"]
+
+
+# -- 2c. curve series (P2-S1) --------------------------------------------------------
+
+def _enc(values):
+    """A float list as exact JSON: finite values as numbers (both sides
+    print them round-trippably), non-finite ones as "nan"/"inf"/"-inf"."""
+    out = []
+    for x in np.asarray(values, dtype=float).ravel():
+        x = float(x)
+        out.append(x if np.isfinite(x) else "nan" if np.isnan(x) else "inf" if x > 0 else "-inf")
+    return out
+
+
+def _store_series(store):
+    """What the C++ curve accessors must report, from NpzResultStore."""
+    view = {"sweep": None, "transient": None, "ac": None, "trace": None}
+    if store.has_sweep():
+        s = store.sweep_result()
+        view["sweep"] = {"contact": s.contact, "quantity": s.meta.get("quantity", "current"),
+                         "meta": s.meta, "unit": s.unit, "voltages": _enc(s.voltages),
+                         "converged": [bool(c) for c in s.converged],
+                         "channels": [[k, _enc(v)] for k, v in s.channels.items()]}
+    if store.has_transient():
+        t = store.transient_result()
+        view["transient"] = {"contact": t.contact, "meta": t.meta, "unit": t.unit,
+                             "times": _enc(t.times),
+                             "channels": [[k, _enc(v)] for k, v in t.channels.items()]}
+    if store.has_ac():
+        a = store.ac_result()
+        view["ac"] = {"port": a.port, "freqs": _enc(a.freqs), "C": _enc(a.C), "G": _enc(a.G),
+                      "unit_c": a.unit_c, "unit_g": a.unit_g}
+    rec = store.run_record()
+    if rec is not None:
+        view["trace"] = [
+            {"stage": st.stage, "iterations": _enc(st.iterations), "converged": st.converged,
+             # _draw_convergence's own reading: a null metric is a gap
+             "metrics": [[k, _enc([np.nan if v is None else v for v in vals])]
+                         for k, vals in st.metrics.items()]}
+            for st in rec.trace]
+    return view
+
+
+def _model_series(got):
+    return {k: got["result"]["series"][k] for k in ("sweep", "transient", "ac", "trace")}
+
+
+@pytest.fixture(scope="module")
+def series_solved(tmp_path_factory):
+    """Real runs for every curve block: a 1D I-V sweep, a C-V sweep from
+    moscap_runner, a 1D transient and a 1D AC sweep."""
+    from gui.services import moscap_runner
+    from gui.services.device_spec import ACSpec, TransientSpec, WaveformSpec
+    d = tmp_path_factory.mktemp("series")
+    out = {}
+
+    def solve(name, spec):
+        job, res = str(d / f"{name}.json"), str(d / f"{name}.npz")
+        with open(job, "w") as fh:
+            json.dump(spec.to_dict(), fh)
+        run_job(job, res)
+        out[name] = res
+
+    spec = examples.EXAMPLES["diode_1d"]()
+    spec.sweep = SweepSpec(contact="anode", start=0.0, stop=0.6, step=0.1)
+    solve("diode_1d_iv", spec)
+    spec = examples.EXAMPLES["diode_1d"]()
+    spec.transient = TransientSpec(contact="anode",
+                                   waveform=WaveformSpec(kind="step", v0=0.3, v1=0.0, t0=0.0),
+                                   t_end=1e-9, dt0=1e-10)
+    solve("diode_1d_transient", spec)
+    spec = examples.EXAMPLES["diode_1d"]()
+    spec.ac = ACSpec(contact="anode", f_start=1.0, f_stop=1e9, n_points=7)
+    solve("diode_1d_ac", spec)
+    job, res = str(d / "cv.json"), str(d / "cv.npz")
+    with open(job, "w") as fh:
+        json.dump({"nsub_cm3": -1e17, "tox_nm": 5.0, "gate": "n+poly", "qf_cm2": 1e12,
+                   "T": 300.0, "vstart": -2.0, "vstop": 2.0, "vstep": 0.1}, fh)
+    moscap_runner.run_job(job, res)
+    out["cv"] = res
+    return out
+
+
+SERIES_SOLVED = ["diode_1d_iv", "diode_1d_transient", "diode_1d_ac", "cv"]
+
+
+@pytest.mark.parametrize("name", SERIES_SOLVED)
+def test_series_accessors_equal_store_on_solver_results(series_solved, name):
+    code, got = _dump(series_solved[name])
+    assert code == 0 and "result_error" not in got, got
+    view = _store_series(NpzResultStore(series_solved[name]))
+    assert _model_series(got) == view
+    # each fixture really exercised its block
+    block = {"diode_1d_iv": "sweep", "diode_1d_transient": "transient",
+             "diode_1d_ac": "ac", "cv": "sweep"}[name]
+    assert view[block] is not None
+    if name == "cv":
+        assert view["sweep"]["quantity"] == "capacitance" and view["sweep"]["unit"] == "F/cm^2"
+    if name == "diode_1d_iv":
+        assert view["sweep"]["quantity"] == "current"
+        assert any(step["metrics"] for step in view["trace"]), "the trace carries metrics"
+
+
+@pytest.mark.parametrize("name", SOLVED)
+def test_series_accessors_equal_store_on_the_viewer_references(solved, name):
+    """The P1 reference results: no curve blocks except the 3D sweep's, a
+    record and a trace on each."""
+    code, got = _dump(solved[name])
+    assert code == 0 and "result_error" not in got, got
+    view = _store_series(NpzResultStore(solved[name]))
+    assert _model_series(got) == view
+    assert (view["sweep"] is not None) == (name == "resistor_3d_sweep")
+
+
+def test_series_accessors_mask_unconverged_points_and_read_null_metrics(tmp_path):
+    d = _full_result_arrays()            # sweep__converged = [True, False]
+    d["sweep__current__drain"] = np.array([1e-9, 5.0])
+    d["sweep__current__source"] = np.array([-1e-9, -5.0])
+    d["sweep__current__a_last"] = np.array([7.0, 8.0])    # archive order != sorted order
+    d["record__meta"] = np.array(json.dumps({"backend": "pytcad", "dimensionality": 2}))
+    d["converge__trace"] = np.array(json.dumps([
+        {"stage": "equilibrium", "iterations": [0, 1, 2],
+         "metrics": {"|dpsi|": [1.0, 1e-3, 1e-9], "|F|": [2.0, None, float("nan")]},
+         "converged": True},
+        {"stage": "sweep:1", "iterations": [0, 1], "metrics": {"|dpsi|": [3.0, float("inf")]},
+         "converged": False},
+        {"stage": "bias"},                              # every default
+        {"stage": "bias", "metrics": {}, "converged": 0},
+    ]))
+    p = _save(tmp_path, "masked.npz", d)
+    code, got = _dump(p)
+    assert code == 0 and "result_error" not in got, got
+    view = _store_series(NpzResultStore(str(p)))
+    assert _model_series(got) == view
+    # non-vacuous: the store really masked the unconverged point, and the
+    # trace really carries a null, a NaN, an inf and the defaults
+    assert view["sweep"]["channels"] == [["drain", [1e-9, "nan"]], ["source", [-1e-9, "nan"]],
+                                         ["a_last", [7.0, "nan"]]]
+    assert view["trace"][0]["metrics"][1][1] == [2.0, "nan", "nan"]
+    assert view["trace"][1]["metrics"][0][1] == [3.0, "inf"]
+    assert [s["converged"] for s in view["trace"]] == [True, False, True, False]
+    assert view["trace"][2] == {"stage": "bias", "iterations": [], "converged": True, "metrics": []}
+
+
+def test_series_accessors_report_absent_blocks_as_null(tmp_path):
+    p = _save(tmp_path, "bare.npz", _result_arrays())
+    code, got = _dump(p)
+    assert code == 0 and "result_error" not in got, got
+    assert _model_series(got) == _store_series(NpzResultStore(str(p))) == \
+        {"sweep": None, "transient": None, "ac": None, "trace": None}
+
+
+@pytest.mark.parametrize("edit,store_call,err_key", [
+    # validate_result checks converge__trace is a JSON list, not its items
+    (_set(converge__trace=np.array("[1]")), lambda s: s.run_record(), "trace_error"),
+    (_set(converge__trace=np.array('[{"metrics": [1, 2]}]')), lambda s: s.run_record(), "trace_error"),
+], ids=["trace-item", "trace-metrics"])
+def test_series_accessors_fail_on_access_like_the_store(tmp_path, edit, store_call, err_key):
+    d = _full_result_arrays()
+    edit(d)
+    p = _save(tmp_path, "lazy_series.npz", d)
+    validate_result(str(p))
+    with pytest.raises(Exception):
+        store_call(NpzResultStore(str(p)))
+    code, got = _dump(p)
+    assert code == 0 and "result_error" not in got, got
+    assert got["result"]["series"].get(err_key), got["result"]["series"]
+
+
+def test_series_accessors_refuse_text_convergence_flags(tmp_path):
+    """Deliberately stricter than the store, on a file no writer produces:
+    numpy reads a TEXT sweep__converged by string non-emptiness, so the
+    store would call "no" converged. The C++ sweep accessor refuses it."""
+    d = _full_result_arrays()
+    d["sweep__converged"] = np.array(["yes", "no"])
+    p = _save(tmp_path, "text_flags.npz", d)
+    validate_result(str(p))
+    assert list(NpzResultStore(str(p)).sweep_result().converged) == [True, True]
+    code, got = _dump(p)
+    assert code == 0 and "result_error" not in got, got
+    assert "sweep__converged must be numeric" in got["result"]["series"]["sweep_error"]
+
+
+# ---------------------------------------------------------------------------
+#  2d. Line cuts (P2-S4, plan 16.4): data/line_cut.cpp vs extract_line_cut
+# ---------------------------------------------------------------------------
+from gui.services.result_store import MeshAxes, ScalarField, extract_line_cut  # noqa: E402
+
+
+def _cpp_cut(x, y, values, orientation, position):
+    req = json.dumps({"x": [float(v) for v in x], "y": [float(v) for v in y],
+                      "values": [float(v) for v in np.asarray(values, dtype=float).ravel()],
+                      "orientation": orientation, "position": float(position)})
+    out = _tool("npz_dump", "--line-cut", stdin=req)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    if "values" in got:
+        got["values"] = [float("nan") if v == "nan" else v for v in got["values"]]
+    return got
+
+
+def _py_cut(x, y, values, orientation, position):
+    axes = MeshAxes(axes={"x": np.asarray(x, float), "y": np.asarray(y, float)}, dimensionality=2)
+    coord, vals, actual = extract_line_cut(
+        axes, ScalarField("f", np.asarray(values, float).reshape(len(y), len(x)), "u"),
+        orientation, position)
+    return coord, vals, actual
+
+
+def _assert_cut_equal(x, y, values, orientation, position):
+    got = _cpp_cut(x, y, values, orientation, position)
+    coord, vals, actual = _py_cut(x, y, values, orientation, position)
+    where = f"{orientation} at {position!r}"
+    assert got["coord"] == list(coord), where
+    assert np.array_equal(np.asarray(got["values"], float), np.asarray(vals, float), equal_nan=True), where
+    assert got["actual"] == actual, where
+    axis = np.asarray(y if orientation == "horizontal" else x, float)
+    assert axis[got["index"]] == actual, where
+
+
+def _positions(axis):
+    """Every kind of request: each node, each midpoint (a tie on a uniform
+    mesh), just off each node both ways, outside both ends, NaN and inf."""
+    a = np.asarray(axis, float)
+    mids = 0.5 * (a[:-1] + a[1:])
+    eps = 1e-3 * np.min(np.diff(a))
+    return list(a) + list(mids) + list(a + eps) + list(a - eps) +         [a[0] - 1.0, a[-1] + 1.0, float("nan"), float("inf"), -float("inf")]
+
+
+@pytest.mark.parametrize("mesh", ["uniform", "graded"])
+@pytest.mark.parametrize("orientation", ["horizontal", "vertical"])
+def test_line_cut_equals_extract_line_cut(mesh, orientation):
+    rng = np.random.default_rng(7)
+    if mesh == "uniform":
+        x, y = np.linspace(0.0, 3e-4, 7), np.linspace(0.0, 1e-4, 5)
+    else:
+        x = np.cumsum(np.r_[0.0, 1e-7 * 1.3 ** np.arange(9)])
+        y = np.cumsum(np.r_[0.0, 2e-7 * 1.2 ** np.arange(6)])
+    values = rng.normal(size=(y.size, x.size))
+    values[1, 2] = np.nan   # a NaN in the data is carried through, not dropped
+    for pos in _positions(y if orientation == "horizontal" else x):
+        _assert_cut_equal(x, y, values, orientation, pos)
+
+
+def test_line_cut_takes_the_first_node_on_an_exact_tie():
+    """numpy's argmin keeps the FIRST minimum: a request exactly midway
+    between two nodes cuts at the lower one -- on both axes."""
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([0.0, 2.0, 4.0])
+    values = np.arange(12.0).reshape(3, 4)
+    assert abs(x[1] - 1.5) == abs(x[2] - 1.5) and abs(y[0] - 1.0) == abs(y[1] - 1.0)
+    assert _cpp_cut(x, y, values, "vertical", 1.5)["index"] == 1
+    assert _cpp_cut(x, y, values, "horizontal", 1.0)["index"] == 0
+    _assert_cut_equal(x, y, values, "vertical", 1.5)
+    _assert_cut_equal(x, y, values, "horizontal", 1.0)
+
+
+@pytest.mark.parametrize("name", ["mosfet_2d"])
+def test_line_cut_equals_extract_line_cut_on_a_real_result(solved, name):
+    store = NpzResultStore(solved[name])
+    axes = store.mesh_axes()
+    x, y = axes.axes["x"], axes.axes["y"]
+    for field in store.available_scalars():
+        values = store.scalar_field(field).values
+        for orientation, axis in (("horizontal", y), ("vertical", x)):
+            for pos in list(axis[:: max(1, len(axis) // 6)]) + [float(np.mean(axis)), -1.0]:
+                _assert_cut_equal(x, y, values, orientation, pos)
+
+
+def test_line_cut_refuses_what_python_refuses():
+    x, y, v = [0.0, 1.0], [0.0, 1.0], [[1.0, 2.0], [3.0, 4.0]]
+    got = _cpp_cut(x, y, v, "diagonal", 0.0)
+    with pytest.raises(ValueError) as exc:
+        _py_cut(x, y, v, "diagonal", 0.0)
+    assert got["error"] == str(exc.value)
+    assert "error" in _cpp_cut(x, y, [1.0, 2.0, 3.0], "horizontal", 0.0)   # size mismatch
+
 
 
 # -- 3. DeviceSpec round trip ----------------------------------------------------------

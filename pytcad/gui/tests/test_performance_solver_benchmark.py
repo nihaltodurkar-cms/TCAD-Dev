@@ -22,10 +22,13 @@ import os
 import tempfile
 import time
 
+import pytest
+
 from gui.services import examples
 from gui.services.solver_runner import run_job
 
 
+@pytest.mark.timing  # wall-clock budget: run serially (pytest.ini "timing")
 def test_mosfet_2d_solve_completes_within_a_generous_time_bound():
     spec = examples.mosfet_example_spec()
     d = tempfile.mkdtemp()

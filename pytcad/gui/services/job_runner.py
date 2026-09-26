@@ -17,7 +17,7 @@ import sys
 import tempfile
 import uuid
 
-from PySide6.QtCore import QObject, QProcess, QTimer, Signal, Property
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal, Property
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,6 +59,7 @@ class JobRunner(QObject):
         self._canceling = False
         self._stderr = ""
         self._result_seen = None
+        self._stdout_pending = b""
         self.result_path = ""
         self._job_path = ""
 
@@ -82,9 +83,23 @@ class JobRunner(QObject):
         self._canceling = False
         self._stderr = ""
         self._result_seen = None
+        self._stdout_pending = b""
 
         self._proc = QProcess(self)
         self._proc.setWorkingDirectory(PROJECT_ROOT)
+        # Unbuffered child stdout (NATIVE-DESKTOP-PLAN.md 17.7, decision 7):
+        # the core's verbose Newton prints do not flush, so through a pipe a
+        # stage's lines used to arrive all at once at the next PYTCAD_STAGE
+        # marker -- measured: a 1.3 s MOSFET bias stage showed nothing, then
+        # all nine lines at its end. The Solver Telemetry panel is live now.
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUNBUFFERED", "1")
+        # UTF-8 child stdio (17.10): a piped stdout on Windows is otherwise
+        # cp1252, which garbled RESULT_PATH for a work dir under a non-ASCII
+        # user name (the run reported failed) and crashed the final print
+        # for a character outside cp1252.
+        env.insert("PYTHONIOENCODING", "utf-8")
+        self._proc.setProcessEnvironment(env)
         self._proc.readyReadStandardOutput.connect(self._on_stdout)
         self._proc.readyReadStandardError.connect(self._on_stderr)
         self._proc.finished.connect(self._on_finished)
@@ -116,35 +131,52 @@ class JobRunner(QObject):
 
     # -- subprocess plumbing ------------------------------------------
     def _on_stdout(self):
-        text = bytes(self._proc.readAllStandardOutput()).decode("utf-8", "replace")
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            m = _RESULT_RE.match(line)
-            if m:
-                self._result_seen = m.group(1)
-                continue
-            m = _STAGE_RE.match(line)
-            if m:
-                self.stageChanged.emit(m.group(1))
-                continue
-            m = _ITER_RE.search(line)
-            if m:
-                self.iterationChanged.emit(int(m.group(1)))
-            m = _RESIDUAL_RE.search(line)
-            if m:
-                try:
-                    val = float(m.group(1))
-                except ValueError:
-                    val = None
-                if val is not None and math.isfinite(val):
-                    self.residualChanged.emit(val)
-            self.progressLine.emit(line)
+        # Whole lines only: a read can end mid-line (and mid-UTF-8
+        # character), which the unbuffered child makes common. The
+        # unfinished tail waits for the next read, or for _on_finished.
+        data = self._stdout_pending + bytes(self._proc.readAllStandardOutput())
+        *complete, self._stdout_pending = data.split(b"\n")
+        for raw in complete:
+            self._handle_line(raw.decode("utf-8", "replace").rstrip("\r"))
+
+    def _handle_line(self, line):
+        if not line.strip():
+            return
+        # The native app's structured progress records (P3-S1): not for
+        # the QML console, which keeps showing the plain lines.
+        if line.startswith("PYTCAD_PROGRESS "):
+            return
+        m = _RESULT_RE.match(line)
+        if m:
+            self._result_seen = m.group(1)
+            return
+        m = _STAGE_RE.match(line)
+        if m:
+            self.stageChanged.emit(m.group(1))
+            return
+        m = _ITER_RE.search(line)
+        if m:
+            self.iterationChanged.emit(int(m.group(1)))
+        m = _RESIDUAL_RE.search(line)
+        if m:
+            try:
+                val = float(m.group(1))
+            except ValueError:
+                val = None
+            if val is not None and math.isfinite(val):
+                self.residualChanged.emit(val)
+        self.progressLine.emit(line)
 
     def _on_stderr(self):
         self._stderr += bytes(self._proc.readAllStandardError()).decode("utf-8", "replace")
 
     def _on_finished(self, exit_code, exit_status):
+        # the last line may have no newline, or not have been read yet
+        tail = self._stdout_pending + bytes(self._proc.readAllStandardOutput())
+        self._stdout_pending = b""
+        for raw in tail.split(b"\n"):
+            if raw.strip():
+                self._handle_line(raw.decode("utf-8", "replace").rstrip("\r"))
         proc, self._proc = self._proc, None
         proc.deleteLater()
 

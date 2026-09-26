@@ -1475,7 +1475,12 @@ class Device3D:
 
     def _residual_jacobian(self, psi, n, p, voltages, theta=None,
                            n_lag=None, Jn_lag_x=None, Jn_lag_y=None,
-                           Jn_lag_z=None, Qheat_lag=None):
+                           Jn_lag_z=None, Qheat_lag=None, current_rows_for=None):
+        # current_rows_for (AC-SENSITIVITY-PLAN.md): optional node indices.
+        # When given, the raw continuity Jacobian rows 3k+1 / 3k+2 of those
+        # nodes are copied to self._raw_current_rows, just before the
+        # contact BC below replaces them. None (every caller but
+        # ac3d.y_parameters) changes nothing; given, it only copies.
         Nx, Ny, Nz, N = self.Nx, self.Ny, self.Nz, self.N
         hx, hy, hz = self.hx, self.hy, self.hz
         dVx, dVy, dVz, dV = self.dVx, self.dVy, self.dVz, self.dV
@@ -1865,6 +1870,15 @@ class Device3D:
                 vals.append(cnt[ev.ddep_p] * ev.ddep_val)
 
         rows = np.concatenate(rows); cols = np.concatenate(cols); vals = np.concatenate(vals)
+
+        # AC-SENSITIVITY-PLAN.md: the exact derivative of the F_n/F_p this
+        # call returns (both built above, before any BC edit), for the
+        # requested nodes -- captured before the block below strips the
+        # contact rows.
+        if current_rows_for is not None:
+            k_req = np.asarray(current_rows_for, dtype=int)
+            sel = np.isin(rows, np.concatenate([3 * k_req + 1, 3 * k_req + 2]))
+            self._raw_current_rows = (rows[sel].copy(), cols[sel].copy(), vals[sel].copy())
 
         # --- Dirichlet (contact) BC on psi, n, p: replace all 3 rows ---
         contact_k = []

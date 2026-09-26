@@ -1,5 +1,33 @@
 # PyTCAD Design System
 
+> **SUPERSEDED IN PART, 2026-09-26: one black-and-white scheme, no light/dark modes.**
+> The user's decision ("make the GUI... no modes, just black and white"; chrome only,
+> both apps). It overrides every colour, mode and glass rule below; the sections
+> after this note are kept as the record of the earlier design, not as current spec.
+> Layout, type, spacing, motion and component structure are unchanged.
+>
+> What is current (`gui/qml/Theme.qml`, mirrored exactly by the native app's
+> `desktop/src/theme/tokens.hpp`):
+> - **One scheme.** No `Theme.dark`, no `toggle()`, no Ctrl+D, no View > theme item,
+>   no toolbar sun/moon button; the native app has no View > Theme menu and ignores
+>   the OS colour scheme.
+> - **Chrome is achromatic:** white surfaces (`background`, `panel`, `cardBg`
+>   `#ffffff`; `chromeBg` `#f2f2f2`), black text (`#000000`; dim `#555555`, faint
+>   `#8c8c8c`), grey borders (`#d4d4d4` / `#9e9e9e`), a **black** accent/focus,
+>   grey selection (`#d9d9d9`). All opaque.
+> - **Glass is gone:** no wallpaper image, no ambient glow blobs, no violet rims
+>   (`glassBorder` is the border grey, `glassHighlight` transparent). The progress
+>   gradient runs black to grey.
+> - **Status colours keep their hue** (running, warning, error, ok and their
+>   backgrounds): they carry meaning. They are the only chromatic tokens.
+> - **Data keeps its colours:** plot curves, colour maps and region colours are
+>   data, not theme.
+> - **The window palette is pinned** to these tokens in `Main.qml` (Qt's own controls
+>   otherwise follow the OS scheme); `textOnAccent` is the text on the black accent.
+> - Gates: `gui/tests/test_theme_tokens.py` (every non-status Theme.qml colour is a
+>   grey; black on white; no mode switch) and `gui/tests/test_desktop_theme.py`
+>   (native tokens equal Theme.qml's and are grey except status).
+
 > Category: Professional Engineering Tool (EDA / TCAD)
 > A dense, dark instrument surface for semiconductor process/device simulation. Precision over polish, state legibility over decoration. Built for Qt Quick/QML + PySide6.
 >

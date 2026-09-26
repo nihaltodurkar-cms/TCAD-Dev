@@ -3,7 +3,8 @@
 //
 //   tcad_npz_dump <file.npz>        -> {"ok": true, "arrays": [...], "result": {...}}
 //                                      ("result": what ResultModel reports -- scalars,
-//                                      vectors, terminals, region metadata, snapshots)
+//                                      vectors, terminals, region metadata, snapshots,
+//                                      and "series": the sweep/transient/AC/trace blocks)
 //   tcad_npz_dump --schema-versions -> [1, 2, 3]
 //   tcad_npz_dump --open-only [--max-bytes N] <file.npz>
 //                                   -> {"ok", "arrays", "array_bytes", "peak_mb_before",
@@ -11,16 +12,20 @@
 //
 // Exit code 0 on success, 2 when the reader rejects the file (the JSON
 // then carries {"ok": false, "error": "..."}).
+#include "data/line_cut.hpp"
 #include "data/npz.hpp"
+#include "data/pyjson.hpp"
 #include "data/result_model.hpp"
 
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -46,6 +51,68 @@ std::string sha256(const void* data, std::size_t n) {
 }
 
 std::string f64_sha256(const std::vector<double>& v) { return sha256(v.data(), v.size() * sizeof(double)); }
+
+// Exact JSON for a float list: finite values as numbers (printed
+// round-trippably), non-finite ones as "nan" / "inf" / "-inf".
+Json enc(const std::vector<double>& v) {
+    Json out = Json::array();
+    for (double x : v) {
+        if (std::isfinite(x)) out.push_back(x);
+        else out.push_back(std::isnan(x) ? "nan" : x > 0 ? "inf" : "-inf");
+    }
+    return out;
+}
+
+Json enc(const std::vector<tcad::desktop::Channel>& chans) {
+    Json out = Json::array();
+    for (const auto& ch : chans) out.push_back(Json::array({ch.name, enc(ch.values)}));
+    return out;
+}
+
+// The curve blocks (P2-S1), each as the contract test builds it from the
+// store, or "<block>_error" when its accessor fails (the store also fails
+// only on access).
+Json series_view(const ResultModel& m) {
+    Json r = {{"sweep", nullptr}, {"transient", nullptr}, {"ac", nullptr}, {"trace", nullptr}};
+    auto guarded = [&](const char* key, auto&& read) {
+        try {
+            read();
+        } catch (const NpzError& e) {
+            r[key] = nullptr;
+            r[std::string(key) + "_error"] = e.what();
+        }
+    };
+    if (m.has_sweep())
+        guarded("sweep", [&] {
+            const auto s = m.sweep();
+            Json conv = Json::array();
+            for (auto c : s.converged) conv.push_back(c != 0);
+            r["sweep"] = {{"contact", s.contact}, {"quantity", s.quantity}, {"meta", s.meta}, {"unit", s.unit},
+                          {"voltages", enc(s.voltages)}, {"converged", conv}, {"channels", enc(s.channels)}};
+        });
+    if (m.has_transient())
+        guarded("transient", [&] {
+            const auto t = m.transient();
+            r["transient"] = {{"contact", t.contact}, {"meta", t.meta}, {"unit", t.unit},
+                              {"times", enc(t.times)}, {"channels", enc(t.channels)}};
+        });
+    if (m.has_ac())
+        guarded("ac", [&] {
+            const auto a = m.ac();
+            r["ac"] = {{"port", a.port}, {"freqs", enc(a.freqs)}, {"C", enc(a.C)}, {"G", enc(a.G)},
+                       {"unit_c", a.unit_c}, {"unit_g", a.unit_g}};
+        });
+    guarded("trace", [&] {
+        const auto steps = m.trace();
+        if (!steps) return;
+        Json list = Json::array();
+        for (const auto& st : *steps)
+            list.push_back({{"stage", st.stage}, {"iterations", enc(st.iterations)},
+                            {"converged", st.converged}, {"metrics", enc(st.metrics)}});
+        r["trace"] = list;
+    });
+    return r;
+}
 
 // What the model reports, in the shape the contract test builds from
 // NpzResultStore. The lazily-read blocks (region metadata, snapshots)
@@ -90,6 +157,7 @@ Json result_view(const ResultModel& m) {
                  {"sweep_points", m.sweep_points()},
                  {"transient_points", m.transient_points()},
                  {"ac_points", m.ac_points()}};
+    r["series"] = series_view(m);
     r["snapshots"] = nullptr;
     if (m.has_sweep_snapshots()) {
         try {
@@ -138,6 +206,29 @@ int main(int argc, char** argv) {
                       << "\n";
             return 2;
         }
+    }
+    // --line-cut: the line-cut contract (P2-S4). stdin is one Python-JSON
+    // object {"x", "y", "values" (C order (Ny, Nx)), "orientation",
+    // "position"}; NaN tokens allowed. Prints {"coord", "values",
+    // "actual", "index"} or {"error"}.
+    if (argc == 2 && std::string(argv[1]) == "--line-cut") {
+        std::string in((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
+        Json out;
+        try {
+            const auto req = tcad::desktop::parse_python_json(in);
+            const auto cut = tcad::desktop::line_cut(
+                req.at("x").get<std::vector<double>>(), req.at("y").get<std::vector<double>>(),
+                req.at("values").get<std::vector<double>>(),
+                tcad::desktop::cut_orientation_from_string(req.at("orientation").get<std::string>()),
+                req.at("position").get<double>());
+            Json vals = Json::array();
+            for (double v : cut.values) vals.push_back(std::isnan(v) ? Json("nan") : Json(v));
+            out = {{"coord", cut.coord}, {"values", vals}, {"actual", cut.actual}, {"index", cut.index}};
+        } catch (const std::exception& e) {
+            out = {{"error", e.what()}};
+        }
+        std::cout << out.dump(-1, ' ', false, Json::error_handler_t::replace) << "\n";
+        return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--schema-versions") {
         Json v = Json::array();

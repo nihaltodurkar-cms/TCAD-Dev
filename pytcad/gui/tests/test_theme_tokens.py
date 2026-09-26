@@ -1,11 +1,14 @@
-"""Headless checks for Theme.qml v2's design-system tokens.
+"""Headless checks for Theme.qml's design-system tokens: ONE scheme,
+black and white (the user's decision, 2026-09-26: "no modes, just black
+and white"; data keeps its colours).
 
 Loads the Theme singleton through a standalone QQmlComponent (not the
-full Main.qml window) so this stays a cheap, independent regression
-gate: if a future edit drops a token or breaks dark/light retuning,
-this fails on its own, without booting the whole app.
+full Main.qml window) so this stays a cheap, independent regression gate.
+Every colour token Theme.qml declares is read back from the running QML
+engine, so a new token cannot slip past the greyscale rule.
 """
 import os
+import re
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor
@@ -14,73 +17,76 @@ from PySide6.QtQml import QQmlComponent, QQmlEngine
 QML_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "qml"
 )
+THEME_QML = os.path.join(QML_DIR, "Theme.qml")
 
-PROBE_QML = """
-import QtQuick
-QtObject {
-    property bool setDark: true
-    onSetDarkChanged: Theme.dark = setDark
-    property color background: Theme.background
-    property color panel: Theme.panel
-    property color cardBg: Theme.cardBg
-    property color cardBorder: Theme.cardBorder
-    property color accent: Theme.accent
-    property color accentGradientStart: Theme.accentGradientStart
-    property color accentGradientEnd: Theme.accentGradientEnd
-    property int radiusCard: Theme.radiusCard
-}
-"""
+# The only tokens allowed a hue: they carry meaning (state), not decoration.
+STATUS = {"running", "runningBg", "warning", "warningBg", "error", "errorBg", "ok", "okBg"}
 
 
-def _make_probe(qml_engine):
-    component = QQmlComponent(qml_engine)
-    component.setData(
-        PROBE_QML.encode("utf-8"),
-        QUrl.fromLocalFile(os.path.join(QML_DIR, "_theme_probe.qml")),
-    )
+def _colour_token_names():
+    text = open(THEME_QML, encoding="utf-8").read()
+    return re.findall(r"^\s*(?:readonly\s+)?property\s+color\s+(\w+)\s*:", text, re.M)
+
+
+def _probe(engine, names):
+    body = "\n".join(f"    property color {n}: Theme.{n}" for n in names)
+    component = QQmlComponent(engine)
+    component.setData(f"import QtQuick\nQtObject {{\n{body}\n}}\n".encode("utf-8"),
+                      QUrl.fromLocalFile(os.path.join(QML_DIR, "_theme_probe.qml")))
     obj = component.create()
     assert obj is not None, component.errorString()
     assert component.errorString() == ""
-    # The QQmlComponent must outlive the object it created -- letting
-    # `component` (a local variable) get garbage-collected when this
-    # function returns takes the created object's underlying C++
-    # object down with it (confirmed directly: a bare `return obj`
-    # here reproduces "libshiboken: Internal C++ object already
-    # deleted" on the very next property access, even though `obj`
-    # itself is still referenced). Anchoring `component` as an
-    # attribute of the object it created keeps it alive exactly as
-    # long as the object is.
+    # The QQmlComponent must outlive the object it created (its C++ object
+    # is otherwise deleted with the component: "Internal C++ object already
+    # deleted" on the next property access).
     obj._keepalive_component = component
     return obj
 
 
-def test_theme_v2_tokens_dark_and_light():
+def _colours():
     engine = QQmlEngine()
     engine.addImportPath(QML_DIR)
-    probe = _make_probe(engine)
+    names = _colour_token_names()
+    probe = _probe(engine, names)
+    out = {n: QColor(probe.property(n)) for n in names}
+    out["_engine"] = engine  # keep alive
+    return out
 
-    probe.setProperty("setDark", True)
-    dark_bg = QColor(probe.property("background")).name()
-    dark_card = QColor(probe.property("cardBg")).name()
-    dark_accent = QColor(probe.property("accent")).name()
-    grad_start_dark = QColor(probe.property("accentGradientStart")).name()
-    grad_end_dark = QColor(probe.property("accentGradientEnd")).name()
-    assert dark_bg == "#0a0b0e"
-    assert dark_card == "#16171d"
-    assert dark_accent == "#8b5cf6"
-    assert probe.property("radiusCard") == 10
 
-    probe.setProperty("setDark", False)
-    light_bg = QColor(probe.property("background")).name()
-    light_card = QColor(probe.property("cardBg")).name()
-    light_accent = QColor(probe.property("accent")).name()
-    grad_start_light = QColor(probe.property("accentGradientStart")).name()
-    grad_end_light = QColor(probe.property("accentGradientEnd")).name()
-    assert light_bg != dark_bg
-    assert light_card == "#ffffff"
-    assert light_accent == "#7c3aed"
+def test_theme_has_no_modes():
+    text = open(THEME_QML, encoding="utf-8").read()
+    assert not re.search(r"property\s+bool\s+dark\b", text), "Theme.qml has a dark/light switch again"
+    assert "function toggle" not in text
+    assert not re.search(r"\bdark\s*\?", text), "a token still depends on a dark flag"
 
-    # The brand gradient is identical in both themes by design (spec
-    # section 4/5) -- this is the regression gate for that requirement.
-    assert grad_start_dark == grad_start_light == "#8b5cf6"
-    assert grad_end_dark == grad_end_light == "#3b82f6"
+
+def test_every_chrome_token_is_a_grey():
+    colours = _colours()
+    names = [n for n in colours if n != "_engine"]
+    assert len(names) >= 30, f"the token parser found too little ({len(names)}): fix it, not the gate"
+    assert STATUS <= set(names), f"status tokens missing: {STATUS - set(names)}"
+    coloured = [f"{n}={c.name()}" for n in names if n not in STATUS
+                for c in [colours[n]] if not (c.red() == c.green() == c.blue())]
+    assert not coloured, f"chrome tokens with a hue (only status colours may have one): {coloured}"
+
+
+def test_black_on_white():
+    c = _colours()
+    for n in ("background", "panel", "cardBg"):
+        assert c[n].name() == "#ffffff", f"{n} {c[n].name()}"
+        assert c[n].alpha() == 255, f"{n} is translucent: nothing is behind the panels any more"
+    for n in ("text", "accent", "focus"):
+        assert c[n].name() == "#000000", f"{n} {c[n].name()}"
+    assert c["panel"].alpha() == c["panelAlt"].alpha() == c["chromeBg"].alpha() == 255
+    assert c["error"].name() == "#c0392b" and c["ok"].name() == "#2e8b44"  # status keeps meaning
+
+
+def test_card_radius_unchanged():
+    engine = QQmlEngine()
+    engine.addImportPath(QML_DIR)
+    component = QQmlComponent(engine)
+    component.setData(b"import QtQuick\nQtObject { property int radiusCard: Theme.radiusCard }\n",
+                      QUrl.fromLocalFile(os.path.join(QML_DIR, "_theme_probe.qml")))
+    obj = component.create()
+    assert obj is not None, component.errorString()
+    assert obj.property("radiusCard") == 10

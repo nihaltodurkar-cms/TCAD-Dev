@@ -44,7 +44,9 @@ find_package(VTK 9 REQUIRED COMPONENTS
 add_library(tcad_desktop_data STATIC
   src/data/npz.cpp
   src/data/pyjson.cpp
+  src/data/max_n_locator.cpp
   src/data/contour_levels.cpp
+  src/data/line_cut.cpp
   src/data/result_model.cpp
   src/document/device_spec_document.cpp)
 target_include_directories(tcad_desktop_data PUBLIC src)
@@ -63,6 +65,14 @@ target_link_libraries(tcad_theme_dump PRIVATE tcad_desktop_data)
 add_executable(tcad_spec_roundtrip src/tools/spec_roundtrip.cpp)
 target_link_libraries(tcad_spec_roundtrip PRIVATE tcad_desktop_data)
 
+# -- PlotView's Qt-free axis maths (P2-S2): matplotlib's locators and
+#    formatters, contract-tested by gui/tests/test_desktop_plot_ticks.py
+add_library(tcad_desktop_plotmath STATIC src/views/plot/axis_ticks.cpp src/views/plot/plot_geometry.cpp)
+target_include_directories(tcad_desktop_plotmath PUBLIC src)
+target_link_libraries(tcad_desktop_plotmath PUBLIC tcad_desktop_data)
+add_executable(tcad_plot_ticks src/tools/plot_ticks.cpp)
+target_link_libraries(tcad_plot_ticks PRIVATE tcad_desktop_plotmath)
+
 # -- the application ----------------------------------------------------------
 set(CMAKE_AUTOMOC ON)
 # The client for the Python backend service (P1 S4): Qt Core only.
@@ -70,6 +80,13 @@ add_library(tcad_desktop_backend STATIC
   src/backend/backend_client.cpp src/backend/backend_client.hpp)
 target_include_directories(tcad_desktop_backend PUBLIC src)
 target_link_libraries(tcad_desktop_backend PUBLIC Qt6::Core nlohmann_json::nlohmann_json)
+# The local solver runner (P3-S3): Qt Core only.
+add_library(tcad_desktop_run STATIC src/run/job_runner.cpp src/run/job_runner.hpp
+  src/run/run_controller.cpp src/run/run_controller.hpp
+  src/run/telemetry.cpp src/run/telemetry.hpp
+  src/run/batch_controller.cpp src/run/batch_controller.hpp)
+target_include_directories(tcad_desktop_run PUBLIC src)
+target_link_libraries(tcad_desktop_run PUBLIC tcad_desktop_backend tcad_desktop_data Qt6::Core nlohmann_json::nlohmann_json)
 
 # The shell and views as a library (P1 S3): the app, and the shell e2e
 # tests (tcad_desktop_shell_tests), link ONE copy of this code.
@@ -80,16 +97,22 @@ add_library(tcad_desktop_ui STATIC
   src/shell/display_panel.cpp src/shell/display_panel.hpp
   src/shell/view3d_panel.cpp src/shell/view3d_panel.hpp
   src/shell/playback_panel.cpp src/shell/playback_panel.hpp
+  src/shell/plot_panel.cpp src/shell/plot_panel.hpp
+  src/shell/run_panel.cpp src/shell/run_panel.hpp
+  src/shell/console_panel.cpp src/shell/console_panel.hpp
+  src/shell/telemetry_panel.cpp src/shell/telemetry_panel.hpp
   src/views/field/field_view.cpp src/views/field/field_view.hpp
   src/views/field/field_view_3d.cpp
   src/views/colormaps.cpp src/views/colormaps.hpp
+  src/views/plot/plot_view.cpp src/views/plot/plot_view.hpp src/views/plot/plot_model.hpp
+  src/views/plot/curve_modes.cpp src/views/plot/curve_modes.hpp
   src/theme/theme.cpp src/theme/theme.hpp src/theme/tokens.hpp
   src/bench/bench.cpp
   src/bench/selftest.cpp
   src/bench/bench_backend.cpp)
 target_include_directories(tcad_desktop_ui PUBLIC src)
 target_link_libraries(tcad_desktop_ui PUBLIC
-  tcad_desktop_data tcad_desktop_backend Qt6::Widgets Qt6::OpenGLWidgets ads::qtadvanceddocking-qt6
+  tcad_desktop_data tcad_desktop_plotmath tcad_desktop_backend tcad_desktop_run Qt6::Widgets Qt6::OpenGLWidgets ads::qtadvanceddocking-qt6
   ${VTK_LIBRARIES} psapi)
 vtk_module_autoinit(TARGETS tcad_desktop_ui MODULES ${VTK_LIBRARIES})
 
@@ -110,6 +133,23 @@ add_test(NAME tcad_desktop_unit_tests COMMAND tcad_desktop_unit_tests)
 # ones; run by gui/tests/test_desktop_backend.py.
 add_executable(tcad_desktop_backend_tests tests/test_backend.cpp)
 target_link_libraries(tcad_desktop_backend_tests PRIVATE tcad_desktop_backend tcad_desktop_data Qt6::Test)
+
+# JobRunner tests (P3-S3): the real solver_runner plus fake solvers; run
+# by gui/tests/test_desktop_run.py.
+add_executable(tcad_desktop_run_tests tests/test_run.cpp)
+target_link_libraries(tcad_desktop_run_tests PRIVATE tcad_desktop_run tcad_desktop_data Qt6::Test)
+
+# PlotView gates (P2-S2): the real widget rendered offscreen with grab(),
+# probed; run by gui/tests/test_desktop_plot.py at display scales 1/1.5/2.
+add_executable(tcad_desktop_plot_tests tests/test_plot.cpp)
+target_link_libraries(tcad_desktop_plot_tests PRIVATE tcad_desktop_ui Qt6::Test)
+vtk_module_autoinit(TARGETS tcad_desktop_plot_tests MODULES ${VTK_LIBRARIES})
+
+# Run dock / Console / Run-Stop end to end (P3-S4): the real window, the real
+# backend and solver; run by gui/tests/test_desktop_run_shell.py.
+add_executable(tcad_desktop_run_shell_tests tests/test_run_shell.cpp)
+target_link_libraries(tcad_desktop_run_shell_tests PRIVATE tcad_desktop_ui Qt6::Test)
+vtk_module_autoinit(TARGETS tcad_desktop_run_shell_tests MODULES ${VTK_LIBRARIES})
 
 add_executable(tcad_desktop_shell_tests tests/test_shell.cpp)
 target_link_libraries(tcad_desktop_shell_tests PRIVATE tcad_desktop_ui Qt6::Test)

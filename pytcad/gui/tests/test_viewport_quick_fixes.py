@@ -190,12 +190,11 @@ def test_content_change_between_pan_and_paint_rebuilds(gapp, store_2d):
 
 @pytest.mark.parametrize("change", [
     lambda it: it.setMode("bands"),
-    lambda it: it.applyTheme(False),
     lambda it: setattr(it, "logScale", True),
     lambda it: setattr(it, "contours", True),
     lambda it: setattr(it, "meshOverlay", True),
     lambda it: it.resetView(),
-], ids=["mode", "theme", "log", "contours", "mesh", "reset"])
+], ids=["mode", "log", "contours", "mesh", "reset"])  # "theme": no theme switch since 2026-09-26
 def test_every_content_setter_invalidates_the_fast_path(gapp, store_2d, change):
     item = _canvas(store_2d)
     item.pan(0.02, 0.0)

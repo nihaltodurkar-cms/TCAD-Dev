@@ -4,11 +4,15 @@
   "backend_root": "@TCAD_BACKEND_ROOT_JSON@",
   "tools": {
     "backend_tests": "tcad_desktop_backend_tests.exe",
+    "run_tests": "tcad_desktop_run_tests.exe",
+    "run_shell_tests": "tcad_desktop_run_shell_tests.exe",
     "npz_dump": "tcad_npz_dump.exe",
     "spec_roundtrip": "tcad_spec_roundtrip.exe",
     "theme_dump": "tcad_theme_dump.exe",
     "desktop": "tcad_desktop.exe",
     "unit_tests": "tcad_desktop_unit_tests.exe",
-    "shell_tests": "tcad_desktop_shell_tests.exe"
+    "shell_tests": "tcad_desktop_shell_tests.exe",
+    "plot_ticks": "tcad_plot_ticks.exe",
+    "plot_tests": "tcad_desktop_plot_tests.exe"
   }
 }

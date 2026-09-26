@@ -273,35 +273,5 @@ ToolBar {
             elide: Text.ElideRight
             Layout.maximumWidth: 340
         }
-        ToolSeparator {}
-        ToolButton {
-            id: themeButton
-            text: Theme.dark ? "☀" : "🌙"
-            ToolTip.visible: hovered
-            ToolTip.delay: 500
-            ToolTip.text: "Toggle light/dark (Ctrl+D)"
-            onClicked: { spin.start(); Theme.toggle(); root.viewport.syncTheme() }
-            background: Rectangle {
-                radius: Theme.radiusSm
-                color: themeButton.pressed ? Theme.pressOverlay
-                       : themeButton.hovered ? Theme.hoverOverlay : "transparent"
-                Behavior on color { ColorAnimation { duration: Theme.animFast } }
-            }
-            contentItem: Image {
-                source: Icons.svg(Theme.dark ? "sun" : "moon", Theme.text)
-                sourceSize.width: 15
-                sourceSize.height: 15
-                fillMode: Image.PreserveAspectFit
-                horizontalAlignment: Image.AlignHCenter
-                verticalAlignment: Image.AlignVCenter
-                rotation: 0
-                RotationAnimation on rotation {
-                    id: spin
-                    from: 0; to: 360
-                    duration: Theme.animSlow
-                    easing.type: Easing.OutCubic
-                }
-            }
-        }
     }
 }

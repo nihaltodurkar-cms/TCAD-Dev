@@ -19,10 +19,10 @@ from PySide6.QtWidgets import QApplication
 
 from gui.app import close_engine, create_engine
 
-# Theme.qml's dark-mode values (see test_theme_tokens.py) -- Main.qml's
-# create_engine() starts with Theme.dark == true, its documented default.
-PANEL_BG = "#0d0e12"
-VIEWPORT_BG = "#0a0b0e"
+# Theme.qml's values (one black-and-white scheme since 2026-09-26; see
+# test_theme_tokens.py): Theme.panel and Theme.background.
+PANEL_BG = "#ffffff"
+VIEWPORT_BG = "#ffffff"
 
 
 def _pump(app, rounds=20):
@@ -51,7 +51,9 @@ def test_workbench_dock_is_wider_than_the_pre_reskin_default():
         close_engine(engine)
 
 
-def test_docks_are_translucent_glass_panels_and_viewport_is_the_darkest_surface():
+def test_docks_and_viewport_are_opaque_white_surfaces():
+    """One black-and-white scheme (2026-09-26): the glass docks are gone --
+    nothing is painted behind them any more, so they are opaque."""
     app = QApplication.instance() or QApplication([])
     engine, controller = create_engine(app)
     try:
@@ -61,9 +63,7 @@ def test_docks_are_translucent_glass_panels_and_viewport_is_the_darkest_surface(
             assert dock is not None, name
             color = QColor(dock.property("color"))
             assert color.name() == PANEL_BG, f"{name}: expected {PANEL_BG}, got {color.name()}"
-            assert color.alphaF() < 1.0, (
-                f"{name}: expected a translucent glass panel (alpha < 1), "
-                f"got alpha={color.alphaF()}")
+            assert color.alphaF() == 1.0, f"{name}: expected an opaque panel, got alpha={color.alphaF()}"
 
         viewport = root.findChild(QObject, "viewportPanel")
         assert viewport is not None
@@ -74,3 +74,36 @@ def test_docks_are_translucent_glass_panels_and_viewport_is_the_darkest_surface(
             f"got alpha={v_color.alphaF()}")
     finally:
         close_engine(engine)
+
+
+def test_window_palette_is_black_and_white_even_under_a_dark_os():
+    """Qt's own controls (menu bar, split handles, check boxes) paint from
+    the palette, which follows the OS unless pinned: a dark Windows setting
+    drew white menu titles on the white bar and black split handles
+    (2026-09-26, found in the running app). Main.qml pins it to Theme."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlEngine, QQmlExpression
+
+    app = QApplication.instance() or QApplication([])
+    hints = QGuiApplication.styleHints()
+    hints.setColorScheme(Qt.ColorScheme.Dark)
+    engine, controller = create_engine(app)
+    try:
+        root = engine.rootObjects()[0]
+
+        def colour(expr):
+            value, error = QQmlExpression(QQmlEngine.contextForObject(root), root, expr).evaluate()
+            assert not error, expr
+            return QColor(value).name()
+
+        for role, token in (("windowText", "text"), ("buttonText", "text"), ("text", "text"),
+                            ("window", "chromeBg"), ("base", "panel"), ("highlight", "accent"),
+                            ("highlightedText", "textOnAccent"), ("mid", "border"), ("dark", "borderStrong")):
+            assert colour(f"palette.{role}") == colour(f"Theme.{token}"), role
+        assert colour("palette.windowText") == "#000000"
+        assert colour("palette.window") == "#f2f2f2"
+    finally:
+        close_engine(engine)
+        hints.unsetColorScheme()
+

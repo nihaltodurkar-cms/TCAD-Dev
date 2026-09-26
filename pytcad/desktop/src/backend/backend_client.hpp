@@ -69,6 +69,9 @@ public:
     const nlohmann::json& result() const { return result_; }
     int errorCode() const { return error_code_; }  // JSON-RPC code, or one of the client codes below
     const QString& errorMessage() const { return error_message_; }
+    // A JSON-RPC error's "data" object (e.g. {"type", "title", "detail"} of a
+    // refused run); null for client-side failures and errors without data.
+    const nlohmann::json& errorData() const { return error_data_; }
     double elapsedMs() const { return elapsed_ms_; }  // enqueue -> answer
 
     // Failures the client itself reports (outside JSON-RPC's range).
@@ -95,6 +98,7 @@ private:
     nlohmann::json result_;
     int error_code_ = 0;
     QString error_message_;
+    nlohmann::json error_data_;
     double elapsed_ms_ = 0;
     QElapsedTimer clock_;
 };

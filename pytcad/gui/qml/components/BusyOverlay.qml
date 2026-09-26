@@ -9,11 +9,10 @@ Rectangle {
     id: root
     property bool running: false
     property string stageText: ""
-    readonly property bool dark: Theme.dark
     color: "transparent"
     gradient: Gradient {
-        GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, dark ? 0.55 : 0.32) }
-        GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, dark ? 0.35 : 0.18) }
+        GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.32) }
+        GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.18) }
     }
 
     visible: opacity > 0

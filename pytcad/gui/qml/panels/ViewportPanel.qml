@@ -350,7 +350,7 @@ Rectangle {
                                     gradient: Gradient {
                                         orientation: Gradient.Horizontal
                                         GradientStop { position: 0.0; color: Theme.accentGradientStart }
-                                        GradientStop { position: 1.0; color: "#c026d3" }
+                                        GradientStop { position: 1.0; color: Theme.accentGradientEnd }
                                     }
                                 }
                                 contentItem: Label {
@@ -463,9 +463,5 @@ Rectangle {
 
     Component.onCompleted: {
         if (controller) canvas.bindController(controller)
-        canvas.applyTheme(Theme.dark)
     }
-
-    // keep matplotlib in step with the design system's light/dark state
-    function syncTheme() { canvas.applyTheme(Theme.dark) }
 }

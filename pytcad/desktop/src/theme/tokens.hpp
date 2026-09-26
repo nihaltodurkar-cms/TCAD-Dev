@@ -1,18 +1,19 @@
 // The native app's colour tokens (NATIVE-DESKTOP-PLAN.md sections 5.5
-// and 15.13, S3c), light and dark -- the ONE place a UI colour is
-// written. Qt-free, so the drift gate's tool (tcad_theme_dump) needs no
-// window.
+// and 15.13, S3c) -- the ONE place a UI colour is written. Qt-free, so the
+// drift gate's tool (tcad_theme_dump) needs no window.
+//
+// ONE scheme, black and white (user decision, 2026-09-26: "no modes, just
+// black and white"; data keeps its colours): white surfaces, black text,
+// grey borders, a black accent. The only chromatic tokens are the status
+// colours (warning, error, ok), which carry meaning; every other token is
+// a grey (r == g == b), which gui/tests/test_desktop_theme.py enforces.
 //
 // Each token names the gui/qml/Theme.qml property it mirrors (`qml`), so
-// the two apps look alike. Tokens mirroring an opaque QML colour must
-// equal it exactly. The window/base/alternate-base surfaces mirror the
-// RGB of translucent QML panels (chromeBg, panel, panelAlt): a widget
-// window has no wallpaper to blend over, so the native app uses the RGB
-// and drops the alpha -- the same "RGB unchanged" rule Theme.qml's own
-// test pins. onAccent (text on an accent fill) has no QML twin.
-// gui/tests/test_desktop_theme.py enforces all of this.
+// the two apps look alike, and must equal it exactly. Overlay and context
+// have no QML twin.
 //
-// Colour MAPS (viridis, ...) are data, not theme: src/views/colormaps.
+// Colour MAPS (viridis, ...) and the plot/region palettes below are data,
+// not theme: they keep their colours.
 #pragma once
 
 #include <array>
@@ -20,8 +21,6 @@
 #include <string_view>
 
 namespace tcad::desktop::theme {
-
-enum class Scheme { Light, Dark };
 
 enum class T {
     Background,     // the view behind a field map; the app background
@@ -42,39 +41,38 @@ enum class T {
     Ok,
     OnAccent,  // text on an accent fill
     Overlay,   // contour and mesh lines drawn over field maps (the QML view's white)
-    Context,   // 3D: the translucent device surface behind interior layers (viewer3d.py's lightsteelblue)
+    Context,   // 3D: the translucent device surface behind interior layers
     Count
 };
 
 struct Entry {
     T id;
     std::string_view name;
-    std::string_view dark;
-    std::string_view light;
-    std::string_view qml;      // the Theme.qml property mirrored ("" for none)
-    bool qml_rgb_only;         // true: mirrors a translucent QML colour's RGB
+    std::string_view hex;
+    std::string_view qml;  // the Theme.qml property mirrored exactly ("" for none)
+    bool status;           // a status colour: the only tokens allowed a hue
 };
 
 inline constexpr std::array<Entry, static_cast<std::size_t>(T::Count)> kTable{{
-    {T::Background, "background", "#0a0b0e", "#eef1f4", "background", false},
-    {T::Window, "window", "#16171d", "#f7f9fa", "chromeBg", true},
-    {T::Base, "base", "#0d0e12", "#ffffff", "panel", true},
-    {T::AlternateBase, "alternateBase", "#111217", "#eceff2", "panelAlt", true},
-    {T::Border, "border", "#1f2026", "#c9d0d8", "border", false},
-    {T::BorderStrong, "borderStrong", "#2c2d36", "#a8b2bc", "borderStrong", false},
-    {T::Text, "text", "#e4e4e7", "#1a2129", "text", false},
-    {T::TextDim, "textDim", "#a1a1aa", "#5a6572", "textDim", false},
-    {T::TextFaint, "textFaint", "#71717a", "#8894a0", "textFaint", false},
-    {T::Focus, "focus", "#8b5cf6", "#7c3aed", "focus", false},
-    {T::Accent, "accent", "#8b5cf6", "#7c3aed", "accent", false},
-    {T::AccentSoft, "accentSoft", "#241f38", "#ede9fe", "accentSoft", false},
-    {T::Selection, "selection", "#3a2f57", "#ede9fe", "selection", false},
-    {T::Warning, "warning", "#d9a441", "#b57f14", "warning", false},
-    {T::Error, "error", "#e05c56", "#c0392b", "error", false},
-    {T::Ok, "ok", "#61bd6d", "#2e8b44", "ok", false},
-    {T::OnAccent, "onAccent", "#ffffff", "#ffffff", "", false},
-    {T::Overlay, "overlay", "#ffffff", "#ffffff", "", false},
-    {T::Context, "context", "#b0c4de", "#b0c4de", "", false},
+    {T::Background, "background", "#ffffff", "background", false},
+    {T::Window, "window", "#f2f2f2", "chromeBg", false},
+    {T::Base, "base", "#ffffff", "panel", false},
+    {T::AlternateBase, "alternateBase", "#f5f5f5", "panelAlt", false},
+    {T::Border, "border", "#d4d4d4", "border", false},
+    {T::BorderStrong, "borderStrong", "#9e9e9e", "borderStrong", false},
+    {T::Text, "text", "#000000", "text", false},
+    {T::TextDim, "textDim", "#555555", "textDim", false},
+    {T::TextFaint, "textFaint", "#8c8c8c", "textFaint", false},
+    {T::Focus, "focus", "#000000", "focus", false},
+    {T::Accent, "accent", "#000000", "accent", false},
+    {T::AccentSoft, "accentSoft", "#e8e8e8", "accentSoft", false},
+    {T::Selection, "selection", "#d9d9d9", "selection", false},
+    {T::Warning, "warning", "#b57f14", "warning", true},
+    {T::Error, "error", "#c0392b", "error", true},
+    {T::Ok, "ok", "#2e8b44", "ok", true},
+    {T::OnAccent, "onAccent", "#ffffff", "textOnAccent", false},
+    {T::Overlay, "overlay", "#ffffff", "", false},
+    {T::Context, "context", "#c8c8c8", "", false},
 }};
 
 // The table is indexed by T: its order must match the enum.
@@ -85,10 +83,7 @@ constexpr bool table_in_enum_order() {
 }
 static_assert(table_in_enum_order(), "theme::kTable must list tokens in enum T order");
 
-constexpr std::string_view hex(T t, Scheme s) {
-    const Entry& e = kTable[static_cast<std::size_t>(t)];
-    return s == Scheme::Dark ? e.dark : e.light;
-}
+constexpr std::string_view hex(T t) { return kTable[static_cast<std::size_t>(t)].hex; }
 
 struct Rgb {
     double r, g, b;  // 0..1
@@ -106,21 +101,20 @@ constexpr bool is_rrggbb(std::string_view h) {
 }
 constexpr bool table_well_formed() {
     for (const Entry& e : kTable)
-        if (!is_rrggbb(e.dark) || !is_rrggbb(e.light)) return false;
+        if (!is_rrggbb(e.hex)) return false;
     return true;
 }
 static_assert(table_well_formed(), "every theme::kTable colour must be #rrggbb");
 
 // "#rrggbb" -> 0..1 components (the form every kTable entry uses).
-constexpr Rgb rgb(T t, Scheme s) {
-    const std::string_view h = hex(t, s);
+constexpr Rgb rgb(T t) {
+    const std::string_view h = hex(t);
     auto byte = [&](std::size_t i) { return (hex_digit(h[i]) * 16 + hex_digit(h[i + 1])) / 255.0; };
     return {byte(1), byte(3), byte(5)};
 }
 
 // 3D exploded view (NATIVE-DESKTOP-PLAN.md section 15.19): one colour per
-// region, in viewer3d.py's order (the CSS colours it names). Data colours,
-// the same in both schemes.
+// region, in viewer3d.py's order (the CSS colours it names). Data colours.
 inline constexpr std::array<std::string_view, 12> kRegionPalette{{
     "#f08080",  // lightcoral
     "#add8e6",  // lightblue
@@ -147,5 +141,38 @@ constexpr Rgb regionRgb(std::size_t index) {
     auto byte = [&](std::size_t i) { return (hex_digit(h[i]) * 16 + hex_digit(h[i + 1])) / 255.0; };
     return {byte(1), byte(3), byte(5)};
 }
+
+// PlotView's data colours (NATIVE-DESKTOP-PLAN.md 16.1, finding 7): the QML
+// canvas's hard-coded ones, as tokens. Data colours, like the region
+// palette. The series palette is
+// MplCanvasItem._series_color's, in its order.
+inline constexpr std::array<std::string_view, 7> kSeriesPalette{{
+    "#4a90d9", "#61bd6d", "#d9a441", "#e05c56", "#9b59b6", "#1abc9c", "#e67e22"}};
+enum class DataColour {
+    Comparison,        // the dashed comparison sweep (QML's purple)
+    Rejected,          // convergence: the rejected-step marker
+    StageEquilibrium,  // convergence: the equilibrium stage
+    StageBias,         // convergence: the bias stage
+    StageOther,        // convergence: any other stage (sweep:<i>, ...)
+};
+constexpr std::string_view dataHex(DataColour c) {
+    switch (c) {
+        case DataColour::Comparison: return "#9b59b6";
+        case DataColour::Rejected: return "#e74c3c";
+        case DataColour::StageEquilibrium: return "#61bd6d";
+        case DataColour::StageBias: return "#d9a441";
+        case DataColour::StageOther: return "#4a90d9";
+    }
+    return "#4a90d9";
+}
+constexpr bool series_palette_well_formed() {
+    for (std::string_view h : kSeriesPalette)
+        if (!is_rrggbb(h)) return false;
+    for (auto c : {DataColour::Comparison, DataColour::Rejected, DataColour::StageEquilibrium,
+                   DataColour::StageBias, DataColour::StageOther})
+        if (!is_rrggbb(dataHex(c))) return false;
+    return true;
+}
+static_assert(series_palette_well_formed(), "every plot data colour must be #rrggbb");
 
 }  // namespace tcad::desktop::theme

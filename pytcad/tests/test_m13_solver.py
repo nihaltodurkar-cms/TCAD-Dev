@@ -41,6 +41,7 @@ APPLICABILITY LIMITS (G7, mirrored in catalog metadata):
 """
 import hashlib
 import os
+import platform
 import sys
 
 import numpy as np
@@ -378,17 +379,26 @@ TAT_EQ_DIGEST = ("8339b19ccd5944acd7d20768c16c5379"
 # exactly what the substitution argument in pytcad/dirichlet.py predicts.
 TAT_FW_DIGEST = ("029c2637d792a4b48c2d05a08088fd76"
                  "44bcfc16bce11719e1cb1812a5ac6267")
-# RE-CAPTURED 2026-09-25 on the Windows PC, which is now the only target
-# machine (the Linux value was "5828f729ec2eb91358e1b84cad07ad09"
-# "24b23df69e0f5f5352794eb4c53d2788"). Machine-specific, not a code
-# change: an untouched export of HEAD and the working tree give the SAME
-# digest here, and it failed identically in the Windows baseline before
-# any edit. The two TAT digests above reproduce on both machines; only
-# this heterojunction path's summation order differs. Checked before
-# trusting it: converged, all fields finite, n and p > 0, forward current
-# positive and conserved along the device to 4.3e-4.
-HETERO_FW_DIGEST = ("9639d6d32b229909a59c54f7e7584762"
-                    "5bde297072be6312e7465c58856ea97c")
+# ONE DIGEST PER OS (2026-09-26). This heterojunction path's summation
+# order differs between the two machines the suite runs on, with the same
+# code:
+# - Windows (the PC; re-captured 2026-09-25): an untouched export of HEAD
+#   and the working tree gave the same digest, and it failed identically
+#   in the Windows baseline before any edit. Checked before trusting it:
+#   converged, all fields finite, n and p > 0, forward current positive
+#   and conserved along the device to 4.3e-4.
+# - Linux (the GitHub CI runner): the value trusted since 2026-09-04
+#   (checked as described below), and exactly what CI still produces.
+# Pinning only the Windows value made CI fail this gate on every run with
+# no code change. Each OS is still held to its own EXACT digest, so a
+# change to the solver's arithmetic fails on both; an OS with no recorded
+# digest skips (there is nothing to compare against) rather than failing
+# on summation order alone. The two TAT digests above reproduced on both
+# machines when captured.
+HETERO_FW_DIGESTS = {
+    "Windows": "9639d6d32b229909a59c54f7e75847625bde297072be6312e7465c58856ea97c",
+    "Linux": "5828f729ec2eb91358e1b84cad07ad0924b23df69e0f5f5352794eb4c53d2788",
+}
 # Re-captured 2026-09-04 on THIS machine's own numpy/scipy/BLAS build --
 # a prior re-capture (2026-09-03) was done in a different sandbox and its
 # digests did not reproduce here bit-for-bit (confirmed: same code, same
@@ -447,13 +457,17 @@ def test_g6c_hetero_path_bit_identity():
     x = np.linspace(0.0, 1.0e-4, 41)
     dop = np.where(x < 0.5e-4, -1e17, 1e17)
     mats = [SILICON] * 20 + [GAAS] * 21
+    expected = HETERO_FW_DIGESTS.get(platform.system())
+    if expected is None:
+        pytest.skip(f"no hetero digest recorded for {platform.system()} "
+                    "(machine-specific summation order: see HETERO_FW_DIGESTS)")
     dev = Device1D(x, dop, T=T, material=mats,
                    models=Models(bgn=False, srh=True))
     dev.solve_equilibrium()
     dev.solve_bias([0.3, 0.0], NewtonOptions())
     assert _digest(psi=dev.psi, n=dev.n, p=dev.p,
-                   Jn=dev.Jn, Jp=dev.Jp) == HETERO_FW_DIGEST, \
-        "G6c FAILURE: hetero forward-bias drifted from the pre-edit golden"
+                   Jn=dev.Jn, Jp=dev.Jp) == expected, \
+        f"G6c FAILURE: hetero forward-bias drifted from the pre-edit golden ({platform.system()})"
 
 
 # ---------------------------------------------------------------- G7

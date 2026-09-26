@@ -91,6 +91,7 @@ from pytcad.transient3d import solve_transient as solve_transient_3d
 from pytcad import ac, ac2d, ac3d
 
 from .device_spec import DeviceSpec
+from . import progress_channel
 from .solver_backend import (
     GEOM_STRUCTURED, SOLVER_RESULT_SCHEMA_VERSION, ConvergenceStep,
 )
@@ -417,6 +418,7 @@ def run_sweep(device, spec, opts=None, fallback_fields=None):
 
     voltages = sw.voltages()
     for i, V in enumerate(voltages):
+        _sweep_context(sw.contact, V)   # P3-S1: the point's contact and bias, for its progress record
         print(f"PYTCAD_STAGE=sweep point {i + 1}/{len(voltages)}", flush=True)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -542,13 +544,15 @@ def run_transient(device, spec, opts=None):
         waveforms_1d = {("left" if stimulus_idx == 0 else "right"): wf,
                         ("left" if other_idx == 0 else "right"):
                             bias[spec.contacts[other_idx].name]}
+        # verbose=True prints each accepted step ([transient*] t=... dt=...),
+        # the source of P3-S1's transient_step progress records; it only prints.
         result = solve_transient_1d(device, waveforms_1d, tr.t_end, tr.dt0,
-                                    theta=tr.theta, opts=opts)
+                                    theta=tr.theta, opts=opts, verbose=True)
         currents = {spec.contacts[0].name: result.terminal_current["left"],
                    spec.contacts[1].name: result.terminal_current["right"]}
     elif d == 2:
         result = solve_transient_2d(device, {tr.contact: wf}, tr.t_end,
-                                    tr.dt0, theta=tr.theta, opts=opts)
+                                    tr.dt0, theta=tr.theta, opts=opts, verbose=True)
         currents = dict(result.terminal_current)
     else:
         # M45: transient3d.solve_transient, identical calling convention
@@ -556,7 +560,7 @@ def run_transient(device, spec, opts=None):
         # every other registered DirichletBC contact defaults to its
         # current bc.V) -- see transient3d.py's own module docstring.
         result = solve_transient_3d(device, {tr.contact: wf}, tr.t_end,
-                                    tr.dt0, theta=tr.theta, opts=opts)
+                                    tr.dt0, theta=tr.theta, opts=opts, verbose=True)
         currents = dict(result.terminal_current)
 
     fields = extract_result(device, spec, solved_bias=True)
@@ -612,12 +616,22 @@ def _stop_capture(handle):
     return buf.getvalue()
 
 
-_STAGE_LINE = re.compile(r"^PYTCAD_STAGE=(\w+)(?:\s+(.*))?$")
-_SWEEP_POINT = re.compile(r"point (\d+)/(\d+)")   # 'sweep' is consumed by
-                                                  # _STAGE_LINE's group(1)
-_ITERATION = re.compile(r"\bit\s+(\d+)\b")
-_METRIC = re.compile(
-    r"\|\s*([^|]+?)\s*\|\s*=\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?\d+)?)")
+# P3-S1: the progress tap main() installs over stdout (None when run_job
+# is called in-process, e.g. by tests or the benchmarks).
+_ACTIVE_TAP = None
+
+
+def _sweep_context(contact, value):
+    if _ACTIVE_TAP is not None:
+        _ACTIVE_TAP.set_sweep_context(contact, value)
+
+
+# The line grammars live in progress_channel (P3-S1): one definition for
+# the stored trace here and the live progress records there.
+_STAGE_LINE = progress_channel.STAGE_LINE
+_SWEEP_POINT = progress_channel.SWEEP_POINT
+_ITERATION = progress_channel.ITERATION
+_METRIC = progress_channel.METRIC
 
 
 def _trace_from_output(text):
@@ -1237,6 +1251,22 @@ def main(argv):
         print("usage: python -m gui.services.solver_runner <job.json> <out.npz>",
               file=sys.stderr)
         return 2
+    # P3-S1 (NATIVE-DESKTOP-PLAN.md 4.3): the structured progress channel.
+    # The tap passes every line through unchanged and adds PYTCAD_PROGRESS
+    # records, parsed with this module's own trace regexes.
+    global _ACTIVE_TAP
+    real = sys.stdout
+    _ACTIVE_TAP = progress_channel.ProgressTap(real)
+    sys.stdout = _ACTIVE_TAP
+    try:
+        return _main(argv)
+    finally:
+        sys.stdout = real
+        _ACTIVE_TAP = None
+
+
+def _main(argv):
+    tap = _ACTIVE_TAP
     try:
         # v0.6 Phase 2c: JobRunner always spawns THIS module regardless
         # of which backend a job wants (AppController is the only
@@ -1264,7 +1294,9 @@ def main(argv):
                    "traceback": traceback.format_exc()}
         print("PYTCAD_ERROR=" + json.dumps(payload), file=sys.stderr, flush=True)
         print(payload["traceback"], file=sys.stderr, flush=True)
+        tap.emit("error", error=payload["error"], message=payload["message"])
         return 1
+    tap.emit("done", result=argv[2], dropped=tap.dropped)
     return 0
 
 

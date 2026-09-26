@@ -13,6 +13,10 @@ At each scale:
   density, sweep snapshots, regions) runs the S6 layer checks at each
   scale too -- face and slice pixels, isosurface, volume, glyphs,
   streamlines, exploded view, playback and the cropped hover oracle.
+- P2-S6 (16.3): every curve mode drawn at each scale -- the render at the
+  display scale and each series' colour at its samples
+  (curveModeImagesProbe: the 1D field, Curves with overlays, C-V,
+  transient, AC, convergence, bands, recombination, line cut).
 
 The view runs at 600x360 logical so 2x (1200x720 device px) fits this
 PC's 1920x1080 screen with the window chrome (section 15.13 rev. 1).
@@ -57,6 +61,9 @@ def _env(scale, extra=None):
 def results(tmp_path_factory):
     import run_bench
     d = str(tmp_path_factory.mktemp("hidpi"))
+    from gui.tests.test_desktop_shell import _curve_results
+    run_bench._solve(d, "diode_1d")
+    _curve_results(d)   # the curve modes' files (P2-S6), beside the MOSFET
     return {"mosfet_2d": run_bench._solve(d, "mosfet_2d"),
             "resistor_3d": run_bench._solve(d, "resistor_3d"),
             "graded_2d": run_bench._synthetic(d, "graded_2d", (90, 70)),
@@ -93,3 +100,16 @@ def test_shell_view_driving_at_scale(results, scale, tmp_path):
                           "-o", f"{report},txt"], capture_output=True, text=True, env=env, timeout=600)
     text = report.read_text(encoding="utf-8") if report.exists() else out.stdout + out.stderr
     assert out.returncode == 0 and ", 0 failed," in text, text[-4000:]
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_curve_modes_draw_at_scale(results, scale, tmp_path):
+    env, manifest = _env(scale, {"TCAD_TEST_DATA": os.path.dirname(results["mosfet_2d"])})
+    report = tmp_path / "curves.txt"
+    out = subprocess.run([os.path.join(BUILD, manifest["tools"]["shell_tests"]),
+                          "curveModeImagesProbe", "curveModesSurviveAdversarialFiles",
+                          "-o", f"{report},txt"], capture_output=True, text=True, env=env, timeout=900)
+    text = report.read_text(encoding="utf-8") if report.exists() else out.stdout + out.stderr
+    assert out.returncode == 0 and ", 0 failed," in text, text[-4000:]
+    assert text.count("PASS   : TestShell::curveModeImagesProbe(") == 10, text[-4000:]
+

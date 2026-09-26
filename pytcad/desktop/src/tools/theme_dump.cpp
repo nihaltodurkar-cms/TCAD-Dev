@@ -2,7 +2,7 @@
 // tokens.hpp) as JSON, for the drift gate against gui/qml/Theme.qml
 // (gui/tests/test_desktop_theme.py). Needs no window.
 //
-//   [{"name": ..., "dark": "#rrggbb", "light": "#rrggbb", "qml": ..., "qml_rgb_only": bool}, ...]
+//   [{"name": ..., "hex": "#rrggbb", "qml": ..., "status": bool}, ...]
 #include "data/contour_levels.hpp"
 #include "data/grid_edges.hpp"
 #include "theme/tokens.hpp"
@@ -41,10 +41,9 @@ int main(int argc, char** argv) {
     nlohmann::ordered_json out = nlohmann::ordered_json::array();
     for (const auto& e : tcad::desktop::theme::kTable)
         out.push_back({{"name", std::string(e.name)},
-                       {"dark", std::string(e.dark)},
-                       {"light", std::string(e.light)},
+                       {"hex", std::string(e.hex)},
                        {"qml", std::string(e.qml)},
-                       {"qml_rgb_only", e.qml_rgb_only}});
+                       {"status", e.status}});
     std::cout << out.dump() << "\n";
     return 0;
 }

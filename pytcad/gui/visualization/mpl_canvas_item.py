@@ -72,7 +72,6 @@ class MplCanvasItem(QQuickPaintedItem):
         self._cut_position_cm = 0.0
         self._comparison_label = "all models off"   # v0.6 Phase 2d default
         self._mode = "doping"
-        self._dark = True
         # last rendered state, for the hover readout
         self._ax = None
         self._fig = None
@@ -97,15 +96,7 @@ class MplCanvasItem(QQuickPaintedItem):
         self._skip_rebuild = False
         self._last_build_size = None
 
-    # -- theme & hover readout ------------------------------------------
-    @Slot(bool)
-    def applyTheme(self, dark):
-        """Mirror the QML design system's light/dark choice into the
-        matplotlib rendering."""
-        if self._dark != bool(dark):
-            self._dark = bool(dark)
-            self._refresh()
-
+    # -- hover readout ----------------------------------------------------
     def _refresh(self):
         """Repaint after a CONTENT change (mode/field/data/theme/limits
         reset...). Always invalidates the pan/zoom fast path first --
@@ -944,13 +935,14 @@ class MplCanvasItem(QQuickPaintedItem):
         return fig
 
     def _style_axes(self, fig, ax):
-        """Mirror the QML design system into matplotlib: neutral panel
-        surface, dimmed grid/spines, readable tick sizes."""
-        dark = self._dark
-        fg = "#dde3e9" if dark else "#1a2129"
-        dim = "#8d99a5" if dark else "#5a6572"
-        panel = "#1f242b" if dark else "#ffffff"
-        grid = "#343c46" if dark else "#d5dbe1"
+        """Mirror the QML design system into matplotlib: one black-and-
+        white scheme (Theme.qml, 2026-09-26) -- white surface, black
+        labels, grey ticks/spines/grid (Theme.text/textDim/panel/border).
+        The data keeps its colours."""
+        fg = "#000000"
+        dim = "#555555"
+        panel = "#ffffff"
+        grid = "#d4d4d4"
         fig.patch.set_facecolor(panel)
         ax.set_facecolor(panel)
         for side in ("top", "right"):

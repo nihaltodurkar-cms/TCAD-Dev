@@ -23,7 +23,8 @@ exception, no hang.
 
 S8d -- soak: tcad_desktop --soak opens a 2D MOSFET, a layered 3D sweep and
 a 1M-node grid into ONE window 60 times, exercising every layer; no GL
-re-init, and no upward memory trend over the last 20 cycles.
+re-init, and private memory not rising over the last 40 cycles (a
+Theil-Sen slope, robust to the allocator's steps -- plan 16.10).
 
 Skipped when the desktop app has not been built.
 """
@@ -226,12 +227,55 @@ def test_the_reader_survives_2000_mutations(results, tmp_path):
 
 # -- S8d ------------------------------------------------------------------------
 
+# The soak's memory gate (NATIVE-DESKTOP-PLAN.md 16.10). Settled private
+# memory is flat plateaus with 10-25 MB steps either way (allocator and
+# driver caches), so a least-squares slope over 20 cycles read one step as
+# a trend: 4 false failures in 51 recorded runs of a leak-free build. The
+# Theil-Sen slope (the median of every pairwise slope) over the last 40
+# cycles is robust to a step: 0 false failures on the same 51 runs (the
+# largest was 0.18 MB/cycle), and with a synthetic 0.5 MB/cycle leak added
+# to each it fails 34/51 against the old gate's 21/51 (1.0 MB/cycle: 41 vs
+# 42). Neither catches a leak that small every time in 60 cycles: memory is
+# often still falling there, and hides it.
+SOAK_RISE_LIMIT = 0.3   # MB/cycle
+SOAK_WINDOW = 40        # cycles
+
+
+def _rise_per_cycle(mem):
+    tail = np.asarray(mem[-SOAK_WINDOW:], dtype=float)
+    i, j = np.triu_indices(len(tail), 1)
+    return float(np.median((tail[j] - tail[i]) / (j - i)))
+
+
+# A real run of the current build that the old gate failed (the full suite,
+# 2026-09-26): flat, then one +12 MB step at cycle 48.
+_STEP_SERIES = [
+    512.45, 538.2, 540.04, 540.37, 547.23, 571.68, 568.24, 566.14, 565.24, 564.11,
+    564.57, 562.94, 562.53, 563.45, 558.39, 559.01, 556.86, 558.81, 557.98, 550.35,
+    547.05, 547.42, 547.46, 546.72, 546.89, 546.8, 547.21, 547.69, 546.41, 546.74,
+    522.95, 524.41, 523.89, 523.29, 524.8, 524.17, 523.5, 523.54, 525.07, 524.16,
+    524.52, 524.21, 524.03, 525.0, 523.99, 525.68, 524.05, 524.35, 536.07, 536.7,
+    536.86, 536.25, 537.04, 536.41, 535.73, 536.21, 536.47, 536.21, 536.04, 536.65]
+
+
+def test_the_soak_memory_gate_ignores_a_step_and_catches_a_steady_rise():
+    """The gate itself, on the recorded run: one step passes; the same run
+    with a steady 0.5 MB/cycle leak added fails, as does a clean ramp."""
+    assert _rise_per_cycle(_STEP_SERIES) < SOAK_RISE_LIMIT
+    old = np.polyfit(np.arange(20), np.array(_STEP_SERIES[-20:]), 1)[0]
+    assert old >= 0.5, "the old least-squares gate failed this run"
+    leaking = [m + 0.5 * k for k, m in enumerate(_STEP_SERIES)]
+    assert _rise_per_cycle(leaking) >= SOAK_RISE_LIMIT
+    assert _rise_per_cycle([500 + 0.35 * k for k in range(60)]) >= SOAK_RISE_LIMIT
+
+
+@pytest.mark.timing  # memory-growth budget under load: run serially (pytest.ini "timing")
 def test_a_soak_keeps_memory_and_the_gl_context(results):
     """60 cycles of opening a 2D MOSFET, a layered 3D sweep and a 1M-node
     grid into ONE window, switching fields and every layer each has. The
-    GL context is never recreated, and memory has no upward trend over
-    the last 20 cycles (a 100-cycle probe, 15.24: private memory peaks
-    while caches warm, then falls back and holds)."""
+    GL context is never recreated, and private memory does not rise over
+    the last 40 cycles (the Theil-Sen gate above; a 100-cycle probe, 15.24:
+    private memory peaks while caches warm, then falls back and holds)."""
     import run_bench
     d = results["dir"]
     files = [run_bench._solve(d, "mosfet_2d"), results["layers_small"],
@@ -246,7 +290,5 @@ def test_a_soak_keeps_memory_and_the_gl_context(results):
     rep = json.loads(out.stdout)
     assert out.returncode == 0 and rep["ok"] and rep["gl_reinits"] == 0, out.stdout[-500:]
     mem = rep["private_mb"]
-    tail = np.array(mem[-20:])
-    slope = np.polyfit(np.arange(len(tail)), tail, 1)[0]
-    assert slope < 0.5, f"private memory still rising {slope:.2f} MB/cycle over the last 20 cycles: {mem}"
-    assert mem[-1] <= max(mem) + 1e-9
+    rise = _rise_per_cycle(mem)
+    assert rise < SOAK_RISE_LIMIT, f"private memory rising {rise:.3f} MB/cycle over the last 40 cycles: {mem}"

@@ -81,7 +81,12 @@ jobs:
           python -c "from pytcad import _accel; assert _accel.HAVE_ACCEL; print(_accel.status())"
       - name: Fast suite
         working-directory: pytcad
-        run: python -m pytest tests/ gui/tests/ -n 4 -m "not slow" -q
+        run: python -m pytest tests/ gui/tests/ -n 4 -m "not slow and not timing" -q
+      # Wall-clock/memory budgets (pytest.ini "timing"): serial, so the
+      # parallel workers above do not skew them.
+      - name: Timing budgets (serial)
+        working-directory: pytcad
+        run: python -m pytest tests/ gui/tests/ -m timing -q
       - name: Slow gate battery
         working-directory: pytcad
         run: python -m pytest tests/ gui/tests/ -n 4 -m "slow" -q

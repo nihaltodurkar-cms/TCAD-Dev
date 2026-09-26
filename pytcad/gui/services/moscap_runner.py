@@ -20,6 +20,7 @@ from gui.services.solver_backend import (
 
 
 def run_job(job_path, out_path):
+    print("PYTCAD_STAGE=cv", flush=True)   # P3-S1: the one stage a C-V job has
     with open(job_path) as fh:
         p = json.load(fh)
 
@@ -80,15 +81,27 @@ def main(argv):
         print("usage: python -m gui.services.moscap_runner "
               "<job.json> <out.npz>", file=sys.stderr)
         return 2
+    # P3-S1 (NATIVE-DESKTOP-PLAN.md 4.3): the structured progress channel,
+    # as solver_runner. A C-V job has no Newton lines to parse: its records
+    # are the stage, then done or error.
+    from gui.services import progress_channel
+    real = sys.stdout
+    tap = progress_channel.ProgressTap(real)
+    sys.stdout = tap
     try:
-        run_job(argv[1], argv[2])
-    except Exception as exc:
-        payload = {"error": type(exc).__name__, "message": str(exc),
-                   "traceback": __import__("traceback").format_exc()}
-        print("PYTCAD_ERROR=" + json.dumps(payload), file=sys.stderr,
-              flush=True)
-        return 1
-    return 0
+        try:
+            run_job(argv[1], argv[2])
+        except Exception as exc:
+            payload = {"error": type(exc).__name__, "message": str(exc),
+                       "traceback": __import__("traceback").format_exc()}
+            print("PYTCAD_ERROR=" + json.dumps(payload), file=sys.stderr,
+                  flush=True)
+            tap.emit("error", error=payload["error"], message=payload["message"])
+            return 1
+        tap.emit("done", result=argv[2], dropped=tap.dropped)
+        return 0
+    finally:
+        sys.stdout = real
 
 
 if __name__ == "__main__":

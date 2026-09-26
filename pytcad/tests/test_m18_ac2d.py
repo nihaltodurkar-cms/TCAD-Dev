@@ -9,6 +9,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import functools
 import warnings
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ from pytcad.constants import Q
 from pytcad.materials import SILICON
 from pytcad.moscap import MOSCapacitor, flatband_voltage
 from pytcad.transient2d import _step_residual_jacobian, _non_contact_flat_index
-from pytcad.ac2d import y_parameters, _storage_matrix, cutoff_frequency
+from pytcad.ac2d import y_parameters, _storage_matrix, cutoff_frequency, YParamResult2D
 from pytcad.mosfet import build_mosfet
 
 warnings.simplefilter("ignore")
@@ -343,7 +344,49 @@ def _mosfet2d():
     return dev
 
 
+# The four G-MOSFET gates analyse the SAME biased MOSFET. y_parameters()
+# costs ~130-165 s here (measured 2026-09-26), almost all of it
+# frequency-independent setup (the ohmic ports' current-sensitivity
+# rows), and each frequency's Y is computed independently from that
+# setup. So it runs ONCE, at the union of the gates' frequencies, and
+# each gate reads its own frequencies back -- the same numbers as a call
+# of its own (test_y_parameters_per_frequency_is_independent_of_the_batch
+# pins that). The xdist group keeps the four on one worker, so the cache
+# is shared (pytest.ini: --dist loadgroup).
+_GAIN_FREQS = np.logspace(3, 11, 25)
+_FT_FREQS = np.logspace(3, 11, 40)
+_RECIP_FREQS = np.array([1e6])
+_FD_FREQS = np.array([1.0])            # low f: ~purely real
+
+
+@functools.lru_cache(maxsize=None)
+def _mosfet2d_y():
+    batch = np.concatenate([_GAIN_FREQS, _FT_FREQS, _RECIP_FREQS, _FD_FREQS])
+    return y_parameters(_mosfet2d(), batch)
+
+
+def _mosfet2d_y_at(freqs):
+    full = _mosfet2d_y()
+    idx = [int(np.flatnonzero(full.freqs == f)[0]) for f in freqs]
+    return YParamResult2D(full.freqs[idx], full.Y[idx], full.port_names)
+
+
+def test_y_parameters_per_frequency_is_independent_of_the_batch():
+    """What the shared MOSFET result above relies on, on a device cheap
+    enough to run twice: Y at a frequency is bit-identical whether it is
+    computed alone or among others."""
+    dev = _resistor3term()
+    dev.solve_equilibrium()
+    batch = np.concatenate([_GAIN_FREQS, _FT_FREQS, _RECIP_FREQS, _FD_FREQS])
+    together = y_parameters(dev, batch)
+    for f in (_FD_FREQS[0], _RECIP_FREQS[0], _GAIN_FREQS[5], _FT_FREQS[-1]):
+        alone = y_parameters(dev, np.array([f]))
+        k = int(np.flatnonzero(batch == f)[0])
+        assert np.array_equal(alone.Y[0], together.Y[k]), f
+
+
 # ---------------------------------------------------------------- G-MOSFET-GAIN
+@pytest.mark.xdist_group("m18_ac2d_mosfet")
 def test_g_mosfet_gain_shows_genuine_rolloff_unlike_the_diode():
     """G-MOSFET-GAIN: unlike the 2-terminal diode (G-FT in
     test_m18_yparam.py: |h21|=1 identically, no real gain to speak of),
@@ -351,9 +394,7 @@ def test_g_mosfet_gain_shows_genuine_rolloff_unlike_the_diode():
     frequency) that genuinely rolls off with frequency -- the first
     device in this repo where fT is a physically meaningful figure of
     merit, not a spurious noise-floor crossing."""
-    dev = _mosfet2d()
-    freqs = np.logspace(3, 11, 25)
-    res = y_parameters(dev, freqs)
+    res = _mosfet2d_y_at(_GAIN_FREQS)
     gi, di = res.port_names.index("gate"), res.port_names.index("drain")
 
     h21_mag = np.abs(res.Y[:, di, gi] / res.Y[:, gi, gi])
@@ -369,21 +410,22 @@ def test_g_mosfet_gain_shows_genuine_rolloff_unlike_the_diode():
 
 
 # ---------------------------------------------------------------- G-MOSFET-FT
+@pytest.mark.xdist_group("m18_ac2d_mosfet")
 def test_g_mosfet_ft_is_finite_and_within_swept_range():
     """G-MOSFET-FT: cutoff_frequency(), generalized to (port_in="gate",
     port_out="drain"), must return a finite fT within the swept band --
     the real validation ac.py's own cutoff_frequency() docstring notes
     was missing (no amplifying 3-terminal device existed in this repo
     before this fixture)."""
-    dev = _mosfet2d()
-    freqs = np.logspace(3, 11, 40)
-    res = y_parameters(dev, freqs)
+    freqs = _FT_FREQS
+    res = _mosfet2d_y_at(freqs)
     fT = cutoff_frequency(res, "gate", "drain")
     assert fT is not None, "expected a genuine |h21|=1 crossing within the swept range"
     assert freqs[0] < fT < freqs[-1], f"fT={fT:.3e} outside swept range"
 
 
 # ---------------------------------------------------------------- G-MOSFET-RECIPROCITY-BROKEN
+@pytest.mark.xdist_group("m18_ac2d_mosfet")
 def test_g_mosfet_reciprocity_is_broken_unlike_the_diode():
     """G-MOSFET-RECIPROCITY-BROKEN: an active 3+-terminal device is NOT
     a reciprocal 2-port -- Y[drain,gate] (forward transconductance) must
@@ -393,8 +435,7 @@ def test_g_mosfet_reciprocity_is_broken_unlike_the_diode():
     EXACT 2-terminal reciprocity. A regression that accidentally forced
     symmetry (e.g. a broken forcing/observation sign convention) would
     silently pass G-NPORT-OHMIC-style checks but must fail this one."""
-    dev = _mosfet2d()
-    res = y_parameters(dev, np.array([1e6]))
+    res = _mosfet2d_y_at(_RECIP_FREQS)
     gi, di = res.port_names.index("gate"), res.port_names.index("drain")
     Y_dg = res.Y[0, di, gi]   # forward: gate drives, drain observed
     Y_gd = res.Y[0, gi, di]   # reverse: drain drives, gate observed
@@ -404,6 +445,7 @@ def test_g_mosfet_reciprocity_is_broken_unlike_the_diode():
 
 
 # ---------------------------------------------------------------- G-MOSFET-FD
+@pytest.mark.xdist_group("m18_ac2d_mosfet")
 def test_g_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
     """G-MOSFET-FD: Y[drain,gate] at low frequency (real transconductance
     gm) must match a DIRECT finite difference of terminal_current("drain")
@@ -427,8 +469,7 @@ def test_g_mosfet_fd_drain_gate_transconductance_matches_direct_perturbation():
     I1, I2 = _drain_I(Vg0 - dVg), _drain_I(Vg0 + dVg)
     dIdVg = (I2 - I1) / (2 * dVg)
 
-    dev = _mosfet2d()
-    res = y_parameters(dev, np.array([1.0]))   # low f: ~purely real
+    res = _mosfet2d_y_at(_FD_FREQS)   # low f: ~purely real
     gi, di = res.port_names.index("gate"), res.port_names.index("drain")
     gm = res.Y[0, di, gi].real
 

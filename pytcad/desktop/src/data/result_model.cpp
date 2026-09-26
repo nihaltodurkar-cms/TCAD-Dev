@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <string_view>
@@ -161,6 +162,53 @@ std::optional<std::vector<double>> number_list(const NpyArray& a) {
         out.push_back(v.get<double>());
     }
     return out;
+}
+
+// A name or unit stamp: one string element, str() of it in the store.
+std::string text(const Ctx& c, const std::string& key) {
+    const NpyArray& a = c.f.at(key);
+    if (a.kind != 'U' || a.count() != 1) c.fail(key + " must be a string");
+    return a.string_scalar();
+}
+
+// meta.get(field, fallback) for a string field of a block's JSON meta.
+std::string meta_string(const Ctx& c, const Json& meta, const std::string& key, const char* field,
+                        const std::string& fallback) {
+    if (!meta.is_object() || !meta.contains(field)) return fallback;
+    const Json& v = meta[field];
+    if (!v.is_string()) c.fail(key + " '" + field + "' must be a string");
+    return v.get<std::string>();
+}
+
+// Every <prefix><name> series, in archive order (the store's dict order).
+std::vector<Channel> channels_with_prefix(const Ctx& c, const std::string& prefix) {
+    std::vector<Channel> out;
+    for (const auto& key : c.f.names())
+        if (key.starts_with(prefix)) out.push_back({key.substr(prefix.size()), c.numeric(key).to_doubles()});
+    return out;
+}
+
+// A JSON list of numbers; null reads as NaN when `null_is_gap`.
+std::vector<double> json_numbers(const Ctx& c, const Json& v, const std::string& where, bool null_is_gap) {
+    if (!v.is_array()) c.fail(where + " must be a JSON list");
+    std::vector<double> out;
+    out.reserve(v.size());
+    for (const auto& x : v) {
+        if (x.is_number()) out.push_back(x.get<double>());
+        else if (null_is_gap && x.is_null()) out.push_back(std::numeric_limits<double>::quiet_NaN());
+        else c.fail(where + " must hold only numbers" + (null_is_gap ? " or null" : ""));
+    }
+    return out;
+}
+
+// Python's bool() of a json.loads value.
+bool py_truthy(const Json& v) {
+    if (v.is_null()) return false;
+    if (v.is_boolean()) return v.get<bool>();
+    if (v.is_number_float()) return v.get<double>() != 0.0;  // NaN is truthy, as in Python
+    if (v.is_number()) return v.get<long long>() != 0;
+    if (v.is_string()) return !v.get_ref<const std::string&>().empty();
+    return !v.empty();
 }
 
 }  // namespace
@@ -430,6 +478,80 @@ std::optional<nlohmann::ordered_json> ResultModel::region_materials() const {
 
 std::optional<nlohmann::ordered_json> ResultModel::structure_regions() const {
     return json_meta("structure_regions__meta");
+}
+
+bool ResultModel::has_sweep() const { return npz_->contains("sweep__voltage"); }
+bool ResultModel::has_transient() const { return npz_->contains("transient__times"); }
+bool ResultModel::has_ac() const { return npz_->contains("ac__freqs"); }
+
+SweepSeries ResultModel::sweep() const {
+    const Ctx c{*npz_, label_};
+    if (!has_sweep()) c.fail("no sweep series in this result");
+    SweepSeries s;
+    s.meta = parse_stamp(c, "sweep__meta");
+    s.contact = meta_string(c, s.meta, "sweep__meta", "contact", "");
+    s.quantity = meta_string(c, s.meta, "sweep__meta", "quantity", "current");
+    s.voltages = c.numeric("sweep__voltage").to_doubles();
+    const NpyArray& conv = npz_->at("sweep__converged");
+    if (!conv.is_numeric()) c.fail("sweep__converged must be numeric (bool or 0/1), not text");
+    for (double v : conv.to_doubles()) s.converged.push_back(v != 0.0 ? 1 : 0);  // bool(NaN) is True
+    s.channels = channels_with_prefix(c, "sweep__current__");
+    // The store NaNs every unconverged point here, at the boundary.
+    for (auto& ch : s.channels)
+        for (std::size_t i = 0; i < ch.values.size() && i < s.converged.size(); ++i)
+            if (!s.converged[i]) ch.values[i] = std::numeric_limits<double>::quiet_NaN();
+    s.unit = text(c, "unit__sweep_current");
+    return s;
+}
+
+TransientSeries ResultModel::transient() const {
+    const Ctx c{*npz_, label_};
+    if (!has_transient()) c.fail("no transient series in this result");
+    TransientSeries t;
+    t.meta = parse_stamp(c, "transient__meta");
+    t.contact = meta_string(c, t.meta, "transient__meta", "contact", "");
+    t.times = c.numeric("transient__times").to_doubles();
+    t.channels = channels_with_prefix(c, "transient__current__");
+    t.unit = text(c, "unit__transient_current");
+    return t;
+}
+
+AcSeries ResultModel::ac() const {
+    const Ctx c{*npz_, label_};
+    if (!has_ac()) c.fail("no AC sweep in this result");
+    AcSeries a;
+    a.port = text(c, "ac__port");
+    a.freqs = c.numeric("ac__freqs").to_doubles();
+    a.C = c.numeric("ac__C").to_doubles();
+    a.G = c.numeric("ac__G").to_doubles();
+    a.unit_c = text(c, "unit__ac_capacitance");
+    a.unit_g = text(c, "unit__ac_conductance");
+    return a;
+}
+
+std::optional<std::vector<TraceStep>> ResultModel::trace() const {
+    if (!npz_->contains("record__meta")) return std::nullopt;  // run_record() is None
+    std::vector<TraceStep> out;
+    if (!npz_->contains("converge__trace")) return out;
+    const Ctx c{*npz_, label_};
+    const Json raw = parse_stamp(c, "converge__trace");  // a list: checked at open
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const Json& item = raw[i];
+        const std::string where = "converge__trace[" + std::to_string(i) + "]";
+        if (!item.is_object()) c.fail(where + " must be a JSON object");  // the store's d.get fails
+        TraceStep st;
+        st.stage = meta_string(c, item, where, "stage", "?");
+        if (item.contains("iterations")) st.iterations = json_numbers(c, item["iterations"], where + " iterations", false);
+        if (item.contains("metrics")) {
+            const Json& m = item["metrics"];
+            if (!m.is_object()) c.fail(where + " metrics must be a JSON object");
+            for (auto it = m.begin(); it != m.end(); ++it)
+                st.metrics.push_back({it.key(), json_numbers(c, it.value(), where + " metric '" + it.key() + "'", true)});
+        }
+        st.converged = item.contains("converged") ? py_truthy(item["converged"]) : true;
+        out.push_back(std::move(st));
+    }
+    return out;
 }
 
 bool ResultModel::has_sweep_snapshots() const { return npz_->contains("sweep__snapshot__voltages"); }

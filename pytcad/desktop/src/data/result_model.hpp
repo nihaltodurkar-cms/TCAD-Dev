@@ -1,6 +1,7 @@
 // C++ counterpart of gui/services/result_store.py's NpzResultStore, for
 // the parts the viewer needs: mesh axes, scalar and vector fields,
-// terminal currents, region metadata and 3D sweep snapshots.
+// terminal currents, region metadata, 3D sweep snapshots, and the curve
+// blocks (sweep, transient, AC, convergence trace).
 //
 // Opening validates the file exactly as gui/services/solver_backend.py's
 // validate_result does (NATIVE-DESKTOP-PLAN.md section 15, P1 S1): schema
@@ -24,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -52,6 +54,50 @@ struct Terminal {
     std::string name;
     double value = 0.0;
     std::string unit;
+};
+
+// One named series of a curve block, e.g. a contact's current. Channel
+// lists keep archive order: the store's dict order.
+struct Channel {
+    std::string name;
+    std::vector<double> values;
+};
+
+// NpzResultStore.sweep_result() (P2-S1, NATIVE-DESKTOP-PLAN.md 16.3).
+struct SweepSeries {
+    std::string contact;              // sweep__meta "contact", "" when absent
+    std::string quantity;             // sweep__meta "quantity"; "current" when absent
+    nlohmann::ordered_json meta;      // sweep__meta as written
+    std::vector<double> voltages;     // [V], every attempted point
+    std::vector<std::uint8_t> converged;  // 0/1 per point
+    std::vector<Channel> channels;    // NaN where not converged, as the store masks them
+    std::string unit;                 // unit__sweep_current (F/cm^2 for C-V)
+    bool is_capacitance() const { return quantity == "capacitance"; }
+};
+
+// NpzResultStore.transient_result().
+struct TransientSeries {
+    std::string contact;              // transient__meta "contact" (the stimulus), "" when absent
+    nlohmann::ordered_json meta;
+    std::vector<double> times;        // [s], every accepted step
+    std::vector<Channel> channels;
+    std::string unit;
+};
+
+// NpzResultStore.ac_result().
+struct AcSeries {
+    std::string port;
+    std::vector<double> freqs;        // [Hz]
+    std::vector<double> C, G;         // [unit_c], [unit_g]
+    std::string unit_c, unit_g;
+};
+
+// One entry of RunRecord.trace (solver_backend.ConvergenceStep).
+struct TraceStep {
+    std::string stage;                // "?" when absent
+    std::vector<double> iterations;
+    std::vector<Channel> metrics;     // JSON null -> NaN (_draw_convergence's gap)
+    bool converged = true;            // Python truthiness of "converged", default True
 };
 
 struct SweepSnapshots {
@@ -107,6 +153,23 @@ public:
     // ResultSchemaError when present but not JSON (the store raises too).
     std::optional<nlohmann::ordered_json> region_materials() const;
     std::optional<nlohmann::ordered_json> structure_regions() const;
+
+    // Curve blocks (P2-S1). Opening validated their structure; like the
+    // store, the accessors read the values and fail (ResultSchemaError)
+    // where the store raises: the block is absent, or a trace entry is
+    // not an object with list-valued metrics. Deliberately stricter on
+    // inputs no writer produces: text convergence flags (numpy reads
+    // "no" as True), a non-string contact, port, stage or unit, and
+    // non-numeric iterations or metric values are refused, not coerced.
+    bool has_sweep() const;
+    bool has_transient() const;
+    bool has_ac() const;
+    SweepSeries sweep() const;
+    TransientSeries transient() const;
+    AcSeries ac() const;
+    // RunRecord.trace: nullopt when the file has no record__meta (the
+    // store's run_record() is None); empty when it has no converge__trace.
+    std::optional<std::vector<TraceStep>> trace() const;
 
     // True when sweep__snapshot__voltages is present (field data may
     // still be missing -- sweep_snapshots() then throws, as the store does).

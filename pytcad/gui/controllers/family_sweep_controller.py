@@ -9,15 +9,16 @@ owns ONE JobRunner of its own, and runs its jobs strictly SEQUENTIALLY
 npz, read back through the ordinary ResultStore.  Nothing here fakes or
 interpolates a curve.
 """
-import copy
 import tempfile
 
 import numpy as np
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
+from ..services import family_jobs
 from ..services.job_runner import JobRunner
 from ..services.result_store import NpzResultStore
+from ..services.run_config import RunConfigError
 
 
 class FamilySweepController(QObject):
@@ -58,29 +59,15 @@ class FamilySweepController(QObject):
     def configureFamily(self, stepped, start, stop, step):
         """Which terminal is STEPPED and over which values.  A single
         value (start == stop) is allowed and yields a one-curve family;
-        the per-point validation happens against the base spec at run."""
-        # reject a step that moves AWAY from the target -- the old code
-        # silently produced a single-curve "family" for that typo
-        if step != 0 and (stop - start) * step < 0:
-            self._app.errorRaised.emit(
-                "Invalid family configuration",
-                f"step {step:g} does not move from start {start:g} "
-                f"toward stop {stop:g}")
+        the per-point validation happens against the base spec at run.
+        (P3-S4/S6: the rules live in gui/services/family_jobs.py, shared
+        with the native app.)"""
+        try:
+            vals = family_jobs.family_values(start, stop, step)
+        except RunConfigError as exc:
+            self._app.errorRaised.emit(exc.title, exc.detail)
             return
         self._stepped = str(stepped)
-        vals = []
-        if step != 0:
-            span = abs(stop - start)
-            n = int(round(span / abs(step)))
-            if abs(span - n * abs(step)) < 1e-9:
-                n += 1
-            else:
-                n = int(span / abs(step)) + 1
-            direction = 1.0 if stop >= start else -1.0
-            vals = [start + i * abs(step) * direction
-                    for i in range(max(n, 1))]
-        else:
-            vals = [float(start)]
         self._values = vals
 
     def setBaseSpec(self, spec):
@@ -91,43 +78,19 @@ class FamilySweepController(QObject):
     @Slot(str, float, float, float)
     def runFamily(self, swept, start, stop, step):
         base = self._base_spec or self._app.lastRunSpec()
-        if base is None:
-            self._app.errorRaised.emit(
-                "Nothing to sweep",
-                "Run the device once first; every family curve re-solves "
-                "that exact device.")
-            return
-        if self._runner.running:
+        if base is not None and self._runner.running:
             return          # a click during a running family is ignored
-        names = [c.name for c in base.contacts]
-        for label, contact in ((self._stepped, self._stepped),
-                               ("swept", swept)):
-            if contact not in names:
-                self._app.errorRaised.emit(
-                    "Family cannot run",
-                    f"Contact {contact!r} is not registered on this "
-                    f"device (have: {', '.join(names)}).")
-                return
+        try:
+            queue = family_jobs.family_specs(base, self._stepped, self._values,
+                                             swept, start, stop, step)
+        except RunConfigError as exc:
+            self._app.errorRaised.emit(exc.title, exc.detail)
+            return
         self._swept = swept
         self._ramp = (float(start), float(stop), float(step))
-        from ..services.device_spec import SweepSpec
-        try:
-            SweepSpec(contact=swept, start=start, stop=stop,
-                      step=step).validate(names)
-        except ValueError as exc:
-            self._app.errorRaised.emit("Invalid family sweep", str(exc))
-            return
-
-        self._queue = []
+        self._queue = queue
         self._curves = []
         self._stale = False
-        for v in self._values:
-            spec = copy.deepcopy(base)
-            spec.sweep = SweepSpec(contact=swept, start=start, stop=stop,
-                                   step=step)
-            spec.bias = dict(base.bias or {})
-            spec.bias[self._stepped] = v
-            self._queue.append((v, spec))
         self._start_next()
 
     def _start_next(self):
@@ -138,7 +101,7 @@ class FamilySweepController(QObject):
         self._app.consoleModel.append(
             f"Family curve {len(self._curves) + 1}/"
             f"{len(self._curves) + len(self._queue)}: "
-            f"{self._stepped}={v:g} V")
+            f"{family_jobs.family_label(self._stepped, v)}")
         try:
             self._runner.start(spec)
         except Exception as exc:
@@ -162,7 +125,7 @@ class FamilySweepController(QObject):
         else:
             currents = np.asarray([], dtype=float)
         self._curves.append({
-            "label": f"{self._stepped}={v:g} V",
+            "label": family_jobs.family_label(self._stepped, v),
             "stepped_value": float(v),
             "voltages": np.asarray(sw.voltages, dtype=float)
                         if sw is not None else [],

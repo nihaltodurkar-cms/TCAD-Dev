@@ -20,6 +20,29 @@ Methods:
     examples.list    -> sorted example names (gui.services.examples.EXAMPLES)
     examples.build   {"name": str} -> DeviceSpec.to_dict() of that example
 
+  P3 S2 (section 17.2) -- jobs are built here, never in C++:
+
+    spec.from_example  {"name"} -> as examples.build
+    spec.load          {"path"} -> DeviceSpec.to_dict() of a DeviceSpec JSON file
+    project.spec       {"path"} -> {"name", "spec", "sweep", "models"} of a project
+    run.options        {"spec", "models"?, "transient_armed"?}
+                       -> {"backends": [...], "engines": [...]}, each
+                          {"id", "label", "enabled", "reason"}
+    spec.configure_run {"spec", "run": {"sweep"?, "transient"?, "ac"?,
+                        "equilibrium_only"?, "models"?, "backend"?, "engine"?}}
+                       -> the DeviceSpec dict to run; a refusal is
+                          AppController.run()'s, with "title" and "detail"
+                          in the error data
+    spec.job_text      {"spec"} -> the job file's text, byte-identical to the
+                          QML runner's (DeviceSpec.to_json); P3 S3
+    cv.job_text        {"nsub_cm3", "tox_nm", "vstart", "vstop", "vstep"}
+                       -> the C-V job file's text, as QML's CVController
+                          writes it, validated; P3 S4
+    family.jobs        {"spec", "stepped", "values": {start, stop, step},
+                        "swept": {contact, start, stop, step}}
+                       -> [{"label", "value", "job_text"}], QML's family; P3 S6
+    comparison.job     {"spec"} -> {"label", "job_text"}: every model off; P3 S6
+
   P1 S4 (section 15.3) -- bulk arrays never travel as JSON: a derived map
   is written as a small RESULT FILE (the result grammar: axes, field__*,
   unit__*, schema stamp) in the service's scratch directory, and the
@@ -123,6 +146,176 @@ def _examples_build(params):
 
 def _shutdown(params):
     raise _Shutdown
+
+
+# -- P3 S2: job methods (NATIVE-DESKTOP-PLAN.md 17.2) --------------------------
+# The native app builds no job itself: the backend loads the device, applies
+# the run configuration with AppController.run()'s own checks (the shared
+# gui.services.run_config) and returns the DeviceSpec JSON the runner writes.
+
+_RUN_KEYS = ("sweep", "transient", "ac", "equilibrium_only", "models", "backend", "engine")
+_ENGINE_IDS = ("auto", "direct", "gpu_direct", "amg", "mpi_schwarz")
+
+
+def _spec_param(params, method, key="spec"):
+    from gui.services.device_spec import DeviceSpec
+    return DeviceSpec.from_dict(_param(params, key, dict, method))
+
+
+def _models_param(value, method):
+    from gui.services.run_config import merged_models
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError(f"{method}: 'models' must be an object {{model_key: bool}} or null")
+    return merged_models(value)
+
+
+def _spec_load(params):
+    from gui.services.device_spec import DeviceSpec
+    path = _param(params, "path", str, "spec.load")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"device spec file not found: {path}")
+    return DeviceSpec.from_json(path).to_dict()
+
+
+def _project_spec(params):
+    from gui.services.run_config import project_run_inputs
+    path = _param(params, "path", str, "project.spec")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"project file not found: {path}")
+    name, spec, sweep, models = project_run_inputs(path)
+    return {"name": name, "spec": spec.to_dict(),
+            "sweep": sweep.to_dict() if sweep is not None else None, "models": models}
+
+
+def _run_options(params):
+    """{"spec", "models"?, "transient_armed"?} -> {"backends", "engines"}.
+    `models` defaults to the spec's own."""
+    from gui.services import run_config
+    spec = _spec_param(params, "run.options")
+    models = _models_param(params.get("models"), "run.options")
+    armed = params.get("transient_armed", False)
+    if not isinstance(armed, bool):
+        raise TypeError("run.options: 'transient_armed' must be a boolean")
+    return {"backends": run_config.backend_options(spec, models if models is not None
+                                                   else spec.models),
+            "engines": run_config.engine_options(spec, armed)}
+
+
+def _job_text(params):
+    """{"spec"} -> the job file's text, exactly as the QML runner writes it
+    (DeviceSpec.to_json): the native runner writes these bytes verbatim,
+    so the two apps' job files are byte-identical (section 17.4)."""
+    import io
+    spec = _spec_param(params, "spec.job_text")
+    buf = io.StringIO()
+    json.dump(spec.to_dict(), buf)          # DeviceSpec.to_json's own call
+    return buf.getvalue()
+
+
+def _cv_job_text(params):
+    """{"nsub_cm3", "tox_nm", "vstart", "vstop", "vstep"} -> the C-V job
+    file's text, as QML's CVController writes it (gui.services.cv_job)."""
+    from gui.services import cv_job
+    method = "cv.job_text"
+    if not isinstance(params, dict):
+        raise TypeError(f"{method} needs params {{nsub_cm3, tox_nm, vstart, vstop, vstep}}")
+    values = {}
+    for key in ("nsub_cm3", "tox_nm", "vstart", "vstop", "vstep"):
+        v = params.get(key)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise TypeError(f"{method}: '{key}' must be a number, got {v!r}")
+        values[key] = v
+    p = cv_job.cv_params(**values)
+    cv_job.validate(p)
+    return cv_job.job_text(p)
+
+
+def _ramp_param(params, key, method, with_contact):
+    ramp = params.get(key) if isinstance(params, dict) else None
+    if not isinstance(ramp, dict):
+        raise TypeError(f"{method}: '{key}' must be an object")
+    out = {}
+    for k in (("contact",) if with_contact else ()) + ("start", "stop", "step"):
+        v = ramp.get(k)
+        if k == "contact":
+            if not isinstance(v, str):
+                raise TypeError(f"{method}: '{key}.contact' must be a string")
+        elif not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise TypeError(f"{method}: '{key}.{k}' must be a number, got {v!r}")
+        out[k] = v
+    return out
+
+
+def _family_jobs(params):
+    """{"spec", "stepped", "values": {start, stop, step}, "swept": {contact,
+    start, stop, step}} -> [{"label", "value", "job_text"}], QML's family
+    (gui.services.family_jobs); a refusal carries QML's title and detail."""
+    import io
+    from gui.services import family_jobs
+    method = "family.jobs"
+    spec = _spec_param(params, method)
+    stepped = _param(params, "stepped", str, method)
+    values = _ramp_param(params, "values", method, False)
+    swept = _ramp_param(params, "swept", method, True)
+    vals = family_jobs.family_values(values["start"], values["stop"], values["step"])
+    out = []
+    for v, job in family_jobs.family_specs(spec, stepped, vals, swept["contact"], swept["start"],
+                                           swept["stop"], swept["step"]):
+        buf = io.StringIO()
+        json.dump(job.to_dict(), buf)          # DeviceSpec.to_json's own call
+        out.append({"label": family_jobs.family_label(stepped, v), "value": v, "job_text": buf.getvalue()})
+    return out
+
+
+def _comparison_job(params):
+    """{"spec"} -> {"label", "job_text"}: the spec with every model off, as
+    QML's runModelComparison builds it."""
+    import io
+    from gui.services import family_jobs
+    job = family_jobs.comparison_spec(_spec_param(params, "comparison.job"))
+    buf = io.StringIO()
+    json.dump(job.to_dict(), buf)
+    return {"label": family_jobs.COMPARISON_LABEL, "job_text": buf.getvalue()}
+
+
+def _configure_run(params):
+    """{"spec", "run": {"sweep"?, "transient"?, "ac"?, "equilibrium_only"?,
+    "models"?, "backend"?, "engine"?}} -> the DeviceSpec dict to run. A
+    refusal is AppController.run()'s, its title and detail in the error data."""
+    from gui.services import run_config
+    from gui.services.device_spec import ACSpec, SweepSpec, TransientSpec
+    method = "spec.configure_run"
+    spec = _spec_param(params, method)
+    run = params.get("run", {})
+    if not isinstance(run, dict):
+        raise TypeError(f"{method}: 'run' must be an object")
+    unknown = sorted(set(run) - set(_RUN_KEYS))
+    if unknown:
+        raise TypeError(f"{method}: unknown run keys {unknown} (known: {', '.join(_RUN_KEYS)})")
+    armed = {}
+    for key, cls in (("sweep", SweepSpec), ("transient", TransientSpec), ("ac", ACSpec)):
+        value = run.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise TypeError(f"{method}: '{key}' must be an object or null")
+        armed[key] = cls.from_dict(value) if value is not None else None
+    eq_only = run.get("equilibrium_only", False)
+    if not isinstance(eq_only, bool):
+        raise TypeError(f"{method}: 'equilibrium_only' must be a boolean")
+    backend = run.get("backend", "pytcad")
+    engine = run.get("engine", "auto")
+    from workbench.solvers.base import backend_ids
+    known_backends = sorted({"pytcad", "devsim", *backend_ids()})
+    if backend not in known_backends:
+        raise ValueError(f"{method}: unknown backend {backend!r} "
+                         f"(known: {', '.join(known_backends)})")
+    if engine not in _ENGINE_IDS:
+        raise ValueError(f"{method}: unknown engine {engine!r} (known: {', '.join(_ENGINE_IDS)})")
+    return run_config.configure_run(
+        spec, **armed, equilibrium_only=eq_only,
+        models=_models_param(run.get("models"), method),
+        backend=backend, engine=engine).to_dict()
 
 
 # -- P1 S4: derived maps ------------------------------------------------------
@@ -252,6 +445,15 @@ METHODS = {
     "system.warmup": _warmup,
     "examples.list": _examples_list,
     "examples.build": _examples_build,
+    "spec.from_example": _examples_build,
+    "spec.load": _spec_load,
+    "project.spec": _project_spec,
+    "run.options": _run_options,
+    "spec.configure_run": _configure_run,
+    "spec.job_text": _job_text,
+    "cv.job_text": _cv_job_text,
+    "family.jobs": _family_jobs,
+    "comparison.job": _comparison_job,
     "analysis.band_map": _band_map,
     "analysis.recombination_map": _recombination_map,
 }
@@ -297,8 +499,10 @@ def handle(line):
         resp = _error(req_id, INVALID_PARAMS, str(exc))
         return (None if notification else resp), False
     except Exception as exc:             # reported to the client, never swallowed
-        resp = _error(req_id, APPLICATION_ERROR, str(exc),
-                      {"type": type(exc).__name__})
+        # An exception may carry structured detail for the client (a
+        # RunConfigError's title and detail); it is added to the type.
+        data = {"type": type(exc).__name__, **(getattr(exc, "rpc_data", None) or {})}
+        resp = _error(req_id, APPLICATION_ERROR, str(exc), data)
         return (None if notification else resp), False
     return (None if notification else
             {"jsonrpc": "2.0", "id": req_id, "result": result}), False

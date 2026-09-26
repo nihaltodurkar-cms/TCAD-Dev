@@ -8,8 +8,9 @@ written. S1 (§15.10), S2 (§15.12), S3 (§15.14), S4 (§15.16) and S5
 (§15.18), S6 (§15.20), S7 (§15.22) and S8 (§15.24) landed
 2026-09-25/26, uncommitted; S7 (export and ParaView) was then REMOVED at the
 user's decision (§15.25). **P1 CLOSED 2026-09-26** with the user's sign-off
-on the exit checklist (§15.24, §15.26). **P2 planned** (§16, proposed, awaiting
-approval); P3 and later are not started. The
+on the exit checklist (§15.24, §15.26). **P2 (§16, reviewed §16.7) APPROVED
+2026-09-26** with its default decisions ("start"); **P2 CLOSED 2026-09-26** at the user's decision ("close P2"; S1-S6: §16.8-§16.16), uncommitted; the full fast suite and timing pass owed by §16.17 were run after P3-S2 (§17.9). **P3 APPROVED 2026-09-26** (§17, reviewed §17.7, decisions 1-9 as proposed); **P3-S1 to P3-S6 landed** (§17.8-§17.15; S5 closed 2026-09-27), uncommitted. P3-S7 onward,
+and P4 and later, are not started. The
 remaining §12 decisions are still open.
 Target platform: **Windows only** (the product is built and used on
 Windows; see the Windows-only decision of 2026-09-25).
@@ -2535,15 +2536,15 @@ Recorded with the sign-off:
 - **Nothing is committed** (the user commits and pushes).
 
 **Open, carried past P1**
-- S8d's single unexplained soak failure (§15.25);
-- S6's single unexplained shell failure (§15.20);
+- ~~S8d's single unexplained soak failure (§15.25)~~ — **explained and fixed 2026-09-26** (§16.10): a one-step memory plateau read as a trend by a 20-cycle least-squares slope; it predates S2 (pre-S2 A/B); the gate is now a Theil–Sen slope over 40 cycles;
+- S6's single unexplained shell failure (§15.20) — seen again 2026-09-26 under the full suite's load and identified as a crash (`0xC0000005`, between two window tests); not reproduced in 20 solo runs; the test now keeps the child's stack trace (§16.10);
 - no desktop CI (it needs a GL runner).
 
 **Next:** P2 (not started) and the remaining §12 decisions.
 
 
 
-## 16. P2 — Plots: detailed plan (2026-09-26, proposed)
+## 16. P2 — Plots: detailed plan (2026-09-26, reviewed §16.7; APPROVED with the default decisions)
 
 §9 defines P2 as PlotView plus every curve-based viewport mode (series, cv, transient, ac, convergence, bands, recombination, cut) with family and comparison overlays. Its exit: every §10.2 mode has a C++ equivalent and an image test. This section makes that concrete against the tree.
 
@@ -2570,62 +2571,86 @@ Recorded with the sign-off:
 
    The native app runs no jobs until P3. In a viewer, an overlay is an **opened result file**: one comparison sweep (dashed, with a label) and a family of N sweeps (solid, one colour each, with a legend). Producing families and comparisons by running is P3's. (`record__meta` stores no stepped bias, so a family curve's label is its file name, editable.)
 4. **Structure, mesh, process and the doping preview are in §10.2 but are not curves.** They draw a `DeviceSpec` or a process state, not a result, and belong with the StructureEditor (P4). P2's exit therefore reads "every **curve** mode of §10.2"; the other four move to P4's exit explicitly.
-5. **The QML hover readout attaches the y value's unit to x**: `f"{label}: {y:.3e} @ {x:.2f} {unit}"` prints e.g. "device: 1.2e-05 @ 0.50 A/cm^2". Its snapping rule is sound (the nearest sample by normalised distance in DISPLAYED coordinates, log included; nothing past 0.08; the physical value reported). See decision 3.
-6. **The AC twin axis is not hoverable in QML** (a documented limitation): only C(f) snaps; G(f) on the right axis does not.
-7. **Colours are hard-coded** in the QML canvas: a 7-colour series palette, stage colours, the comparison purple, the rejected-step red. They become data-colour tokens in `theme/tokens.hpp`, the same "data colours, same in both schemes" rule as the region palette (S6), so the no-hard-coded-colour gate holds.
+5. **The QML hover readout attaches the y value's unit to x**: `f"{label}: {y:.3e} @ {x:.2f} {unit}"` prints e.g. "device: 1.2e-05 @ 0.50 A/cm^2". See decision 3. **Its snapping rule is not sound either** (corrected in review, §16.7):
+   - it takes the sample nearest in **x**, then applies the 0.08 cut-off to that one sample's normalised distance; a neighbouring sample nearer the cursor on a steep curve never wins;
+   - **one NaN in a series disables the cut-off.** `np.max` over the series is NaN, so every score is NaN and `NaN > 0.08` is false. Probed on `_hover_series` directly: an 11-point sweep with one NaN point, cursor far off the curve, printed `'device: 0.000e+00 @ 0.00 A/cm^2'`; the same series without the NaN printed `''`. Every sweep with an unconverged point has NaN, so this is the common case;
+   - only the log-y toggle is honoured in "displayed coordinates"; AC's log x and convergence's and recombination's log y are snapped linearly.
+
+   The native rule is decision 9. The NaN defect is a bug fix the QML GUI may take under the transition rule (§9).
+6. **The AC twin axis is not hoverable in QML** (a documented limitation): only C(f) snaps; G(f) on the right axis does not. **Convergence is not hoverable at all** (`_draw_convergence` never calls `_remember_series`), and neither are family or comparison curves (only the primary series is remembered).
+7. **Colours are hard-coded** in the QML canvas: a 7-colour series palette, stage colours, the comparison purple, the rejected-step red, and `_style_axes`'s four chrome colours (panel, grid, spines, text). The data colours become data-colour tokens in `theme/tokens.hpp`, the same "data colours, same in both schemes" rule as the region palette (S6); the chrome colours map to existing tokens (`Base`, `Border`, `TextDim`, `Text`), not new ones. The stage colours `#61bd6d` / `#d9a441` already equal `Ok` / `Warning` (dark). The no-hard-coded-colour gate then holds.
 8. **Line-cut computation.** §9 says cuts come from the backend's `extract_line_cut`. That function is a nearest-row/column slice of an array the app already holds (no physics). A round trip per slider step would add latency for nothing. See decision 1.
 9. **No golden images** (the §15.5 rule: machine-specific). An "image test" is a render to an offscreen image plus pixel and structure probes (below), as S5/S6 did for maps.
+10. **QML has three log rules, not one** (added in review):
+    - series, the comparison curve and 1D recombination: a log axis of |y|, so a negative value shows as its magnitude and only an exact zero is absent;
+    - 1D field and cut: a **linear** axis of `log10(max(|v|, 1e-30))` (`_maybe_log`), so a zero is drawn at −30, not absent;
+    - family curves: **signed** values on the primary's log axis (`_draw_series`, the family loop), so a negative stepped current silently disappears — a QML bug, not a rule.
+
+    The native rule is decision 8.
+11. **QML's view control is linear and partly unfitted** (from reading, not run):
+    - `zoom()` and `pan()` scale the limits in data units, so zooming out on AC's log frequency axis can drive the lower limit negative;
+    - `fit()` has no ac, convergence, cut, bands or recombination branch; they fall through to the mesh x extent in µm, which the pan/zoom fast path then applies to the plotted axis (AC's frequency axis, a vertical cut's y axis).
+
+    Not ported: native fit is per mode, from the plotted data, and zoom/pan act in the axis's own (linear or log) coordinates (§16.2).
+12. **QML plots the comparison against the primary's voltages** (`ax.plot(V, Ic)`), which only works because its comparison job reuses the primary's ramp. An opened file need not (finding 3), so every overlay plots against its own x.
 
 ### 16.2 Design
 
 - **PlotView** (`desktop/src/views/plot/plot_view.{hpp,cpp}`) is a QWidget painted with QPainter (§5.2). It draws:
   - a model of series: x, y, style (line / markers / dashed), colour token, axis (left or right), label;
   - linear or log x and y, and an optional right-hand y-axis (AC);
-  - NaN as a gap, never interpolated; on log axes, non-positive values are absent (the QML rule);
+  - NaN as a gap, never interpolated, and never bridged by decimation;
+  - log y shows |y| on a true log axis, and an exact zero leaves a gap (decision 8) — one rule for every mode and every series, overlays included;
   - markers when a series has ≤ 40 points (the QML rule);
-  - legend, title, grid, and per-pixel-column min/max decimation above ~4× the plot width in points;
+  - legend, title, grid, and per-pixel-column min/max decimation above ~4× the plot width in points; decimation is drawing only — hover and fit read the raw samples;
   - device-pixel rendering (HiDPI), and theme tokens only.
-- **Ticks:** a port of matplotlib's `AutoLocator` (MaxNLocator with steps [1, 2, 2.5, 5, 10] and `nbins="auto"`) and `LogLocator` (decades, with minor ticks), reusing S5's MaxNLocator core. Contract-tested against matplotlib's own tick values, so the axes read like the QML view's (decision 4).
+- **Ticks:** a port of matplotlib's `AutoLocator` (MaxNLocator with steps [1, 2, 2.5, 5, 10]) and `LogLocator` (decades, with minor ticks), reusing S5's MaxNLocator core (decision 4). The contract is on the locators' `tick_values(vmin, vmax)` at a **given** `nbins` / `numticks`: matplotlib's `nbins="auto"` derives the count from the axis length in pixels, font size and DPI, which the native app does not share, so tick **counts** could not match anyway. The native count is its own rule — the pixel length divided by a minimum label spacing from the font's metrics — stated in code and gated separately (labels never overlap). The LogLocator contract includes decade striding on wide ranges (convergence residuals span 10+ decades) and minor-tick labelling when the range is under one decade.
 - **View control:**
-  - fit: the x range from the data, y from all data, with matplotlib's 5% margins;
-  - zoom about the centre (wheel), pan (drag), reset to home;
-  - hover snaps to a real sample (finding 5's rule, decision 3's format).
-- **The central area becomes a stack:** `FieldView` or `PlotView`, switched by a **View mode** selector (a toolbar combo plus menu). The selector offers only the modes the open result supports (finding 2's table). The default is the field map (2D/3D) or the 1D field curve (1D). `FieldView` is placed in the stack before its GL context exists, so switching views never reparents it (the S6 GL lesson). A test pins 0 GL re-inits across view switches.
+  - fit, per mode, from the plotted data (all series, overlays included): x and y with matplotlib's 5% margins, in the axis's own coordinates (a log axis margins in log10);
+  - zoom about the centre (wheel), pan (drag), reset to home — in the axis's own coordinates, so a log axis never reaches a non-positive limit (finding 11);
+  - hover snaps to a real sample (decision 9's rule, decision 3's format), primary and overlay curves alike, with the curve's label in the readout.
+- **The central area becomes a splitter**, not a stack (decision 7): `FieldView` and `PlotView` sit in one `QSplitter` for the app's lifetime, and a **View mode** selector (a toolbar combo plus menu) shows one or the other — or, in cut mode, both, the map with the cut's line over the cut's curve. The selector offers only the modes the open result supports (finding 2's table). The default is the field map (2D/3D) or the 1D field curve (1D). `FieldView` is placed in the splitter before its GL context exists and is only ever hidden or shown, never reparented (the S6 GL lesson). A test pins 0 GL re-inits across view switches, cut mode included.
 - **A Plot panel** (dock, tabbed with Display):
   - the series channel (series mode);
   - log y;
-  - cut orientation and position (a slider snapping to node coordinates, showing the actual node, as the QML title does);
-  - overlays: Add comparison… / Add to family…, the list with labels, remove.
+  - cut orientation and position (a slider snapping to node coordinates, showing the actual node, as the QML title does). The cut slices whatever 2D map the field view shows — a stored field, or a backend-derived Ec or R map (S5) — which is wider than QML (stored fields only); log follows decision 8;
+  - overlays: Add comparison… / Add to family…, the list with labels, remove. An overlay is accepted only when its swept contact, channel, **unit** and **quantity** (current or capacitance) match the open result's; otherwise it is refused with the mismatching item named. Each overlay plots against its own voltages (finding 12).
 
 ### 16.3 Steps, in order
 
 | Step | Size | Content |
 |---|---|---|
-| P2-S1 | S | **Typed accessors** in `ResultModel`: sweep (voltages, converged, channels, unit, contact, quantity), transient (times, channels, unit, contact), AC (freqs, C, G, units, port) and the run record's trace (stages, metrics, converged). Contract gate: they equal `NpzResultStore.sweep_result()` / `transient_result()` / `ac_result()` / `run_record()` on real files, including a C-V result from `moscap_runner` and a transient and an AC run. |
+| P2-S1 | S | **Typed accessors** in `ResultModel`: sweep (voltages, converged, channels, unit, contact, quantity), transient (times, channels, unit, contact), AC (freqs, C, G, units, port) and the run record's trace (stages, metrics, converged). Contract gate: they equal `NpzResultStore.sweep_result()` / `transient_result()` / `ac_result()` / `run_record()` on real files, including a C-V result from `moscap_runner` and a transient and an AC run, **plus a synthetic sweep with `sweep__converged` partly False**, so the store's NaN masking of unconverged points is exercised (real files may have none). |
 | P2-S2 | M | **PlotView core**: axes, the tick port with its contract test, series styles, gaps, log, twin axis, legend, decimation, view control, hover, theme tokens (finding 7), HiDPI. Bench rows and pixel probes (below). |
-| P2-S3 | M | **The modes**: 1D field, series (with channel), cv, transient, ac, convergence (stage colours, rejected-step marker, cumulative iteration axis, log y), and 1D bands and recombination through the backend (cached per result, like S5's maps). Each keeps the QML empty-state text. The view-mode stack and selector. |
-| P2-S4 | S | **Line cut** (2D): decision 1's implementation, the cut controls, and — new — the cut's line drawn on the field map while in cut mode. |
-| P2-S5 | S | **Overlays** from files (finding 3): one comparison sweep (dashed) and a family. Both must share the open result's swept contact and channel; otherwise refused with the reason. |
+| P2-S3 | M | **The modes**: 1D field, series (with channel), cv, transient, ac, convergence (stage colours, rejected-step marker, cumulative iteration axis, log y, hoverable — new), and 1D bands and recombination through the backend (cached per result, like S5's maps). Each keeps the QML empty-state text. The view-mode splitter and selector (decision 7). |
+| P2-S4 | S | **Line cut** (2D): decision 1's implementation, the cut controls, and — new — the cut's line drawn on the field map, visible beside the curve in cut mode's split (decision 7). |
+| P2-S5 | S | **Overlays** from files (finding 3): one comparison sweep (dashed) and a family, each on its own voltages. Contact, channel, unit and quantity must match the open result's; otherwise refused with the mismatch named. Overlays hover like the primary. |
 | P2-S6 | M | **Hardening and write-up**: one named test per curve mode, image probes per mode at scales 1, 1.5 and 2, adversarial files (a sweep with every point unconverged, an all-NaN channel, a one-point sweep, a trace with no steps, AC with one frequency), bench, the full fast suite, results as §16.6. |
 
 ### 16.4 Gates
 
 - **Contracts:**
   - the S1 accessors equal the Python store's on real files;
-  - the tick port equals matplotlib's ticks over ≥ 100 generated linear and log ranges;
-  - the cut equals `extract_line_cut` on uniform and graded meshes, both orientations, including the reported actual position.
+  - the tick port's `tick_values(vmin, vmax)` equals matplotlib's `MaxNLocator` / `LogLocator` at the same `nbins` / `numticks` over ≥ 100 generated linear and log ranges, including log ranges under one decade and over ten;
+  - the native tick-count rule: over a sweep of axis lengths and scales 1 / 1.5 / 2, no two tick labels overlap;
+  - the cut equals `extract_line_cut` on uniform and graded meshes, both orientations, including the reported actual position and a request exactly midway between two nodes (numpy's `argmin` takes the first; so must the port).
 - **Image probes** on offscreen renders (no golden images):
   - for every series, a pixel at the projected position of a sample (away from other series) has that series' colour;
-  - a NaN sample leaves no line through its neighbourhood;
+  - a NaN sample leaves no line through its neighbourhood — on a ≤ 40-point series and on a series long enough to be decimated;
   - with ≤ 40 points, markers are present;
-  - the log axis carries no non-positive sample;
+  - on a log axis, a negative sample is drawn at its magnitude and a zero sample leaves a gap (decision 8), for the primary and for a family curve;
   - AC's G curve sits on the right axis's scale;
   - ticks are drawn at the tick port's values;
   - the legend and title are present.
-- **Hover:** at the pixel of every plotted sample of a probe series, the readout names that sample's raw value; past the 0.08 snap distance, nothing.
-- **View switching:** every mode reachable for a result is selectable; modes a result cannot show are absent; 0 GL re-inits across 20 switches.
+- **Hover:**
+  - at the pixel of every plotted sample of a probe series, the readout names that sample's raw value; past the snap distance, nothing;
+  - the same on a series containing NaN (finding 5's QML defect), and on a decimated series (the raw sample, not a decimated vertex);
+  - on log-x AC, both C and G; on convergence; on a family and a comparison curve, each with its own label.
+- **View control:** in every mode, fit shows every plotted sample; zoom out ×10 and pan by a full span on a log axis keep both limits positive; reset returns to fit.
+- **View switching:** every mode reachable for a result is selectable; modes a result cannot show are absent; 0 GL re-inits across 20 switches, cut mode included.
+- **Overlays:** a family or comparison file differing in contact, channel, unit or quantity is refused with the mismatch named; one with a different voltage ramp from the primary is drawn on its own voltages.
 - **Parity checklist:** one named shell test per curve mode, plus the 1D field mode, overlays and cut.
-- **Mutations:** a gap interpolated, the log axis fed non-positive values, the family drawn on the wrong channel, a cut off by one node, and ticks at naive steps, must each fail their gate.
+- **Mutations:** a gap interpolated (and one bridged by decimation), a zero drawn at a floor on the log axis, the family drawn on the wrong channel or on the primary's voltages, a cut off by one node, hover without the NaN guard, zoom in data units on a log axis, and ticks at naive steps, must each fail their gate.
 - **Bench:**
   - pan/zoom frame at 1,000-point and 100,000-point series ≤ 16.7 ms p95 (§5.2's expectation, now measured);
   - hover ≤ 1 ms;
@@ -2638,10 +2663,1336 @@ Recorded with the sign-off:
 1. **Line cuts in C++**, gated against `extract_line_cut`, instead of a backend call per slider step (finding 8). §12 decision 5 (where GUI computations live) stays open for physics. This is array slicing, not physics.
 2. **Overlays come from opened result files** (finding 3). Running families and comparisons arrives with P3's job runner.
 3. **The hover readout is fixed**, not copied: "device: 1.234e-05 A/cm^2 @ 0.500 V" — the y value with its unit, then x with its unit (V, s, Hz, um, iteration). This is the same kind of deliberate improvement as S5's signed doping map.
-4. **Ticks port matplotlib's locators exactly** (contract-tested), so the native axes read like the QML ones. The alternative is simpler nice-number ticks without a contract.
-5. **AC hovers both curves**, C on the left axis and G on the right (finding 6), instead of copying QML's C-only limitation.
+4. **Ticks port matplotlib's locators exactly** (contract-tested at a given `nbins` / `numticks`, §16.2), so the native axes read like the QML ones; the tick **count** is the native app's own rule, gated on non-overlapping labels. The alternative is simpler nice-number ticks without a contract.
+5. **AC hovers both curves**, C on the left axis and G on the right (finding 6), instead of copying QML's C-only limitation. Convergence, family and comparison curves hover too.
 6. **P2's exit covers every curve mode**; structure, mesh, process and the doping preview move to P4's exit (finding 4).
+7. **The central area is a splitter, and cut mode shows the map and the curve together** (added in review). A stack shows one view, so the cut's line on the map (P2-S4) would never be visible beside its curve. The alternative is a stack, with the cut line visible only after switching back to the map.
+8. **One log rule** (added in review, finding 10): log y shows |y| on a true log axis; an exact zero leaves a gap; every mode and every series, family included. This changes the 1D field and cut from QML's "log10 on a linear axis, zeros at −30" and fixes QML's signed family curves. The readout still reports the raw, signed value.
+9. **Hover snapping** (added in review, finding 5): the nearest sample by normalised distance in displayed coordinates — each axis's own scale, log x included — over the finite samples of every hoverable series, normalised by the **current view's** span; nothing past 0.08. NaN samples are skipped, never scored. Exact ties (EFn and EFp coincide everywhere at equilibrium) go to the series first in legend order, and the readout lists every series tied at that sample. This replaces QML's nearest-in-x rule and fixes its NaN defect.
 
 ### 16.6 Out of scope
 
 Running anything (P3); structure, mesh and process views (P4); data export (CSV or images); 3D line cuts (the QML cut is 2D only); new physics.
+
+### 16.7 Review revisions (2026-09-26, before any P2 code)
+
+A review of §16 against `gui/visualization/mpl_canvas_item.py`, `gui/services/result_store.py`, `backend_service/server.py` and `desktop/src/` confirmed findings 1–4, 8 and 9: the 1D placeholder (`main_window.cpp`, "curve views arrive with PlotView (P2)"), the C-V `quantity` stamp (`moscap_runner.py`), both `analysis.*_map` methods, `extract_line_cut` being a plain nearest-node slice, and S5's MaxNLocator core in `data/contour_levels.cpp`. It changed the plan as follows:
+
+1. **Finding 5 was wrong.** QML's hover is nearest-in-x, not nearest-by-distance, and one NaN disables its 0.08 cut-off (probed: a far-off cursor over a one-NaN sweep printed `'device: 0.000e+00 @ 0.00 A/cm^2'`; the clean sweep printed nothing). New decision 9 and hover gates on NaN, decimated, log-x, convergence and overlay series.
+2. **The log rule was misstated** (new finding 10). QML has three behaviours, one of them a bug (signed family curves on a log axis). New decision 8; the probe and mutation now name zeros and negatives separately.
+3. **Cut mode could not show its own map line.** The stack became a splitter (decision 7); the GL gate covers cut mode.
+4. **Overlays needed more than contact and channel** (new finding 12): unit and quantity must match too, and each overlay plots on its own voltages. QML's comparison reuses the primary's voltages.
+5. **The tick contract was not satisfiable as written**: `nbins="auto"` depends on matplotlib's font and DPI. The contract is now on `tick_values` at a given count; the native count rule is gated on non-overlap. Log striding and sub-decade labelling are named in the contract.
+6. **View control is in axis coordinates and fit is per mode** (new finding 11), with a view-control gate. QML's linear zoom and its fit fall-through to the mesh extent are not ported (the fall-through read from code, not run).
+7. **Smaller:** decimation never bridges a NaN gap and hover reads raw samples; the S1 contract adds a synthetic partly-unconverged sweep; the cut contract adds a midway tie; convergence, family and comparison curves become hoverable; finding 7 names `_style_axes`'s chrome colours, mapped to existing tokens; the cut may slice backend-derived maps.
+
+Decisions 1–3, 5 and 6 are unchanged. Decisions 7–9 are new and, like the others, defaults awaiting approval. **Approved 2026-09-26 with every default** (the user's "start").
+
+### 16.8 P2-S1 results (2026-09-26)
+
+**Built.**
+- `ResultModel` (`desktop/src/data/result_model.{hpp,cpp}`) gains `has_sweep/transient/ac()`, `sweep()`, `transient()`, `ac()` and `trace()`, returning `SweepSeries`, `TransientSeries`, `AcSeries` and `TraceStep`s. They mirror `NpzResultStore.sweep_result()` / `transient_result()` / `ac_result()` / `run_record().trace`:
+  - channels in archive order (the store's dict order);
+  - unconverged sweep points masked to NaN, as the store does;
+  - `quantity` from `sweep__meta` ("current" when absent; `moscap_runner` stamps "capacitance");
+  - trace defaults as `ConvergenceStep.from_dict` (stage "?", converged True by Python truthiness);
+  - a JSON null metric reads as NaN, `_draw_convergence`'s gap.
+- `tcad_npz_dump` reports them under `result.series`, or `<block>_error` when an accessor fails.
+- **Deliberately stricter than the store**, on files no writer produces: text `sweep__converged` is refused (numpy reads `"no"` as True), as are a non-string contact, port, stage or unit, and non-numeric iterations or metric values.
+
+**A defect found and fixed on the way.** `parse_python_json` mapped `NaN` / `Infinity` / `-Infinity` to null. Its header said nothing the viewer reads needs them, which stopped being true with the trace: Python reads a blown-up residual as inf, and the C++ side read it as a gap. The tokens now become marker strings for nlohmann's strict parse and are turned back into NaN / ±inf afterwards.
+- A genuine string that spells the marker is never captured: the marker is tried again with the next index when more marker strings come back than tokens were replaced.
+- A token used as an object key is refused, as in Python.
+- For the validator nothing changes: `is_python_int` of a float is false either way.
+
+The unit tests that pinned the null mapping now pin the values, and add a marker-collision test and `{NaN: 1}` / `-NaN` rejections.
+
+**Gates** (`gui/tests/test_desktop_contracts.py`, section 2c; all green):
+- **Real runs:** the accessors equal the store's on a 1D I-V sweep, a C-V sweep from `moscap_runner`, a 1D transient and a 1D AC run. Each fixture asserts its block really exists, and the I-V run's trace really carries metrics.
+- **The P1 reference results:** the same equality holds on all four (1D, 2D, 3D, 3D sweep).
+- **Synthetic sweep:** unconverged points (NaN-masked), channels in an archive order different from sorted order, and a trace with null, NaN and inf metrics, a missing-fields step and a falsy `converged`.
+- **Absent blocks** are null on both sides.
+- **Accessors fail on access like the store** for malformed trace items.
+- **Stricter refusal:** text convergence flags are refused.
+- **Mutations, each rebuilt and run:** dropping the NaN mask, defaulting `converged` to False, reading a null metric as 0, sorting channels, and not restoring non-finite tokens each fail exactly one gate.
+
+**Invariants:**
+- a clean `/W4` build of every target;
+- C++ unit tests 22/22;
+- the contract file 102/102 (13 new);
+- every desktop and backend-service test file: 263 passed, none skipped;
+- the full fast suite (6 workers): **2312 passed, 37 skipped, 2 xfailed, zero warnings, 0 failed**.
+
+**Not explained, recorded rather than hidden (S1).** The fast suite collects 2349 tests, which means 2336 at HEAD before S1's 13. That is 30 fewer than P1's close (§15.25: 2329 passed + 35 skipped + 2 xfailed = 2366), and 2 more tests skip. S1 only adds tests, and none of the skips is in a desktop or backend-service file. Where the 30 went (the commit made after P1 closed changed test files) and which 2 tests newly skip was not investigated.
+
+### 16.9 P2-S2 results (2026-09-26)
+
+**Built.**
+- **Axis maths** (`desktop/src/views/plot/axis_ticks.{hpp,cpp}`, Qt-free). Ports of matplotlib 3.11's own code at a given tick count:
+  - AutoLocator's tick values;
+  - LogLocator's major and minor tick values, including decade striding and the minor locator's AutoLocator fall-back;
+  - ScalarFormatter's labels and offset text (offset threshold 4, power limits (−5, 6), unicode minus);
+  - LogFormatterSciNotation's labels, including which minor ticks it labels (minor thresholds (1, 0.4)).
+- **Shared locator.** The MaxNLocator core moved from `contour_levels.cpp` to `data/max_n_locator.{hpp,cpp}`, with CPython float helpers in `data/pyfloat.hpp`; the contour levels now call it. S5's 80-case contour gate is unchanged and green.
+- **PlotView** (`views/plot/plot_view.{hpp,cpp}`, `plot_model.hpp`). A QWidget painted with QPainter, from a `PlotModel` of series. It has:
+  - linear and log axes and a right-hand y-axis;
+  - NaN gaps, and decision 8's log rule;
+  - markers at ≤ 40 points;
+  - a legend, title, grid and offset text;
+  - fit, zoom, pan and reset in each axis's own coordinates;
+  - decision 9's hover and decision 3's readout.
+- **Geometry** (`views/plot/plot_geometry.{hpp,cpp}`, Qt-free): the log rule, polyline clipping, column decimation, dense-column drawing and the hover search.
+- **Data colours as tokens** (`theme/tokens.hpp`): the QML canvas's series palette and its comparison, rejected-step and stage colours. `theme::seriesColour` and `theme::dataColour` read them; the no-hard-coded-colour gate holds.
+- **New tools:**
+  - `tcad_plot_ticks` (the contract tool);
+  - `tcad_desktop_plot_tests` (Qt Test, `desktop/tests/test_plot.cpp`), run by `gui/tests/test_desktop_plot.py`.
+
+**Rules chosen while building (the plan left them open).**
+- **Tick count.** matplotlib's own heuristic in logical pixels: the axis length over 3× the tick font size for x, 2× for y, clipped to 1–9 (2–9 on a log axis). It is then lowered until no two major labels overlap. A minor log label is dropped where it would overlap a placed label. matplotlib would let those overlap; here the no-overlap gate forbids it.
+- **Legend.** matplotlib's `loc="best"`, the QML canvas's default. Its nine candidates are tried in matplotlib's order, and the first with the least data under it (vertices inside plus segments crossing) wins. The first version put the legend at the upper right always and hid data; the probes found it.
+- **Readout x format.** `%.3f` for |x| in [1e-3, 1e4) or 0, else `%.3e`. For example: "device: 1.234e-05 A/cm^2 @ 0.500 V", "G: 3.000e-04 S/cm^2 @ 1.000e+06 Hz".
+- **Snapping.** Axis lines (grid, spines, tick marks) sit on device-pixel centres, as matplotlib snaps them. Unsnapped, a 1-px tick mark was smeared over two half-lit pixels, which a probe found.
+
+**Performance: three problems found by the bench, each measured before it was fixed.**
+1. **The legend search dominated panning** (300 ms at 100k points). It clipped every data segment against each of nine candidate positions with an allocating clip. Fixed with an allocation-free segment test on points thinned to ≤ 2k per series; the view change is now ≤ 0.25 ms p95.
+2. **Decimation did not run on a curve leaving the view.** Clipping ran first and cut it into short pieces, each under the threshold (48k vertices drawn at 100k points). It now decimates each gap-free segment before clipping (2,092 vertices).
+3. **Qt's wide-pen antialiased stroker is the cost, not the vertex count.** Measured on the same frames:
+
+   | Variant | 1k paint p95 | 100k paint p95 |
+   |---|---|---|
+   | one polyline, round joins | 10.2 ms* | 91.5 ms |
+   | no line at all | 1.5 ms | 3.9 ms |
+   | 1-device-px pen (the fast path) | 1.9 ms | 6.0 ms |
+   | bevel joins | 7.7 ms* | 65.7 ms |
+   | no antialiasing | 4.9 ms* | 20.6 ms |
+
+   \* on the drifting bench (item 4), which understated the 1k cost.
+
+   Two fixes, kept together:
+   - a dense solid line's tall columns (≥ 3 points spread over > 2 device px) are drawn as filled bars covering their extent (`dense_columns`); the other columns stay a stroked polyline;
+   - solid polylines are stroked in 8-segment chunks with round caps. One 1,000-vertex noisy polyline took 25 ms; chunked, it takes 5 ms.
+
+   Dashed lines stay one polyline, so their pattern runs on across the joints.
+4. **The bench itself misled at first.** It panned up by 0.5% of the span every frame, so the curve slid out of view and later frames got cheaper. The per-frame times showed it: 25 ms for the first ten frames, 5 ms at the end. It now alternates its pans and stays on the data; that is what exposed item 3 at 1k points.
+
+**A defect found by mutation.** Mutating the paint to skip a NaN without ending the segment (a gap interpolated) was not caught by the decimated-gap probe. The cause was a bug in `dense_columns`, not a weak test: when a dense curve jumped across empty columns into a bar column, the connecting segment was never drawn. The bar only extended vertically at the destination column. Unevenly sampled data would have lost that stretch of line. An edge from a non-adjacent column is now stroked on its own. A unit test reproduces the defect (it failed first) and the mutation is now caught.
+
+**Bench** (Windows, this PC, 1200×800 logical; `TCAD_PLOT_BENCH`). A frame is the view change plus the paint into a device-resolution image, the analogue of P1's Render() + finish without the present. `repaint()`'s wall time, which includes the flush to screen, is reported beside it.
+
+| Series | Scale | Pan p50 / p95 | Zoom p95 | `repaint()` wall p95 | Hover p95 / max | Vertices drawn |
+|---|---|---|---|---|---|---|
+| 1,000 points (noisy) | 1 | 6.0 / 6.8 ms | 7.4 ms | 7.7 ms | 0.004 / 0.03 ms | 1,000 |
+| 100,000 points | 1 | 5.3 / 6.0 ms | 6.1 ms | 6.6 ms | 0.19 / 0.32 ms | 2,054 |
+| 1,000 points (noisy) | 2 | 9.5 / 11.0 ms | 10.8 ms | 11.4 ms | 0.004 / 0.03 ms | 1,000 |
+| 100,000 points | 2 | 6.0 / 8.0 ms | 7.4 ms | 8.5 ms | 0.23 / 0.57 ms | 3,246 |
+
+Gated at scale 1 (`test_plot_view_bench_meets_the_budgets`): frames ≤ 16.7 ms p95, hover ≤ 1 ms p95, and decimation ran at 100k. The scale-2 rows are reported, not gated. Mode switching and the warm 1D-bands call are S3's.
+
+**Gates** (all green):
+- **Tick contract** (`test_desktop_plot_ticks.py`), 265 cases:
+  - 137 linear ranges with every tick count, including the offset and scientific cases and degenerate views;
+  - 127 log ranges: 18 views under 0.4 decades, 20 under one decade and 45 over ten (striding, no minors);
+  - plus one test that the case lists really cover those kinds;
+  - each compared with matplotlib's own locators and formatters, not with a reading of its code.
+- **PlotView** (`test_desktop_plot.py` → `test_plot.cpp`), 24 tests at scales 1, 1.5 and 2, rendered with `grab()`, with no golden images:
+  - every series' colour at its samples;
+  - a NaN gap stays empty, also at 100k points through decimation, whose envelope still covers every raw sample (300 seeded probes);
+  - markers at 20 and 40 points, none at 41;
+  - log: negative values at their magnitude (primary and family), a zero leaves a gap, ticks positive;
+  - a right-axis series on its own scale;
+  - ticks equal the port's for some count and are drawn where it says; matplotlib's "1e−6" offset text;
+  - legend and title present, and the legend over no sample when a free spot exists;
+  - no two tick labels overlap, and all lie inside the widget, over 6 axis combinations × 5 sizes;
+  - hover names each sample pointed at (exact readout); nothing far away; a NaN never reported (the QML defect, including exactly one entry beside a NaN); raw samples of a decimated series; log x and both AC axes; tied series all listed;
+  - fit shows every sample on every scale combination; zoom and pan keep a log view positive; reset returns to fit;
+  - the render is at the display scale;
+  - an empty model shows its text;
+  - unit tests of the clipping, decimation, dense columns (every point and every edge covered, including the jump) and the hover search.
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | a gap interpolated | 3 gates, since the `dense_columns` fix |
+  | a gap bridged across segments | 3 gates |
+  | a zero drawn at a floor on a log axis | 1 gate |
+  | hover without the NaN guard | 2 gates |
+  | zoom in data units on a log axis | 1 gate |
+  | naive tick steps | 131 tick-contract cases |
+
+- **Refactor guard:** the contour gate (80 cases) green after the MaxNLocator move.
+- **Invariants:** a clean `/W4` build; the theme, contour and contract gates green (454 passed together). The full fast suite (6 workers): **2580 passed, 1 failed, 37 skipped, 2 xfailed, zero warnings**.
+
+**The one failure is P1's open soak item (§15.25), now with its message captured.** It is `test_desktop_hardening.py::test_a_soak_keeps_memory_and_the_gl_context`: "private memory still rising 0.86 MB/cycle over the last 20 cycles".
+- **The series has no steady rise.** It is flat plateaus with steps: about 547 MB, a drop to about 523 MB at cycle 30, then a single +12 MB step at cycle 48, inside the last-20 window. The gate fits a line through those 20 cycles, so one step reads as a slope.
+- **Reruns:** it failed once more in 9 runs on its own (1 in 3, then 6 of 6 passed); the whole file passed (6/6).
+- **S2 does not touch the path it drives** (the main window's FieldView), but that was not proven with a pre-S2 build.
+- **Not changed then:** making the gate robust to steps would alter a test, which needs the user's decision. The user decided: "pre-S2 soak first; threshold/statistical relaxation second". See §16.10.
+
+### 16.10 The soak's memory gate: pre-S2 A/B, then a robust gate (2026-09-26)
+
+**Step 1: is S2 involved? No.**
+- **Method.** A pre-S2 build, reconstructed as HEAD plus S1's six files (S1 is uncommitted too), was built in a separate git worktree, then removed. It was run against the current build on the same inputs and the same command as the test, interleaved, with the order flipped each round.
+- **Result, 15 rounds:**
+  - pre-S2: **2/15 failed** (slopes +0.90 and +0.56);
+  - current: **0/15**.
+- **All runs today:** the current build fails 2 in 25 runs (one of them in the full suite) and the pre-S2 build 2 in 15. The failure predates S2, as §15.25 recorded.
+
+**Step 2: the gate itself.** Candidate gates were scored on real series: 30 A/B runs plus the suite's failing run. Each was also scored with a synthetic steady leak added to every series. Findings:
+- **The old gate was weak as well as flaky.** Its threshold is a 0.5 MB/cycle leak, yet with that leak added it caught only 14 of 31. The noise (10–25 MB plateau steps) is as large as the 10 MB such a leak adds over 20 cycles.
+- **Its second assertion was vacuous.** `mem[-1] <= max(mem)` is always true. Its likely intent, "final ≤ the warm-up peak", fails on 6 of 51 real runs, so it was removed rather than replaced.
+- **The chosen gate:** the Theil–Sen slope (the median of every pairwise slope) over the last 40 cycles must be < 0.3 MB/cycle. It was selected on those 31 runs, then checked on **20 fresh holdout runs** it was not selected on. All 51 runs:
+
+  | Leak added (MB/cycle) | Old gate (least squares, last 20, < 0.5) | New gate (Theil–Sen, last 40, < 0.3) |
+  |---|---|---|
+  | 0 (false failures) | 4/51 | **0/51** (0/20 on the holdout) |
+  | 0.25 | 10/51 | 6/51 |
+  | 0.5 | 21/51 | 34/51 |
+  | 0.75 | 36/51 | 40/51 |
+  | 1.0 | 42/51 | 41/51 |
+
+- **What the new gate buys.** The largest leak-free Theil–Sen slope over the 51 runs is 0.18 MB/cycle. So the gate stops the false failures and loses no power (more at 0.5, about the same at 1.0).
+- **What it does not buy.** Neither gate catches a 0.5–1 MB/cycle leak every time in 60 cycles: memory is often still falling in the window and hides a small leak (holdout, 1.0 MB/cycle: 13/20 caught). A longer soak would help; that costs test time and is the user's decision.
+
+**Built.**
+- `test_desktop_hardening.py` gains `_rise_per_cycle`, `SOAK_RISE_LIMIT = 0.3` and `SOAK_WINDOW = 40`.
+- A new fast test, `test_the_soak_memory_gate_ignores_a_step_and_catches_a_steady_rise`, pins the gate on the recorded failing run:
+  - the step passes, and the old gate is confirmed to fail it;
+  - the same run plus a 0.5 MB/cycle leak fails, as does a clean 0.35 MB/cycle ramp.
+- **Mutations:** the limit loosened to 0.5 and the statistic returning 0 each fail that test.
+- **Results:** the hardening file 7/7; the soak 5/5 on its own after the change.
+
+**The full fast suite after the change: 2581 passed, 1 failed, 37 skipped, 2 xfailed, zero warnings.** The soak passed. The one failure was a different test: `test_desktop_shell.py::test_shell_end_to_end`.
+- **It was a crash, not an assertion.** The shell test binary exited `0xC0000005` (access violation) right after `overlaysAreDisabledIn3D`. That test opens 3D then 2D, and its window is destroyed; the next test, `view3dPanelIsDisabledIn2D`, creates a new window. So the crash was in a window's GL/VTK teardown or the next window's creation.
+- **It is very likely P1's open item** (§15.20): S6's shell failure "without writing a Qt Test report", which matches a crash.
+- **Not reproduced.** 20 consecutive runs of the shell binary on the test's own data, outside the suite, all exited 0. It appears only under the full suite's load.
+- **The stack trace was lost.** Qt printed it to the child's stdout, and the test showed only the report. The test now also shows the child's own output and the exit code on a non-zero exit, so the next occurrence arrives with its trace. This changes the failure message only; the pass condition is unchanged. The shell test passes (1/1).
+- **Still open**, and not caused by S2: S6 predates S2, and PlotView is not in the window.
+
+### 16.11 P2-S3 handoff (2026-09-26; superseded — S3 landed, see §16.12)
+
+**Done:** PlotView has matplotlib's `:` and `-.` line styles (`LineStyle::Dotted` and `LineStyle::DashDot`, patterns in `plot_view.cpp`'s `setDashes`), which convergence needs. The tree builds clean; this change has no test yet.
+
+**Designed, not written:**
+- **Modes.** Field map (2D/3D), Field (1D curve), Curves, C-V, Transient, AC, Convergence, Bands (1D), Recombination (1D). Each is offered only when the result has its data: a C-V file is a capacitance sweep; Convergence needs a non-empty trace; Bands needs potential and both densities, and Recombination also needs doping.
+- **Defaults.** Field map (2D/3D) or Field (1D); a C-V result defaults to C-V.
+- **Model builders.** `views/plot/curve_modes.{hpp,cpp}` builds a PlotModel from S1's accessors, with the QML labels, titles, empty texts, colours and markers (§16.1's table).
+- **Central area.** A vertical `QSplitter` holding FieldView and PlotView, made the ADS central widget, so FieldView is never reparented. The selector hides one view or the other.
+- **Controls.** A "ViewModeCombo" in the toolbar plus a View-menu submenu; a Plot dock tabbed with Display, holding "SweepChannelCombo" and "PlotLogCheck". Bump `AppSettings::kLayoutVersion` to 5.
+- **1D bands and recombination** come through the existing `requestDerived` (cached per result), and warm the backend for 1D results too.
+- **Routing.** The toolbar's Log and Fit act on the visible view.
+- **Tests.** One shell test per mode; modes absent when unsupported; 0 GL re-inits over 20 switches; mode switch ≤ 50 ms p95. `test_desktop_shell.py`'s fixture gains diode_1d, a diode I-V sweep, a C-V file, a transient and an AC run.
+
+**Not done in S2 (by the plan's steps):** the curve modes and the view-mode selector (S3), line cuts (S4) and overlays (S5). PlotView is built and gated but not yet in the app's window.
+
+### 16.12 P2-S3 results (2026-09-26)
+
+**Built.**
+- **The curve modes** (`desktop/src/views/plot/curve_modes.{hpp,cpp}`). They build a `PlotModel` from S1's accessors. Each mode takes its labels, titles, colours, markers and empty-state texts from the QML draw path that §16.1's table names:
+  - **Field**, a 1D field against x [um], with no markers;
+  - **Curves**, one sweep channel. The first channel is the default, as in QML; the title notes any unconverged points;
+  - **C-V**, the first channel against Vg;
+  - **Transient**, every channel sorted by name, one colour each;
+  - **AC**, C on the left axis and G on the right, on a log frequency axis, each axis coloured like its curve;
+  - **Convergence**, one `.`-marked line per step and metric:
+    - on a log y-axis and a cumulative iteration axis;
+    - coloured by stage and styled by metric index (`-`, `--`, `:`, `-.`);
+    - a red cross on a rejected step's last value;
+    - legend entries once per `stage:metric`, and one for "rejected";
+  - **Bands** and **Recombination**, for 1D results only, through the backend's `analysis.band_map` / `recombination_map`. The maps are cached per result, like S5's.
+- **The plan's changes to QML behaviour**, applied in every mode:
+  - decision 8: the 1D field's log view is a true log axis, and R is passed signed;
+  - decisions 5 and 9: every curve hovers, AC's G and convergence included.
+- **Mode availability.** A mode is offered only when the result holds its data:
+  - a capacitance sweep is offered as C-V, not as Curves;
+  - Convergence needs a non-empty trace;
+  - Bands needs potential and both densities, and Recombination also needs doping;
+  - a 2D/3D result's bands and R stay maps in the Fields list (S5).
+- **Defaults.** Field map (2D/3D), Field (1D), and C-V for a capacitance sweep.
+- **A block that fails to read is still offered.** Its mode shows "Cannot read the …" with the error, rather than disappearing.
+- **The central area** (decision 7) is a vertical `QSplitter` holding the FieldView and the PlotView. It is the ADS central widget for the window's lifetime. The selector hides one view and shows the other; the FieldView is never reparented.
+- **Selector.** A `ViewModeCombo` in the toolbar and a View > View mode submenu, both rebuilt on every open.
+- **Plot panel** (`shell/plot_panel.{hpp,cpp}`), a dock tabbed with Display. It holds `SweepChannelCombo`, enabled in Curves only, and `PlotLogCheck`, enabled in Field and Curves, the modes QML gives a log toggle.
+- **Routing.**
+  - The toolbar's Log and Fit act on the visible view.
+  - Log is disabled in modes without a toggle: convergence and R are always log; C-V, transient and bands are linear.
+  - Clicking a field of a 1D result draws its curve. Clicking a field or derived map of a 2D/3D result returns to the field map.
+- **Backend warm-up** now also runs for a 1D result that offers Bands.
+- **A failed or unreadable derived map** is shown in the plot, as well as reported. A second request while one is pending is not sent.
+- **Settings.** `AppSettings::kLayoutVersion` is now 5, so an older saved layout is ignored.
+
+**A crash found and fixed: closing a window while a backend call is in flight.**
+- **The first run of the new view-switch test crashed** with `0xC0000005` in `QMainWindow::statusBar()`, called from `~QWidget`'s `deleteChildren`.
+- **The mechanism.**
+  1. `~BackendClient` runs `shutdown()`, and `failAll()` emits `finished` on every pending reply.
+  2. The handlers are connected with the window as their context. They are still connected at that point: `~QObject`, which disconnects them, runs after `~QWidget`.
+  3. So the handlers ran after `~QMainWindow` and called `statusBar()` on a half-destroyed window.
+- **When it happens.** Only when a call is still pending at close: the warm-up that tryOpen schedules 300 ms after a 2D open, or a derived map.
+- **Repro.** A new test, `windowClosesWhileABackendCallIsInFlight`, closes a window with `system.warmup` pending and another with `analysis.band_map` pending. It crashed every time before the fix and passes after it.
+- **The fix.** `~MainWindow` now disconnects the pending replies from the window, then deletes the backend client while the window is still whole.
+- **This is very likely P1's open shell crash** (§15.20, §16.10): an access violation between two window tests, seen only under load, never reproduced solo, with no stack trace captured.
+  - It fits: `overlaysAreDisabledIn3D` ends with a 2D open. Under load the test runs past 300 ms, so the warm-up timer fires, and the window closes while the warm-up is pending.
+  - That link is inferred from the shape of the failure, not proven: the original failure left no stack trace. The item stays open until the full suite has run clean enough times to trust it.
+
+**Gates** (all green):
+- **Shell tests** (`test_shell.cpp`), one per curve mode, on real runs built by `test_desktop_shell.py`'s fixture: the diode, its I-V sweep, transient and AC runs, a `moscap_runner` C-V sweep, and the I-V run with one step marked rejected (no real run rejects one).
+  - `curveModeFieldIsTheDefaultFor1D`:
+    - Field is the default, with the plot shown and the map hidden;
+    - the curve equals the stored field against x × 1e4;
+    - hover shows the exact readout, in the status bar too;
+    - Log gives a log axis and "|name| [unit]", and leaves the map's log alone;
+    - the Fields list picks the field.
+  - `curveModeCurvesDrawsTheSweep`: the title and axis labels are QML's; the data equals `sweep()`; hover; the channel combo; an unknown channel is refused; log |I|.
+  - `curveModeCVIsTheDefaultForACapacitanceSweep`: C-V is the default and Curves is absent; the labels and data are right; Log is disabled.
+  - `curveModeTransientDrawsEveryChannel`: both channels, sorted, in distinct colours; a legend; hover.
+  - `curveModeACHoversBothAxes`: log x; G on the right axis; axis colours equal their curves'; C and G both hover.
+  - `curveModeConvergenceDrawsTheTrace`, checked for every step and metric:
+    - data, cumulative x offset, colour and label;
+    - exactly one rejected cross, at the step's last value, in the legend once;
+    - legend entries unique;
+    - hoverable, with the x unit "iteration";
+    - Log disabled.
+  - `curveModeBandsAndRecombinationThroughTheBackend`:
+    - four bands equal the backend's map, with EFn and EFp dashed;
+    - R equals the map, signed, on a log axis;
+    - returning to Bands uses the cache.
+  - `curveModeBackendFailureIsShownInThePlot`: with a bad interpreter configured, the error is named and the plot shows "Could not compute the bands…".
+  - `curveModesAbsentWhenUnsupported`:
+    - `mosfet_2d` offers exactly Field map and Convergence, and every other mode is refused;
+    - the menu matches the combo;
+    - the C-V file offers exactly Field and C-V;
+    - the diode offers exactly Field, Convergence, Bands and Recombination;
+    - a 2D result opened next shows the map again.
+  - `viewSwitchesKeepTheGlContextAndAreFast`: 20 switches between the map and Convergence, then 20 across the 1D modes that need no backend. The FieldView's GL initialisations stay unchanged, and the map still renders.
+  - `fitAndLogActOnTheVisibleView`:
+    - F refits the plot, not the hidden map;
+    - the Plot panel's log and the toolbar's are one state;
+    - Log is disabled in Convergence and restored on return;
+    - on a 2D result, Log drives the map again.
+  - `windowClosesWhileABackendCallIsInFlight`: above.
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | convergence x offset not accumulated | `curveModeConvergenceDrawsTheTrace` |
+  | no rejected-step cross | `curveModeConvergenceDrawsTheTrace` |
+  | AC's G on the left axis | `curveModeACHoversBothAxes` |
+  | the Log action always driving the (hidden) map | `curveModeFieldIsTheDefaultFor1D`, `curveModeCurvesDrawsTheSweep` |
+
+  The crash fix was checked the other way round: the repro test crashed before it and passes after.
+- **Bench.** Mode switch, measured as `setViewMode` plus a synchronous `repaint()` of the shown widget over 40 switches: **p50 0.36 ms, p95 0.75 ms, max 5.1 ms**, against a 50 ms budget, which is gated.
+  - For the FieldView, this `repaint()` may leave the GL frame itself to the event loop, so the map direction measures the switch, not a full GL frame.
+  - The warm 1D bands call is not timed separately: the bands test's backend round trip is inside its wait.
+- **Invariants:**
+  - a clean `/W4` build of every target;
+  - every desktop and backend-service test file: **533 passed**, none skipped;
+  - the full fast suite (6 workers, run 2026-09-26 after the black-and-white theme change too): **2586 passed, 37 skipped, 2 xfailed, 0 failed, zero warnings** (15 min 54 s). The slow battery was not run: no solver code changed.
+
+**Looked at in the app (2026-09-26).**
+- **The main window, launched live** on the diode's I-V result: the Field mode drew doping against x with the `1e19` offset text.
+- **Every other curve mode**, from grabs of the real `MainWindow` in the shell tests (`TCAD_SHELL_SNAPSHOT=<dir>`; Windows refused keyboard focus to a background-driven window, and driving the real mouse was avoided).
+- **All eight render as intended**: stage colours, one rejected cross and a deduplicated legend in Convergence; C/G twin axes coloured like their curves; dashed quasi-Fermi levels; log R; no markers above 40 points; Log greyed out where a mode has no toggle.
+- **Found:**
+  1. **The inactive dock-tab labels (Info, 3D, Plot) are nearly invisible.** This predates S3 (it is the ADS tab styling), but it now hides the Plot panel's controls. Not fixed.
+  2. **The view-mode combo had no accessible name.** Fixed (`setAccessibleName`).
+  3. **The C-V readout at 0 V reads `@ 1.776e-15 V`.** That is the file's own voltage (float accumulation in `moscap_runner`'s ramp), shown raw by decision 3's rule. Left as is.
+  4. **The fixture's "I-V sweep" is not a forward sweep.** The diode example holds the cathode at 0.6 V, so sweeping the anode from 0 to 0.6 V takes V_ak from −0.6 V to 0. The falling |I| in Curves mode is that data, drawn correctly.
+
+**Not done in S3** (by the plan's steps): line cuts (S4), overlays (S5), and S6's adversarial files and per-mode image probes at scales 1.5 and 2. The curve modes feed PlotView, whose rendering is S2's gated widget. S3's tests check the models, the routing and the hover, not the pixels per mode.
+
+### 16.13 One black-and-white theme, both apps (2026-09-26, user decision)
+
+**The decision.** The user asked: "make the GUI only Light mode (I meant no modes), just black and white". Asked to choose, they picked **chrome only** (data keeps its colours) and **both apps**. This replaces S3c's System/Light/Dark choice (§15.13) and the QML GUI's light/dark toggle and glass design (`DESIGN.md` now carries a superseding note).
+
+**Native app.**
+- `theme/tokens.hpp` has one value per token: white surfaces, black text, grey borders, a black accent. The only hued tokens are `warning`, `error` and `ok`, flagged `status`.
+- `Scheme`, `Choice` and `ThemeController` are gone. `theme::apply()` sets Fusion and the palette once, and the OS colour scheme is not followed. The View > Theme menu is gone, and an old `theme/choice` setting is ignored.
+- `FieldView::applyTheme()` and PlotView take no scheme. The 3D outline box is now text-coloured: the white overlay colour vanished on a white background (the old light scheme had the same bug).
+
+**QML GUI.**
+- `Theme.qml` has one set of values, with no `dark` property and no `toggle()`. Token names are kept, and panels are opaque.
+- Removed:
+  - Ctrl+D and the View menu's theme item (the View menu itself, now empty);
+  - the toolbar's sun/moon button and the status bar's "dark/light" label;
+  - the wallpaper image and glow blobs (`assets/glass_wallpaper.png`, `components/GlowBlob.qml` deleted);
+  - the magenta button gradient stop.
+- The matplotlib canvas's `applyTheme` is gone; `_style_axes` draws black on white.
+- **Kept with their hue:** the status colours (running, warning, error, ok and their backgrounds), including the green Run and red Stop buttons, because they carry meaning.
+
+**Gates.**
+- `test_theme_tokens.py` was rewritten. It reads every colour token Theme.qml declares from a running QML engine and requires each non-status token to be a grey. It also checks black on white, opaque panels, and that no mode switch remains. Mutation: restoring the violet accent fails 2 of its 4 tests.
+- `test_desktop_theme.py`: native tokens equal Theme.qml's exactly and are grey except status.
+- The shell tests `theBlackAndWhiteThemeReachesQtVtkAndAds` and `theThemeIgnoresTheOsColourScheme` replace the three mode-switching tests. The first checks the palette, VTK background and text, the painted ADS panel, the ADS stylesheet, the plot background, that no theme menu exists, and that a stale `theme/choice=dark` is ignored.
+- **Pre-existing tests changed**, because the feature they tested is gone:
+  - `test_viewport_quick_fixes.py` lost its `applyTheme` parameter case;
+  - `test_shell_icons.py` no longer expects sun/moon;
+  - `test_shell_layout.py` pins the new panel colours.
+
+**Found in the running QML app, and fixed.**
+- **The menu titles were nearly invisible, and the split handles were black.** Qt's own controls paint from the application palette, which nothing had set, so it followed the OS (dark on this PC). The dark theme had hidden this.
+  - `Main.qml` now pins the window's palette to Theme tokens, with a new `textOnAccent` token for text on the black accent. It is not named `onAccent`: QML reads `on<Name>` as a signal handler, and that name broke `Theme.qml`'s load.
+  - The native token mirrors it.
+  - Gated by `test_window_palette_is_black_and_white_even_under_a_dark_os`, which forces a dark OS colour scheme.
+- **The earlier invisible dock-tab labels in the native app** (§16.12, found 1) are legible now, since the tab text is dark on light.
+
+**Result.**
+- `gui/tests/` (QML app offscreen, plus the native shell, plot, theme, HiDPI and selftest files): **1336 passed, 3 skipped, zero warnings**.
+- Both apps were looked at on screen: the native app on `mosfet_2d`, and the QML app's start screen.
+- The solver suite (`tests/`) was not run; nothing under `pytcad/` changed.
+
+### 16.14 P2-S4 results: line cuts (2026-09-26)
+
+**Built.**
+- **The cut** (`desktop/src/data/line_cut.{hpp,cpp}`, Qt-free). A port of `extract_line_cut`: the nearest row (horizontal) or column (vertical), not interpolated, with the node actually used reported.
+  - `nearest_node` reproduces numpy's `argmin(abs(axis - position))` exactly: the first minimum on a tie, and NaN propagating (the first NaN distance wins, so a NaN position gives node 0).
+  - `tcad_npz_dump --line-cut` (Python JSON on stdin, NaN allowed) is the contract tool.
+- **The mode.** `Line cut` (`ViewMode::Cut`, offered for 2D results only, as in QML; 3D cuts stay out of scope, §16.6) shows the map AND the curve in the central splitter, map above at 60/40 (decision 7). The FieldView is only shown, never reparented. The curve (`plot::cutModel`) takes `_draw_cut`'s labels and title ("cut at y=… um (nearest node)"), with decision 8's log rule.
+- **The cut follows the map.** It cuts whatever the FieldView shows:
+  - a stored field, or a backend-derived Ec/Ev/EFn/EFp/R map (wider than QML, which cut stored fields only);
+  - choosing a field or derived map from the list stays in Line cut mode and re-cuts;
+  - a colour-map or range edit does not rebuild the curve.
+- **The line on the map** (`FieldView::setCutLine`): a dark halo (`Text`) under a light line (`Overlay`), so it reads on any colour map. It spans the device at the node's exact coordinate, since the points are stored as doubles; float32 put it ~1e-10 µm off, which the tests caught. It is hidden outside Line cut mode and on a new result.
+- **Controls** (Plot panel):
+  - `CutOrientationCombo`;
+  - `CutPositionSlider`, over the cut axis's NODES, so it snaps to them;
+  - `CutPositionLabel` ("y = 0.0094 um (node 3 of 41)").
+
+  All are enabled in Line cut mode only. An orientation switch keeps the node index where the new axis allows it. The default is QML's: horizontal at y = 0, node 0.
+- **Routing.** In Line cut mode, Log acts on the curve (the Display panel still edits the map), and Fit fits both.
+
+**Gates** (all green):
+- **Contract** (`test_desktop_contracts.py`, section 2d; 7 tests), C++ vs `extract_line_cut`:
+  - uniform and graded meshes, both orientations;
+  - every node, every midpoint, just off each node both ways, outside both ends, NaN and ±inf positions, NaN data;
+  - an exact midway tie on both axes (the first node);
+  - every field of the real MOSFET result;
+  - the refusal message equals Python's.
+- **Shell** (`test_shell.cpp`):
+  - `cutModeIsOffered2DOnly`;
+  - `cutModeShowsTheMapAboveItsCurve`: both views shown, map above; the curve equals the cut of the shown field; labels and title; the line at the exact node coordinate, spanning the device; 0 GL re-inits; the line hidden again outside the mode;
+  - `cutFollowsTheSliderAndTheOrientation`: the slider over the nodes; row values; label; the line moves; vertical gives the column along y; out-of-range refused; controls off outside the mode;
+  - `cutFollowsTheFieldAndDerivedMaps`: a list field re-cuts and stays in the mode; the derived Ec map through the backend;
+  - `cutLogAndHoverFollowDecisions8And9`;
+  - `cutSwitchesKeepTheGlContext` (20 switches through Line cut, Field map and Convergence);
+  - `curveModesAbsentWhenUnsupported` updated: the MOSFET now offers Field map, Line cut and Convergence.
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | a tie takes the last node | 5 contract tests |
+  | a row off by one | 4 contract tests |
+  | the curve ignores the slider | both targeted shell tests |
+  | the map line one node off | both targeted shell tests |
+
+- **Looked at:** a snapshot of the window in Line cut mode (`TCAD_SHELL_SNAPSHOT`): the MOSFET doping map with the cut line near the surface, and the source/drain profile below it.
+- **Not run, at the user's request:** the full suite. Run instead: the line-cut contract (7/7), the theme gate (4/4), and the 7 cut and mode shell tests, plus S3's `viewSwitchesKeepTheGlContextAndAreFast` and `fitAndLogActOnTheVisibleView` (all pass). A clean build of every target.
+
+### 16.15 P2-S5 results: overlays from files (2026-09-26)
+
+**Built.**
+- **Model** (`plot::OverlayCurve`, `plot::overlayMismatch`, in `curve_modes`). Overlays are sweeps from other result files drawn over the open one:
+  - **one comparison**, dashed in the comparison colour, lw 1.2;
+  - **a family of any size**, solid, series colours 1, 2, …, lw 1.1: QML's `_draw_series` styles, with markers at ≤ 40 points;
+  - order: primary, the family, then the comparison; a legend once there is more than one curve;
+  - **each overlay on its OWN voltages** (finding 12);
+  - they hover like the primary, and follow decision 8's log rule.
+- **Modes.** Overlays work in **Curves and C-V** (QML had them in Curves only; the quantity check exists so C-V can have them too). In other modes they are not drawn, and adding is refused.
+- **Refusal.** `overlayMismatch` names the FIRST mismatch against the open sweep: the swept contact, the quantity (current/capacitance), the unit, or the channel shown (Curves: the selected channel; C-V: the first). `MainWindow::addOverlay` also refuses, with the reason:
+  - a missing, corrupt or sweep-less file;
+  - the open result itself;
+  - the same file twice as the same kind.
+
+  A refusal is reported (non-modal box and status bar), and the list is unchanged.
+- **Behaviour.**
+  - A second comparison replaces the first (QML's `setComparisonSource`).
+  - The sweep is decoded at add time; the file is not kept open.
+  - Overlays are cleared when another result opens (they compare against ONE result).
+  - An overlay without the channel now shown is not drawn, and is greyed out in the list with the reason.
+- **Controls** (Plot panel): "Add comparison…" / "Add to family…" (a file dialog), `OverlayList` with labels editable in place (the file name by default; an empty edit is undone; the comparison in italics), and "Remove".
+
+**Gates** (all green; shell tests on new fixture files):
+- **Fixture files.** Finer and coarser ramps of the diode I-V (valid overlays, on other voltages). Five that differ from it in exactly one respect: a sweep of the other contact; the run re-stamped as capacitance; a unit-edited copy; a channel-renamed copy; and the C-V run with its quantity stamp removed. Also a second C-V sweep, and two-channel copies ("extra" = 3 × "device").
+- **Tests:**
+  - `overlayComparisonIsDashedOnItsOwnVoltages`: style and colour; the overlay's own voltages (≠ the primary's) and values; a legend; hover; a second comparison replaces the first;
+  - `overlayFamilyGetsOneColourEachBeforeTheComparison`: colours 1 and 2, solid, order, all in the legend; a duplicate refused;
+  - `overlayRefusesAMismatchNamingIt`, 9 rows: contact, quantity, unit, channel, no sweep, the result itself, missing, corrupt, and "contact first" (the real C-V file also sweeps another contact, which is named first). Each is reported, and nothing is added;
+  - `overlayLabelsEditRemoveAndClear`: a label edited in the list reaches the legend; an empty label is undone; Remove; log keeps the overlays' raw values on the |y| axis; other modes refuse and disable; a new result clears them;
+  - `overlayFollowsTheSelectedChannel`: two-channel files; the overlay follows the channel shown, including after a switch;
+  - `overlaysInCVMode`: a C-V family on its own voltages; a current sweep refused by quantity.
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | the family drawn on the primary's voltages | 2 tests |
+  | the overlay's first channel instead of the one shown | `overlayFollowsTheSelectedChannel` (the only test that can: every other fixture has one channel) |
+  | the contact check removed | the 2 contact rows |
+  | the comparison drawn solid | 2 tests |
+
+- **Looked at:** a snapshot of the family and comparison over the primary: the diode I-V with the fine ramp (green, its own 0-0.4 V points), the coarse ramp (gold) and the dashed comparison over it.
+  - **An observation it made visible (not S5's):** the same diode at the same bias gives a ~3 % different reverse current on the fine ramp at 0.3 V (≈ −1.62e-9 vs −1.67e-9 A/cm²). That suggests the answer at nanoamp level depends slightly on the continuation path. Not investigated here.
+- **Not run, at the user's request:** the full suite. Run instead: the 7 overlay tests (with 9 refusal rows), plus the S3 and S4 tests that share the models and routing (`curveModeCurvesDrawsTheSweep`, `curveModeCVIsTheDefaultForACapacitanceSweep`, `cutModeShowsTheMapAboveItsCurve`, `fitAndLogActOnTheVisibleView`, `curveModesAbsentWhenUnsupported`): 21/21 passed with the harness's two. The theme gate: 4/4. A clean build.
+
+### 16.16 P2-S6 results: hardening, and the P2 exit checklist (2026-09-26)
+
+**Built.**
+- **`plot::nothingToPlot`**, applied to every curve mode. When no sample of any series can be shown on its axes (finite, and non-zero on a log axis: decision 8), the mode shows a message keeping its title, for example "anode sweep (7 point(s) did not converge)" followed by "Nothing to plot: no finite value". It no longer draws empty axes over an invented 0-1 range.
+- **Edge-case files**, each a real run with one thing broken, all accepted by both `validate_result` and the native reader:
+  - every sweep point unconverged;
+  - a one-point sweep;
+  - a trace whose steps carry no metrics;
+  - a transient with one all-NaN channel;
+  - AC at one frequency.
+- **Image probes** (`probeSeriesColours`). On the widget as rendered (`grab()`), the render must be at the display scale (logical size × DPR). Each series' colour must be drawn at one of its samples that no other series' polyline comes within 4 logical px of; dashed and dotted series are probed only where markers are drawn.
+
+**Gates** (all green):
+- **`curveModeImagesProbe`, one row per curve mode**: 1D field, Curves, Curves with a family overlay, C-V, transient, AC, convergence (with a rejected step), bands and recombination (through the backend), and the line cut. Each checks the colours, ticks on both axes, the legend when there is one, and the title when there is one. **Run at display scales 1, 1.5 and 2** by `test_desktop_hidpi.py::test_curve_modes_draw_at_scale` (3/3).
+- **`curveModesSurviveAdversarialFiles`**:
+  - all unconverged: the message with the note, in linear and log;
+  - one point: a marker, a finite non-degenerate view, the exact readout;
+  - no metrics: the Convergence message;
+  - an all-NaN channel: the good channel drawn, and a NaN never read out anywhere on a 17-px hover grid;
+  - one AC frequency: a positive single-decade log view. **Found:** C's and G's single markers land on the SAME pixel, since each axis centres its only value, so G, drawn last, is the one seen. The test asserts exactly that.
+- **Mutations**, each rebuilt and run, both caught:
+  - `nothingToPlot` removed: the all-unconverged row fails;
+  - every series painted in series 0's colour: 6 of the 10 image rows fail (every mode with more than one series).
+- **Bench row: 1D bands through a warm backend**, from the request to the curves drawn: **1066.5 ms**, reported and not gated (`bandsWithAWarmBackendIsReported`).
+
+**P2 exit checklist (§9: every curve mode of §10.2 has a C++ equivalent and an image test).**
+
+| §10.2 mode | Native | Named test | Image test |
+|---|---|---|---|
+| series (Curves) | S3 | `curveModeCurvesDrawsTheSweep` | `curveModeImagesProbe(curves)` |
+| family + comparison | S5 | `overlay*` (6 tests, 9 refusal rows) | `(curves_overlays)` |
+| cv | S3 | `curveModeCVIsTheDefaultForACapacitanceSweep` | `(cv)` |
+| transient | S3 | `curveModeTransientDrawsEveryChannel` | `(transient)` |
+| ac | S3 | `curveModeACHoversBothAxes` | `(ac)` |
+| convergence | S3 | `curveModeConvergenceDrawsTheTrace` | `(convergence)` |
+| bands (1D) | S3 | `curveModeBandsAndRecombinationThroughTheBackend` | `(bands)` |
+| recombination (1D) | S3 | the same | `(recombination)` |
+| cut | S4 | `cutMode*`, `cutFollows*` | `(cut)` |
+| doping/field, 1D | S3 | `curveModeFieldIsTheDefaultFor1D` | `(field_1d)` |
+| bands / recombination / field, 2D-3D | P1 (FieldView maps) | P1's `parity2d*` and derived-map tests | P1's selftest pixel probes |
+| structure, mesh, process, doping preview | **moved to P4** (decision 6) | -- | -- |
+
+Every image test runs at scales 1, 1.5 and 2. The §16.4 bench rows:
+- pan/zoom frames at 1k and 100k points ≤ 16.7 ms p95 and hover ≤ 1 ms: S2, gated; now a `timing` test;
+- mode switch ≤ 50 ms: S3, p95 0.75 ms;
+- 1D bands, warm: above.
+
+**Not yet done for the P2 close:**
+- **The full fast suite and the timing pass.** They were not run during S4-S6, at the user's instruction. They must run before P2 is called closed.
+- **Sign-off.**
+
+### 16.17 P2 closed (2026-09-26)
+
+The user closed P2 ("close P2, plan P3") on the §16.16 exit checklist. Recorded with the closure, not hidden:
+
+- **Owed before commit: the full fast suite and the timing pass.** They last ran after S3: the fast suite was 2610 passed, 0 failed (with the AC-sensitivity change); the timing pass had one open item, `stencil3d`'s throughput floor measured while a game was running (`AC-SENSITIVITY-PLAN.md` §9). S4-S6 were verified by targeted runs only, at the user's instruction:
+  - the line-cut contract;
+  - the theme gate;
+  - every cut, overlay and S6 shell test, and the S3 tests they touch;
+  - the image probes at three scales;
+  - mutations for each gate.
+- **Carried to P3 and later:**
+  - P1's unexplained shell crash: probably the window-close crash fixed in S3 (§16.12), unconfirmed until a few full-suite runs pass;
+  - no desktop CI (it needs a GL runner);
+  - the ~3 % path dependence of a nanoamp reverse current seen in S5 (a solver question, §16.15).
+
+
+## 17. P3 — Run and monitor: detailed plan (2026-09-26, reviewed §17.7; APPROVED with the default decisions 1-9)
+
+§9 defines P3 as running solver jobs from the native app, and watching them:
+- the JobRunner and RemoteJobRunner equivalents: QProcess, cancel, and the remote SSH path (including the Windows `mkdir -p` lesson from `gui/tests/fixtures/fake_ssh.py`);
+- solver telemetry on the structured progress channel (§4.3);
+- the console;
+- study and batch (M30);
+- the backend service's full method set.
+
+Exit: an end-to-end run → view flow for the 1D, 2D and 3D examples. P2 adds one item: families and comparisons made by RUNNING, which feed S5's overlays (§16.1 finding 3).
+
+### 17.1 Review findings (from the tree, before any P3 code)
+
+1. **A run is already a clean process contract.**
+   - The command: `python -m gui.services.solver_runner <job.json> <result.npz>`. `process_runner` and `moscap_runner` follow the same shape; `moscap_runner` takes a plain dict job, not a DeviceSpec.
+   - Stdout markers: `PYTCAD_STAGE=`, `RESULT_PATH=`, `PYTCAD_ERROR=`, plus the core's `verbose=True` Newton lines. `job_runner.py` scrapes an iteration number and `|dpsi|` from those.
+   - Results are written atomically, so a killed run leaves nothing half-written.
+   - The native app should start the same process with the same interpreter as the backend service (`resolveBackendConfig`). Nothing about solving moves into C++.
+2. **Cancel does less than the QML code suggests, on Windows.**
+   - `JobRunner.cancel()` calls `terminate()`, then `kill()` after 3 s. On Windows, `QProcess::terminate()` only posts WM_CLOSE to the process's windows, and a console Python process has none. So every QML cancel is in fact a 3 s wait and then a kill.
+   - The atomic writes make an immediate kill safe. See decision 3.
+3. **Run configuration is DeviceSpec state, validated in Python.**
+   - `SweepSpec`, `TransientSpec` and `ACSpec` each have `validate(contact_names)` in `device_spec.py`.
+   - `AppController.run()` refuses more than one of sweep, transient and AC armed at once; refuses equilibrium-only with a sweep; and checks devsim compatibility (`check_devsim_compatible`) before using the devsim backend.
+   - It stamps `spec.models` from the Physics Lab, and `backend`/`engine` from the run options.
+   - The native app must not re-implement these rules; it asks the backend (decision 1).
+4. **Without P4's editors, there are three places a device can come from:**
+   - the bundled examples (`examples.list` / `examples.build` already exist in `backend_service`);
+   - a DeviceSpec JSON file;
+   - a saved project (schema 5), whose DeviceSpec the backend can produce.
+
+   Model toggles (the Physics Lab) are P4 editors, so P3 runs a device with the models its spec carries.
+5. **Remote runs** (`remote_job_runner.py`) chain four QProcess stages: mkdir, push (scp), run (ssh, the same entry point), pull. It uses BatchMode=yes, no credential storage, and has the same signals as the local runner. `gui/tests/fixtures/fake_ssh.py` is a ready local stand-in.
+6. **Telemetry today** is scraping, not a structured channel. §4.3 (P0) specifies `PYTCAD_PROGRESS <json>` lines, produced in `solver_runner` by parsing the core's verbose prints in-process. The core is frozen, and no core change is needed. `job_runner.py` must then swallow those lines, or the QML console fills with JSON.
+7. **Study (M30)** (`study_controller.py`): a split matrix (`workbench.splits.run_split_matrix`) is run as a pool of runners, local or round-robin over remote hosts. Row statuses are `build_error | pending | running | done | failed`. It is shaped like `FamilySweepController`.
+8. **Families and comparisons in QML are runs:**
+   - `FamilySweepController`: one job per stepped value;
+   - the M9 models-off comparison and `runBackendComparison`: a second job.
+
+   In P2 the native app could only open their result files (S5). P3 runs them and adds the results as S5 overlays.
+9. **Not solver-backed in QML:**
+   - The Probe Station's "real-solver DC sweep dispatch" is "NOT YET IMPLEMENTED"; it generates demo data in-process (`probe_station_controller.py`). P3 does not port a demo as if it were a feature (decision 6).
+   - The compact-model extraction (`CompactModelPanel`, M38) is analysis over results, not a run: P4.
+
+### 17.2 Design
+
+- **`run/job_runner.{hpp,cpp}`: the local runner** (QProcess, Qt Core only).
+  - It starts `<python> -u -m <module> <job> <result>` in the backend root, with a per-run id so a cancelled run's missing file can never be mistaken for another's.
+  - It parses the markers and `PYTCAD_PROGRESS` lines, and forwards every other line to the console.
+  - Signals: `started`, `stage`, `progress(event)`, `line`, `finished(result)`, `failed(summary, details)`, `canceled`.
+  - One job file per run, removed on every outcome.
+  - Cancel is decision 3, and targets the same process even if a new run started.
+- **`run/remote_job_runner.{hpp,cpp}`**: mkdir → push → run → pull, the same signals, and the same BatchMode command shapes as `remote_job_runner.py`. It is gated against `fake_ssh.py`, including its Windows `mkdir -p` case.
+- **Jobs are built by the backend** (new `backend_service` methods, each with a conformance test and a measured latency, §4.4):
+  - `spec.from_example`, `spec.load` (a DeviceSpec JSON file) and `project.spec` (a schema-5 project's DeviceSpec);
+  - `spec.configure_run`: sweep, transient, AC or equilibrium-only; backend and engine. It applies `AppController.run()`'s refusals, with the same messages, and returns the normalized DeviceSpec JSON the runner writes;
+  - `study.rows`: a split matrix into row specs.
+- **The progress channel** (§4.3, implemented here):
+  - `solver_runner` writes `PYTCAD_PROGRESS` records with events stage, newton, sweep_point, transient_step, done and error;
+  - non-finite numbers become null; at most one newton record per iteration and 50 records/s;
+  - `job_runner.py` swallows them;
+  - `process_runner` and `moscap_runner` emit stage events only.
+- **The UI:**
+  - **A Run dock.** Device: an example, a DeviceSpec file or a project. Run kind: equilibrium, bias, sweep, C-V, transient or AC, with each kind's parameters. Backend and engine: the QML options, gated the same way. Where: local, or a remote host. Toolbar Run and Stop.
+  - **A Console dock**: every line, stage lines marked, and a failure's details.
+  - **A Telemetry dock**: stage, iteration, a live residual history (a PlotView, log y), sweep point k of N, and elapsed time.
+  - **On success**: the result opens (`tryOpen`) in its natural view (a sweep in Curves, a C-V in C-V, and so on).
+  - **Families and comparisons**: "Run family" (a stepped bias, N jobs) and "Run comparison" (models off, or the other backend). Their results arrive as S5 overlays.
+  - **A Study dock**: the rows, their statuses and a pool size; a row opens its result.
+
+### 17.3 Steps
+
+| Step | Size | Content |
+|---|---|---|
+| P3-S1 | S | **Progress channel** (Python only): `PYTCAD_PROGRESS` in `solver_runner` (+ stage events in `process_runner`/`moscap_runner`); `job_runner.py` swallows them. Contract tests: record grammar, null for non-finite, rate limit, event order on a real 1D sweep and a 3D solve; the QML console receives no JSON. |
+| P3-S2 | S | **Backend job methods** (`spec.*`, `project.spec`), each conformance-tested against the direct Python call, including every `run()` refusal message. |
+| P3-S3 | M | **C++ JobRunner**. Tests against the real `solver_runner` (the 1D diode) and misbehaving fakes: crash, hang (cancel), garbage and very long lines, no `RESULT_PATH`, exit 0 with no file, a non-ASCII work dir, cancel then immediate restart. |
+| P3-S4 | M | **Run dock, Console, Run/Stop, open on success.** The exit flow: run → view for the 1D, 2D and 3D examples, e2e in the shell tests. |
+| P3-S5 | S | **Telemetry dock**: the live residual plot, stage, sweep progress; gated against the `PYTCAD_PROGRESS` records of a real run. |
+| P3-S6 | M | **Families and comparisons by running**, into S5's overlays; refusals as S5's; cancel of a family mid-way. |
+| P3-S7 | M | **Remote runner** against `fake_ssh.py`: every stage fails in turn, cancel in each stage, the Windows mkdir case. |
+| P3-S8 | M | **Study** (M30): build rows through the backend, a pooled local/remote run, statuses, open a row's result, cancel all. |
+| P3-S9 | M | **Hardening and exit.** Bench rows: Run click to first progress record; native vs direct `run_job` overhead. The full fast suite, the timing pass and the slow battery (P3 edits `solver_runner`), and a live run of all three examples, looked at. |
+
+### 17.4 Gates
+
+- **Contracts:**
+  - the progress grammar;
+  - every new backend method equals its Python call;
+  - `configure_run`'s refusals equal `AppController.run()`'s messages;
+  - a native job file equals the QML one for the same inputs (byte-compared JSON).
+- **Runner robustness:**
+  - every misbehaving fake yields a named failure, never a hang or a crash;
+  - cancel leaves no result and no job file, and a run started straight after a cancel is never killed by the old cancel's timer (QML's final-review I-5 bug, tested).
+- **End to end:** the 1D, 2D and 3D examples run and open, with a sweep and a transient on the 1D diode, a C-V run, and an AC run, all in the real window.
+- **Remote and study:** every stage failure is named; round-robin over two fake hosts; statuses as M30's vocabulary.
+- **Mutations**, each rebuilt and run:
+  - no rate limit;
+  - cancel on the wrong process;
+  - progress events not forwarded;
+  - an overlay run on the primary's contact when it should be refused;
+  - the remote pull step skipped.
+- **Invariants:** a clean `/W4` build; the full suite green with zero warnings.
+
+### 17.5 Decisions (defaults proposed; say if you want otherwise)
+
+1. **Jobs are built and validated by the Python backend**, not re-implemented in C++. This is §12 decision 5's recommended default, applied to P3.
+2. **One device run at a time in the main window, as in QML.** Families and studies have their own pools.
+3. **Cancel kills at once on Windows.** `terminate()` cannot stop a console Python process there, so QML's 3 s wait is dead time. The atomic writes make an immediate kill safe, and the tests prove no partial file.
+4. **Results are kept in `%LOCALAPPDATA%\PyTCAD\runs\`, the 20 most recent**, reachable from Open Recent, plus a "Save result as…". The alternative is QML's temp dir per session, lost on exit.
+5. **The Physics Lab model toggles stay P4.** P3 runs a device with its spec's models; equilibrium-only is a P3 run kind.
+6. **The Probe Station is not ported in P3**: its solver dispatch does not exist in QML. When it gets real solver runs, it arrives through this runner. The compact-model extraction goes to P4.
+
+### 17.6 Out of scope
+
+- Editors, projects' editing and undo (P4).
+- Packaging and the bundled Python (P5).
+- Any change to the frozen core: the progress channel scrapes verbose prints, per §4.3.
+- MPI launch outside what `solver_runner` already does.
+
+### 17.7 Review revisions (2026-09-26, before any P3 code)
+
+Every §17.1 claim was checked against the tree, and three were measured by running `solver_runner` through a pipe. Where the plan was wrong or incomplete, it changes as follows.
+
+**Corrections to §17.1**
+
+1. **`PYTCAD_ERROR` is on stderr, not stdout** (`solver_runner.main`: a JSON payload plus the traceback). The runner must read both streams. The failure summary comes from stderr's `PYTCAD_ERROR` line; the details are the rest of stderr (as `job_runner.py` does).
+2. **Progress is only stage-level for two engines.**
+   - The MPI Schwarz engine relays only its workers' `PYTCAD_STAGE` lines (`_run_mpi_schwarz`).
+   - The devsim backend prints no Newton lines.
+
+   So `newton` events exist only for the pytcad engine without MPI; the Telemetry dock must say "stage-level progress only" instead of showing an empty residual plot.
+3. **Transient progress has a source.** The transient modules print `[transient] t=… dt=…` (and `[transient2d]`, `[transient3d]`, with `SHRINK` lines); `solver_runner` can turn these into `transient_step` events. Sweep points already have `PYTCAD_STAGE=sweep point i/N`.
+4. **C-V is not a run kind of the loaded device.** `moscap_runner` takes its own MOS-capacitor inputs (`nsub_cm3`, `tox_nm`, `gate`, `qf_cm2`, `T`, `vstart/vstop/vstep`): a separate job type with its own small form, as QML's C-V section is.
+5. **Remote runs are a Study feature in QML, not a single-run one.** `RemoteJobRunner` is created only by `StudyController.setRemoteHosts`. A single-run "local or remote" choice would be new scope. See decision 8.
+6. **A project gives more than a DeviceSpec** (`project_store.load_project`): it also returns a sweep and a models config (schema 5). P3 applies both. Applying a saved models config needs no Physics Lab editor, so decision 5 is narrowed to editing the toggles. A project with no structure (a process flow only) has no DeviceSpec and is refused, named.
+7. **Process-flow runs are P4.** `process_runner` produces a process manifest whose views (process, doping preview) moved to P4 in P2 (§16.5 decision 6). P3 drops `process_runner` from its scope; its stage events come with P4.
+8. **The engine options are computed.** QML's engine list (`AppController`, around the `mpi_schwarz` option) depends on the device's size and on which optional packages import (pyamg, cupy, mpi4py). The devsim backend likewise needs `check_devsim_compatible` and devsim installed. P3 needs a backend method for the options, not a fixed list.
+
+**New findings, measured**
+
+9. **QML's live telemetry is not live.**
+   - `job_runner.py` starts `python -m …` without `-u` or `PYTHONUNBUFFERED`, and the core's `verbose` prints do not flush. So through a pipe, a stage's Newton lines are block-buffered until the next flushed `PYTCAD_STAGE` marker.
+   - Measured on the 2D MOSFET job, the same run twice:
+
+     | Stage | Without `-u` (as QML) | With `-u` |
+     |---|---|---|
+     | equilibrium: 12 Newton lines | all at 0.94 s | 0.73-0.94 s |
+     | bias: 9 lines | all at 2.30 s, the stage's end | 1.09-2.28 s |
+
+   - So for the whole 1.3 s bias stage, QML's Solver Telemetry panel shows nothing, then everything at once.
+   - The native runner uses `-u` (as §17.2 had). QML gets the same one-line fix as a bug fix (decision 7).
+10. **Remote runs can be abused, in both the Python and the planned C++ runner.**
+    - `remote_job_runner.py` (and `workbench.remote_executor`) pass the host string to `ssh`/`scp` as a plain argument. A host typed as `-oProxyCommand=<command>` would be parsed as an ssh OPTION, which runs a local command.
+    - The remote command is built unquoted: `mkdir -p {remote_workdir}` and `" ".join(argv)`. A remote path with a space breaks it, and a shell metacharacter injects into the remote shell.
+    - The port must validate hosts: no leading `-`, and `--` before the target; and it must quote the remote command. Decision 9 asks whether to fix the Python side too.
+11. **Nothing bounds the console.** `console_model.py` appends forever. A long 3D sweep's verbose output would grow without limit. The native Console keeps the last N lines (50,000 proposed), with the count of dropped lines shown.
+12. **A window closed mid-run.**
+    - Qt's `~QProcess` kills its process, so no orphan solver keeps the CPU. But the runner's signal handlers can then run into a half-destroyed `MainWindow`: the same class of crash P2-S3 fixed for the backend client (§16.12). The native runner is torn down first in `~MainWindow`, with its handlers disconnected.
+    - This is gated: close the window during a run; no crash, no orphan `python.exe`, no job file left behind.
+13. **The Study needs its definition UI.** A split matrix is factors and their levels (`StudyController`'s slots take them). §17.2's Study dock listed only the rows. It gains the factor/level table, which is study configuration, not device editing, so it stays in P3.
+
+**Unverified, so tested rather than assumed.** Windows `scp` with a local path like `C:\…`. Some scp builds read a `C:` prefix as a host name. S7's fake-ssh tests and one real `scp` call decide it.
+
+**Changes to §17.2-§17.5**
+
+- **§17.2:**
+  - the runner reads stderr (point 1);
+  - the Telemetry dock states stage-level-only progress (point 2);
+  - `transient_step` comes from the `[transient*]` lines (point 3);
+  - C-V is its own job form (point 4);
+  - the backend gains `run.options(spec)`, the engines/backends offered with each refusal named (point 8), and `project.spec` returns the sweep and models config too (point 6);
+  - the Console is bounded (point 11);
+  - the Study dock gains the factor/level table (point 13).
+- **§17.3 steps:**
+  - S1 adds `transient_step` and the stage-only engines;
+  - S3 adds stderr parsing and the window-close teardown;
+  - S7 and S8 swap: **S7 Study (local)**, then **S8 remote**, since QML's remote runs exist for studies only (point 5);
+  - S8 adds host validation and quoting (point 10).
+- **§17.4 gates, added:**
+  - a live-telemetry gate: the Newton lines of a real 2D bias stage arrive while the stage runs, measured as above, in the native runner (and in QML, if decision 7 is accepted);
+  - a window-close-mid-run gate (point 12);
+  - hostile host names and paths are refused or quoted, never executed (point 10);
+  - the console cap;
+  - a project with a models config runs with those models (point 6);
+  - a flow-only project is refused, named.
+- **§17.5 decisions:** 1-4 unchanged. Decision 5 narrows: a saved models config is applied; editing the toggles stays P4. Decision 6 unchanged. New:
+  7. **QML's telemetry buffering is fixed** by starting the solver with `-u` (or `PYTHONUNBUFFERED=1`) in `job_runner.py`, a bug fix under the transition rule, gated by the measurement above. The alternative is to leave QML as it is.
+  8. **Remote stays a Study feature in P3**, as in QML. A single-run remote choice can follow if wanted.
+  9. **The remote-command hardening (point 10) is applied to the Python runners too** (`remote_job_runner.py`, `workbench.remote_executor`), as a security fix under the transition rule. The alternative is native only, with the Python side recorded as a known issue.
+
+Decisions 7-9 are new and, like 1-6, defaults awaiting approval.
+
+### 17.8 P3-S1 results: the progress channel (2026-09-26)
+
+**Built (Python only; the frozen core is untouched).**
+- **`gui/services/progress_channel.py` (new).** `ProgressTap` wraps the runner's stdout for the whole job. Every line passes through unchanged, and it adds `PYTCAD_PROGRESS <json>` records (§4.3), v1:
+  - `stage`;
+  - `sweep_point`: index, count, and the swept contact and bias (null when relayed by the MPI engine);
+  - `newton`: stage, iter, residual;
+  - `transient_step`: time, dt, iters;
+  - `done`: result, dropped;
+  - `error`: error, message.
+
+  Other properties:
+  - non-finite numbers are written as null;
+  - one newton record per (stage, iteration);
+  - at most 50 records/s; excess newton and transient_step records are dropped and counted in `done`;
+  - stage, sweep_point, done and error are never dropped.
+- **One definition of the line grammars.** `STAGE_LINE`, `SWEEP_POINT`, `ITERATION` and `METRIC` moved from `solver_runner` into `progress_channel` (checked identical to the committed patterns). `solver_runner`'s names now alias them, so the stored convergence trace and the live records read every line the same way.
+- **`solver_runner`:**
+  - `main()` installs the tap and emits `done`, or `error` beside the unchanged stderr `PYTCAD_ERROR`;
+  - the sweep loop gives each point's contact and bias;
+  - the three `solve_transient` calls pass `verbose=True`. That only prints: a transient result from before and after the change has every array identical, and its run record differs only in `created_utc`. Without it, a transient job printed no step lines at all, so `transient_step` had no source (a finding of this step);
+  - an MPI-engine or devsim job gets stage-level records only, as §17.7 recorded.
+- **`moscap_runner`:** a new `PYTCAD_STAGE=cv` marker, plus the tap: stage, then done or error.
+- **QML `job_runner.py`**, under the transition rule:
+  - it swallows `PYTCAD_PROGRESS` lines, so the console shows none;
+  - it starts the child with `PYTHONUNBUFFERED=1` (decision 7);
+  - it now assembles whole lines from BYTES across reads. The unbuffered child makes a read that ends mid-line (or mid-UTF-8 character) common, and the old per-read `splitlines()` would have split a `RESULT_PATH` or a record in two. A final line without a newline is read at exit.
+
+**Departures from the P0 spec (§4.3), each deliberate:**
+- metric names are the trace's own (`F`, `dpsi`, `dn/n`), not §4.3's example `dn_rel`;
+- `done` carries `dropped`;
+- the essential events are exempt from the rate limit;
+- a record emitted while a line is unfinished starts on its own line.
+
+**Found and fixed while testing:**
+- **A record glued to a line.** The tap first wrote a whole chunk and then its records, so a record could be glued onto the end of a partial line (`partialPYTCAD_PROGRESS {…}`) and corrupt both. The pass-through test found it; the tap now writes line by line, each record after its line's newline.
+- **The wrong clock.** `time.monotonic` ticks at 15.6 ms on Windows; the records use `perf_counter`.
+- **A test that did not test decision 7.** The first live test did not fail when `PYTHONUNBUFFERED` was removed. The tap's flush after each record already makes `solver_runner`'s Newton lines live, and the variable only matters for lines that produce no record. A second fixture (`slow_printer`, unflushed plain lines 0.25 s apart) gates decision 7 itself.
+
+**Gates** (`gui/tests/test_progress_channel.py`, 14, all green):
+- **Real runs, as subprocesses:**
+  - a 1D sweep: the v1 grammar, non-decreasing `t`, one record per `PYTCAD_STAGE` marker in order, sweep points with contact `anode` and the exact bias values, `done` naming the written result;
+  - a transient: one `transient_step` per accepted step, equal to the stored `transient__times` to the printed precision;
+  - a C-V run: `stage` then `done`;
+  - a failing job: an `error` record equal to its stderr `PYTCAD_ERROR` payload, and no `done`.
+- **The live newton records ARE the stored trace:** each record is a stored iteration, in order, with equal metric values, and records + dropped = the trace's iterations.
+- **The tap:**
+  - pass-through unchanged;
+  - a record emitted mid-line starts its own line;
+  - non-finite numbers as null, with no `NaN`/`Infinity` token;
+  - one newton record per (stage, iteration);
+  - 49 newton records plus the stage in one second, 151 dropped, the essential stage record still written, and the window reopening after a second;
+  - a relayed sweep line with a null contact.
+- **QML runner:**
+  - the 2D MOSFET's bias-stage residuals arrive spread over the stage, and no record reaches the console;
+  - unflushed lines arrive live (decision 7);
+  - lines split across reads: mid-marker, mid-number, mid-JSON, mid-UTF-8 character, and a last line with no newline.
+- **Mutations**, each run and restored, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | no rate limit | 1 test |
+  | QML child buffered | the decision-7 test |
+  | no line assembly | the split-reads test |
+  | records forwarded to the console | 2 tests |
+  | no newton de-duplication | 1 test |
+  | a record written before its line | 5 tests |
+
+- **Existing tests:** every test file touching the runners, the trace, telemetry, studies or families (55 files): **632 passed, 3 skipped**, zero warnings. The full suite was not run.
+
+### 17.9 P3-S2 results: the backend job methods (2026-09-26)
+
+**Built (Python only; the frozen core is untouched).**
+- **`gui/services/run_config.py` (new, Qt-free): one pre-flight for both GUIs.**
+  - `configure_run(spec, sweep, transient, ac, equilibrium_only, models, backend, engine)` holds `AppController.run()`'s checks, in the same order and with the same messages, and returns the spec to run. It raises `RunConfigError(title, detail)`. It works on a shallow copy and never changes its input. `models=None` keeps the spec's own models.
+  - `backend_options` and `engine_options` are the QML selectors' lists, moved here unchanged.
+  - `merged_models` merges a models config the way the Physics Lab restores one.
+  - `project_run_inputs(path)` gives a project's name, DeviceSpec, sweep and merged models. It refuses a project with no structure ("Nothing to run", naming a flow-only project) and an invalid structure, with QML's message.
+- **`AppController` delegates.**
+  - `run()` calls `configure_run` and emits a `RunConfigError` through `errorRaised`. It then stamps the run fields back onto `self.spec`, which keeps its identity (`_last_run_spec` and the comparisons read it).
+  - `backendOptionsForQml` and `engineOptionsForQml` call the shared functions.
+- **Backend methods** (`backend_service/server.py`):
+  - `spec.from_example` (the same as `examples.build`), `spec.load` and `project.spec`, which returns `{name, spec, sweep, models}`;
+  - `run.options` gives `{backends, engines}`, each option as `{id, label, enabled, reason}`;
+  - `spec.configure_run {spec, run: {...}}` gives the DeviceSpec dict to run.
+  - An error's data now includes the exception's `rpc_data` if it has one, so a refusal arrives as `{type: "RunConfigError", title, detail}`.
+  - Unknown run keys and wrongly typed values are refused as INVALID_PARAMS; an unknown backend or engine id is refused, named.
+- **`study.rows` is not here.** It belongs with the Study (S7).
+
+**One behaviour change, deliberate.** Before S2, a refused devsim run had already stamped the sweep, the models and so on onto `self.spec` before the devsim check refused it. Now a refusal leaves `self.spec` as it was. Nothing reads those fields between a refused run and the next one, which stamps them again.
+
+**Gates** (`gui/tests/test_run_config.py`, 49; 48 in the fast run and 1 `timing`):
+- **Every `run()` refusal** (7 cases) gives the same `(title, detail)` through the RPC as QML's `errorRaised`. A further test checks that these cases reach every title `configure_run` can raise.
+- **Every accepted run** (8 cases) gives the RPC the same spec QML hands its runner. The cases are bias, sweep, transient, AC, equilibrium-only, a forced engine, a toggled model, and devsim.
+- The run options equal the QML selectors' for 1D, 2D and 3D, with and without an armed transient.
+- A project runs with its saved sweep and models exactly as in QML, including a partial models config with an unknown key.
+- A flow-only project and an invalid one are refused, named.
+- The loaders equal their direct calls, and malformed params are refused.
+- **A/B against pre-S2 code.** HEAD's `app_controller.py` was loaded beside the new one (as a temporary module, since deleted). On all 15 scenarios, the old and new `run()` give the same errors, the same runner spec, the same options and the same `self.spec` afterwards. This proves the refactor kept QML's behaviour, which the conformance gates alone cannot: both sides of those go through `run_config`.
+- **Mutations**, each applied, run and restored, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | the RPC ignores models | 5 tests |
+  | the error drops title and detail | 9 tests |
+  | `run.options` ignores the transient | 1 test |
+  | `project.spec` drops the sweep | 1 test |
+  | `configure_run` changes its input | 1 test |
+  | the controller does not stamp the spec | 8 tests |
+  | devsim keeps the pytcad engine | 1 test |
+  | the project's models are not merged | 1 test (added after this mutation first passed the tests) |
+
+- **Latency**, median round trip through a real service process after warm-up:
+
+  | Method | Median |
+  |---|---|
+  | `spec.from_example` | 0.57 ms |
+  | `project.spec` | 0.45 ms |
+  | `run.options` (3D) | 0.30 ms |
+  | `spec.configure_run` (3D) | 1.19 ms |
+
+  The `timing` test's bound is 250 ms.
+- **Existing tests:** 27 files touching `run()`, the selectors, projects, the backend service and the runners: **325 passed, 1 skipped**, zero warnings. The full suite was not run.
+
+**The full suite, run after S2 (2026-09-26), settling the run §16.17 owed:**
+- **Fast suite** (`-n 6 -m "not slow and not timing"`): **2682 passed, 37 skipped, 2 xfailed**, zero warnings, in 6:09.
+- **Timing pass** (serial): **10 passed, 2 skipped, 1 failed.** The failure was the soak's memory gate: 0.354 MB/cycle against a 0.3 limit.
+  - The last 40 cycles swing between two levels (about 752 and 776 MB), and there is one step up of about 15 MB near the window's start. This is the plateau pattern §16.10 recorded.
+  - S2 touched no native code.
+  - Re-run alone twice, it passed both times.
+  - The gate was not changed.
+- **The slow battery was not run.**
+
+### 17.10 P3-S3 results: the C++ job runner (2026-09-26)
+
+**Built.**
+- **`desktop/src/run/job_runner.{hpp,cpp}` (new):** the library `tcad_desktop_run`, Qt Core only. It is not in the window yet; that is S4.
+- **One run in the main window at a time** (decision 2). `start()` takes an entry point (`moduleEntry("gui.services.solver_runner")`, or a script) and the job file's bytes, and returns the run's id or a named refusal.
+- **Signals:**
+  - `started(id)`;
+  - `line(text, kind)`, where kind is Output, Stage or Stderr;
+  - `stage(name)`;
+  - `progress(record)`, the §4.3 records;
+  - `finished(id, result)`;
+  - `failed(id, summary, details)`;
+  - `canceled(id)`.
+- **A run succeeds only if** it exits 0, prints `RESULT_PATH` equal to the path it was given (compared after normalizing), and that file exists.
+- **Failures are named, most specific first:**
+  - the child's `PYTCAD_ERROR` payload: the summary is `error: message`, the details its traceback;
+  - a crash (`exit code 0x...`);
+  - a non-zero exit;
+  - no `RESULT_PATH`;
+  - a result at another path;
+  - a missing result file.
+
+  The details default to the last 400 stderr lines.
+- **The child:**
+  - is started as `python -u` with `PYTHONUNBUFFERED=1` (decision 7) and `PYTHONIOENCODING=utf-8` (finding below);
+  - runs in the backend root;
+  - has the app's DLL directory removed from its PATH.
+- **Output handling:**
+  - Lines are assembled from bytes across reads, with the trailing CR stripped.
+  - A line over 1 MiB is delivered truncated and the rest dropped up to the next newline, so memory stays bounded.
+  - A malformed progress record goes to the console as text and is counted.
+  - A canceled run's remaining output is dropped.
+- **Cancel** (decision 3):
+  - Each run's process is put in its own Windows job object, which kills it on close. Cancel terminates the whole job, so grandchildren (MPI, pools) die too, and closing the job at the end of a run kills any grandchild a finished run left behind.
+  - The process is assigned right after `CreateProcess` returns, before the interpreter can have started a child.
+  - After `cancel()`, a new run can start at once. The old run is a separate object: its end removes only its own files and emits only its own `canceled(id)`.
+- **The destructor** disconnects every process, kills its tree, waits, and removes its files. It emits nothing into an owner being destroyed (§17.7 point 12).
+- **Every outcome removes the job file.** A failed or canceled run also loses its partial and `.tmp.npz` result.
+- **Results stay in the configured work directory.** Where that directory lives and how many results are kept (decision 4) is S4's.
+- **Backend: `spec.job_text {spec}`** returns the job file's text, from `json.dump(spec.to_dict())`, the same call as `DeviceSpec.to_json`. The native app writes these bytes verbatim.
+
+**Finding: a piped Python stdout on Windows is cp1252, which breaks runs in non-ASCII directories. The QML app has this bug.**
+- **Measured with QML's own `JobRunner`,** running `diode_1d` in three work directories:
+  - `ascii`: finished;
+  - `José`: the solve succeeded, but `RESULT_PATH` arrived garbled (é went out as the cp1252 byte, which does not decode as UTF-8). The run was reported "Simulation failed (see details)", with "no output" as the details;
+  - `😀`: the solver's final `print` raised `UnicodeEncodeError` after the result was written.
+- **Impact.** QML's work directory is under `%TEMP%`, so any Windows user whose account name has a non-ASCII character cannot run anything in the QML app.
+- **Fix.** The native runner sets `PYTHONIOENCODING=utf-8`. The QML fix is the same one line in `job_runner.py`'s child environment. **Applied 2026-09-26** at the user's "proceed". It is gated by `gui/tests/test_job_runner_encoding.py`, which runs QML's runner in `José` and in `µm € 😀` with the parent's encoding variables removed. Before the fix, both runs failed exactly as measured above; after it, both finish.
+
+**Gates**, all green. `tcad_desktop_run_tests` reports 26 results (7 of them failure-mode rows, and the init and cleanup steps), driven by `gui/tests/test_desktop_run.py`.
+- **Real `solver_runner`**, with job files written by the QML path:
+  - **the 1D diode's bias run:** it opens through `ResultModel` with `solved_bias`. The records start with stage and end with done naming the result, with Newton records between. No record or `RESULT_PATH` text reaches the console, and only the result file is left;
+  - **a 4-point sweep:** 4 `sweep_point` records with contact `anode`, and the result holds 4 points;
+  - **an unparsable job:** the solver's own `JSONDecodeError`, with its traceback, and no file left;
+  - **a run in a directory named `µm € 😀`:** it succeeds.
+- **Fakes** (`desktop/tests/fake_solver.py`):
+  - a real access violation, exit 5, a `PYTCAD_ERROR` payload, no marker, no file, a wrong path and a 5,000-line stderr flood each fail with their own summary;
+  - garbage (invalid UTF-8, a NUL, 3 malformed records) is shown, counted and not fatal;
+  - lines of 3 MB and 2 MB (the second split over writes) are truncated, and the next line is intact;
+  - a last line without a newline is read at exit;
+  - `RESULT_PATH`, a record, and a UTF-8 character each split across writes are reassembled;
+  - unflushed lines 50 ms apart arrive spread over more than 1 s.
+- **Cancel:**
+  - it takes under 2 s, leaves no file and no process, and kills the grandchild;
+  - a finished run leaves no grandchild;
+  - canceled from inside the handler of a burst's first line, no later line of the burst is shown;
+  - cancel then an immediate restart: the first run reports canceled, and the second keeps its job file, finishes, and shows exactly its own 41 lines;
+  - a second `start()` is refused, named;
+  - destroying the runner mid-run emits no signal and leaves no process, grandchild or file.
+- **Refusals:** a missing interpreter and an empty one are named.
+- **Job-file bytes:** a job with CRLF, a float repr and non-ASCII text arrives verbatim. `spec.job_text`'s text, as UTF-8, equals the file QML's runner writes (`spec.to_json`) for all 8 accepted-run cases of `test_run_config.py`.
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | child buffered | liveness |
+  | stdio not UTF-8 | the non-ASCII run |
+  | no job object | the tree, orphan and teardown tests |
+  | QML's I-5 (a deferred kill hitting the current run) | restart |
+  | the ended run's files taken from the current run | restart |
+  | a canceled run's output shown | the burst test |
+  | no line bound | the long-line test |
+  | no line assembly | the split and long-line tests |
+  | any `RESULT_PATH` accepted | `wrong_path` |
+  | the destructor not disconnecting | teardown |
+
+  Two of these first went uncaught, and the tests and code changed:
+  - **The canceled-output mutation.** The kill is immediate, so no test produced output after a cancel. The burst test was added.
+  - **A destructor flag that could never fire.** It was removed, and the mutation moved to the disconnect that makes it unneeded.
+
+  The first crash fake was wrong too. `ctypes.string_at(0)` is caught by ctypes and becomes a clean exit 1, so the fake uses `faulthandler._read_null()`, which gives a real `0xC0000005`.
+- **Build:** clean at `/W4`, with both new files recompiled to confirm it.
+- **Existing tests:** the runner, `run_config`, backend service, backend client, progress channel and desktop contract files: **217 passed**, zero warnings. The full suite was not run.
+
+### 17.11 P3-S4 design: Run dock, Console, Run/Stop, open on success (2026-09-26)
+
+**What is built.**
+
+- **`run/run_controller.{hpp,cpp}`** (Qt Core): the pipeline from a Run click to a result.
+  - **Device.** Load the device through the backend: `spec.from_example`, `spec.load`, or `project.spec`. A project brings its sweep and its models.
+  - **Options.** Ask `run.options` for the backends and engines.
+  - **Run.** `spec.configure_run`, then `spec.job_text`, then `JobRunner.start`. A C-V job goes through `cv.job_text` and `moscap_runner` instead.
+  - **Stop** works in either phase. If the run is still in the backend calls, the late reply is ignored. If it is running, the runner cancels it.
+  - **Refusals keep their titles.** A `RunConfigError` arrives with its own title and detail, now readable through a new `BackendReply::errorData()`. A spec that fails its own validation is titled as QML titles it at arm time, e.g. "Invalid sweep configuration".
+- **`shell/run_panel.{hpp,cpp}`, the Run dock:**
+  - **Device:** an example, a DeviceSpec file or a project.
+  - **Run kind:** Equilibrium, Bias (the device's own contact voltages), Sweep, Transient, AC, or C-V (MOS capacitor).
+    - Sweep: contact, start, stop, step.
+    - Transient: contact, waveform (step, ramp, pulse, constant), v0, v1, t0, t1, t_end, dt0.
+    - AC: contact, f_start, f_stop, points.
+    - C-V: Nsub, tox, and the gate ramp. C-V needs no device.
+  - **Contacts** come from the loaded spec.
+  - **Backend and engine** come from `run.options`. A disabled entry carries its reason as a tooltip.
+  - **Numbers** are typed text in C locale, so scientific notation works. A non-finite value is refused before anything is sent.
+- **`shell/console_panel.{hpp,cpp}`, the Console dock:**
+  - every line, with stage lines in bold and stderr lines in the muted token colour;
+  - a failure's summary and details in the error colour;
+  - capped at 50,000 lines, with the number of dropped earlier lines shown (§17.7 point 11);
+  - lines batched every 50 ms, so a flood does not stall the window.
+- **MainWindow:**
+  - toolbar and Run menu entries Run (F5) and Stop (Shift+F5);
+  - the Run dock on the right edge and the Console along the bottom (layout version 6);
+  - the status bar shows the stage and the elapsed time;
+  - on success, `tryOpen(result)` opens the result in its natural view (`defaultMode`), and it joins Open Recent;
+  - File > Save result as... copies the open result;
+  - the run controller is torn down first in `~MainWindow` (§17.7 point 12).
+- **Runs directory** (decision 4):
+  - the settings key `run/dir`, else `%LOCALAPPDATA%/PyTCAD/runs`;
+  - after each run, the 20 newest `result-*.npz` are kept and the open result is never removed;
+  - job and `.tmp.npz` files older than 24 h are removed. That age is the guard for a second app instance sharing the directory.
+- **Backend:** `cv.job_text {nsub_cm3, tox_nm, vstart, vstop, vstep}` gives the job text QML's `CVController` writes. That builder moves to the Qt-free `gui/services/cv_job.py`, which `CVController` then uses.
+
+**Gates** (new executable `tcad_desktop_run_shell_tests`, the real window; driven by `gui/tests/test_desktop_run_shell.py`):
+- **Run to view, end to end:**
+  - the diode's bias, sweep, transient, AC and equilibrium runs;
+  - a C-V run;
+  - `mosfet_2d` and `resistor_3d`.
+
+  Each opens in its natural mode, in the runs directory, and the console holds its stage lines and no record text.
+- **Sources:** a DeviceSpec file; a project whose models config reaches the result's run record; a flow-only project refused, named.
+- **Refusals:** a sweep step of 0 is refused, named, and nothing runs.
+- **Stop:**
+  - during the solve: canceled, nothing opened, the previous result still shown, no job file;
+  - during the backend phase: nothing starts.
+- **Closing the window mid-run:** no crash, no process left, no job file.
+- **The console cap:** 60,000 lines leave 50,000 and report 10,000 dropped.
+- **Retention:** 25 results leave the 20 newest, plus the open one if it is older.
+- **Mutations**, each rebuilt and run:
+  - Stop ignored in the backend phase;
+  - no console cap;
+  - the open result pruned;
+  - the job run with the spec's own models instead of the project's.
+
+### 17.12 P3-S4 results: Run dock, Console, Run/Stop, open on success (2026-09-26)
+
+**Built** as §17.11 designed, with these changes found while building:
+
+- **Where the docks go.** Run is tabbed with Fields, and Console with Info, Display, 3D and Plot. Fields and Display stay in front.
+  - Docked beside the view (Run on the right, Console along the bottom), they cut the view from nearly the whole 1500 x 950 window to 1014 x 616 (measured).
+  - That also broke the P2 curve-image probes, `curveModeImagesProbe(recombination)` and `(transient)`, in the shell and HiDPI suites. Existing tests stay unchanged, so the layout changed instead.
+  - Now the view is exactly the size it is with both docks closed, in a fresh window and after Reset layout (gated).
+  - The cost: in the left column the Run form scrolls, and its Backend/Engine selectors and Run/Stop buttons sit below the fold. The toolbar's Run and Stop are always visible. Either dock can be dragged elsewhere, and the layout persists.
+- **No Python before it is needed** (the shell's P1 rule, gated by `backendWarmsUpAfterA2DResultOpens`), kept:
+  - the run controller gets the backend client through a function, so the client is still created on first use;
+  - the examples are listed when the Run tab is first shown or focus enters it, never with the window.
+- **The natural view.** A run opens in the mode of its kind: sweep in Curves, transient in Transient, AC in AC, C-V in C-V. Otherwise it opens in the default an opened file gets. `defaultMode` alone opened a sweep in the Field mode.
+- **Signals carry `JsonPayload`, not `nlohmann::json`.**
+  - Declaring `nlohmann::json` as a Qt metatype made Qt's traits probe its catch-all converting constructors, which failed to compile with QtWidgets included (the incomplete Windows `MSG`).
+  - `JobRunner::progress` and `RunController::optionsChanged` now carry a one-member struct.
+- **A project's sweep in the form** is written in the shortest round-trip form: 0.2, not 0.20000000000000001.
+- **Found in the window grabs: the status bar never showed a message (P1 bug, fixed).**
+  - The hover readout was a permanent status widget with stretch 1, and Qt draws a temporary message only beside the permanent widgets. So every `showMessage()` since P1 had zero width. Errors were still seen, because each also opens a message box.
+  - The readout now has no stretch. A pixel test failed first (0 dark pixels with a message set) and passes now.
+- **`BackendReply::errorData()`** exposes a JSON-RPC error's data, so a `RunConfigError` keeps its title and detail.
+- **`cv.job_text`** comes from the Qt-free `gui/services/cv_job.py`, which QML's `CVController` now uses too. It equals the file `CVController` writes, byte for byte, in three cases: its zero-step fallback, its absolute step, and a plain one.
+
+**Gates.** `tcad_desktop_run_shell_tests` reports 24 results, all green. It runs the real window, the real backend and the real solver, driven by `gui/tests/test_desktop_run_shell.py`.
+- **The Run and Console docks cost the view nothing.**
+- **No Python starts until the Run tab is shown.** Once it is, the examples are listed and the diode loads.
+- **The status message is drawn.**
+- **Run to view:**
+  - the diode's bias, equilibrium, sweep (4 points, Curves), transient (Transient) and AC (7 points, AC) runs;
+  - a C-V run (17 points, C-V, with no device loaded);
+  - `mosfet_2d` (2D) and `resistor_3d` (3D).
+
+  Each checks that:
+  - the result is in the runs directory and joined Open Recent;
+  - the view is in its natural mode;
+  - the console has `PYTCAD_STAGE` lines and no record or `RESULT_PATH` text;
+  - no job or tmp file is left;
+  - Run is enabled again and Stop disabled.
+- **Sources:**
+  - a DeviceSpec file runs;
+  - a project selects its armed sweep, and its `auger: false` reaches the result's run record;
+  - a flow-only project is refused as "Nothing to run", naming the process flow.
+- **Refusals:**
+  - a zero sweep step fails as "Invalid sweep configuration: sweep step must be nonzero", QML's arm-time title, and nothing runs;
+  - a non-number is refused in the form.
+- **Stop:**
+  - during a 101-point `mosfet_2d` gate sweep: canceled, the process dead, the job file gone, the runs directory empty, the previous result still shown;
+  - before the solver starts: canceled at once, and the late backend replies start nothing.
+- **Closing the window:**
+  - mid-run: no process, no file, no error box;
+  - while the backend prepares: no failure reported into the dying window, no error box.
+- **Save result as** makes a byte copy, and saving onto the open file itself is refused.
+- **The console:** 60,000 lines keep the last 50,000 and report 10,000 dropped; a traceback's last newline adds no line.
+- **Retention:** 25 results leave the 20 newest plus the open (oldest) one. Stale job and tmp files go; a fresh job file and a file that is not the runner's stay.
+- **Looked at:** window grabs after a sweep run and after a Stop (the `TCAD_SHELL_SNAPSHOT` hook, as in the shell tests).
+- **Mutations**, each rebuilt and run, all caught:
+
+  | Mutation | Caught by |
+  |---|---|
+  | Stop ignored while the backend prepares | stop before the solver starts |
+  | a late backend reply not disowned | stop before the solver starts |
+  | no console cap | the console test |
+  | the open result pruned | retention |
+  | the project's models not sent | the project test |
+  | no natural view | the sweep, transient, AC and project tests |
+  | the Run dock beside the view | the layout test and the no-Python test |
+  | Python started with the window | the no-Python test |
+  | the run controller not torn down before the backend | closing while the backend prepares |
+
+  The last mutation first went uncaught, and the test after it was added for it.
+- **Existing tests:** every native-app test file (`gui/tests/test_desktop_*.py`, among them the P2 shell and HiDPI suites) and the Python files S2 to S4 touch, `-m "not slow and not timing"`: **726 passed, 1 skipped**, zero warnings.
+- **Also this step:** QML's `job_runner.py` got the `PYTHONIOENCODING=utf-8` fix (§17.10, applied).
+- **Not run:** the full suite.
+
+### 17.13 P3-S5 results: the Telemetry dock (2026-09-27) -- CLOSED
+
+**Built.**
+- **`run/telemetry.{hpp,cpp}`: `TelemetryModel`, Qt-free.** It folds the §4.3 records into state:
+  - the stage;
+  - the newton records, as trace steps. A new step starts at each stage change, and each metric is a channel in the order the record wrote it, with a gap where a record lacks a metric;
+  - the sweep point, whose index is 0-based as written (it matches the trace's `sweep:0`);
+  - the transient step, done with its dropped count, and error.
+
+  A record outside the grammar is counted and changes nothing, and a null value becomes NaN.
+- **`shell/telemetry_panel.{hpp,cpp}`, the Telemetry dock**, tabbed with Console, Info, Display, 3D and Plot:
+  - status, elapsed time, stage, "Newton: iteration i of stage s (n in all)", "Sweep: point k of N, contact = V", "Transient: step n, t, dt, iterations", and notes;
+  - the residual history on a log axis, redrawn at most every 100 ms.
+- **The plot is drawn by the Convergence mode's own function.** `convergenceModel(const std::vector<TraceStep>&, empty_text)` is the old body; the `ResultModel` overload now calls it. So a finished run's live plot is its result's Convergence plot (gated below).
+- **Stage-level progress only** (§17.7 point 2) is stated, not left as an empty plot:
+  - up front, for a C-V run or the MPI Schwarz engine;
+  - at the end, for a run that reported stages but no Newton iteration. The auto engine can pick MPI.
+- **Dropped records are said too:** "N progress records were dropped...; the Convergence mode has every iteration".
+- **Records keep their key order.** They travel as `ProgressRecord{nlohmann::ordered_json}`, as the result reader keeps the trace's order (`ordered_json`). The sorting `nlohmann::json` would put F, dn/n, dpsi in the wrong line styles (mutation-tested).
+- **`RunController::lastOutcome()`** is set before `busyChanged(false)`, and the dock ends on it. After a Stop, `runCanceled()` arrives only when the process is gone, possibly after the next run began.
+- **Layout version 7.**
+- **The status bar says "Run finished in 0.6 s"**, not "0 s".
+
+**Found while testing:**
+- **The sweep label was 0-based.** It showed "point 3 of 4" at the last point, because the record's index is 0-based by S1's design. It now shows index + 1.
+- **devsim was offered but could not run on this machine (pre-existing).**
+  - pip's devsim 2.11.0 finds no BLAS (`libopenblas.dll` missing, no MKL) and raises "Issues initializing DEVSIM" on import.
+  - `workbench.solvers.base._register_devsim` imports only the adapter module, and the adapter loads devsim lazily. So `backend_ids()` lists devsim, both apps' selectors enabled it, and every devsim run failed.
+  - Resolved for the native app by the decision below.
+
+**Gates** (`tcad_desktop_run_shell_tests`, 31 results after the decision below, all green):
+- **A diode sweep's telemetry is its convergence plot:**
+  - every record folded (newton count equal, nothing ignored, done, 0 dropped);
+  - the stage, iteration and sweep labels equal the last records' ("point 4 of 4, anode = 0.3 V");
+  - the live plot equals `convergenceModel(result)`: labels, colours, line styles, legend entries, x, and y (NaN-aware), series for series.
+- **Live and ends with the run:**
+  - on a 101-point `mosfet_2d` gate sweep, while it runs: "Running: ...", "point k of 101, gate = ...", Newton series drawn;
+  - Stop ends the dock at once as "Canceled", and no record is folded after it;
+  - the next run starts afresh.
+- **Transient:** the step count and last time equal the records'.
+- **Stage-level only:** a C-V run shows the note and the stage-level plot message.
+- **`TelemetryModel`:** stage grouping, metric order kept, gaps for absent and null metrics, five malformed records ignored and counted, a relayed sweep point, done's dropped count, error.
+- **The layout gate now includes the Telemetry dock:** the view still loses nothing.
+- **Looked at:** a window grab after the diode sweep, with the Telemetry tab in front.
+- **Mutations**, each rebuilt and run:
+
+  | Mutation | Caught by |
+  |---|---|
+  | records not forwarded to the dock (§17.4's "progress events not forwarded") | 4 tests |
+  | metrics sorted by name | 2 tests |
+  | no new step per stage | 2 tests |
+  | the sweep point 0-based | 1 test |
+  | stage-level runs not said | 2 tests (the C-V test, and a devsim test since replaced) |
+  | the dock not ended with the run | 2 tests |
+  | the outcome not recorded on Stop | 1 test |
+  | records after the run's end still applied | **missed** |
+
+  The missed mutation's guard was unreachable: a canceled run's output is dropped by the JobRunner (S3's burst test), and a finished or failed run's records all arrive before its end. It was removed rather than kept untested.
+- **Existing tests:** every native-app test file plus the Python files S2 to S5 touch, `-m "not slow and not timing"`: **631 passed**, zero warnings.
+- **Not run:** the full suite.
+
+**Decision (user, 2026-09-27): the native app does not support devsim.** P3-S5 is closed with it.
+- **What changed:**
+  - The native backend list is pytcad only. `RunController` keeps only the backends the app runs when `run.options` answers.
+  - `run()` refuses any other backend, named ("Backend not supported: the native app runs the pytcad backend only"), before any backend call or process.
+  - §17.2's "Backend and engine: the QML options" now means, for the backend, pytcad alone.
+  - The Telemetry dock's devsim note is gone.
+- **What did not change:**
+  - The backend service's `run.options` still lists devsim. It is QML's list, gated equal to QML's selector in `test_run_config.py`, and the native app filters it.
+  - No devsim Python code was touched (`workbench/` has no change), and QML is unchanged. It still offers devsim, which still fails on this machine.
+  - No BLAS or MKL was installed, and no import probing was added.
+- **Gates** (the devsim telemetry test is replaced by these):
+  - **`theNativeAppOffersPytcadOnly`:** for the diode, which the service lists devsim for, the Backend selector holds exactly `pytcad`. The service's own `run.options` is asserted to still list devsim, so the gate cannot pass vacuously.
+  - **`aRunOnAnotherBackendIsRefusedNamed`:** a programmatic run with `backend = "devsim"` fails as "Backend not supported". Nothing is busy, no process starts and no file is written.
+  - **`theSupportedBackendRunsWithAChosenEngine`:** the diode with the Direct engine opens as a result whose run record says `"backend": "pytcad"`.
+  - **Mutations**, each rebuilt and run, both caught:
+
+    | Mutation | Caught by |
+    |---|---|
+    | devsim let through the native filter | the selector test and the refusal test |
+    | `run()` taking any backend | the refusal test |
+- **The supported backend still works:**
+  - `tcad_desktop_run_shell_tests` is green (31), with every run kind on pytcad;
+  - every native-app test file plus the Python files S2 to S5 touch, with `test_m7_devsim.py` and `test_engine_selector.py`: **639 passed, 1 skipped** (an existing devsim test), zero warnings.
+  - The full suite was not run.
+
+### 17.14 P3-S6 design: families and comparisons by running (2026-09-27)
+
+The P2-S5 overlays (families and one comparison, from result files) now also come from runs started in the app. The jobs are built by the backend (decision 1), with QML's own rules.
+
+- **`gui/services/family_jobs.py` (new, Qt-free):**
+  - It holds QML's family rules, moved from `FamilySweepController`: the stepped values (the step must move toward the stop), each curve's spec (the base spec with the swept ramp, and the stepped contact's bias set), the labels (`cathode=0.1 V`), and the refusals with QML's titles ("Invalid family configuration", "Family cannot run", "Invalid family sweep").
+  - It also holds the models-off comparison spec, moved from `AppController.runModelComparison` (label "all models off").
+  - Both QML controllers call these functions, so the two apps build the same jobs.
+- **Backend methods:**
+  - `family.jobs {spec, stepped, values: {start, stop, step}, swept: {contact, start, stop, step}}` returns `[{label, value, job_text}]`;
+  - `comparison.job {spec}` returns `{label, job_text}`.
+
+  Each `job_text` is byte-identical to the job file QML's runner writes for the same inputs.
+- **Native: `run/batch_controller.{hpp,cpp}`.**
+  - It runs a family's jobs or a comparison **sequentially on its own JobRunner** (decision 2: families have their own pool), beside the main run.
+  - The base is the last main run's configured spec, and it must be a sweep. A family re-solves that sweep at each stepped value, and a comparison re-solves it with every model off. Anything else is refused, named.
+  - Each finished curve is added as an overlay (`addOverlay`, its P2-S5 checks and refusals unchanged) with its label, in the Curves view.
+  - The batch belongs to the result that was open when it started. If another result is opened, the batch is canceled, named.
+  - Stop cancels the batch mid-way; the curves already added stay, as in QML.
+  - `~MainWindow` tears the batch controller down before the backend, as for the run controller.
+- **The Run dock:** a "Family and comparison" group (the stepped contact, start/stop/step, Run family, Run comparison, Stop batch, and a status line).
+- **Not in S6:** the backend comparison, which needs devsim (not a native backend, §17.13).
+
+**Gates:**
+- **Python:** `family.jobs` and `comparison.job` job texts equal QML's job files byte for byte, and every refusal equals QML's `errorRaised`. The existing family and comparison tests pass unchanged.
+- **Native, end to end:**
+  - a family of 3 on the diode's sweep gives 3 labelled Family overlays;
+  - the comparison gives 1 Comparison overlay whose result's run record has every model off;
+  - a family before any sweep run, a wrong step direction, and a result opened elsewhere are refused, named;
+  - a family canceled mid-way keeps its finished curves, with no process and no job file left;
+  - opening another result cancels the batch;
+  - closing the window mid-family leaves nothing running.
+- **Mutations:**
+  - a curve added to a result the batch does not belong to;
+  - the curves not labelled;
+  - cancel leaving the queue running;
+  - the batch controller not torn down first.
+
+### 17.15 P3-S6 results: families and comparisons by running (2026-09-27)
+
+**Built** as §17.14 designed:
+- **`gui/services/family_jobs.py`:**
+  - `family_values`, `family_specs`, `family_label` and `comparison_spec`, with QML's titles as `RunConfigError`s;
+  - `FamilySweepController` (`configureFamily`, `runFamily`, its labels and console lines) and `AppController.runModelComparison` now call it;
+  - `import copy`, left unused in the controller, is removed.
+- **Backend:** `family.jobs` and `comparison.job`, each job text written by `DeviceSpec.to_json`'s own `json.dump`.
+- **Native:**
+  - **`run/batch_controller.{hpp,cpp}`:** runs a family or the comparison sequentially on its own JobRunner. The base is `RunController::lastRunSpec()`, the configured spec of the last finished DeviceSpec run; a C-V run does not count.
+  - **Refusals before anything starts:** no run yet, the last run not a sweep, and the open result not the last run's.
+  - **Each finished curve** becomes a P2-S5 overlay with QML's label, drawn in the Curves view.
+  - **Opening another result stops the batch.** A curve the overlay checks refuse also stops it.
+  - **The Run dock's "Family and comparison" group:** the stepped contact, start/stop/step, Run family, Run comparison, Stop, and a status line.
+  - **`~MainWindow`** deletes the batch controller right after the run controller, before the backend.
+- **Not built:** the backend comparison, which needs devsim (§17.13).
+
+**Gates:**
+- **Python** (`gui/tests/test_family_jobs.py`, 13 tests):
+  - `family.jobs` job texts equal the files QML's family runner writes, byte for byte, for three cases: three curves, a reverse step, and one value;
+  - labels and values are QML's;
+  - `comparison.job` equals QML's comparison job file byte for byte, with every model off;
+  - four family refusals equal QML's `errorRaised` (wrong direction, stepped or swept contact missing, invalid sweep), and so do "Nothing to sweep" and "Nothing to compare";
+  - the base is not modified;
+  - malformed params are INVALID_PARAMS.
+- **A/B against pre-S6 code.** HEAD's `family_sweep_controller.py` and `app_controller.py` were loaded as temporary modules, since deleted. Same job bytes, values, console lines and refusals in all 8 family and 4 comparison scenarios. The conformance gates cannot prove this, since both sides of them go through `family_jobs`.
+- **Existing tests:** `test_family_sweep.py`, `test_m30_run_comparison.py` and `test_performance_family_sweep_signals.py` pass unchanged.
+- **Native end to end** (`tcad_desktop_run_shell_tests`, now 38 results, all green):
+  - a family of 3 on the diode's anode sweep gives three Family overlays labelled `cathode=0 V`, `cathode=0.1 V` and `cathode=0.2 V`, each on the base sweep's voltages, with 4 series drawn and no job file left;
+  - the comparison gives one overlay labelled "all models off", whose result's run record has every model off;
+  - refusals are named: nothing run yet; a bias run as base ("Nothing to compare"); a wrong step direction (QML's "Invalid family configuration", from the backend); another result open;
+  - a family stopped mid-way keeps its finished curves, no more arrive, no process or job file is left, and the status reads "Family stopped after ...";
+  - opening another result stops the batch, draws nothing over it and refuses nothing on it, with a console note;
+  - closing the window mid-family, and while `family.jobs` is in flight, leaves no process, no error box and no batch signal during teardown.
+- **Looked at:** a window grab of the diode's anode sweep with its cathode family. The forward current falls as the cathode is raised.
+- **Mutations**, each rebuilt and run:
+
+  | Mutation | Caught by |
+  |---|---|
+  | a batch's curves drawn over another result | the reopen test |
+  | the curves not labelled | the family and comparison tests |
+  | Stop leaving the batch going | the stop and reopen tests |
+  | the batch controller not torn down first | the prepares-close test, after a fix to it |
+
+  The last mutation first went uncaught. The warm backend answered `family.jobs` during `~MainWindow`, so the batch started a solver job in the dying window (killed by its runner) and reported no failure, while the test watched only `failed()`. The test now counts any batch signal during teardown, and catches the mutation.
+- **Existing tests:** every native-app test file plus the Python files S2 to S6 touch (including the family, comparison, controller and QML smoke tests), `-m "not slow and not timing"`: **694 passed, 1 skipped** (an existing devsim test), zero warnings.
+- **Not run:** the full suite.
+
+### 17.16 P3-S7 plan: the local Study (2026-09-27, awaiting approval)
+
+A Study (M30) is a split matrix: one device per combination of parameter levels, each solved as an ordinary job, in a pool of parallel runners. P3-S7 brings QML's local Study to the native app. Remote hosts are S8.
+
+**What QML does today** (checked in the tree, `gui/controllers/study_controller.py` and `gui/qml/panels/StudyPanel.qml`):
+- **Definition.** A template id, base parameters as `KEY=value` lines, and splits as `PARAM = v1, v2, ...` lines.
+  - `configureStudy` runs `workbench.splits.run_split_matrix` (a Cartesian product, the last axis fastest).
+  - A row the template rejects is `build_error` and never runs.
+- **Rows** are statuses `build_error | pending | running | done | failed`. Each row's job is `spec_from_domain(device)` with `bias = None` and `sweep = None`.
+  - **Every QML study row is an equilibrium solve.** `setBias` exists, but no QML code calls it.
+- **The pool:**
+  - its size is `workbench.batch.default_worker_count(n)`: `min(6, cpu count, n)`;
+  - each runner takes the next pending row when it frees;
+  - a failed row does not stop the others.
+- **Cancel all** returns the running rows to `pending`, and Run re-runs pending and failed rows.
+- **A row's View** opens its result in the main view (`loadStudyResult`).
+- **Matrix viewer** (M30 phase 6): for a 2-axis study, a grid of `max(field)` per done row. A row not done is shown as nothing, never as 0 (gate G-PARTIAL).
+- **Row comparison** (M30 phase 7): a horizontal line cut of a 2D field across chosen done rows, with a provenance diff table of their run records.
+
+**Design (decision 1 as before: the backend builds the jobs).**
+- **`gui/services/study_jobs.py` (new, Qt-free).** It moves QML's row building out of `StudyController`: `configureStudy`'s matrix and statuses, `_spec_for_row`, and `matrixCells`'s reduction. `StudyController` calls it, as S2/S6 did for runs and families.
+- **Backend methods:**
+  - `study.templates` gives each template's id, title, description and parameters (name, label, unit, default, bounds, integer);
+  - `study.rows {template_id, base, splits}` gives `{axes, rows: [{params, status, error, job_text|null}]}`. A row that builds has a `job_text` byte-identical to QML's job file; a `build_error` row has none.
+- **Native `run/study_controller.{hpp,cpp}`** (Qt Core):
+  - the rows and QML's status vocabulary;
+  - a pool of N JobRunners, N defaulting to QML's `default_worker_count(n)` and adjustable from 1 to 6;
+  - dispatch in row order, with failed rows isolated;
+  - Cancel all, which returns running rows to pending as QML does, and Run, which re-runs pending and failed rows;
+  - independent of the main run and the family batch (decision 2);
+  - torn down before the backend in `~MainWindow`.
+- **The Study dock** (`shell/study_panel.{hpp,cpp}`), with the factor/level table of §17.7 point 13:
+  - a template combo; a base-parameter table from the template (name, value, unit, default);
+  - a splits table (parameter, levels "v1, v2, ...", add and remove);
+  - pool size; Build rows, Run and Cancel;
+  - the rows table: index, the split parameters, status, error. Double-click opens a done row's result in the main view (`tryOpen`, as QML's View);
+  - a status line with counts;
+  - the matrix grid for a 2-axis study, with a field chosen from the done rows' results.
+
+  Its placement follows S4's rule: a tab in the left column, costing the view nothing.
+- **The matrix value** `max(field)` is computed in C++ from `ResultModel`, the reader already gated equal to Python's. A contract test compares it with `StudyController.matrixCells` on the same files.
+- **Where results go:** each study writes into its own `runs/study-<stamp>/` directory, so the main runs' keep-20 retention never removes a study's rows.
+
+**Decisions (defaults proposed):**
+1. **Rows are equilibrium solves, as QML's.** No bias or sweep per study in S7. A bias option would be new behaviour, not a port.
+2. **The matrix viewer is in S7.** It is what makes a study readable, and the 2-axis grid is small.
+3. **The row comparison is deferred to P4.** It needs multi-result line cuts plus a provenance diff table, a new view kind. The alternative is to include it in S7, which makes it about twice as big.
+4. **Study results are kept per study.** The 5 most recent `study-*` directories stay, and the directory of an open result is never removed. The alternative is to keep every study's results.
+5. **Definition by tables, not QML's free text.** Bounds come from the template, and a value it rejects is still a named `build_error` row. The alternative is the same text areas as QML.
+
+**Gates:**
+- **Python:**
+  - `study.rows` equals `StudyController.configureStudy`'s rows (params, statuses, errors, axes) for a 2 x 2 `mos_capacitor` study that includes a rejected value;
+  - every `job_text` equals the job file QML's pool runner writes, byte for byte;
+  - `study.templates` equals the templates' own parameter lists;
+  - an A/B against HEAD's `StudyController` (as S2/S6);
+  - the existing M30 tests pass unchanged.
+- **Native, end to end:**
+  - a 2 x 2 `mos_capacitor` study (tox x na, plus one rejected value) with pool 2: the rejected row shows `build_error` and never runs; never more than 2 rows `running`; all others reach `done`; a done row opens in the main view;
+  - the matrix grid's values equal `matrixCells` on the same files, and a row not done shows empty, not 0;
+  - a row made to fail is `failed` with its error, and the rest finish;
+  - Cancel all mid-way: running rows back to `pending`, no process, no job file; then Run completes the rest;
+  - closing the window mid-study leaves no process;
+  - the default pool size equals `default_worker_count(n)` for several n;
+  - the dock costs the view nothing.
+- **Mutations**, each rebuilt and run:
+  - the pool size not honoured;
+  - Cancel leaving rows pending in the queue;
+  - a failed row stopping the study;
+  - a not-done matrix cell shown as 0;
+  - a row dispatched twice;
+  - the study controller not torn down first.
+- **Size: M**, as §17.3 had it. About half is the dock and its tables, and half the controller, the backend methods and the gates.

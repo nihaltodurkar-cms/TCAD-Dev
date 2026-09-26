@@ -149,12 +149,22 @@ FieldView::FieldView(QWidget* parent) : QVTKOpenGLNativeWidget(parent) {
     mesh_actor_->GetProperty()->SetOpacity(0.35);
     mesh_actor_->GetProperty()->LightingOff();
     mesh_actor_->VisibilityOff();
+    // P2-S4: the line cut's line -- a halo under a line, one geometry.
+    cut_mapper_->ScalarVisibilityOff();
+    for (vtkActor* a : {cut_halo_actor_.Get(), cut_actor_.Get()}) {
+        a->SetMapper(cut_mapper_);
+        a->GetProperty()->LightingOff();
+        a->PickableOff();
+        a->VisibilityOff();
+    }
 
     renderer_->AddViewProp(actor_);
     renderer_->AddViewProp(mesh_actor_);
     renderer_->AddViewProp(contour_actor_);
+    renderer_->AddViewProp(cut_halo_actor_);
+    renderer_->AddViewProp(cut_actor_);
     setup3D();
-    applyTheme(theme::Scheme::Dark);  // until the shell's ThemeController says otherwise
+    applyTheme();
 
     picker_->SetTolerance(0.0005);
     picker_->PickFromListOn();
@@ -164,21 +174,23 @@ FieldView::FieldView(QWidget* parent) : QVTKOpenGLNativeWidget(parent) {
 
 FieldView::~FieldView() = default;
 
-void FieldView::applyTheme(theme::Scheme s) {
-    scheme_ = s;
-    const theme::Rgb bg = theme::rgb(theme::T::Background, s), fg = theme::rgb(theme::T::Text, s);
-    const theme::Rgb ov = theme::rgb(theme::T::Overlay, s);
+void FieldView::applyTheme() {
+    const theme::Rgb bg = theme::rgb(theme::T::Background), fg = theme::rgb(theme::T::Text);
+    const theme::Rgb ov = theme::rgb(theme::T::Overlay);
     renderer_->SetBackground(bg.r, bg.g, bg.b);
     bar_renderer_->SetBackground(bg.r, bg.g, bg.b);
     for (vtkTextProperty* tp : {bar_->GetTitleTextProperty(), bar_->GetLabelTextProperty(), title_->GetTextProperty()})
         tp->SetColor(fg.r, fg.g, fg.b);
     contour_actor_->GetProperty()->SetColor(ov.r, ov.g, ov.b);
     mesh_actor_->GetProperty()->SetColor(ov.r, ov.g, ov.b);
-    outline_actor_->GetProperty()->SetColor(ov.r, ov.g, ov.b);
+    cut_actor_->GetProperty()->SetColor(ov.r, ov.g, ov.b);
+    cut_halo_actor_->GetProperty()->SetColor(fg.r, fg.g, fg.b);
+    // the 3D box sits on the background, not on the map: text-coloured (white vanished on white)
+    outline_actor_->GetProperty()->SetColor(fg.r, fg.g, fg.b);
     for (vtkTextProperty* tp : {vbar_->GetLabelTextProperty(), vtitle_->GetTextProperty()}) tp->SetColor(fg.r, fg.g, fg.b);
-    const theme::Rgb ctx = theme::rgb(theme::T::Context, s);
+    const theme::Rgb ctx = theme::rgb(theme::T::Context);
     if (surface_mode_ == SurfaceMode::Context) actor_->GetProperty()->SetColor(ctx.r, ctx.g, ctx.b);
-    if (exploded_on_) rebuildExploded();  // region edges follow the scheme
+    if (exploded_on_) rebuildExploded();
     renderNow();
 }
 
@@ -192,6 +204,9 @@ void FieldView::setResult(const ResultModel* model) {
     snapshots_.reset();
     snapshots_checked_ = false;
     snapshot_union_.clear();
+    cut_.reset();  // a cut belongs to one result's mesh
+    cut_actor_->VisibilityOff();
+    cut_halo_actor_->VisibilityOff();
     if (!model_ || model_->dimensionality() < 2 || model_->scalar_names().empty()) {
         // 1D results are curves: PlotView, P2 (NATIVE-DESKTOP-PLAN.md section 9).
         for (vtkProp* p : std::initializer_list<vtkProp*>{actor_, bar_, title_, contour_actor_, mesh_actor_})
@@ -591,6 +606,41 @@ void FieldView::updateViewports() {
     // VTK draws lines thinner than 1 device px as 1 px (review rev. 6).
     contour_actor_->GetProperty()->SetLineWidth(static_cast<float>(std::max(1.0, 0.6 * dpr)));
     mesh_actor_->GetProperty()->SetLineWidth(static_cast<float>(std::max(1.0, 0.3 * dpr)));
+    cut_halo_actor_->GetProperty()->SetLineWidth(static_cast<float>(std::max(3.0, 4.0 * dpr)));
+    cut_actor_->GetProperty()->SetLineWidth(static_cast<float>(std::max(1.0, 1.5 * dpr)));
+}
+
+void FieldView::setCutLine(std::optional<CutLine> line) {
+    cut_ = line;
+    const bool show = cut_ && model_ && model_->dimensionality() == 2 && !edges_um_[0].empty() &&
+                      !edges_um_[1].empty();
+    if (show) {
+        const double x0 = edges_um_[0].front(), x1 = edges_um_[0].back();
+        const double y0 = edges_um_[1].front(), y1 = edges_um_[1].back();
+        vtkNew<vtkPoints> pts;
+        pts->SetDataTypeToDouble();  // exactly on the node, not float-rounded beside it
+        if (cut_->orientation == CutOrientation::Horizontal) {
+            pts->InsertNextPoint(x0, cut_->position_um, 0.0);
+            pts->InsertNextPoint(x1, cut_->position_um, 0.0);
+        } else {
+            pts->InsertNextPoint(cut_->position_um, y0, 0.0);
+            pts->InsertNextPoint(cut_->position_um, y1, 0.0);
+        }
+        vtkNew<vtkCellArray> lines;
+        const vtkIdType ids[2] = {0, 1};
+        lines->InsertNextCell(2, ids);
+        vtkNew<vtkPolyData> pd;
+        pd->SetPoints(pts);
+        pd->SetLines(lines);
+        cut_mapper_->SetInputData(pd);
+        // Above the mesh lines and contours (the camera looks along +z from -z).
+        const double lift = -2e-3 * std::max(x1 - x0, y1 - y0);
+        cut_halo_actor_->SetPosition(0.0, 0.0, lift);
+        cut_actor_->SetPosition(0.0, 0.0, 1.5 * lift);
+    }
+    cut_halo_actor_->SetVisibility(show);
+    cut_actor_->SetVisibility(show);
+    renderNow();
 }
 
 void FieldView::initializeGL() {

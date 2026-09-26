@@ -54,8 +54,12 @@ history.md   session-by-session state + handoff notes
 ## Commands (run from `pytcad/`)
 
 ```bash
-# fast dev loop (~70s): parallel, skips the multi-minute M15/M22 "slow" gates
-python3 -m pytest tests/ gui/tests/ -n 6 -m "not slow" -q
+# fast dev loop: parallel, skips the multi-minute "slow" gates and the
+# "timing" budgets (frame times, soak memory slope, solve-time bound) that
+# six busy workers skew; measured 7-13 min on 2026-09-26, load-dependent
+python3 -m pytest tests/ gui/tests/ -n 6 -m "not slow and not timing" -q
+# timing budgets: SERIAL, right after (no -n; ~1 min). Part of every full run
+python3 -m pytest tests/ gui/tests/ -m timing -q
 # slow gate battery: must run before any milestone completion claim
 python3 -m pytest tests/ gui/tests/ -n 6 -m "slow" -q
 python3 -m pytest tests/ gui/tests/ -q     # full suite, serial (~4 min)
