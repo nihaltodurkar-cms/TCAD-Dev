@@ -1,0 +1,14 @@
+{
+  "runtime_bin": "@TCAD_RUNTIME_BIN_JSON@",
+  "backend_python": "@TCAD_BACKEND_PYTHON_JSON@",
+  "backend_root": "@TCAD_BACKEND_ROOT_JSON@",
+  "tools": {
+    "backend_tests": "tcad_desktop_backend_tests.exe",
+    "npz_dump": "tcad_npz_dump.exe",
+    "spec_roundtrip": "tcad_spec_roundtrip.exe",
+    "theme_dump": "tcad_theme_dump.exe",
+    "desktop": "tcad_desktop.exe",
+    "unit_tests": "tcad_desktop_unit_tests.exe",
+    "shell_tests": "tcad_desktop_shell_tests.exe"
+  }
+}

@@ -28,9 +28,13 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 
 SCHEMA_VERSION = 1
+# StudyManifest.save's Windows replace retry: 100 x 20 ms = 2 s.
+_REPLACE_ATTEMPTS = 100
+_REPLACE_WAIT_S = 0.02
 
 
 def _git_commit():
@@ -61,12 +65,21 @@ class StudyManifest:
                    rows=list(rows), git_commit=_git_commit())
 
     def save(self, path):
-        """Atomic on POSIX (os.replace): a reader never observes a
-        half-written manifest."""
+        """Atomic (os.replace): a reader never observes a half-written
+        manifest. On Windows the replace is refused (PermissionError)
+        while another handle has `path` open -- a poller mid-read -- so
+        it is retried for up to ~2 s; a lasting refusal still raises."""
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(asdict(self), f, indent=2)
-        os.replace(tmp, path)
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_WAIT_S)
 
     @classmethod
     def load(cls, path):

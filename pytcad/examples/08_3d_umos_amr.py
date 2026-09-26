@@ -42,17 +42,13 @@ would be. That tradeoff was discussed and accepted before writing this
 example: it is the only one of the two existing pipelines that can
 reach hundreds of thousands of elements in practical time.
 
-Outputs (this directory): one .vtu per AMR pass
-(8_umos_amr_pass{N}.vtu) with potential, log10(n), net doping, and
-electric-field magnitude as point data -- open the sequence in
-ParaView to see the refined regions concentrate at the trench corners
-and junctions across passes. Also two headless PNG previews per pass
-(8_umos_amr_pass{N}_overview.png, _trench_corner.png) -- a quick,
-non-interactive sanity check (fixed camera/colormap, off_screen=True
-pyvista, same pattern examples/07 uses for its own screenshot) for
-when ParaView isn't open; not a substitute for the real interactive
-inspection ParaView gives you (slicing, plot-over-line, time-series
-stepping).
+Outputs (this directory): two headless PNG previews per AMR pass
+(8_umos_amr_pass{N}_overview.png, _trench_corner.png), drawn from a
+grid carrying potential, log10(n), net doping and electric-field
+magnitude -- a non-interactive view (fixed camera/colormap,
+off_screen=True pyvista, same pattern examples/07 uses for its own
+screenshot) of the refined regions concentrating at the trench corners
+and junctions across passes.
 
 MEASURED RUN (5 passes, THETA=0.7, TOL=2e-4, not projected): 31,581 ->
 850,218 elements (26.9x), 15.8%->48.7% of per-axis cells flagged each
@@ -129,11 +125,10 @@ def _qoi(dev):
     return float(np.sum(np.abs(rho).ravel() * dev.mesh.dV))
 
 
-def _export_vtu(dev, mesh, cycle):
-    """Plain pyvista, headless -- same pattern examples/07 already uses
-    for its own VTK export (RectilinearGrid built from mesh axes, cast
-    to an UnstructuredGrid so the file is a genuine .vtu ParaView can
-    diff cell-by-cell against the previous pass)."""
+def _preview_grid(dev, mesh):
+    """Plain pyvista, headless: a RectilinearGrid built from the mesh
+    axes, cast to an UnstructuredGrid, carrying the fields the PNG
+    previews draw."""
     grid = pv.RectilinearGrid(mesh.x * 1e4, mesh.y * 1e4, mesh.z * 1e4)
     grid.point_data["potential_V"] = dev.psi_V.ravel(order="C")
     grid.point_data["log10_n_cm3"] = np.log10(
@@ -145,18 +140,13 @@ def _export_vtu(dev, mesh, cycle):
     Emag = np.sqrt(dpsi_dx ** 2 + dpsi_dy ** 2 + dpsi_dz ** 2)
     grid.point_data["E_field_Vcm"] = Emag.ravel(order="C")
 
-    ugrid = grid.cast_to_unstructured_grid()
-    out_path = os.path.join(HERE, f"8_umos_amr_pass{cycle}.vtu")
-    ugrid.save(out_path)
-    return ugrid, out_path
+    return grid.cast_to_unstructured_grid()
 
 
 def _export_screenshots(ugrid, cycle):
     """Static, headless PNG previews (off_screen=True, same pyvista
-    path examples/07 already uses for its own screenshot) -- a quick
-    sanity/README preview when ParaView isn't open, NOT a replacement
-    for actually inspecting the .vtu in ParaView (no interactivity,
-    fixed camera/colormap here). Two views per pass: (1) the whole
+    path examples/07 already uses for its own screenshot; no
+    interactivity, fixed camera/colormap). Two views per pass: (1) the whole
     half-cell mesh with edges shown, colored by field magnitude, so
     the growing element density is visible frame to frame; (2) a
     zoomed-in view of the trench corner region (x<0.35um, y<1.4um in
@@ -248,7 +238,7 @@ for cycle in range(MAX_PASSES):
     n_cells_total = (Nx - 1) + (Ny - 1) + (Nz - 1)
     refine_pct = 100.0 * n_marked / max(n_cells_total, 1)
 
-    ugrid, vtu_path = _export_vtu(dev, mesh, cycle)
+    ugrid = _preview_grid(dev, mesh)
     png_paths = _export_screenshots(ugrid, cycle)
 
     print(
@@ -263,7 +253,7 @@ for cycle in range(MAX_PASSES):
         f"  marked cells     : {n_marked} / {n_cells_total} "
         f"({refine_pct:.1f}% of per-axis cells flagged)\n"
         f"  Debye violations : x={viol_x.size} y={viol_y.size} z={viol_z.size}\n"
-        f"  exported         : {os.path.basename(vtu_path)}, "
+        f"  exported         : "
         f"{', '.join(os.path.basename(pp) for pp in png_paths)}"
     )
 
@@ -308,5 +298,4 @@ growth = history[-1]["elements"] / history[0]["elements"]
 print(f"\nElement growth over {len(history)} cycles: "
       f"{history[0]['elements']} -> {history[-1]['elements']} "
       f"({growth:.1f}x)")
-print(f"VTU files written to {HERE} -- open the "
-      f"8_umos_amr_pass*.vtu sequence in ParaView to inspect refinement.")
+print(f"PNG previews written to {HERE} (8_umos_amr_pass*_*.png).")

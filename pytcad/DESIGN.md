@@ -49,7 +49,7 @@ PyTCAD's reference class is **professional engineering tools**, not consumer sof
 
 - **Cadence Virtuoso / KiCad / Synopsys Custom Compiler** — dense property forms, layer/net trees, non-modal DRC violation lists that stay visible while you keep working.
 - **ANSYS Workbench / COMSOL Multiphysics** — project trees that mirror a physical/numerical pipeline (geometry → mesh → solve → results), each node carrying its own stale/solved/failed badge.
-- **ParaView / VisIt** — pipeline browser + properties panel + render view triptych; color/opacity driven strictly by data, never by decoration.
+- **VisIt** — pipeline browser + properties panel + render view triptych; color/opacity driven strictly by data, never by decoration.
 - **VS Code / JetBrains IDEs** — dockable panel chrome, command-dense status bar, unambiguous list/tree selection highlighting, keyboard-first navigation with visible focus rings everywhere.
 
 What these share, and what PyTCAD adopts: **the content (viewport, mesh, plot, netlist) is always the brightest, highest-contrast surface on screen; the chrome that surrounds it is deliberately quieter.** Panels are instrument surfaces, addressed by borders and luminance steps — not by cards, shadows, or whitespace.

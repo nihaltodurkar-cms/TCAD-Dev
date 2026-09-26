@@ -33,6 +33,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickPaintedItem
 
 from ..services.structure_model import rasterize_doping
+from ..services.observable_maps import band_maps, observable_inputs, recombination_map
 from ..services.result_store import extract_line_cut
 
 _MIN_POSITIVE = 1e-30
@@ -40,6 +41,12 @@ _MIN_POSITIVE = 1e-30
 
 class MplCanvasItem(QQuickPaintedItem):
     viewChanged = Signal()
+    # The hover readout is drawn by ViewportPanel.qml's overlay Label,
+    # not by matplotlib, so a readout change needs its own NOTIFY signal
+    # and never a repaint of this item (measured 2026-09-25: a repaint
+    # here is a full figure rebuild, 37-105 ms per mouse move, for
+    # pixels identical to the ones already on screen).
+    readoutChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -97,16 +104,24 @@ class MplCanvasItem(QQuickPaintedItem):
         matplotlib rendering."""
         if self._dark != bool(dark):
             self._dark = bool(dark)
-            self.update()
+            self._refresh()
 
-    @Property(str, notify=viewChanged)
+    def _refresh(self):
+        """Repaint after a CONTENT change (mode/field/data/theme/limits
+        reset...). Always invalidates the pan/zoom fast path first --
+        otherwise a pan followed by e.g. setField() reused the old
+        Figure and kept showing the previous field. Only pan()/zoom()
+        call self.update() directly."""
+        self._skip_rebuild = False
+        self.update()
+
+    @Property(str, notify=readoutChanged)
     def readout(self):
         return self._readout
 
     @Slot()
     def clearReadout(self):
-        self._readout = ""
-        self.update()
+        self._set_readout("")
 
     @Slot(float, float)
     def hoverAt(self, x_px, y_px):
@@ -146,18 +161,13 @@ class MplCanvasItem(QQuickPaintedItem):
         if self._mode == "mesh" and self._mesh_axes_um is not None:
             self._hover_mesh(dx, dy)
             return
-        if self._readout:
-            self._readout = ""
-            self.update()
+        self._set_readout("")
 
     def _set_readout(self, text):
         text = text.rstrip()
         if text != self._readout:
             self._readout = text
-            self.update()
-        elif not text and self._readout:
-            self._readout = ""
-            self.update()
+            self.readoutChanged.emit()
 
     def _hover_series(self, dx, dy):
         """1D curve modes (series/cv/transient/ac/convergence, and the
@@ -256,7 +266,7 @@ class MplCanvasItem(QQuickPaintedItem):
     @Slot(str)
     def setField(self, name):
         self._field = name
-        self.update()
+        self._refresh()
 
     @Slot(QObject)
     def bindController(self, controller):
@@ -304,7 +314,7 @@ class MplCanvasItem(QQuickPaintedItem):
     @Slot(str)
     def setMode(self, mode):
         self._mode = mode
-        self.update()
+        self._refresh()
 
     # -- sweep series (v0.4) ------------------------------------------
     @Slot(object)
@@ -323,7 +333,7 @@ class MplCanvasItem(QQuickPaintedItem):
     def setSweepChannel(self, name):
         if self._sweep is None or name in self._sweep.channels:
             self._sweep_channel = name
-            self.update()
+            self._refresh()
 
     # -- model on/off comparison overlay (M9) --------------------------
     @Slot(object)
@@ -332,7 +342,7 @@ class MplCanvasItem(QQuickPaintedItem):
         "series" mode.  Does NOT touch self._mode (same contract as
         every other source setter)."""
         self._comparison_sweep = sweep
-        self.update()
+        self._refresh()
 
     @Slot(result=bool)
     def hasComparisonSource(self):
@@ -347,7 +357,7 @@ class MplCanvasItem(QQuickPaintedItem):
         the M9 model-comparison call sites (which never call this) are
         unaffected."""
         self._comparison_label = str(label)
-        self.update()
+        self._refresh()
 
     # -- batch family overlay ------------------------------------------
     @Slot("QVariant")
@@ -356,7 +366,7 @@ class MplCanvasItem(QQuickPaintedItem):
         dicts from FamilySweepController -- drawn as a multi-curve
         family in "series" mode, one solid line per stepped value."""
         self._family_curves = curves or []
-        self.update()
+        self._refresh()
 
     @Slot(result=int)
     def familyCurveCount(self):
@@ -562,7 +572,7 @@ class MplCanvasItem(QQuickPaintedItem):
     @logScale.setter
     def logScale(self, value):
         self._log = bool(value)
-        self.update()
+        self._refresh()
 
     @Property(bool, notify=viewChanged)
     def contours(self):
@@ -571,7 +581,7 @@ class MplCanvasItem(QQuickPaintedItem):
     @contours.setter
     def contours(self, value):
         self._contours = bool(value)
-        self.update()
+        self._refresh()
 
     def _maybe_contour(self, ax, x, y, values):
         """Overlay a handful of contour lines on the SAME (x, y, values)
@@ -593,7 +603,7 @@ class MplCanvasItem(QQuickPaintedItem):
     @meshOverlay.setter
     def meshOverlay(self, value):
         self._mesh_overlay = bool(value)
-        self.update()
+        self._refresh()
 
     def _maybe_mesh_overlay(self, ax, x, y):
         """M51: draw the TRUE mesh grid lines (the same non-uniform axis
@@ -628,12 +638,12 @@ class MplCanvasItem(QQuickPaintedItem):
     @Slot(str)
     def setCutOrientation(self, orientation):
         self._cut_orientation = str(orientation)
-        self.update()
+        self._refresh()
 
     @Slot(float)
     def setCutPositionUm(self, value_um):
         self._cut_position_cm = float(value_um) * 1e-4
-        self.update()
+        self._refresh()
 
     def _draw_cut(self, ax):
         """A 1D slice through the CURRENT field mode's 2D data, extracted
@@ -682,7 +692,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = (0.0, self._structure.height_cm * 1e4)
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         if self._mode == "process" and self._process_store is not None:
             state = self._process_store.state_for(self._process_store.selected_step_id)
@@ -691,7 +701,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         if self._mode == "series" and self._sweep is not None:
             V = np.asarray(self._sweep.voltages, dtype=float)
@@ -702,7 +712,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         if self._mode == "cv" and self._cv is not None:
             Vg = np.asarray(self._cv.voltages, dtype=float)
@@ -713,7 +723,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         if self._mode == "transient" and self._transient is not None:
             t = np.asarray(self._transient.times, dtype=float)
@@ -724,7 +734,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = None
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         # Doping mode before any solve has no ResultStore yet -- fit to the
         # structure's own extent instead. Once a store exists (post-solve)
@@ -734,7 +744,7 @@ class MplCanvasItem(QQuickPaintedItem):
             self._ylim = (0.0, self._structure.height_cm * 1e4)
             self._home = (self._xlim, self._ylim)
             self.viewChanged.emit()
-            self.update()
+            self._refresh()
             return
         if self._store is None:
             self._xlim = self._ylim = None
@@ -749,7 +759,7 @@ class MplCanvasItem(QQuickPaintedItem):
                 self._ylim = None
             self._home = (self._xlim, self._ylim)
         self.viewChanged.emit()
-        self.update()
+        self._refresh()
 
     @Slot()
     def resetView(self):
@@ -758,7 +768,7 @@ class MplCanvasItem(QQuickPaintedItem):
             return
         self._xlim, self._ylim = self._home
         self.viewChanged.emit()
-        self.update()
+        self._refresh()
 
     @Slot(float)
     def zoom(self, factor):
@@ -773,9 +783,11 @@ class MplCanvasItem(QQuickPaintedItem):
         self._ylim = scaled(self._ylim)
         # Performance pass: request the fast redraw path (see
         # renderToImage()) -- only takes effect if a prior full build
-        # left reusable Axes (self._ax is not None, true for the
-        # line-plot modes: series/cv/cut/bands/recombination/1D-field --
-        # 2D colormap modes never set self._ax and are unaffected).
+        # left reusable Axes (self._ax is not None -- set by
+        # _remember_series() for the line-plot modes AND by
+        # _remember_grid()/_draw_mesh() for the 2D maps, so 2D field
+        # maps take this path too; renderToImage() keeps their
+        # inverted y-axis).
         self._skip_rebuild = True
         self.viewChanged.emit()
         self.update()
@@ -1094,35 +1106,10 @@ class MplCanvasItem(QQuickPaintedItem):
     # -- M9 observables (workbench/analysis) ---------------------------
     def _observable_fields(self):
         """(x_um, psi, n, p, doping, material, T) from the current store,
-        or None when there is nothing to draw yet.  Material/T come from
-        the run record -- what actually produced the numbers -- falling
-        back to the silicon defaults."""
-        store = self._store
-        if store is None or not store.is_solved_result():
-            return None
-        names = store.available_scalars()
-        for required in ("potential", "electron_density", "hole_density"):
-            if required not in names:
-                return None
-        axes = store.mesh_axes()
-        x = np.asarray(axes.axes["x"], dtype=float) * 1e4
-        psi = np.asarray(store.scalar_field("potential").values, float)
-        n = np.asarray(store.scalar_field("electron_density").values, float)
-        p = np.asarray(store.scalar_field("hole_density").values, float)
-        doping = None
-        if "doping" in names:
-            doping = np.asarray(store.scalar_field("doping").values, float)
-        material, T = "SILICON", 300.0
-        record = getattr(store, "run_record", None)
-        if callable(record):
-            try:
-                rec = record()
-                if rec is not None:
-                    material = rec.material or material
-                    T = rec.T or T
-            except Exception:
-                pass
-        return x, psi, n, p, doping, material, T
+        or None when there is nothing to draw yet -- see
+        services/observable_maps.observable_inputs, the one implementation
+        this viewport and the native app's backend share."""
+        return observable_inputs(self._store)
 
     def _draw_bands(self, ax):
         """Band diagram (Ec/Ev/EFn/EFp) via workbench.analysis -- the
@@ -1147,10 +1134,8 @@ class MplCanvasItem(QQuickPaintedItem):
                         ha="center", va="center")
                 ax.set_axis_off()
                 return
-            from workbench.core.materials import LIBRARY
-            mat = LIBRARY.get(material)
             y = np.asarray(axes.axes["y"], dtype=float) * 1e4
-            Ec = -psi - mat.chi
+            Ec = band_maps(data, ["Ec"])["Ec"]  # = -psi - chi, element-wise
             mesh = ax.pcolormesh(x, y, Ec, shading="nearest",
                                  cmap="viridis")
             self._maybe_contour(ax, x, y, Ec)
@@ -1165,8 +1150,8 @@ class MplCanvasItem(QQuickPaintedItem):
             if self._ylim:
                 ax.set_ylim(self._ylim[1], self._ylim[0])
             return
-        from workbench.analysis.observables import band_diagram
-        Ec, Ev, EFn, EFp = band_diagram(psi, n, p, material, T)
+        bands = band_maps(data)
+        Ec, Ev, EFn, EFp = (bands[k] for k in ("Ec", "Ev", "EFn", "EFp"))
         for arr, style, lbl in ((Ec, "-", "Ec"), (Ev, "-", "Ev"),
                                 (EFn, "--", "EFn"), (EFp, "--", "EFp")):
             ax.plot(x, arr, style, label=lbl,
@@ -1199,8 +1184,7 @@ class MplCanvasItem(QQuickPaintedItem):
                         ha="center", va="center")
                 ax.set_axis_off()
                 return
-            from workbench.analysis.observables import recombination_rate
-            R = recombination_rate(n, p, doping, material, T)
+            R = recombination_map(data)
             y = np.asarray(axes.axes["y"], dtype=float) * 1e4
             logR = np.log10(np.maximum(np.abs(R), 1e-30))
             mesh = ax.pcolormesh(x, y, logR, shading="nearest", cmap="inferno")
@@ -1216,8 +1200,7 @@ class MplCanvasItem(QQuickPaintedItem):
             if self._ylim:
                 ax.set_ylim(self._ylim[1], self._ylim[0])
             return
-        from workbench.analysis.observables import recombination_rate
-        R = recombination_rate(n, p, doping, material, T)
+        R = recombination_map(data)
         ax.semilogy(x, np.abs(R), lw=1.6, color=self._series_color(3))
         ax.set_xlabel("depth [um]")
         ax.set_ylabel("|R| [cm^-3 s^-1]")
@@ -1306,16 +1289,29 @@ class MplCanvasItem(QQuickPaintedItem):
         # it depends on label/tick TEXT size, which pan/zoom alone
         # never changes, not on which data is currently visible. Only
         # eligible when a prior full build left reusable Axes at the
-        # SAME pixel size (self._ax is not None only for the line-plot
-        # modes -- see _remember_series() -- and the size check guards
-        # against a resize happening between builds).
+        # SAME pixel size (self._ax is set by _remember_series(),
+        # _remember_grid() and _draw_mesh(); the size check guards
+        # against a resize happening between builds). The flag is
+        # one-shot, and every content change clears it via _refresh().
         if (self._skip_rebuild and self._ax is not None
                 and self._fig is not None
                 and self._last_build_size == (w, h)):
             if self._xlim:
                 self._ax.set_xlim(*self._xlim)
             if self._ylim:
-                self._ax.set_ylim(*self._ylim)
+                # Keep the orientation the full build chose: every 2D
+                # draw path puts y=0 (the surface) at the TOP via
+                # set_ylim(hi, lo) / invert_yaxis(). Re-applying
+                # (lo, hi) here flipped the map upside down on the
+                # first pan or zoom.
+                lo, hi = self._ylim
+                if self._ax.yaxis_inverted():
+                    lo, hi = hi, lo
+                self._ax.set_ylim(lo, hi)
+            # One-shot: the flag covers exactly the pan/zoom it was set
+            # for, so any later repaint rebuilds unless another pan/zoom
+            # re-arms it.
+            self._skip_rebuild = False
             fig = self._fig
         else:
             fig = self._build_figure(w, h)

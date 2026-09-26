@@ -884,3 +884,49 @@ def test_viewer3d_window_switching_vector_field_redraws_glyphs(gapp, resistor_3d
     win._on_vector_field_changed("current_density")
     assert win._glyph_actor is not None
     assert first_actor in win.plotter.removed
+
+
+# -- S8 bug fixes (NATIVE-DESKTOP-PLAN.md 15.23 decision 3): glyph_sources --
+
+def _grid_with_distinct_vectors(store):
+    """The resistor's grid with a vector per node that NAMES the node (its
+    own coordinates, scaled), so a mispaired arrow cannot pass unseen."""
+    grid = build_rectilinear_grid(store.mesh_axes())
+    pts = np.asarray(grid.points, dtype=float)
+    grid.point_data["J"] = 1e3 * (pts - pts.min(axis=0)) / (pts.max(axis=0) - pts.min(axis=0) + 1e-30) + 1.0
+    return grid
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.05, 0.2])
+def test_glyph_sources_sit_on_nodes_carrying_their_own_vector(resistor_3d_store, tolerance):
+    grid = _grid_with_distinct_vectors(resistor_3d_store)
+    sources, factor = viewer3d.glyph_sources(grid, "J", tolerance)
+    assert sources is not None and factor > 0
+    pts = np.asarray(grid.points)
+    index = {tuple(p): i for i, p in enumerate(pts)}
+    for p, v in zip(np.asarray(sources.points), np.asarray(sources.point_data["J"])):
+        i = index.get(tuple(p))
+        assert i is not None, f"{p} is not a grid node"
+        np.testing.assert_array_equal(v, np.asarray(grid.point_data["J"])[i])
+    if tolerance == 0.0:
+        assert sources.n_points == grid.n_points
+    else:
+        assert 0 < sources.n_points < grid.n_points
+
+
+def test_glyph_longest_arrow_is_the_spacing_not_millions_of_devices(resistor_3d_store):
+    grid = build_rectilinear_grid(resistor_3d_store.mesh_axes())
+    viewer3d.attach_vector_field(grid, resistor_3d_store.mesh_axes(), resistor_3d_store.vector_field("current_density"))
+    tol = 0.05
+    sources, factor = viewer3d.glyph_sources(grid, "current_density", tol)
+    mags = np.linalg.norm(np.asarray(grid.point_data["current_density"]), axis=1)
+    assert factor * mags.max() == pytest.approx(tol * grid.length, rel=1e-12)
+    glyphs = sources.glyph(orient="current_density", scale="current_density", factor=factor)
+    # before the fix: 7.9e6 x the device (15.20); now within one spacing of it
+    assert glyphs.length <= grid.length * (1 + 2 * tol) + 1e-12
+
+
+def test_glyph_sources_refuse_an_all_zero_field(resistor_3d_store):
+    grid = build_rectilinear_grid(resistor_3d_store.mesh_axes())
+    grid.point_data["J"] = np.zeros((grid.n_points, 3))
+    assert viewer3d.glyph_sources(grid, "J", 0.05) == (None, 0.0)

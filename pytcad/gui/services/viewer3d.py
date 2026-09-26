@@ -26,18 +26,22 @@ before scrubbing a sweep, or accept a stale vector overlay.
 """
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QProcess, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
-    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox,
+    QFormLayout, QHBoxLayout, QLabel, QMainWindow,
     QPushButton, QSlider, QWidget,
 )
 from pyvistaqt import QtInteractor
 
-# paraview_export imports FROM this module (its pure grid-building
-# functions) -- importing it back at module level here would be
-# circular, so the export dock's handlers import it lazily instead
-# (see _on_export_vtu_clicked etc.).
+# The pure grid builders live in grid_builders.py (Qt-free --
+# NATIVE-DESKTOP-PLAN.md 15.6/S4a) and are re-imported here under their
+# old names, so every caller of viewer3d.build_rectilinear_grid & co. is
+# unchanged.
+from .grid_builders import (  # noqa: F401  (re-exported)
+    attach_scalar_field, attach_vector_field, build_rectilinear_grid,
+    extract_isosurface,
+)
 
 # A small curated set, not every matplotlib colormap -- perceptually
 # uniform sequential (viridis/plasma) plus one diverging colormap for
@@ -71,115 +75,6 @@ TRANSFER_FUNCTION_PRESETS = {
 }
 
 
-def attach_scalar_field(grid, mesh_axes, field):
-    """Attach one scalar field to an existing grid as point data,
-    in place. Shared by build_rectilinear_grid() (Phase 1, one field at
-    construction) and Viewer3DWindow (Phase 2, every available field
-    attached up front so switching the active field needs no rebuild).
-
-    Raises ValueError if the field's shape doesn't match the mesh axes
-    -- the same guard build_rectilinear_grid() has always had, now
-    shared rather than duplicated.
-    """
-    z = np.asarray(mesh_axes.axes["z"], dtype=float)
-    y = np.asarray(mesh_axes.axes["y"], dtype=float)
-    x = np.asarray(mesh_axes.axes["x"], dtype=float)
-    expected_shape = (z.size, y.size, x.size)
-    values = np.asarray(field.values, dtype=float)
-    if values.shape != expected_shape:
-        raise ValueError(
-            f"field '{field.name}' has shape {values.shape}, "
-            f"expected {expected_shape} to match the mesh axes")
-    grid.point_data[field.name] = values.flatten(order="C")
-
-
-def attach_vector_field(grid, mesh_axes, vector_field):
-    """Attach one vector field to an existing grid as point data, in
-    place -- the vector analogue of attach_scalar_field above, shared
-    by Viewer3DWindow's vector sidebar (glyphs/streamlines both need a
-    real (n_points, 3) vector array set as active on the grid, which is
-    what VTK's own glyph()/streamlines() filters key off).
-
-    vector_field: a result_store.VectorField whose `.components` dict
-    carries per-axis arrays, each shaped like this device's node grid
-    (Nz, Ny, Nx) -- same node ordering as attach_scalar_field. A
-    missing axis (e.g. a 2D result's current_density, which has no
-    "z" component) is treated as all-zero, so a genuinely 2D vector
-    quantity still glyphs/streamlines sensibly in a thin 3D grid.
-
-    Raises ValueError if a present component's shape doesn't match the
-    mesh axes -- the same guard attach_scalar_field has always had.
-    """
-    z = np.asarray(mesh_axes.axes["z"], dtype=float)
-    y = np.asarray(mesh_axes.axes["y"], dtype=float)
-    x = np.asarray(mesh_axes.axes["x"], dtype=float)
-    expected_shape = (z.size, y.size, x.size)
-    n_points = z.size * y.size * x.size
-    cols = []
-    for axis in ("x", "y", "z"):
-        if axis not in vector_field.components:
-            cols.append(np.zeros(n_points, dtype=float))
-            continue
-        values = np.asarray(vector_field.components[axis], dtype=float)
-        if values.shape != expected_shape:
-            raise ValueError(
-                f"vector field '{vector_field.name}' component '{axis}' has "
-                f"shape {values.shape}, expected {expected_shape} to match "
-                "the mesh axes")
-        cols.append(values.flatten(order="C"))
-    grid.point_data[vector_field.name] = np.column_stack(cols)
-
-
-def build_rectilinear_grid(mesh_axes, field=None):
-    """A pyvista.RectilinearGrid for a 3D device's mesh, optionally
-    carrying one scalar field as point data.
-
-    mesh_axes: a result_store.MeshAxes with dimensionality == 3.
-    field: an optional result_store.ScalarField whose `.values` array
-    has this device's node shape (Nz, Ny, Nx) -- pytcad's own node
-    ordering (x fastest, z slowest; see mesh3d.py's module docstring).
-    A plain `.flatten()` (C order) of that array lines up exactly with
-    VTK's own point order for a RectilinearGrid built from (x, y, z)
-    axes in that same order -- verified directly, not assumed; see
-    3D-VISUALIZATION-PLAN.md Phase 1's test for the check.
-
-    Raises ValueError for anything other than a 3D mesh -- this
-    function has no 1D/2D behavior to silently fall back to.
-    """
-    if mesh_axes.dimensionality != 3:
-        raise ValueError(
-            "build_rectilinear_grid requires a 3D mesh, got "
-            f"dimensionality={mesh_axes.dimensionality}")
-    x = np.asarray(mesh_axes.axes["x"], dtype=float)
-    y = np.asarray(mesh_axes.axes["y"], dtype=float)
-    z = np.asarray(mesh_axes.axes["z"], dtype=float)
-    grid = pv.RectilinearGrid(x, y, z)
-    if field is not None:
-        attach_scalar_field(grid, mesh_axes, field)
-    return grid
-
-
-def extract_isosurface(grid, field_name, level):
-    """The real isosurface (a pv.PolyData) where `field_name` on `grid`
-    crosses `level`, via VTK's own contour filter -- no approximation
-    or custom marching-cubes code here.
-
-    A level outside the field's actual [min, max] range yields an
-    EMPTY surface (n_points == 0), verified directly (not assumed) to
-    be VTK's actual behavior -- never a crash or an exception, which
-    matters because a user is free to type any number into the level
-    control.
-
-    Raises KeyError if `field_name` isn't a scalar field on this grid
-    -- a real caller mistake, not a scenario to silently paper over.
-    """
-    if field_name not in grid.point_data:
-        raise KeyError(
-            f"no scalar field '{field_name}' on this grid (available: "
-            f"{sorted(grid.point_data.keys())})")
-    return grid.contour(isosurfaces=[float(level)], scalars=field_name)
-
-
 def _build_transfer_function(preset_name):
     """Build a transfer-function specification for PyVista's add_volume().
 
@@ -196,6 +91,42 @@ def _build_transfer_function(preset_name):
             f"unknown transfer function '{preset_name}' "
             f"(available: {sorted(TRANSFER_FUNCTION_PRESETS.keys())})")
     return dict(TRANSFER_FUNCTION_PRESETS[preset_name])
+
+
+def glyph_sources(grid, name, tolerance):
+    """The arrows' base points and their scale factor, for grid.glyph().
+
+    Bug fixes (NATIVE-DESKTOP-PLAN.md 15.20 / 15.23 decision 3), both
+    measured on resistor_3d:
+    - glyph(tolerance=) thins through vtkCleanPolyData, which pairs a
+      merged point's COORDINATES with ANOTHER point's vector (1184 of 1207
+      arrows mispaired). Thinning here keeps, of the nodes in each
+      tolerance-sized bin, the first -- a real node carrying its own vector.
+    - glyph()'s default factor 1 scales an arrow by |J| itself (A/cm^2, in
+      cm): the arrows spanned 7.9e6 x the device. The factor here makes the
+      longest arrow as long as the spacing, max(tolerance, 0.02) x the
+      device diagonal, with length proportional to |J| as before.
+
+    Returns (pv.PolyData of the kept nodes with the `name` vectors, factor),
+    or (None, 0.0) when no finite, non-zero vector exists.
+    """
+    points = np.asarray(grid.points, dtype=float)
+    vectors = np.asarray(grid.point_data[name], dtype=float)
+    ok = np.isfinite(vectors).all(axis=1)
+    mags = np.linalg.norm(np.where(ok[:, None], vectors, 0.0), axis=1)
+    if not np.any(mags > 0):
+        return None, 0.0
+    step = float(tolerance) * float(grid.length)
+    if step > 0:
+        bins = np.floor((points - points.min(axis=0)) / step).astype(np.int64)
+        _, first = np.unique(bins, axis=0, return_index=True)
+        keep = np.sort(first)
+    else:
+        keep = np.arange(points.shape[0])
+    sources = pv.PolyData(points[keep])
+    sources.point_data[name] = np.where(ok[keep, None], vectors[keep], 0.0)
+    factor = max(float(tolerance), 0.02) * float(grid.length) / float(mags.max())
+    return sources, factor
 
 
 class _Viewer3DMainWindow(QMainWindow):
@@ -319,13 +250,6 @@ class Viewer3DWindow:
         self._glyph_enabled = False
         self._streamline_actor = None
         self._streamline_enabled = False
-        # PARAVIEW-EXPORT-PLAN.md: persisted path to the user's own
-        # ParaView executable, so "Open in ParaView" doesn't have to
-        # re-ask every time this window opens. QSettings, not a new
-        # bespoke settings file -- no other app setting is persisted
-        # anywhere in this codebase yet, so this is a new, minimal use
-        # of Qt's own mechanism rather than an existing pattern to match.
-        self._pv_settings = QSettings("PyTCAD", "Viewer3D")
         self._build_sidebar(field_names)
         if field_names:
             # "doping" first if present (the example every Phase-1/2
@@ -414,10 +338,6 @@ class Viewer3DWindow:
         # a separate physical quantity from the scalar isosurface/volume
         # above, not another row on the same form.
         self._build_vector_dock()
-        # PARAVIEW-EXPORT-PLAN.md: export to a genuine ParaView-native
-        # .vtu/.pvd file, own dock -- an output action, not a display
-        # control, so it doesn't belong on the isosurface/vector forms.
-        self._build_export_dock()
 
     def _build_vector_dock(self):
         """Build the vector-field (glyph arrows / streamlines) sidebar
@@ -471,109 +391,6 @@ class Viewer3DWindow:
             self._glyph_toggle.setEnabled(False)
             self._streamline_toggle.setEnabled(False)
 
-    def _build_export_dock(self):
-        """PARAVIEW-EXPORT-PLAN.md: export the current result as a
-        genuine ParaView-native file, and optionally hand it straight
-        to the user's own ParaView install. Two export actions, not
-        one: a single .vtu (whatever's on screen right now) and, only
-        when sweep-snapshot playback data exists, a real .pvd time
-        series keyed by bias voltage -- see paraview_export.py's own
-        docstring for why the .pvd path is worth having at all versus
-        just exporting one frame at a time by hand."""
-        dock = QDockWidget("ParaView Export", self._window)
-        panel = QWidget()
-        form = QFormLayout(panel)
-
-        self._export_vtu_btn = QPushButton("Export .vtu…")
-        self._export_vtu_btn.clicked.connect(self._on_export_vtu_clicked)
-        form.addRow(self._export_vtu_btn)
-
-        self._export_pvd_btn = QPushButton("Export animation (.pvd)…")
-        self._export_pvd_btn.clicked.connect(self._on_export_pvd_clicked)
-        self._export_pvd_btn.setEnabled(False)
-        form.addRow(self._export_pvd_btn)
-
-        self._paraview_path_edit = QLineEdit(
-            self._pv_settings.value("paraview_path", "paraview", type=str))
-        form.addRow("ParaView executable", self._paraview_path_edit)
-
-        browse_btn = QPushButton("Browse…")
-        browse_btn.clicked.connect(self._on_browse_paraview_path)
-        form.addRow(browse_btn)
-
-        self._open_in_paraview_btn = QPushButton("Open in ParaView")
-        self._open_in_paraview_btn.clicked.connect(
-            self._on_open_in_paraview_clicked)
-        self._open_in_paraview_btn.setEnabled(False)
-        form.addRow(self._open_in_paraview_btn)
-
-        dock.setWidget(panel)
-        self._window.addDockWidget(Qt.RightDockWidgetArea, dock)
-        # The last file exported this session -- "Open in ParaView"
-        # acts on it directly rather than re-prompting for a path,
-        # same "export, then act on what you just wrote" flow a save
-        # dialog followed by a launch button implies.
-        self._last_export_path = None
-
-    def _on_browse_paraview_path(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self._window, "Locate ParaView executable")
-        if path:
-            self._paraview_path_edit.setText(path)
-            self._pv_settings.setValue("paraview_path", path)
-
-    def _on_export_vtu_clicked(self):
-        from . import paraview_export
-        out_path, _ = QFileDialog.getSaveFileName(
-            self._window, "Export .vtu", "result.vtu",
-            "ParaView unstructured grid (*.vtu)")
-        if not out_path:
-            return
-        try:
-            paraview_export.export_vtu(self._store, out_path)
-        except Exception as exc:
-            QMessageBox.warning(
-                self._window, "Export failed",
-                f"Could not export to {out_path}:\n{exc}")
-            return
-        self._last_export_path = out_path
-        self._open_in_paraview_btn.setEnabled(True)
-
-    def _on_export_pvd_clicked(self):
-        from . import paraview_export
-        if self._snapshots is None or self._snapshots.n_snapshots() == 0:
-            return
-        out_dir = QFileDialog.getExistingDirectory(
-            self._window, "Export animation (.pvd) — choose a folder")
-        if not out_dir:
-            return
-        try:
-            pvd_path = paraview_export.export_pvd_series(
-                self._store, self._snapshots, out_dir, "sweep")
-        except Exception as exc:
-            QMessageBox.warning(
-                self._window, "Export failed",
-                f"Could not export animation to {out_dir}:\n{exc}")
-            return
-        self._last_export_path = pvd_path
-        self._open_in_paraview_btn.setEnabled(True)
-
-    def _on_open_in_paraview_clicked(self):
-        if self._last_export_path is None:
-            return
-        paraview_path = self._paraview_path_edit.text().strip()
-        self._pv_settings.setValue("paraview_path", paraview_path)
-        # startDetached: ParaView keeps running independently of this
-        # app, exactly like the user double-clicking it themselves --
-        # this process has no business waiting on or reaping it.
-        started = QProcess.startDetached(
-            paraview_path, [str(self._last_export_path)])
-        if not started:
-            QMessageBox.warning(
-                self._window, "Could not launch ParaView",
-                f"Failed to start '{paraview_path}'. Check the path "
-                "above (Browse…) and that ParaView is installed.")
-
     def _build_playback_dock(self):
         """Build the sweep playback dock widget with play/pause, step,
         and timeline scrubber controls."""
@@ -626,7 +443,6 @@ class Viewer3DWindow:
             self._playback_slider.setRange(0, 0)
             self._voltage_label.setText("0.000 V")
             self._stop_playback()
-            self._export_pvd_btn.setEnabled(False)
             return
         n = snapshots.n_snapshots()
         self._playback_slider.setRange(0, n - 1)
@@ -636,7 +452,6 @@ class Viewer3DWindow:
         self._play_btn.setEnabled(True)
         self._step_fwd_btn.setEnabled(True)
         self._playback_slider.setEnabled(True)
-        self._export_pvd_btn.setEnabled(True)
         self._update_playback_label()
         # Apply the first snapshot's field data to the grid.
         self._apply_snapshot(0)
@@ -1012,9 +827,13 @@ class Viewer3DWindow:
             # solve) has nothing to orient an arrow along -- refuse
             # rather than hand VTK a degenerate glyph() call.
             return
-        glyphs = self.grid.glyph(
-            orient=name, scale=name,
-            tolerance=self._glyph_density_spin.value())
+        # Thinned on real nodes and scaled to the spacing -- see
+        # glyph_sources() for the two bugs grid.glyph(tolerance=) had.
+        sources, factor = glyph_sources(
+            self.grid, name, self._glyph_density_spin.value())
+        if sources is None:
+            return
+        glyphs = sources.glyph(orient=name, scale=name, factor=factor)
         # glyph() does NOT carry the source array through under its own
         # name -- confirmed directly: its output only ever has
         # "GlyphVector"/"GlyphScale" (PyVista's own fixed names for the

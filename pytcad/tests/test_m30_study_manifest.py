@@ -143,6 +143,26 @@ def test_manifest_is_written_incrementally_not_only_at_the_end(tmp_path):
         "state -- it is only being written once, at the end"
 
 
+def test_save_survives_a_reader_holding_the_manifest_open(tmp_path):
+    """Windows refuses os.replace onto a file another handle has open
+    (PermissionError), so a reader polling the manifest -- the test
+    above, or a GUI showing progress -- used to kill the study's writer
+    thread mid-run. save() must wait out a transient reader. On POSIX
+    the replace never conflicts and this passes trivially."""
+    manifest_path = str(tmp_path / "study.json")
+    m = StudyManifest.create("pn_diode", _BASE, {}, None, [])
+    m.save(manifest_path)
+    reader = open(manifest_path)          # a poller mid-read
+    release = threading.Timer(0.2, reader.close)
+    release.start()
+    try:
+        m.save(manifest_path)             # must not raise PermissionError
+    finally:
+        release.join()
+        reader.close()
+    assert StudyManifest.load(manifest_path) == m
+
+
 # ----------------------------------------------------------------------
 #  G-RESUME-SKIPS-DONE / G-RESUME-RETRIES-FAILED
 # ----------------------------------------------------------------------
